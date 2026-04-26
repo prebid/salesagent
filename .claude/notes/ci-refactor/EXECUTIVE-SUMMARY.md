@@ -3,13 +3,13 @@
 **If you have time to read ONE file before being parachuted in, this is it.**
 Read order for cold-start: this file → `RESUME-HERE.md` → `pr<N>-<slug>.md` for your PR. ~14-20k tokens total.
 
-Last refresh: 2026-04-25 (post-integrity-audit + Round 5+6 P0 sweep applied, blockers fixed, D22-D28, R19/R20/R23 promoted, R26-R30 added).
+Last refresh: 2026-04-26 (Round 10 completeness audit sweep applied; D30-D38 added, R33-R37 added, frozen check names expanded 11→14, container hardening added, `default_install_hook_types` directive locked).
 
 ---
 
 ## What is this?
 
-A 6-PR rollout (issue [#1234](https://github.com/prebid/salesagent/issues/1234)) that brings salesagent to top-tier OSS supply-chain posture. **~15-19 engineer-days, ~6 calendar weeks part-time.** PRs land sequentially; PR 6 is a Week-6 follow-up.
+A 6-PR rollout (issue [#1234](https://github.com/prebid/salesagent/issues/1234)) that brings salesagent to top-tier OSS supply-chain posture. **~19-23 engineer-days, ~6 calendar weeks part-time.** PRs land sequentially; PR 6 is a Week-6 follow-up. (Effort revised 2026-04-26: Round 10 sweep added ~3.5-4 days for `default_install_hook_types`, 14-name expansion, creative-agent bootstrap, container hardening, gitleaks, ADR promotion. Calendar slack absorbs without extension.)
 
 A concurrent v2.0 (Flask-to-FastAPI) effort runs under [PR #1221](https://github.com/prebid/salesagent/pull/1221). Per **D20** (Path 1 sequencing), issue #1234 lands first; v2.0 phase PRs rebase onto the new layered model.
 
@@ -21,7 +21,7 @@ A concurrent v2.0 (Flask-to-FastAPI) effort runs under [PR #1221](https://github
 |---|---|---|---|
 | 1 | Governance + supply-chain hardening (CODEOWNERS, SECURITY.md, dependabot, zizmor, CodeQL advisory, SHA-pin all hooks/actions, `persist-credentials: false` on every checkout) | 2.5 days | 2, 3 |
 | 2 | uv.lock as single source: replace `mirrors-mypy` and `psf/black` with local `language: system` hooks (NOT a deprecation — fixes isolated-env import resolution per [Jared Khan](https://jaredkhan.com/blog/mypy-pre-commit)); delete `[project.optional-dependencies].dev`; re-enable `pydantic.mypy` plugin | 4-6 days | 3 |
-| 3 | CI authoritative + composite actions (Decision-4: composite, NOT reusable workflows); 11 frozen bare-name check jobs (D17 + D26); 3-phase merge (overlap → rendered-name capture → atomic flip → cleanup); coverage hard-gate from day 1 (D11 revised) | 3-4 days | 4 |
+| 3 | CI authoritative + composite actions (Decision-4: composite, NOT reusable workflows); **14** frozen bare-name check jobs (D17 amended by D30 — Round 10 added Smoke Tests, Security Audit, Quickstart); creative-agent service bootstrap (D32); 3-phase merge (overlap → rendered-name capture → atomic flip → cleanup); coverage hard-gate from day 1 (D11 revised) | 4.5-5.5 days | 4 |
 | 4 | Hook relocation: 5 grep hooks → AST guards; **10** to pre-push (D27 revised — includes mypy per D3); 4 to CI-only; 6 deleted; real math **36 effective − 13 − 10 − 1 = 12** commit-stage (exactly at ceiling, zero headroom); CLAUDE.md guards table audit DEFERS to post-v2.0-rebase (target ~81 rows, D18 revised) | 2 days | 5 |
 | 5 | Version consolidation: Python, Postgres, uv anchors single-sourced; `test_architecture_uv_version_anchor` guard. **Black/ruff target-version DEFERRED per D28 (ADR-008 — separate post-#1234 PR)** | 2 days | none |
 | 6 | Image supply chain: `harden-runner` (audit→block, **v2.16.0+** for CVE-2025-32955 + GHSA-46g3-37rh-v698), `cosign` keyless signing + SBOM + provenance, dependency-review, `scorecard.yml` self-host (Week 6 follow-up; resolves D-pending-4 → D25) | 1.5-2 days | none |
@@ -40,7 +40,7 @@ These were the load-bearing defects that would have failed at runtime. All three
 
 ---
 
-## The 28 locked decisions (D1-D28)
+## The 45 locked decisions (D1-D45)
 
 D1: Solo maintainer (@chrishuie sole CODEOWNERS) ·
 D2: Branch protection + @chrishuie bypass (ADR-002) ·
@@ -55,10 +55,10 @@ D10: CodeQL Path C — advisory 2 weeks, gating Week 5 ·
 D11: Coverage hard-gate from PR 3 day 1 at 53.5% (revised 2026-04-25 P0 sweep) ·
 D12: pre-commit autoupdate --freeze ·
 D13: Fix pydantic.mypy errors in PR 2 (tripwire >200) ·
-D14: Migrate ui-tests extras → dependency-groups ·
+D14: Migrate ui-tests extras → dependency-groups (tests/ui/ stays local-only via `tox -e ui`) ·
 D15: Delete Gemini key fallback (unconditional mock) ·
 D16: Dependabot ignores adcp until #1217 merges ·
-D17: 11 frozen CI check names (the *rendered* names; see D26) ·
+D17: 11 frozen CI check names — **AMENDED by D30 to 14 names** ·
 D18: **27 baseline + 1 + 4 + 1 + 8 + 27 + 4 + 9 = ~81** final guards (post-v2.0-rebase canonical; revised in 2026-04-25 Round 8 — was ~73, drift-corrected to 81 after v2.0 architecture/ count was re-verified at 27, not 31) ·
 D19: Per-PR specs, not master doc ·
 D20: Path 1 sequencing (#1234 first, v2.0 rebases) ·
@@ -69,29 +69,41 @@ D24: UV_VERSION anchor in `_setup-env` (was D-pending-3) ·
 D25: harden-runner adoption → PR 6 (was D-pending-4) ·
 D26: Workflow naming — drop `CI /` prefix from job names (resolves Blocker #1) ·
 D27: Pre-commit hook reallocation — **10** to pre-push (9 named + mypy per D3); revised math **36−13−10−1=12** (resolves Blocker #2; revised Round 8) ·
-D28: Defer black/ruff target-version bump out of PR 5 (P0 sweep; ADR-008 follow-up after #1234)
+D28: Defer black/ruff target-version bump out of PR 5 (P0 sweep; ADR-008 follow-up after #1234) ·
+D29: Structural-guard marker name `arch_guard` (was `architecture` — collision with entity-marker) ·
+D30: **Frozen CI check names: 14** (was 11). Adds Smoke Tests, Security Audit, Quickstart (Round 10) ·
+D31: **`default_install_hook_types: [pre-commit, pre-push]` mandatory** in `.pre-commit-config.yaml` (Round 10 — load-bearing one-liner) ·
+D32: Creative-agent containerized service bootstrap fully spec'd in PR 3 commit 9 (43 lines, 10 env vars, pinned commit `ca70dd1e2a6c`) ·
+D33: xdist test config — `pytest-xdist≥3.6` + `pytest-randomly` in dev group (PR 2 commit 4.5); `--dist=loadscope` in CI ·
+D34: Container hardening — `@sha256:` digest pin + `USER` non-root (PR 5); `SOURCE_DATE_EPOCH` + Trivy OS-layer scan (PR 6) ·
+D35: gitleaks adopted — pre-commit hook + workflow with SARIF upload (PR 1) ·
+D36: ADR file location — ADR-001/002/003 inline in PR 1 spec, lifted to docs/decisions/ at commit time; ADR-008 in drafts/, copied to docs/decisions/ in PR 5 ·
+D37: `workflow_dispatch` trigger preserved in `ci.yml` (matches `test.yml:8`) ·
+D38: `Schema Contract` job runs under `tox -e integration` env (DATABASE_URL set), not unit (which unsets it) ·
+D39: Creative-agent integration uses docker-run script-step pattern, NOT GHA `services:` (Round 11 fix for R11A-03 — services blocks can't cross-resolve hostnames) ·
+D40: Postgres `max_connections` tuned app-side via `DB_POOL_SIZE=4` + `DB_MAX_OVERFLOW=8` env (Round 11 fix for R11E-02 — GHA services has no `command:` field) ·
+D41: pytest-json-report path stays at `{toxworkdir}/<env>.json`; composite globs both `test-results/` and `.tox/<env>.json` (Round 11 fix for R11E-03) ·
+D42: integration_db Alembic divergence accepted with tripwire (Round 11 R11B-2 — full unification deferred) ·
+D43: DATABASE_URL canonical credentials (CI: adcp_user/test_password/adcp_test; compose: dev-realistic; tests must NOT hardcode) (Round 11 R11B-1) ·
+D44: `minimum_pre_commit_version: 3.2.0` in `.pre-commit-config.yaml` (Round 11 R11C-06 — D31's `default_install_hook_types` requires pre-commit ≥3.2) ·
+D45: Phase B branch-protection flip FORBIDDEN on Fri/Sat/Sun + holiday eve (Round 11 R11C-02 — solo-maintainer weekend lockout mitigation)
 
 ---
 
-## The 11 frozen rendered CI check names (D17 + D26)
+## The 14 frozen rendered CI check names (D17 amended by D30 + D26)
 
-Workflow `name: CI`, job `name: 'Quality Gate'` etc. — GitHub renders the concatenation:
+Workflow `name: CI`, job `name: 'Quality Gate'` etc. — GitHub renders the concatenation. **Round 10 expansion (D30) added Smoke Tests, Security Audit, Quickstart** — currently-running CI jobs that the original D17 silently dropped:
 
 ```
-CI / Quality Gate
-CI / Type Check
-CI / Schema Contract
-CI / Unit Tests
-CI / Integration Tests
-CI / E2E Tests
-CI / Admin UI Tests
-CI / BDD Tests
-CI / Migration Roundtrip
-CI / Coverage
-CI / Summary
+CI / Quality Gate         CI / Smoke Tests           CI / Migration Roundtrip
+CI / Type Check           CI / Unit Tests            CI / Coverage
+CI / Schema Contract      CI / Integration Tests     CI / Summary
+CI / Security Audit       CI / E2E Tests
+CI / Quickstart           CI / Admin UI Tests
+                          CI / BDD Tests
 ```
 
-Branch protection requires exact-string match. Reusable workflow nesting can produce 3-segment names — verify with `scripts/capture-rendered-names.sh` BEFORE Phase B flip.
+Branch protection requires exact-string match. Reusable workflow nesting can produce 3-segment names — verify with `scripts/capture-rendered-names.sh` BEFORE Phase B flip. PR 6's `Security / Dependency Review` is OUTSIDE the 14 (lives in `security.yml` namespace; PR 6 commit 4 must update `test_architecture_required_ci_checks_frozen` guard's expected list per R36).
 
 ---
 

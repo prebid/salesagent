@@ -4,18 +4,22 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 
 **Round 9 sweep applied 2026-04-25** — see [`RESUME-HERE.md`](RESUME-HERE.md) for full delta. ~30 net-new findings across cross-PR state handoffs, ecosystem drift, failure modes, layer-model completeness, and governance. P0 + P1 fixes applied. D29 added (marker rename). R16 promoted; R31, R32 added.
 
+**Round 10 completeness audit sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 10 section. 9 parallel opus subagents (5 axis audits + 4 verification/extension passes) surfaced load-bearing one-liners that look correct on paper but silently no-op (top finding: `default_install_hook_types` missing → entire pre-push tier disabled). Frozen check names expanded **11 → 14**. D30-D38 added; R33-R37 added; D17 amended. v2.0 collision list expanded with `release-please.yml`, `.github/CODEOWNERS` glob, `pytest.ini`, `tests/conftest_db.py`. (Round 11 follow-up correction: ADR-001/002/003 are inline in PR 1 spec per drafts/README.md; not staged as standalone drafts. Earlier Round 10 framing was incorrect.)
+
+**Round 11 verification + extension sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 11 section. 5 parallel opus subagents covered drift over Round 10, cross-environment parity, failure-modes/disaster-recovery, documentation lifecycle, resource budgets/observability. **Caught severe Round-10-self-introduced break** (R11A-03: creative-agent `services:` blocks technically broken in GHA — service containers can't resolve each other by hostname). Reverted to docker-run script-step pattern matching `test.yml:180-223` disk truth. D39-D45 added; R38-R42 added; structural-guard draft updated to 14 names; PR 5 Dockerfile gains `ARG SOURCE_DATE_EPOCH`.
+
 ## Status
 
 | PR | Title | Status | Spec | Hidden scope |
 |---|---|---|---|---|
-| PR 1 | Supply-chain hardening | not started | [pr1-supply-chain-hardening.md](pr1-supply-chain-hardening.md) | 2.5 days (Path C CodeQL); closes PD15a + PD15b |
-| PR 2 | uv.lock single-source for pre-commit deps | not started | [pr2-uvlock-single-source.md](pr2-uvlock-single-source.md) | 4-6 days (pydantic.mypy delta) |
-| PR 3 | CI authoritative + reusable workflows | not started | [pr3-ci-authoritative.md](pr3-ci-authoritative.md) | 3-4 days (3-phase merge) |
-| PR 4 | Hook relocation + structural guards | not started | [pr4-hook-relocation.md](pr4-hook-relocation.md) | 2 days |
-| PR 5 | Cross-surface version consolidation | not started | [pr5-version-consolidation.md](pr5-version-consolidation.md) | 2 days |
-| PR 6 | Image supply chain (cosign + harden-runner + SBOM + scorecard.yml) | not started | [pr6-image-supply-chain.md](pr6-image-supply-chain.md) | 1.5-2 days (Week 6 follow-up; resolves D25) |
+| PR 1 | Supply-chain hardening | not started | [pr1-supply-chain-hardening.md](pr1-supply-chain-hardening.md) | 3 days (Path C CodeQL + Round 10: gitleaks D35, ipr-agreement perms narrowing; ADR-001/002/003 inline-in-spec lifted to docs/decisions/ at commit time); closes PD15a + PD15b |
+| PR 2 | uv.lock single-source for pre-commit deps | not started | [pr2-uvlock-single-source.md](pr2-uvlock-single-source.md) | 4-6 days (pydantic.mypy delta + Round 10 commit 4.5: pytest-xdist + pytest-randomly D33) |
+| PR 3 | CI authoritative + composite actions | not started | [pr3-ci-authoritative.md](pr3-ci-authoritative.md) | 4.5-5.5 days (3-phase merge + Round 10: 3 new jobs per D30, creative-agent bootstrap D32, env vars D37/MF, --dist=loadscope D33, conftest_db.py filelock standalone, concurrency formula, retention-days, workflow_dispatch D37) |
+| PR 4 | Hook relocation + structural guards | not started | [pr4-hook-relocation.md](pr4-hook-relocation.md) | 2.5 days (+ Round 10: Layer 4 table rewrite to D17/D30, default_install_hook_types D31, P8 fallback, TROUBLESHOOTING.md) |
+| PR 5 | Cross-surface version consolidation | not started | [pr5-version-consolidation.md](pr5-version-consolidation.md) | 2.5 days (+ Round 10: Dockerfile @sha256: pin D34, USER non-root D34, ADR-008 copy from drafts/ to docs/decisions/ D36; + Round 11: ARG SOURCE_DATE_EPOCH declaration R11A-02) |
+| PR 6 | Image supply chain (cosign + harden-runner + SBOM + scorecard.yml + Round 10 additions) | not started | [pr6-image-supply-chain.md](pr6-image-supply-chain.md) | 2-2.5 days (Week 6 follow-up; resolves D25; + Round 10: Trivy OS-layer scan D34, SOURCE_DATE_EPOCH D34, dep-review config extract, dep-review pin minor, frozen-checks guard update R36, OpenSSF Best Practices Badge enrollment) |
 
-**Total realistic effort:** ~13.5-17 engineer-days for the 5-PR core rollout (PRs 1-5); +1.5-2 days for PR 6 follow-up = **15-19 engineer-days total, ~6 calendar weeks part-time**.
+**Total realistic effort:** ~16.5-20 engineer-days for the 5-PR core rollout (PRs 1-5); +2-2.5 days for PR 6 follow-up = **19-23 engineer-days total, ~6 calendar weeks part-time** (Round 10 added ~3.5-4 days; calendar slack absorbs without extension).
 
 ## Read in this order
 
@@ -43,6 +47,12 @@ PR 1 → PR 2 → PR 3 (3-phase) → PR 4 → PR 5. Strict ordering for these re
   - **`.pre-commit-config.yaml` three-way collision warning** — PR 1 SHA-pins, PR 2 deletes the entire `mirrors-mypy` block + replaces with `language: system` local hook, AND v2.0 bumps `mirrors-mypy rev: v1.18.2 → v1.19.1` + edits `additional_dependencies`. If v2.0 phase PR landed mid-PR-2-review, re-run autoupdate-freeze on the resulting block before authoring PR 2's deletion commit.
   - **`test-migrations` already deleted on v2.0** — PR 4's hook-deletion list double-counts if v2.0 lands first; verify post-rebase.
   - **27 architecture/ + 4 top-level + 9 baselines = 40 v2.0 guard contributions** + 8 PR 1/3/6 governance guards — projected post-rollout guard count is **~81** (D18 revised Round 8 sweep — was 73, drift-corrected after v2.0 architecture/ count re-verified at 27 not 31). PR 4's CLAUDE.md guards table audit defers to a post-v2.0-rebase commit.
+  - **Round 10 sweep additions to v2.0 collision list:**
+    - **`.github/workflows/release-please.yml`** — modified by PR 1 commit 9 (SHA-pin + permissions + persist-credentials) AND PR 6 commit 2 (publish-docker job extension). v2.0 may also touch (release engineering is naturally part of FastAPI migration). Three-way collision possible.
+    - **`.github/CODEOWNERS`** — PR 1 creates with glob `/tests/unit/test_architecture_*.py @chrishuie`. v2.0 adds `tests/unit/architecture/**/*.py` (27 files in a new directory). The current glob does NOT cover that directory. PR 1 spec must use both patterns: `/tests/unit/test_architecture_*.py @chrishuie` AND `/tests/unit/architecture/ @chrishuie`. If v2.0 lands first, the second glob applies; if PR 1 lands first, glob is broader at no cost.
+    - **`pytest.ini`** — modified by PR 2 commit 8 (registers `arch_guard` marker per D29). v2.0's 31 new architecture tests likely depend on marker behavior. Verify post-rebase that `arch_guard` registration survives v2.0 merge.
+    - **`tests/conftest_db.py`** — modified by PR 3 commit 4b (template-clone optimization). v2.0 adds `_no_module_level_get_engine.py` guard implying it touches DB-engine layer. R31 risk register entry covers throughput; conflict resolution at rebase: take v2.0 baseline + apply PR 3's template-clone diff on top.
+  - **Bytecode-only artifacts on disk (NOT a regression):** `tests/migration/__pycache__/` retains `.pyc` files for `test_a2a_agent_card_snapshot`, `test_mcp_tool_inventory_frozen`, `test_openapi_byte_stability`. The `.py` source files exist on `feat/v2.0.0-flask-to-fastapi` (commits `a2d3b350`, `c736f6c5`, `def4a4ea`), NOT on main or HEAD. Stale bytecode from a prior local v2.0 checkout. Pre-flight A15 cleans up; not a planning issue.
 
 ## Success criteria (6 weeks from start)
 

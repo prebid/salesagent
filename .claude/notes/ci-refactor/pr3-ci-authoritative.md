@@ -10,7 +10,7 @@
 
 ## Scope
 
-Restructure `.github/workflows/` to make CI the authoritative enforcement layer. Replace the matrix-sharded integration tests with `pytest-xdist` (validated safe per `tests/conftest_db.py:323-348` UUID-per-test DB pattern). Add **composite actions** `setup-env` and `_pytest` (NOT reusable workflows — composites avoid the 3-segment rendered-name issue per Decision-4). Freeze the 11 required check names per D17. Add Migration Roundtrip and Coverage Combine jobs.
+Restructure `.github/workflows/` to make CI the authoritative enforcement layer. Replace the matrix-sharded integration tests with `pytest-xdist` (validated safe per `tests/conftest_db.py:323-348` UUID-per-test DB pattern). Add **composite actions** `setup-env` and `_pytest` (NOT reusable workflows — composites avoid the 3-segment rendered-name issue per Decision-4). Freeze the 14 required check names per D17 amended by D30 (Round 10 sweep added Smoke Tests, Security Audit, Quickstart). Add Migration Roundtrip and Coverage Combine jobs. Per D32, integration-tests bootstraps the creative-agent service with 10 env vars (ghcr.io/prebid/creative-agent:ca70dd1e2a6c).
 
 This is the **only PR with a non-atomic merge.** It lands in 3 phases over ~1 week:
 
@@ -66,7 +66,7 @@ inputs:
   uv-version:
     description: 'uv version to install'
     required: false
-    default: '0.11.6'
+    default: '0.11.7'   # Round 9 sweep bumped 0.11.6 → 0.11.7; Round 10 verified the bump applies in setup-env baseline too (was half-applied)
   groups:
     description: 'uv dependency groups to install (space-separated)'
     required: false
@@ -134,16 +134,46 @@ runs:
     - name: Run tox env
       shell: bash
       env:
+        # ADCP_TESTING signals test-mode auth/config paths
         ADCP_TESTING: 'true'
+        # Coverage data file (downloaded by Coverage job for combine)
         COVERAGE_FILE: .coverage.${{ inputs.tox-env }}
+        # ENCRYPTION_KEY: integration tests at tests/integration/test_*encryption* + creative-agent
+        # ↳ matches test.yml:232 today; mock value, not a real secret. Per D-Round-10 + MF-6.
+        ENCRYPTION_KEY: 'PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk='
+        # DELIVERY_WEBHOOK_INTERVAL: tests/e2e/conftest.py:137-141 reads this; tox.ini:24 passes.
+        # ↳ Per D-Round-10 + MF-7. Default '5' matches local tox.ini.
+        DELIVERY_WEBHOOK_INTERVAL: '5'
+        # GEMINI_API_KEY: unconditional mock per D15 (no fork-PR secret leak surface).
+        GEMINI_API_KEY: 'test_key_for_mocking'
+        # SUPER_ADMIN_EMAILS: parity with test.yml today; per Round 11 R11B-9 baseline alignment.
+        SUPER_ADMIN_EMAILS: 'test@example.com'
+        # DB_POOL_SIZE / DB_MAX_OVERFLOW: per Round 11 R11E-02 — reduce app's connection pool
+        # in CI so 4 xdist workers × 12 conn = 48 stays well under Postgres default
+        # max_connections=100. Local dev compose sees production defaults (no override).
+        # NB: src/core/database/database_session.py must read these env vars; verify at PR-3
+        # author time. If not wired, add a tiny PR before this composite lands.
+        DB_POOL_SIZE: '4'
+        DB_MAX_OVERFLOW: '8'
+        # CREATIVE_AGENT_URL: integration job sets this at job level (NOT here in the composite).
+        # The creative-agent runs as a docker-run script step on a custom Docker network;
+        # see PR 3 commit 9 (D32 amended Round 11). Value at job level:
+        # `CREATIVE_AGENT_URL: 'http://localhost:9999/api/creative-agent'` (port 9999 is the
+        # host mapping; `/api/creative-agent` is the path prefix inside the adcp monolith).
       run: |
         XDIST_FLAG=""
+        DIST_FLAG=""
         if [[ "${{ inputs.xdist-workers }}" != "" && "${{ inputs.xdist-workers }}" != "0" ]]; then
           XDIST_FLAG="-n ${{ inputs.xdist-workers }}"
+          # --dist=loadscope keeps tests sharing session-scoped fixtures (DB, app) on the
+          # same worker. Default --dist=load is random and would split UUID-per-test DB
+          # fixtures across workers, causing IntegrityError. Per D33 + Round 10 MF-10.
+          # If any test uses @pytest.mark.xdist_group in the future, switch to loadgroup.
+          DIST_FLAG="--dist=loadscope"
         fi
         uv run tox -e ${{ inputs.tox-env }} -- \
           -p no:cacheprovider \
-          $XDIST_FLAG \
+          $XDIST_FLAG $DIST_FLAG \
           ${{ inputs.pytest-args }}
     - uses: actions/upload-artifact@<SHA>  # v4
       if: always()
@@ -153,12 +183,22 @@ runs:
         path: '.coverage.${{ inputs.tox-env }}'
         include-hidden-files: true
         if-no-files-found: error   # fail noisily; coverage data must be produced
+        retention-days: 7   # Per Round 10 MF-13; matches Scorecard pattern. GH default is 90d (~5MB × N envs × every PR run = quota burn).
     - uses: actions/upload-artifact@<SHA>  # v4
       if: always()
       with:
         name: pytest-report-${{ inputs.tox-env }}
-        path: test-results/
+        # Round 11 R11E-03 fix: tox.ini writes pytest-json-report to {toxworkdir}/<env>.json
+        # (e.g., .tox/unit.json), NOT test-results/. The earlier `path: test-results/` was a
+        # silent-empty-artifact. Glob both candidate paths so this works whether tox.ini is
+        # updated to emit into test-results/ (preferred follow-up) or stays at the
+        # {toxworkdir}-relative default.
+        path: |
+          test-results/
+          .tox/${{ inputs.tox-env }}.json
+          .tox/${{ inputs.tox-env }}-*.json
         if-no-files-found: ignore
+        retention-days: 7   # Per Round 10 MF-13.
 ```
 
 **Why composite, not reusable workflow** (Decision-4): rendering. A reusable-workflow `_pytest.yml`
@@ -189,7 +229,7 @@ grep -qE 'using:\s+["\x27]?composite' .github/actions/_pytest/action.yml
 Files:
 - `.github/workflows/ci.yml` (new)
 
-The 11 frozen check names per D17:
+The 14 frozen check names per D17 amended by D30:
 
 ```yaml
 name: CI
@@ -199,9 +239,12 @@ on:
     branches: [main, develop]
   push:
     branches: [main, develop]
+  workflow_dispatch:   # D37 (Round 10) — preserve manual-run capability matching test.yml:8 today.
   # Note: `develop` is included to maintain parity with the existing test.yml trigger model.
   # Formal deprecation of `develop` is deferred to a post-#1234 follow-up; until then,
   # PR 3 must support both branches so contributor PRs targeting `develop` continue to gate.
+  # `workflow_dispatch` is required by Phase B Step 1b (rendered-name capture) and Phase B
+  # Step 2.5 (in-flight PR drain). R28 ensures cancel-in-progress does NOT cancel dispatch runs.
 
 permissions: {}
 
@@ -211,6 +254,30 @@ permissions: {}
 # Fallback (if anchors fail to parse on first run): emit ci.yml from a small Python template
 # script — preserves single-source-of-truth without runtime anchor dependency.
 x-postgres-service: &postgres-service
+  # Round 11 R11E-02: pool_size=10 + max_overflow=20 = 30 conn/worker × 4 xdist workers
+  # under -n auto = 120 conn at peak; default max_connections=100 → "too many clients" flake.
+  # GHA `services:` block does NOT support a `command:` field (GitHub schema only allows
+  # image/env/ports/options/credentials/volumes), so we cannot pass `-c max_connections=200`
+  # directly to postgres CLI. Two workarounds available; chosen approach is (b):
+  #
+  #   (a) Build a custom postgres image with config in postgresql.conf — adds a build step
+  #       to ci.yml and a Dockerfile to maintain. Rejected: too much surface for one knob.
+  #   (b) Post-start tuning step inside integration-tests / e2e-tests / admin-tests / bdd-tests
+  #       jobs that runs `docker exec <postgres-container> psql -c "ALTER SYSTEM SET ...;"`
+  #       followed by `SELECT pg_reload_conf();`. Reload (NOT restart) works because
+  #       `max_connections` requires restart but we can ALTER SYSTEM + restart-in-place via
+  #       `pg_ctl restart` if needed. **For the per-PR-test scope, the simpler route is to
+  #       lower the app pool size in CI**: set env `DB_POOL_SIZE=4` and `DB_MAX_OVERFLOW=8`
+  #       (4 workers × 12 = 48 conn at peak, comfortably under default 100).
+  #   (c) Move salesagent postgres out of `services:` into a docker-run step like
+  #       creative-postgres. Most invasive but most consistent. P1 follow-up if (b)
+  #       doesn't suffice.
+  #
+  # PR 3 ships with workaround (b) + R31 tripwire monitoring. If `tox -e integration -- -n auto`
+  # post-Phase-A-soak shows "too many clients" failures, escalate to (a) or (c).
+  # NB: `src/core/database/database_session.py:124-125` reads `DB_POOL_SIZE` /
+  # `DB_MAX_OVERFLOW` env vars (verify at PR-3 author time; if not, add a pre-flight ADR
+  # to wire the env-var override).
   image: postgres:17-alpine
   env:
     POSTGRES_USER: adcp_user
@@ -227,15 +294,18 @@ x-database-url: &database-url
   postgresql://adcp_user:test_password@localhost:5432/adcp_test
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Per Round 10 MF-12 (corroborates ruff/uv pattern): include PR-number/SHA in the group key
+  # so two distinct runs at different commits on the same branch don't collide. Without the
+  # third segment, branch-rebase or force-push workflows lose the in-flight cancel.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
   # FYI / Round-9 trade-off note: this expression cancels in-progress runs on PR pushes
-  # but NEVER cancels main-branch runs. If main receives rapid pushes (merge train),
-  # multiple ci.yml runs queue serially and can dominate runner-minute budget. A future
-  # follow-up may switch to:
+  # but NEVER cancels main-branch runs OR workflow_dispatch (R28 + D37). If main receives
+  # rapid pushes (merge train), multiple ci.yml runs queue serially and can dominate
+  # runner-minute budget. A future follow-up may switch to:
   #   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
-  # which cancels rapid main pushes while preserving release-tag runs. Defer the change
-  # until main-push cadence is measured (e.g., 4-week telemetry window post-Phase B).
+  # which cancels rapid main pushes while preserving release-tag runs. Defer until
+  # main-push cadence is measured (e.g., 4-week telemetry window post-Phase B).
 
 jobs:
   quality-gate:
@@ -271,14 +341,107 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    services:
+      postgres: *postgres-service   # D38: integration test needs DB; tox -e unit unsets DATABASE_URL.
+    env:
+      DATABASE_URL: *database-url
     steps:
-      # schema-contract runs pytest against unit + integration contract tests;
-      # pytest needs the package installed to import `src.*`. Project IS installed
-      # (default install-project: 'true' is propagated via _pytest -> setup-env).
+      # schema-contract runs pytest against unit + integration contract tests.
+      # tests/integration/test_mcp_contract_validation.py loads the MCP tool registry
+      # from the DB, so the integration env (DATABASE_URL set) is required.
+      # tox -e unit unsets DATABASE_URL at tox.ini:38; running this under unit would
+      # silently fail the DB-dependent assertions or error on connect. Per D38 +
+      # Round 10 MF-9.
+      - run: uv run python scripts/ops/migrate.py
       - uses: ./.github/actions/_pytest
         with:
-          tox-env: unit
+          tox-env: integration
           pytest-args: 'tests/unit/test_adcp_contract.py tests/integration/test_mcp_contract_validation.py -v'
+
+  # ── Round 10 / D30 additions: Security Audit, Quickstart, Smoke Tests ──
+  # These three jobs preserve regression coverage from `test.yml` (which Phase C deletes).
+  # Without them the equivalent capability silently disappears post-rollout.
+
+  security-audit:
+    name: 'Security Audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: ./.github/actions/setup-env
+        with:
+          install-project: 'false'
+      # Preserves test.yml:15-32 behavior — uvx uv-secure scan with the two existing
+      # CVE allowlists (verify the GHSA IDs are still active at PR 3 author time;
+      # if a fix has shipped, drop the allowlist entry):
+      #   GHSA-7gcm-g887-7qv7  — vulnerable PyPI package transitive (re-verify)
+      #   GHSA-5239-wwwm-4pmq  — Pygments AdlLexer ReDoS (CVE-2026-4539); local-only;
+      #                          ADL lexer not invoked by this app
+      # The pip-audit job in security.yml (PR 1) is complementary, not a replacement —
+      # uv-secure consults a different (smaller, uv-curated) advisory set.
+      - run: uvx uv-secure --ignore-vulns GHSA-7gcm-g887-7qv7,GHSA-5239-wwwm-4pmq
+
+  quickstart:
+    name: 'Quickstart'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@<SHA>  # v4
+        with:
+          persist-credentials: false
+      # Preserves test.yml:239-285 behavior — full docker-compose stack health check.
+      # This is the only CI job that exercises the actual `docker compose up -d` flow that
+      # contributors and operators use. Catches docker-compose drift no other job sees.
+      - name: Bring up the stack
+        run: docker compose up -d --wait
+        timeout-minutes: 8
+      - name: Verify migration logs
+        run: docker compose logs db-init | grep -E "Running migration|migration complete"
+      - name: Verify /health endpoint
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health; then exit 0; fi
+            sleep 2
+          done
+          echo "Health check failed after 60s"; docker compose logs; exit 1
+      - name: Verify core tables exist
+        run: |
+          docker compose exec -T postgres psql -U adcp_user -d adcp -c "\dt" | \
+            grep -E "media_buys|tenants|products" || { docker compose logs; exit 1; }
+      - name: Cleanup (always)
+        if: always()
+        run: docker compose down -v
+
+  smoke-tests:
+    name: 'Smoke Tests'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: ./.github/actions/setup-env
+      # Preserves test.yml:34-75 behavior — pytest tests/smoke/ for fast import/migration/startup.
+      # No Docker needed; ~30s warm. Fail-fast layer that runs cheap before paying for
+      # heavier suites. Includes the @pytest.mark.skip grep gate (test.yml:69-75).
+      - name: Run smoke tests
+        env:
+          ADCP_TESTING: 'true'
+          GEMINI_API_KEY: 'test_key_for_mocking'
+          PYTEST_CURRENT_TEST: 'true'
+        run: uv run pytest tests/smoke/ -v --tb=short
+      - name: Skip-decorator hygiene gate
+        # Round 10 CRIT-6: this gate must run somewhere CI-side after Phase C deletes test.yml.
+        # `repo-invariants` pre-commit hook also covers it, but contributors who skip pre-commit
+        # would otherwise ship `@pytest.mark.skip` decorators undetected.
+        run: |
+          if grep -r "@pytest.mark.skip" tests/ --include="test_*.py" | grep -v "skip_ci"; then
+            echo "❌ Found @pytest.mark.skip without skip_ci label"
+            exit 1
+          fi
+          echo "✅ No skip decorators found"
 
   unit-tests:
     name: 'Unit Tests'
@@ -298,15 +461,98 @@ jobs:
     permissions:
       contents: read
     services:
+      # Only the salesagent's own Postgres lives as a `services:` container. Creative-agent
+      # and its Postgres CANNOT be `services:` because GitHub Actions service containers
+      # cannot resolve each other by hostname (they're each on their own bridge network
+      # with the runner host). They're started as script steps below using
+      # `docker network create + docker run` — matching the existing `test.yml:180-223`
+      # pattern. (Round 11 R11A-03 fix; revoked the Round 10 services-block spec.)
       postgres: *postgres-service
     env:
       DATABASE_URL: *database-url
+      # CREATIVE_AGENT_URL value comes from the docker-run step below; default points at
+      # the host-port-mapped creative-agent container (port 9999 host → 8080 container,
+      # matching test.yml:200). Path is `/api/creative-agent` because creative-agent is
+      # one route in the adcp monolith (per `test.yml:215`).
+      CREATIVE_AGENT_URL: 'http://localhost:9999/api/creative-agent'
     steps:
+      - uses: ./.github/actions/setup-env
       - run: uv run python scripts/ops/migrate.py
+
+      # Round 10 D32 (revised Round 11 R11A-03/R11A-04) — start the creative-agent stack.
+      # Pinned commit `ca70dd1e2a6c` per test.yml:186; bump and re-verify at PR-3 author
+      # time per D32 tripwire and pre-flight A23 (Round 11). The reference creative agent
+      # is part of the adcp monolith repo — built from a source tarball, not pulled from
+      # GHCR. NODE_ENV=production matches test.yml:201 (production code path with mock
+      # WorkOS via the documented test-mode env vars).
+      - name: Build creative-agent image (from pinned source tarball)
+        run: |
+          mkdir -p /tmp/adcp-server
+          curl -sL https://github.com/adcontextprotocol/adcp/archive/ca70dd1e2a6c.tar.gz \
+            | tar xz -C /tmp/adcp-server --strip-components=1
+          docker build -t adcp-creative-agent /tmp/adcp-server
+
+      - name: Create creative-agent docker network
+        run: docker network create creative-net
+
+      - name: Start creative-agent's Postgres
+        run: |
+          docker run -d --network creative-net --name adcp-postgres \
+            -e POSTGRES_DB=adcp_registry \
+            -e POSTGRES_USER=adcp \
+            -e POSTGRES_PASSWORD=localdev \
+            postgres:16-alpine
+          # Wait for adcp-postgres to be ready (container's pg_isready)
+          for i in $(seq 1 30); do
+            if docker exec adcp-postgres pg_isready -U adcp > /dev/null 2>&1; then
+              echo "adcp-postgres ready"; break
+            fi
+            sleep 2
+          done
+
+      - name: Start creative-agent
+        run: |
+          docker run -d --network creative-net --name creative-agent \
+            -p 9999:8080 \
+            -e NODE_ENV=production \
+            -e PORT=8080 \
+            -e DATABASE_URL=postgresql://adcp:localdev@adcp-postgres:5432/adcp_registry \
+            -e RUN_MIGRATIONS=true \
+            -e ALLOW_INSECURE_COOKIES=true \
+            -e DEV_USER_EMAIL=ci@test.com \
+            -e DEV_USER_ID=ci-user \
+            -e AGENT_TOKEN_ENCRYPTION_SECRET='local-ci-encryption-key-32chars!!' \
+            -e WORKOS_API_KEY=sk_test_dummy \
+            -e WORKOS_CLIENT_ID=client_dummy \
+            adcp-creative-agent
+
+      - name: Wait for creative-agent health
+        # Health probe runs on the runner host (where curl is preinstalled), NOT inside
+        # the creative-agent container — Round 11 R11A-04 fix avoids the "curl missing
+        # in Node image" silent-timeout. 60×2s = 120s budget, matches test.yml:213-223.
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:9999/api/creative-agent/health > /dev/null 2>&1; then
+              echo "Creative agent healthy on :9999"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Creative agent failed to start"
+          docker logs creative-agent | tail -50
+          docker logs adcp-postgres | tail -20
+          exit 1
+
       - uses: ./.github/actions/_pytest
         with:
           tox-env: integration
           xdist-workers: 'auto'
+
+      - name: Cleanup creative-agent stack
+        if: always()
+        run: |
+          docker rm -f creative-agent adcp-postgres 2>/dev/null || true
+          docker network rm creative-net 2>/dev/null || true
 
   e2e-tests:
     name: 'E2E Tests'
@@ -419,6 +665,9 @@ jobs:
       - quality-gate
       - type-check
       - schema-contract
+      - security-audit       # D30 (Round 10)
+      - quickstart           # D30 (Round 10)
+      - smoke-tests          # D30 (Round 10)
       - unit-tests
       - integration-tests
       - e2e-tests
@@ -445,8 +694,8 @@ yamllint -d relaxed .github/workflows/ci.yml
 actionlint .github/workflows/ci.yml
 # Workflow header is `name: CI` (D26) — GitHub auto-prefixes job names
 grep -qE '^name:\s+CI\s*$' .github/workflows/ci.yml
-# All 11 frozen BARE job names present (D26: bare, no 'CI /' prefix)
-for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Unit Tests' 'Integration Tests' 'E2E Tests' 'Admin UI Tests' 'BDD Tests' 'Migration Roundtrip' 'Coverage' 'Summary'; do
+# All 14 frozen BARE job names present (D26: bare, no 'CI /' prefix; D30 expanded 11→14)
+for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Security Audit' 'Quickstart' 'Smoke Tests' 'Unit Tests' 'Integration Tests' 'E2E Tests' 'Admin UI Tests' 'BDD Tests' 'Migration Roundtrip' 'Coverage' 'Summary'; do
   grep -qF "name: '$name'" .github/workflows/ci.yml || \
     grep -qF "name: \"$name\"" .github/workflows/ci.yml || \
     grep -qE "^\s+name:\s+$name\s*$" .github/workflows/ci.yml
@@ -538,24 +787,50 @@ time tox -e integration -- -n auto
 
 The `{env:PYTEST_XDIST_WORKER:gw0}` substitution gives each xdist worker its own file (`gw0`, `gw1`, ...); the `:gw0` default keeps non-xdist runs valid. Coverage-combine and JSON-aggregator steps must adapt to glob `*-gw*.json`.
 
-**Sub-fix — filelock + worker-id gate around `migrate.py`.** The session-scoped fixture at `tests/conftest_db.py:79-81` runs migrations on every worker startup; under xdist with N workers, that's N concurrent `alembic upgrade head` invocations racing on the same DB. Gate so only `gw0` runs migrations; other workers wait via filelock until the lockfile is released:
+**Note (Round 10 CRIT-7):** the filelock + worker-id gate around `migrate.py` is its own commit (4c, below) — promoted from prose-only embedded "sub-fix" to a reviewable standalone change.
+
+#### Commit 4c — `test: filelock + worker-id gate around migrate.py for xdist safety`
+
+The session-scoped fixture at `tests/conftest_db.py:79-81` runs `subprocess.run([..., "scripts/ops/migrate.py"])` on every worker startup. Under xdist with N workers (`-n auto` per commit 4b's xdist-workers='auto'), that's N concurrent `alembic upgrade head` invocations racing on the same DB. Symptoms include `IntegrityError: duplicate key` on alembic_version, partial schema, or first-worker-wins schema with later workers running against incomplete state.
+
+Gate so only `gw0` runs migrations; other workers wait via filelock and find the schema at head when the lock releases (alembic upgrade head is idempotent — re-running on already-migrated schema is a no-op).
+
+Files:
+- `tests/conftest_db.py` (modify lines ~79-81)
 
 ```python
 # tests/conftest_db.py — replace the unconditional migrate.py call
 import os
+import subprocess
 from filelock import FileLock
 
 def _run_migrations_once(template_dsn):
     worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
-    lock_path = f"/tmp/salesagent-migrate-{os.getpid()}.lock"  # or per-suite root_tmp_dir
+    # Lock file under root_tmp_dir is per-test-session; pgid keeps separate sessions isolated.
+    lock_path = f"/tmp/salesagent-migrate-{os.getpgid(0)}.lock"
     with FileLock(lock_path, timeout=120):
-        # gw0 runs migrations; other workers acquire the lock after gw0 releases
-        # and find the schema already at head — alembic upgrade head is idempotent.
+        # gw0 runs migrations under the lock; other workers acquire after gw0 releases
+        # and skip (idempotency check below). alembic upgrade head is already idempotent
+        # — running it twice on a fully-migrated schema is a no-op — but we skip the
+        # subprocess overhead for the common case.
         if worker == "gw0":
             subprocess.run(["uv", "run", "python", "scripts/ops/migrate.py"], check=True)
 ```
 
-Add `filelock>=3.13` to `pyproject.toml [dependency-groups].dev` (verify it's not already pulled in transitively; if `filelock` is already a transitive dependency of e.g. `virtualenv` or `pytest`, no addition needed). Alternative: use `flock(1)` system tool inline in CI's pre-step rather than Python. The Python form is preferred for parity with local `tox -e integration -- -n auto` runs.
+`filelock` is already a main dependency at `pyproject.toml:48` (`filelock>=3.20.3`); no additional add needed for this commit. (PR 2 commit 4.5 adds `pytest-xdist` and `pytest-randomly` to the dev group per D33; filelock stays where it is.)
+
+**Why a standalone commit:** under Round 10 CRIT-7, this race-condition fix was embedded in commit 4b's prose. The audit caught the gap — without a standalone commit, the change either (a) ships unreviewed inside commit 4b's diff, or (b) is silently dropped during executor handoff. Promoted here for explicit reviewability.
+
+Verification:
+```bash
+# Filelock import present in conftest_db.py
+grep -q 'from filelock import FileLock' tests/conftest_db.py
+# Worker-id gate present
+grep -q 'PYTEST_XDIST_WORKER' tests/conftest_db.py
+# Run xdist soak — must be green for ≥3 consecutive runs at -n 4 AND ≥1 run at -n auto
+DATABASE_URL="postgresql://adcp_user:test_password@localhost:5432/adcp_test" \
+  tox -e integration -- -n 4
+```
 
 #### Commit 5 — `ci: pin GitHub Actions in new workflows to SHAs`
 
@@ -646,16 +921,75 @@ Verification:
 ! grep -q 'ADCP_SALES_PORT: 8080' .github/workflows/test.yml
 ```
 
-#### Commit 9 — `ci: unconditional creative agent in integration; permissions blocks`
+#### Commit 9 — `ci: unconditional creative agent in integration; permissions blocks (D32 full bootstrap, Round 11 corrected)`
+
+Closes #1233 D12, PD15. **Per D32 + Round 10 CRIT-2 + Round 11 R11A-03/R11A-04:** spec content matches disk truth (`test.yml:180-223`); creative-agent runs as docker-run script-steps on a custom `creative-net` Docker network (NOT as `services:` blocks — GHA service containers can't resolve each other by hostname).
 
 Files:
-- `.github/workflows/test.yml:181, etc.` (modify)
+- `.github/workflows/ci.yml` `integration-tests` job (already authored in commit 3 — this commit is the bootstrap that makes the integration job actually run, NOT a separate workflow change)
 - All workflows missing top-level `permissions:` block (PR 1 commit 9 should have done this; verify)
 
-Closes #1233 D12, PD15.
+The integration-tests job in commit 3 already declares the docker-network + script-step bootstrap (matches `test.yml:180-223` verbatim with corrections for `xdist-workers: 'auto'` from commit 4b and 14-name frozen list). This commit's role is to:
+
+1. **Re-verify the pinned source-tarball SHA at PR-3 author time.** Round 10 D32 used `ca70dd1e2a6c` per `test.yml:186` (the adcp monolith repo source tarball, NOT a Docker image — creative-agent is one route in the full app and is built locally via `docker build`). If a stable release has been tagged upstream since 2026-04-26, prefer the release SHA. Update both the curl URL and the verification grep.
+
+2. **Verify environment variables match the upstream creative-agent's expected schema.** The upstream may have added required env vars between Round 10 audit time and PR 3 author time. Inspect the pinned source:
+   ```bash
+   curl -sL https://github.com/adcontextprotocol/adcp/archive/ca70dd1e2a6c.tar.gz \
+     | tar xz -C /tmp/adcp-pinned --strip-components=1
+   grep -RhE 'process\.env\.[A-Z_]+' /tmp/adcp-pinned/src/ 2>/dev/null \
+     | sort -u | head -30
+   ```
+   Confirm the 10 env vars (table below) are still authoritative; flag any new required vars to the user before authoring.
+
+3. **Confirm the health-check endpoint** is still `/api/creative-agent/health` (NOT `/health` — the creative agent is one route in the adcp monolith; the adcp app prefixes `/api/creative-agent`). If the upstream relocated the route, update both the curl URL and the `CREATIVE_AGENT_URL` env value.
+
+4. **Audit `permissions:` blocks** across all workflows (`test.yml` is being deleted in Phase C, but until then both old + new workflows run — verify both have explicit `permissions: {}` at top-level).
+
+The 10 env vars (per D32 amended Round 11 — values match `test.yml:201-211` verbatim):
+
+| Var | Value | Purpose |
+|---|---|---|
+| `NODE_ENV` | `production` | Production code path; mock identity provided via `DEV_USER_*` + `WORKOS_*` test-mode flags below |
+| `PORT` | `8080` | Container internal port; mapped to host `9999` for `CREATIVE_AGENT_URL` reach |
+| `DATABASE_URL` | `postgresql://adcp:localdev@adcp-postgres:5432/adcp_registry` | adcp monolith's own DB (separate from salesagent's `adcp_test`); resolves via `creative-net` Docker network |
+| `RUN_MIGRATIONS` | `true` | Auto-migrate on startup |
+| `ALLOW_INSECURE_COOKIES` | `true` | HTTP-only test mode (no HTTPS in CI) |
+| `DEV_USER_EMAIL` | `ci@test.com` | Mock identity bound to test JWT |
+| `DEV_USER_ID` | `ci-user` | Mock identity bound to test JWT |
+| `AGENT_TOKEN_ENCRYPTION_SECRET` | `local-ci-encryption-key-32chars!!` | Test-only mock; 32-char string required for AES-256-GCM init in adcp |
+| `WORKOS_API_KEY` | `sk_test_dummy` | Test-mode bypass; adcp's WorkOS client doesn't validate against real WorkOS for `sk_test_*` keys |
+| `WORKOS_CLIENT_ID` | `client_dummy` | Test-mode bypass paired with `sk_test_dummy` |
+
+**No real secrets in CI.** All 10 values are test-mode mocks that match `test.yml:201-211` verbatim. The mock-identity path is exercised by adcp's `NODE_ENV=production` plus `WORKOS_API_KEY=sk_test_*` heuristic. The `AGENT_TOKEN_ENCRYPTION_SECRET` is intentionally a literal string published in the repo — its only role is satisfying the AES-256-GCM init's 32-byte requirement during integration tests; production secret rotation is out of scope.
 
 Verification:
 ```bash
+# Workflow has the integration-tests job with the docker-run step pattern (NOT services blocks)
+! grep -qE '^\s+creative-agent:' .github/workflows/ci.yml   # negative: no services-block creative-agent
+! grep -qE '^\s+creative-postgres:' .github/workflows/ci.yml # negative: no services-block creative-postgres
+grep -q 'docker network create creative-net' .github/workflows/ci.yml
+grep -q 'docker run -d --network creative-net --name creative-agent' .github/workflows/ci.yml
+grep -q 'docker run -d --network creative-net --name adcp-postgres' .github/workflows/ci.yml
+grep -q 'ca70dd1e2a6c' .github/workflows/ci.yml
+
+# All 10 env vars enumerated in the docker run step
+for var in NODE_ENV PORT DATABASE_URL RUN_MIGRATIONS ALLOW_INSECURE_COOKIES \
+           DEV_USER_EMAIL DEV_USER_ID AGENT_TOKEN_ENCRYPTION_SECRET \
+           WORKOS_API_KEY WORKOS_CLIENT_ID; do
+  grep -q "${var}=" .github/workflows/ci.yml || { echo "missing creative-agent env: $var"; exit 1; }
+done
+
+# CREATIVE_AGENT_URL exported on integration-tests job, with /api/creative-agent path
+grep -qE "CREATIVE_AGENT_URL: 'http://localhost:9999/api/creative-agent'" .github/workflows/ci.yml
+
+# Health probe runs on the host (curl available there), NOT inside the container (curl missing in node images)
+grep -A 5 'Wait for creative-agent health' .github/workflows/ci.yml | grep -q 'curl -sf http://localhost:9999/api/creative-agent/health'
+
+# Cleanup-on-always step exists
+grep -q 'docker rm -f creative-agent adcp-postgres' .github/workflows/ci.yml
+
+# All workflows have explicit top-level permissions:
 for f in .github/workflows/*.yml; do
   grep -qE '^permissions:' "$f" || { echo "missing perms: $f"; exit 1; }
 done
@@ -737,11 +1071,14 @@ PR_SHA="${PR_SHA:-$(gh pr list --state merged --limit 1 --search "phase a" --jso
 gh api "repos/prebid/salesagent/commits/${PR_SHA}/check-runs" --paginate \
   --jq '.check_runs[].name' | sort -u > /tmp/rendered-names.txt
 
-# Compare to the 11 expected names — they must match the Step 2 PATCH body exactly
+# Compare to the 14 expected names (D17 amended by D30) — they must match the Step 2 PATCH body exactly
 cat <<'EOF' | sort -u > /tmp/expected-names.txt
 CI / Quality Gate
 CI / Type Check
 CI / Schema Contract
+CI / Security Audit
+CI / Quickstart
+CI / Smoke Tests
 CI / Unit Tests
 CI / Integration Tests
 CI / E2E Tests
@@ -757,7 +1094,7 @@ diff /tmp/expected-names.txt <(grep -F -f /tmp/expected-names.txt /tmp/rendered-
   || { echo "Rendered names diverge from expected. Inspect /tmp/rendered-names.txt and update PATCH body in Step 2 to match exact strings before flipping."; exit 1; }
 ```
 
-If the diff fails AFTER applying Decision-4 (composite migration), the failure indicates a regression — a reusable workflow has been re-introduced somewhere. The structural guard `test_architecture_required_ci_checks_frozen.py` should have caught this before the soak; if it didn't, audit `ci.yml` for `uses: ./.github/workflows/_*.yml` and convert to composite. Do NOT flip Phase B until rendered names are 2-segment for all 11 checks.
+If the diff fails AFTER applying Decision-4 (composite migration), the failure indicates a regression — a reusable workflow has been re-introduced somewhere. The structural guard `test_architecture_required_ci_checks_frozen.py` should have caught this before the soak; if it didn't, audit `ci.yml` for `uses: ./.github/workflows/_*.yml` and convert to composite. Do NOT flip Phase B until rendered names are 2-segment for all 14 checks.
 
 Pre-Decision-4 historical note: the original plan used a reusable workflow `_pytest.yml` and accepted the 3-segment rendered name as a runtime concern (flatten on detection). Decision-4 (2026-04-25 P0 sweep) eliminates this class of bug at design time by mandating composite actions.
 
@@ -801,6 +1138,9 @@ gh api -X PATCH \
     {"context": "CI / Quality Gate"},
     {"context": "CI / Type Check"},
     {"context": "CI / Schema Contract"},
+    {"context": "CI / Security Audit"},
+    {"context": "CI / Quickstart"},
+    {"context": "CI / Smoke Tests"},
     {"context": "CI / Unit Tests"},
     {"context": "CI / Integration Tests"},
     {"context": "CI / E2E Tests"},
@@ -825,6 +1165,9 @@ cat <<'EOF' | sort > /tmp/expected
 CI / Quality Gate
 CI / Type Check
 CI / Schema Contract
+CI / Security Audit
+CI / Quickstart
+CI / Smoke Tests
 CI / Unit Tests
 CI / Integration Tests
 CI / E2E Tests
@@ -841,7 +1184,7 @@ Expected diff: empty.
 
 #### Step 4 — Open a test PR
 
-Open a trivial PR (e.g., add a comment) and confirm all 11 new check names show as required. If any fail unexpectedly, see rollback.
+Open a trivial PR (e.g., add a comment) and confirm all 14 new check names show as required. If any fail unexpectedly, see rollback.
 
 ### Phase C — Cleanup (small follow-up PR)
 
@@ -870,7 +1213,7 @@ From issue #1234 §Acceptance criteria, scoped to PR 3:
 - [ ] Composite action `.github/actions/setup-env/action.yml` exists
 - [ ] Composite action `_pytest` exists at `.github/actions/_pytest/action.yml` with `using: composite` (Decision-4 — NOT a reusable workflow)
 - [ ] No `.github/workflows/_pytest.yml` file (confirms composite migration; reusable form would re-introduce 3-segment rendering)
-- [ ] Required check names match the 11 frozen names per D17
+- [ ] Required check names match the 14 frozen names per D17 amended by D30
 - [ ] Every workflow has top-level `permissions: {}` (or restrictive equivalent)
 - [ ] `grep -E '\|\| true|continue-on-error' .github/workflows/*.yml` returns zero hits in lint-related contexts
 - [ ] Coverage-combine job posts single combined number on PRs

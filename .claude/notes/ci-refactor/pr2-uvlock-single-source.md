@@ -132,6 +132,50 @@ Verification:
 [[ $(grep -rE 'pip install -e \.\[dev\]|--extra dev' Makefile scripts/ docs/ 2>/dev/null | wc -l) == "0" ]]
 ```
 
+### Commit 4.5 — `chore(deps): add pytest-xdist + pytest-randomly to dev group (PR 3 prereq)`
+
+Files:
+- `pyproject.toml` (modify `[dependency-groups].dev` block)
+
+Per **D33** (Round 10 sweep). PR 3 commit 4b's `integration_db` template-clone optimization requires `pytest-xdist≥3.6` (xdist is invoked from `_pytest` composite action with `-n auto`). PR 3 spec line 9 declared this as a precondition ("MUST be added... before this PR's xdist commits land. Best location: PR 2 commit 4 or 5") — this commit fulfills that contract.
+
+`pytest-randomly` adopts the order-independence enforcement standard from Django, attrs, structlog. Combined with PR 3's `--dist=loadscope`, it surfaces hidden inter-test dependencies that the project's UUID-per-test DB pattern otherwise hides.
+
+```toml
+# pyproject.toml [dependency-groups].dev — append both entries
+[dependency-groups]
+dev = [
+    # ... existing dev dependencies preserved ...
+    "pytest-xdist>=3.6",          # PR 3 commit 4b template-clone (xdist -n auto + --dist=loadscope)
+    "pytest-randomly",            # order-independence enforcement (D33)
+]
+```
+
+`filelock>=3.20.3` is already a main dependency at `pyproject.toml:48` — no addition needed for PR 3 commit 4c's filelock+worker-id gate.
+
+Why a dedicated commit (between 4 and 5):
+- Commit 4 (extra → group migration) does not add NEW deps; it only changes invocation.
+- Commit 5 deletes `[project.optional-dependencies].dev`. Adding new dev deps in commit 5 would make commit 5's diff harder to review.
+- A standalone commit makes the "PR 3 precondition fulfillment" reviewable independently. Spec contract: PR 3 commits 4b and 4c MUST find these packages on main when they author.
+
+Verification:
+```bash
+# Both packages present in dev group after this commit
+uv run python -c "
+import tomllib
+data = tomllib.loads(open('pyproject.toml','rb').read().decode())
+deps = data['dependency-groups']['dev']
+assert any('pytest-xdist' in d for d in deps), 'pytest-xdist missing'
+assert any('pytest-randomly' in d for d in deps), 'pytest-randomly missing'
+print('OK')
+"
+# Filelock unchanged (still in main deps, not added to dev)
+grep -qE '^\s+"filelock>=' pyproject.toml
+# Lockfile updated (uv lock will re-run as part of `uv add`)
+grep -q 'pytest-xdist' uv.lock
+grep -q 'pytest-randomly' uv.lock
+```
+
 ### Commit 5 — `refactor(deps): delete [project.optional-dependencies].dev (PEP 735 dependency-groups is canonical)`
 
 Files:
@@ -260,6 +304,8 @@ markers =
     arch_guard: structural guards (run with -m arch_guard)
     # ... existing markers
 ```
+
+**Ownership note (Round 10 MF-1):** This commit OWNS the `arch_guard` marker registration in `pytest.ini`. PR 4 commit 1 VERIFIES the registration via `grep`, does NOT re-write. Earlier spec revisions had both PRs registering the marker; the verify-only stance in PR 4 prevents the duplicate-write surfaced by Round 10 audit.
 
 Verification:
 ```bash

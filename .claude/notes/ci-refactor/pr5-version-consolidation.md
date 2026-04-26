@@ -1,26 +1,36 @@
-# PR 5 — Cross-surface version consolidation
+# PR 5 — Cross-surface version consolidation + container hardening
 
 **Drift items closed:** PD9, PD10, PD11, PD12
-**Estimated effort:** 2 days
+**Estimated effort:** 2.5 days (Round 10 sweep added Dockerfile hardening + ADR-008 copy)
 **Depends on:** PR 3 Phase C merged (uses the `_pytest/action.yml` composite — Decision-4 P0 sweep — and per-job `services: postgres:` blocks at job level in `ci.yml`); independent of PR 4
-**Blocks:** none (final PR of rollout)
-**Decisions referenced:** D24 (UV_VERSION resolution)
+**Blocks:** none (final PR of rollout core; PR 6 is the Week-6 follow-up)
+**Decisions referenced:** D24 (UV_VERSION resolution), D34 (Round 10: Dockerfile @sha256: + USER non-root), D36 (Round 10: ADR-008 copy from drafts/)
 
 ## Scope
 
 Consolidate Python, Postgres, and uv version anchors across the repo. Single source of truth per dimension:
 - **Python**: `.python-version` (canonical), referenced via `python-version-file:` in workflows and `ARG PYTHON_VERSION` in Dockerfile
 - **Postgres**: single image tag (`postgres:17-alpine`) referenced everywhere
-- **uv**: SHA-pinned `COPY --from=ghcr.io/astral-sh/uv:<version>` in Dockerfile; `version: <pin>` in setup-uv action
+- **uv**: SHA-pinned `COPY --from=ghcr.io/astral-sh/uv:<version>@sha256:<digest>` in Dockerfile; `version: <pin>` in setup-uv action
 
-**[DEFERRED per D28 / ADR-008 — P0 sweep]** Black/ruff `target-version` bump from `py311` → `py312` is deferred to a separate hand-reviewed PR after #1234 closes (rationale: 2026-04-14 unsafe-autofix incident pattern). PR 5 retains uv/Python/Postgres anchor consolidation only — the load-bearing piece.
+**Round 10 sweep additions** (per D34 + D36):
+- **Dockerfile base image** `@sha256:` digest pin (Round 10 sweep — was tag-only `python:3.12-slim`)
+- **Dockerfile `USER` non-root** stanza (Round 10 sweep — was running as root)
+- **Structural guard** `test_architecture_dockerfile_digest_pinned.py`
+- **ADR-008 copy** from `drafts/` to `docs/decisions/` (per D36)
+- ADR-001/002/003 are NOT created here — PR 1 commit 7 + 11 already write them directly to `docs/decisions/`. PR 5's job is just the ADR-008 copy.
+
+**[DEFERRED per D28 / ADR-008 — P0 sweep]** Black/ruff `target-version` bump from `py311` → `py312` is deferred to a separate hand-reviewed PR after #1234 closes (rationale: 2026-04-14 unsafe-autofix incident pattern). PR 5 retains uv/Python/Postgres anchor consolidation + Dockerfile hardening only — the load-bearing pieces.
+
+**[DEFERRED — `SOURCE_DATE_EPOCH` reproducible builds]** Per D34, this lands in PR 6 (release-please.yml publish-docker job), not PR 5. PR 5 only modifies the Dockerfile FROM line + USER directive; the build-time reproducibility flag is a release-pipeline concern.
 
 ## Out of scope
 
 - Python version bump (3.12 → 3.13) — this PR only aligns existing anchors, doesn't change the version
 - Postgres version bump beyond unifying — PG17 chosen because dev compose already uses it
 - uv version bump — pinning current 0.11.7, not upgrading
-- New Fortune-50 patterns (harden-runner, SBOM, etc.) — defer to PR 6 follow-up
+- New Fortune-50 patterns (harden-runner, cosign, SBOM, dependency-review, Trivy scan, SOURCE_DATE_EPOCH) — defer to PR 6 follow-up
+- Distroless / Chainguard runtime image (per D34 P2 follow-up — runtime stage installs `nginx + supercronic + curl`; decompose into sidecars first)
 
 ## Internal commit sequence
 
@@ -35,7 +45,7 @@ Files:
 
 `.python-version` is already canonical (5 bytes, contains `3.12`). PR 5 makes everything else read FROM it.
 
-`Dockerfile` change:
+`Dockerfile` change (Round 10 sweep — combined with D34 base-image SHA pin; Round 11 R11A-02 added `ARG SOURCE_DATE_EPOCH`):
 
 ```dockerfile
 # Before:
@@ -43,12 +53,32 @@ FROM python:3.12-slim AS builder
 # ... stages
 FROM python:3.12-slim
 
-# After:
+# After (D34 — pin to immutable digest; dependabot docker ecosystem auto-bumps;
+# Round 11 R11A-02 — declare ARG SOURCE_DATE_EPOCH so PR 6's --build-arg flows into
+# layer timestamps for reproducible-build digest stability):
 ARG PYTHON_VERSION=3.12
-FROM python:${PYTHON_VERSION}-slim AS builder
+ARG PYTHON_BASE_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
+# SOURCE_DATE_EPOCH is consumed by BuildKit (≥0.12) to rewrite layer timestamps
+# deterministically. Default value is 0 (epoch) which produces stable but obviously-
+# wrong timestamps; PR 6's publish-docker job overrides via --build-arg
+# SOURCE_DATE_EPOCH=$(git log -1 --format=%ct). Without this ARG declaration, PR 6's
+# build-arg is silently ignored — Round 11 R11A-02 caught this.
+ARG SOURCE_DATE_EPOCH=0
+FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST} AS builder
 # ... stages
-FROM python:${PYTHON_VERSION}-slim
+FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST}
 ```
+
+**At PR-5 author time:** resolve `PYTHON_BASE_DIGEST` to the actual current digest:
+
+```bash
+# Resolve the current digest for python:3.12-slim
+docker pull python:3.12-slim
+docker inspect python:3.12-slim --format='{{index .RepoDigests 0}}' | awk -F@ '{print $2}'
+# Use the resulting sha256:... value as the ARG default in the Dockerfile.
+```
+
+Dependabot's `docker` ecosystem (already enabled in PR 1 commit 4 dependabot.yml) auto-bumps the digest as upstream `python:3.12-slim` re-publishes. The `@${PYTHON_BASE_DIGEST}` syntax is supported by Docker BuildKit 0.10+ (CI uses ≥0.12).
 
 Caller (CI workflow or local build):
 ```bash
@@ -222,10 +252,120 @@ are **DEFERRED** to the same post-#1234 follow-up. Rationale: identical to commi
 
 PR 5 commit 6 slot is vacant; commit 7 below remains.
 
-### Commit 7 — vacant (rolled into commit 8)
+### Commit 7 — `chore(docker): add USER non-root + structural guard for digest pin (D34)`
 
-The `black reformat + ruff fix` commit was for the target-version bump output, which is
-deferred per D28. Slot is vacant.
+Files:
+- `Dockerfile` (add stanza before ENTRYPOINT)
+- `tests/unit/test_architecture_dockerfile_digest_pinned.py` (new structural guard)
+
+Per **D34** (Round 10 sweep). Two changes:
+
+**1. Non-root runtime user.** The image currently runs as root in the runtime stage. Top-OSS norm + Kubernetes `runAsNonRoot: true` admission requires a non-root UID. Add to the runtime stage (NOT the builder stage):
+
+```dockerfile
+# In the runtime stage, BEFORE the ENTRYPOINT line:
+
+# Create a dedicated non-root user for the runtime stage. Numeric UID/GID lets
+# Kubernetes runAsNonRoot admission verify without root-equivalence checks.
+RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app
+
+# Ensure the app's working directories are owned by the non-root user.
+# Adjust paths to match the actual COPY targets in this stage.
+RUN chown -R app:app /app /var/log/app 2>/dev/null || true
+
+USER app:app
+```
+
+If the image's existing `chown www-data` lines are for nginx-only paths, keep them; the new `app:app` ownership applies to the Python application's working directory only.
+
+**2. Structural guard** — fail CI if the Dockerfile reverts to a tag-only base or drops `USER`:
+
+```python
+# tests/unit/test_architecture_dockerfile_digest_pinned.py
+"""Asserts Dockerfile pins base image by @sha256: digest and runs as non-root.
+
+Per D34 (Round 10 sweep). Without these, the cosign-signed image carries
+unverified base-layer provenance and root-equivalent runtime privileges.
+"""
+import re
+from pathlib import Path
+
+import pytest
+
+
+@pytest.mark.arch_guard
+def test_dockerfile_base_image_digest_pinned():
+    repo = Path(__file__).resolve().parents[2]
+    dockerfile = (repo / "Dockerfile").read_text()
+    # Every FROM that's not `FROM scratch` or `FROM <stage> AS ...` (intra-Dockerfile reference)
+    # must include @sha256:... after the tag.
+    from_lines = [ln for ln in dockerfile.splitlines() if ln.strip().startswith("FROM ")]
+    violations = []
+    for ln in from_lines:
+        m = re.match(r"^FROM\s+(\S+)(?:\s+AS\s+\S+)?\s*$", ln.strip())
+        if not m:
+            continue
+        ref = m.group(1)
+        # Skip stage references (e.g., `FROM builder`) — they have no tag.
+        if ":" not in ref and "@" not in ref and "/" not in ref:
+            continue
+        # Skip ARG-resolved references that include the digest ARG.
+        if "${PYTHON_BASE_DIGEST}" in ref or "@sha256:" in ref or "@${" in ref:
+            continue
+        violations.append(f"Dockerfile FROM line lacks @sha256: digest: {ln.strip()}")
+    assert not violations, "\n".join(violations)
+
+
+@pytest.mark.arch_guard
+def test_dockerfile_runs_as_non_root():
+    repo = Path(__file__).resolve().parents[2]
+    dockerfile = (repo / "Dockerfile").read_text()
+    # The runtime stage must end with USER <non-root>.
+    # Find the LAST FROM line (= runtime stage start), then verify a USER directive
+    # appears after it (NOT `USER root` or empty).
+    from_indices = [i for i, ln in enumerate(dockerfile.splitlines()) if ln.strip().startswith("FROM ")]
+    assert from_indices, "no FROM lines in Dockerfile"
+    runtime_stage = dockerfile.splitlines()[from_indices[-1]:]
+    user_lines = [ln.strip() for ln in runtime_stage if ln.strip().startswith("USER ")]
+    assert user_lines, "Dockerfile runtime stage has no USER directive (D34)"
+    last_user = user_lines[-1]
+    assert last_user not in ("USER root", "USER 0"), \
+        f"Dockerfile runtime stage runs as root: {last_user}"
+```
+
+Verification:
+```bash
+test -f tests/unit/test_architecture_dockerfile_digest_pinned.py
+uv run pytest tests/unit/test_architecture_dockerfile_digest_pinned.py -v
+# Build the image and confirm it runs as the non-root UID
+docker build -t salesagent-pr5-test .
+docker inspect salesagent-pr5-test --format='{{.Config.User}}' | grep -qE 'app|1001'
+docker rmi salesagent-pr5-test
+```
+
+### Commit 7b — `docs(decisions): copy ADR-008 from drafts/ to docs/decisions/ (D36)`
+
+Files:
+- `docs/decisions/adr-008-target-version-bump.md` (new — copy of `.claude/notes/ci-refactor/drafts/adr-008-target-version-bump.md`)
+
+Per **D36** (Round 10 sweep). ADR-008 lives in `drafts/` because it evolved across multiple planning rounds; PR 5 is the first PR whose scope touches the deferred target-version concern, so it copies ADR-008 to the production `docs/decisions/` location.
+
+```bash
+cp .claude/notes/ci-refactor/drafts/adr-008-target-version-bump.md \
+   docs/decisions/adr-008-target-version-bump.md
+```
+
+The drafts/ original stays as audit trail (`drafts/README.md` notes the production copy now exists). This commit does NOT modify content; it's a verbatim copy.
+
+PR 1 commit 7 already creates `docs/decisions/` and lands ADR-001 + ADR-002 there. PR 1 commit 11 lands ADR-003 there. By PR 5 author time, the directory exists. Verification:
+
+```bash
+test -f docs/decisions/adr-008-target-version-bump.md
+diff -q docs/decisions/adr-008-target-version-bump.md \
+   .claude/notes/ci-refactor/drafts/adr-008-target-version-bump.md
+# Confirm `## Status` is the canonical ADR header
+grep -qE '^## Status' docs/decisions/adr-008-target-version-bump.md
+```
 
 ### Commit 8 — `chore: regression checks against PG17`
 

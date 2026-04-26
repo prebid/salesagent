@@ -159,12 +159,64 @@ grep -qE 'dependency-name: "?googleads"?' .github/dependabot.yml
 ! grep -qE 'auto-?merge' .github/dependabot.yml
 ```
 
-### Commit 5 — `ci: add security.yml (zizmor + pip-audit)`
+### Commit 5 — `ci: add security.yml (zizmor + pip-audit + gitleaks + pinact + actionlint)`
 
 Files:
 - `.github/workflows/security.yml` (new)
+- `.pre-commit-config.yaml` (Round 10 D35 — append `gitleaks` repo entry alongside the existing repos)
 
-Closes PD13.
+Closes PD13. **Round 10 D35 addition:** gitleaks adopted as both a pre-commit hook (commit-stage, fast scan of changed files) and a workflow job (full-history scan with SARIF upload to GitHub Security tab).
+
+GitHub's native secret scanning + push-protection (enabled in PR 6 admin step) covers known-pattern secrets (API tokens, AWS keys, etc.) but misses:
+- Entropy-based detection (high-entropy strings that don't match a known pattern)
+- Full-history scan (push-protection only checks new pushes, not historical commits)
+- Custom org-specific patterns (e.g., internal service tokens)
+
+`.pre-commit-config.yaml` addition:
+
+```yaml
+  # Round 10 D35 — secret detection. Top-OSS norm (24,400+ stars; CNCF, sigstore, Apache).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: <SHA>  # frozen: v8.x — resolve via PR 1 commit 8 autoupdate-freeze
+    hooks:
+      - id: gitleaks
+        # Default config scans staged files only at commit time; .gitleaks.toml at repo
+        # root can customize (allowlist test fixtures, add custom rules).
+```
+
+`.github/workflows/security.yml` jobs (per Round 10 D35 + existing PD13/zizmor/pip-audit):
+
+```yaml
+  gitleaks:
+    name: 'Security / Gitleaks'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # SARIF upload to Security tab
+    steps:
+      - uses: step-security/harden-runner@<SHA>   # v2.19.0+ (introduced in PR 6 commit 1; carry-forward usage)
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+      - uses: actions/checkout@<SHA>  # v4
+        with:
+          fetch-depth: 0          # full history scan
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@<SHA>   # frozen: v2.x — resolve at commit time
+        with:
+          upload-sarif: true
+          # GITLEAKS_LICENSE not needed for OSS repos
+```
+
+Pre-flight P3a (NEW companion to P3 zizmor): capture gitleaks baseline against current main:
+
+```bash
+uvx --from gitleaks gitleaks detect --source=. --no-git --report-format=json \
+  --report-path=.gitleaks-preflight.json || true
+jq '.findings | length' .gitleaks-preflight.json   # baseline count
+```
+
+If >50 findings, baseline via `.gitleaks.toml` allowlist with rule-specific entries (NOT broad-category ignores). Most likely false positives: test fixtures, mock secrets in `tests/`, JWT examples in docs. Per Round 10 D35: do NOT suppress with category-wide ignores.
 
 Verification:
 ```bash
@@ -173,6 +225,10 @@ yamllint -d relaxed .github/workflows/security.yml
 grep -qE '^permissions:\s*\{?\s*\}?' .github/workflows/security.yml
 grep -q 'zizmor' .github/workflows/security.yml
 grep -q 'pip-audit' .github/workflows/security.yml
+grep -q 'gitleaks' .github/workflows/security.yml      # Round 10 D35
+grep -q 'gitleaks-action' .github/workflows/security.yml
+# Pre-commit hook also registered
+grep -q 'gitleaks/gitleaks' .pre-commit-config.yaml
 ```
 
 ### Commit 6 — `ci: add codeql.yml (advisory)`
@@ -1054,7 +1110,7 @@ making any change.
 ### 4. PR process
 - Branch from `main` (`git checkout -b feat/short-description`). Never push directly to main.
 - PR title must use a Conventional Commit prefix (`feat:`, `fix:`, `docs:`, `refactor:`, `perf:`, `chore:`). Enforced by `.github/workflows/pr-title-check.yml`.
-- Required CI checks (the 11 frozen names per D17 + D26):
+- Required CI checks (the 14 frozen names per D17 amended by D30 + D26):
   - `CI / Quality Gate`, `CI / Type Check`, `CI / Schema Contract`, `CI / Unit Tests`, `CI / Integration Tests`, `CI / E2E Tests`, `CI / Admin UI Tests`, `CI / BDD Tests`, `CI / Migration Roundtrip`, `CI / Coverage`, `CI / Summary`
 - Reviewer is auto-requested via `.github/CODEOWNERS`.
 

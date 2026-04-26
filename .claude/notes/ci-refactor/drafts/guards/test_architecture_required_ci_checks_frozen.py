@@ -1,4 +1,4 @@
-"""Guard: ci.yml renders the 11 frozen required-check names per D17.
+"""Guard: ci.yml renders the 14 frozen required-check names per D17 amended by D30.
 
 The check names are a contract with branch protection. Renaming any of them
 is an atomic flip handled by PR 3 Phase B; the names cannot drift in code
@@ -9,17 +9,29 @@ workflow header is `name: CI`; jobs use BARE `name: 'Quality Gate'` (NOT
 `name: 'CI / Quality Gate'` — that would render as `CI / CI / Quality Gate`).
 This guard validates the bare job-name convention plus the workflow `name: CI`
 prefix, which together produce the rendered names that branch protection sees.
+
+Round 10 D30 added 3 names (Smoke Tests, Security Audit, Quickstart) to the
+canonical list. Round 11 R11A-01/R11C-04 caught that this guard was still
+hardcoded with the old 11 — fixed below. PR 6 commit 4 will further extend
+the expected list with `Security / Dependency Review` (per R36).
 """
 
 import re
 
 from tests.unit._architecture_helpers import repo_root
 
-# D17 — bare job names (the rendered names are workflow `CI` + ` / ` + bare).
+# D17 amended by D30 — bare job names (the rendered names are workflow `CI` + ` / ` + bare).
+# Round 10 sweep: added Smoke Tests, Security Audit, Quickstart. PR 6 (commit 4) will
+# further extend this list with `Security / Dependency Review` (note: that one lives in
+# a separate workflow `security.yml` with `name: Security`, NOT `name: CI`, so the
+# rendered name is `Security / Dependency Review`, not `CI / Dependency Review`).
 _BARE_JOB_NAMES: tuple[str, ...] = (
     "Quality Gate",
     "Type Check",
     "Schema Contract",
+    "Security Audit",  # D30 (Round 10)
+    "Quickstart",  # D30 (Round 10)
+    "Smoke Tests",  # D30 (Round 10)
     "Unit Tests",
     "Integration Tests",
     "E2E Tests",

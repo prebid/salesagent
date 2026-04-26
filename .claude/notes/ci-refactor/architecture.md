@@ -2,9 +2,19 @@
 
 > **⚠️ STALE — pre-Round-5+6-P0-sweep audit trail.** This file documents the architecture
 > as understood before the 2026-04-25 P0 sweep. Several details were superseded by
-> Decision-4 (composite migration), D11 (hard-gate from day 1), D18 (~73 final guards),
-> D27 (real hook math 33−13−9−1=10), D28 (target-version bump deferred), and the
-> harden-runner v2.16+ pin. Specific stale items in this file:
+> Decision-4 (composite migration), D11 (hard-gate from day 1), D18 (~81 final guards
+> post-v2.0-rebase, revised again in Round 8), D27 (real hook math 36−13−10−1=12, revised
+> Round 8), D28 (target-version bump deferred), the harden-runner v2.16+ pin, and **D30
+> (Round 10: 11 frozen check names → 14 — added Smoke Tests, Security Audit, Quickstart),
+> D31 (`default_install_hook_types` directive), D32 (creative-agent bootstrap), D33 (xdist
+> +randomly + `--dist=loadscope`), D34 (Dockerfile `@sha256:` pin + `USER` non-root + Trivy
+> scan + `SOURCE_DATE_EPOCH`), D35 (gitleaks adoption), D36 (ADR file lifecycle), D37
+> (`workflow_dispatch` preserved), D38 (Schema Contract under integration env)**. Specific
+> stale items in this file:
+>
+> - **All "11 frozen check names" references** → 14 names per D30. The `architecture.md`
+>   text below has not been mass-rewritten; per-PR specs are authoritative for the canonical
+>   list.
 >
 > - References to `.github/workflows/_pytest.yml` as a reusable workflow → **superseded** by
 >   `.github/actions/_pytest/action.yml` composite (Decision-4). Per-job `services: postgres:`

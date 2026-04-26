@@ -1,6 +1,6 @@
 # Risk Register
 
-Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep.
+Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep**.
 
 | # | Risk | Sev | Prob | PR |
 |---|---|---|---|---|
@@ -25,6 +25,16 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 | 16 | Concurrent Dependabot PRs corrupt `uv.lock` | Med | High | PR 1 |
 | 31 | `integration_db` per-test CREATE DATABASE saturates Postgres pool under xdist | Med | High | PR 3 |
 | 32 | Phase B branch-protection flip leaves in-flight PRs in "expected — waiting" | Low | Med | PR 3 Phase B |
+| 33 | Pre-push hook tier silently disabled when contributor runs `pre-commit install` | **Crit** | High | PR 4 |
+| 34 | `ADCP_AUTH_TEST_MODE` module-level env mutation leaks across xdist workers | High | Med | PR 3 |
+| 35 | Schema Contract job runs under wrong tox env (DATABASE_URL drift) | Med | Med | PR 3 |
+| 36 | PR 6 `Security / Dependency Review` breaks PR 3's frozen-checks structural guard | Med | High | PR 6 |
+| 37 | New pre-commit hook added between PR 1 author and merge slips by SHA-freeze | Med | Low | PR 1 |
+| 38 | Frozen-checks structural guard 11→14 transition deadlock | **Crit** | Med | PR 3 |
+| 39 | Phase B snapshot file single point of failure for rollback | High | Low | PR 3 Phase B |
+| 40 | Cosign + Rekor outage + tag immutability cascade traps unsigned tag | High | Low | PR 6 |
+| 41 | CODEOWNERS / dependabot.yml syntax error silently breaks routing or stops dep updates | High | Low | PR 1 |
+| 42 | Phase A overlap window exhausts GHA runner-minutes / memory under double workflow load | Med | Med | PR 3 Phase A |
 
 ## R1 — Branch-protection flip locks out merging (HIGH)
 
@@ -229,6 +239,167 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 **Mitigation:** PR 3 Phase B Step 2.5 captures in-flight PR HEAD SHAs before the PATCH. After flip, either (a) trigger `gh workflow run ci.yml --ref refs/pull/<n>/head` for each, or (b) post a coordination comment that contributors must push a no-op commit to refresh status.
 
 **Tripwire:** ≥5 PRs stuck in "expected — waiting" after flip → escalate, post-mortem flip procedure.
+
+### R33 — Pre-push hook tier silently disabled when contributor runs `pre-commit install`
+
+**Severity:** Critical × High = Critical (load-bearing for D27 hook math)
+
+**Likelihood:** High — every contributor who follows `docs/development/contributing.md`'s `pre-commit install` instruction without `--hook-type pre-push` qualifier has zero pre-push hooks installed. Default-state failure.
+
+**Detection:** post-PR-4, `git ls-files .git/hooks/pre-push` is absent on contributor machines. Mypy never runs locally before push despite D3. The 10 hooks moved to pre-push (D27: `check-docs-links, check-route-conflicts, type-ignore-no-regression, adcp-contract-tests, mcp-contract-validation, mcp-schema-alignment, check-tenant-context-order, ast-grep-bdd-guards, check-migration-completeness, mypy`) silently no-op.
+
+**Mitigation:**
+- D31: PR 4 commit 1 adds `default_install_hook_types: [pre-commit, pre-push]` to top of `.pre-commit-config.yaml`. Single `pre-commit install` auto-installs both hook types.
+- `scripts/check-hook-install.sh` (added in P0 sweep) warns at `make quality` time if `.git/hooks/pre-push` is absent.
+- `docs/development/contributing.md` instruction simplified to `pre-commit install` (no `--hook-type` qualifier needed).
+
+**Rollback:** if D31 is incorrectly omitted from PR 4 (e.g., merge conflict drops it), remediate via a follow-up one-line PR. Pre-push hooks are recoverable per-contributor: `pre-commit install --hook-type pre-push` works at any time.
+
+### R34 — `ADCP_AUTH_TEST_MODE` module-level env mutation leaks across xdist workers
+
+**Severity:** High × Medium = High
+
+**Likelihood:** Medium (any `tox -e integration -- -n auto` run that exercises auth-mode-sensitive paths)
+
+**Detection:** `tests/integration/conftest.py:104, 661` does `os.environ["ADCP_AUTH_TEST_MODE"] = "true"` directly (NOT `monkeypatch.setenv`). Under xdist `-n auto` (PR 3 commit 4b), worker processes inherit the parent env at fork; one worker's `os.environ.pop()` won't propagate to siblings; one worker's set persists for tests that run later in the same worker. Symptom: intermittent auth assertions fail in tests that don't explicitly opt-in to auth-test-mode.
+
+**Mitigation:**
+- Convert both module-level mutations to `monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")` inside the `authenticated_admin_session` and `authenticated_admin_client` fixtures. Pytest's `monkeypatch` is per-test, auto-undone, and xdist-safe.
+- Pre-flight 3a (xdist soak on current main BEFORE PR 3 Phase A) verifies the conversion works before composite landing.
+- If conversion is too invasive (>20 file refactor), gate integration env to `-p no:xdist` with documentation; revisit in follow-up PR.
+
+**Rollback:** revert PR 3 commit 4b (xdist `-n auto` enablement); integration runs serial; module-level env mutation is no longer hazardous.
+
+### R35 — Schema Contract job runs under wrong tox env (DATABASE_URL drift)
+
+**Severity:** Medium × Medium = Medium
+
+**Likelihood:** Medium — depends on PR 3 spec `Schema Contract` job invocation choice.
+
+**Detection:** post-PR-3, `Schema Contract` job fails on `tests/integration/test_mcp_contract_validation.py` with `OperationalError: connect ... DATABASE_URL not set` OR silently skips DB-dependent assertions. Root cause: `tox -e unit` unsets `DATABASE_URL` at `tox.ini:38`, but `test_mcp_contract_validation.py` lives in `tests/integration/` and depends on the DB-loaded MCP tool registry.
+
+**Mitigation:**
+- D38: PR 3 spec runs Schema Contract under `tox -e integration` (with DATABASE_URL set), not `tox -e unit`.
+- Verification step in PR 3 spec: invoke locally before authoring with `DATABASE_URL=postgresql://… tox -e integration -- tests/integration/test_mcp_contract_validation.py` and confirm exit 0.
+
+**Rollback:** if Schema Contract job consistently times out under integration (resource contention), spin a third tox env `tox -e schema-contract` with DATABASE_URL and minimal fixtures.
+
+### R36 — PR 6 `Security / Dependency Review` breaks PR 3's frozen-checks structural guard
+
+**Severity:** Medium × High = Medium
+
+**Likelihood:** High — guaranteed to fire on PR 6 author start unless explicitly handled.
+
+**Detection:** PR 6 lands; structural guard `tests/unit/test_architecture_required_ci_checks_frozen.py` (added in PR 3 commit, expected list = 14 names per D30) fails because PR 6 introduces a 12-or-15th required check `Security / Dependency Review`.
+
+**Mitigation:**
+- PR 6 commit 4 (or later commit) MUST update the guard's expected-list to include the new check name. Spec checklist item: "verify `test_architecture_required_ci_checks_frozen.py` updated."
+- PR 6 acceptance gate: `pytest tests/unit/test_architecture_required_ci_checks_frozen.py` passes against the new guard list.
+
+**Rollback:** if PR 6 lands without guard update, fix-forward in a one-line PR adding the check name. Guard failure is local-only; doesn't block other CI.
+
+### R37 — New pre-commit hook added between PR 1 author and merge slips by SHA-freeze
+
+**Severity:** Medium × Low = Medium
+
+**Likelihood:** Low — depends on PR cadence in the PR 1 author window.
+
+**Detection:** post-PR-1 merge, structural guard `test_architecture_pre_commit_sha_pinned` reports a hook with `rev: v<tag>` (not 40-char SHA). Root cause: dependabot's `pre-commit` ecosystem (enabled by PR 1) opens a PR adding a new hook between when PR 1 was authored and when it merged; the new hook arrives with a tag-only `rev:` that PR 1's `autoupdate --freeze` didn't see.
+
+**Mitigation:**
+- PR 1 spec adds structural guard `test_architecture_pre_commit_sha_pinned` (one of the 8 governance guards in `drafts/guards/`); fails if any external `rev:` is not a 40-char SHA. Catches the regression on the next CI run.
+- PR 1 verification step (final commit before opening PR): re-run `pre-commit autoupdate --freeze` to catch any new hooks.
+- Dependabot PR review checklist: verify `rev:` is full SHA before approving.
+
+**Rollback:** fix-forward in a one-line PR replacing the tag with a SHA.
+
+### R38 — Frozen-checks structural guard 11→14 transition deadlock
+
+**Severity:** Critical × Medium = Critical (cascading deadlock)
+
+**Likelihood:** Medium — fires the moment ci.yml emits 14 names and the guard still expects 11.
+
+**Detection:** every PR fails with `test_architecture_required_ci_checks_frozen` reporting "missing rendered name `CI / Smoke Tests`" (and 2 others).
+
+**Mitigation:**
+- PR 3 commit 3 introduces both the new ci.yml jobs (14 names) AND the structural guard with the 14-name expected list, in the SAME merge.
+- `drafts/guards/test_architecture_required_ci_checks_frozen.py` updated 2026-04-26 (Round 11) to enumerate all 14 names. PR 4 commit 3 lifts this draft into `tests/unit/`.
+- Acceptance gate on PR 3: the structural guard must pass against the 14-job ci.yml.
+
+**Rollback:** revert PR 3 if guard fires post-merge (mechanical revert; <10 min).
+
+**Tripwire:** if a 15th required check is added (e.g., `Security / Dependency Review` per R36), update the guard expected list in the SAME PR commit.
+
+### R39 — Phase B snapshot file single point of failure for rollback
+
+**Severity:** High × Low = High
+
+**Likelihood:** Low (snapshot is committed in `.claude/notes/ci-refactor/branch-protection-snapshot.json` per pre-flight A1; corruption requires accidental commit/diff).
+
+**Detection:** Phase B 422 → operator runs `--input branch-protection-snapshot-required-checks.json` → file corrupted/missing → main unmergeable indefinitely.
+
+**Mitigation:**
+- Pre-flight A1 captures + commits snapshot. Hash-verify before Phase B (Phase B Step 0 — NEW): `sha256sum branch-protection-snapshot.json` and compare to a stored value in the PR description.
+- Phase B Step 1.5: re-fetch from `gh api` and confirm byte-equal against the committed snapshot.
+- Daily branch-protection-snapshot cron (R23 mitigation) maintains a parallel history of valid snapshots; recovery target is "yesterday's cron output" if today's is bad.
+
+**Rollback:** if the snapshot is unrecoverable, hand-reconstruct the required-checks list from `gh api repos/.../check-runs` archive of recent main pushes; admin token still required. If admin token also revoked since A1 capture, escalate to org admin for one-time re-issue.
+
+**Tripwire:** if snapshot file changes outside of A1 capture (`git log -- branch-protection-snapshot.json`), investigate before any Phase B operation.
+
+### R40 — Cosign + Rekor outage + tag immutability cascade traps unsigned tag
+
+**Severity:** High × Low = High
+
+**Likelihood:** Low (Sigstore Rekor uptime is high; correlation with a release window is rare).
+
+**Detection:** release-please publishes a tag; cosign sign step fails with `failed to verify against rekor`; image is pushed but unsigned; subsequent steps (Trivy, attest-build-provenance) skip; tag immutability (PR 6 commit 7 admin step) prevents re-push.
+
+**Mitigation:**
+- PR 6 commit 2 splits build-and-push from sign-and-attest into two `needs:`-chained jobs (per R29). Sign job's failure does NOT push the tag.
+- Add cosign retry: 3 attempts with 30s/60s/120s backoff before failing the job.
+- Document the cosign-failure-with-immutable-tag interaction in PR 6 spec; if it fires, the recovery path is `:vX.Y.Z-hotfix.1` with public deprecation of `:vX.Y.Z` (cannot republish).
+
+**Rollback:** if an unsigned tag escapes (sign step skipped due to upstream race), cut a new patch release as `:vX.Y.Z+1` immediately. Document in CHANGELOG. The unsigned tag stays in GHCR but is annotated via release notes.
+
+**Tripwire:** if any release publishes an unsigned image, file an incident retrospective; if it happens twice in 6 months, audit the harden-runner allowlist for Rekor egress completeness.
+
+### R41 — CODEOWNERS / dependabot.yml syntax error silently breaks routing or stops dep updates
+
+**Severity:** High × Low = High (silent failures are the dangerous class)
+
+**Likelihood:** Low (PR review catches most syntax errors) but elevated during PR 1 author iteration.
+
+**Detection:**
+- CODEOWNERS bad-syntax: GitHub silently disables routing; PRs require no specific reviewer; `gh api repos/.../codeowners/errors` returns errors.
+- dependabot.yml bad-syntax: Dependabot stops opening PRs entirely; no error surface in the UI.
+
+**Mitigation:**
+- PR 1 commit 3 (CODEOWNERS) verification step: `gh api repos/prebid/salesagent/codeowners/errors --jq 'length'` MUST be 0.
+- PR 1 commit 4 (dependabot.yml) verification step: `gh api repos/.../dependabot/secrets` (or equivalent validation API) must succeed; pre-merge check.
+- Pre-flight A21 (NEW, Round 11): once both files are committed in PR 1, validate via `gh api` before merging the PR.
+
+**Rollback:** revert the offending commit; re-author with corrected syntax.
+
+**Tripwire:** if Dependabot doesn't open any PR within 1 week of PR 1 merge, re-validate dependabot.yml syntax.
+
+### R42 — Phase A overlap exhausts GHA runner-minutes / memory under double workflow load
+
+**Severity:** Medium × Medium = Medium
+
+**Likelihood:** Medium (Phase A runs old test.yml + new ci.yml in parallel for 48h; integration jobs in both build creative-agent + Postgres).
+
+**Detection:** ci.yml integration job fails with OOM or runner-minute quota exceeded mid-run; jobs queue in "waiting for available runner."
+
+**Mitigation:**
+- Pre-flight 3a (already documented) measures peak memory under `-n auto` BEFORE Phase A. If peak >5GB, hard-cap workers (`xdist-workers: '4'` not `'auto'`).
+- Phase A explicitly time-boxed at 48-72h (not indefinite); if overlap window extends, escalate.
+- Larger runner upgrade path: `runs-on: ubuntu-latest-4-cores` (16GB RAM, 4 vCPU) is available for runner-quota orgs.
+- Concurrency group includes PR-number/SHA so rapid PR pushes cancel in-flight ci.yml runs but NOT main pushes.
+
+**Rollback:** if Phase A overlap fails consistently, revert ci.yml; postpone Phase B; investigate whether new ci.yml has a memory regression vs old test.yml.
+
+**Tripwire:** if peak memory grows >7GB during Phase A measurement, either (a) bump to larger-runner, (b) reduce xdist workers, or (c) split integration into multiple smaller jobs.
 
 ## Cross-cutting risk: Dependabot review backlog (D5 sustainability tripwire)
 

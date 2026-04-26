@@ -126,6 +126,14 @@ Files:
             type=semver,pattern={{major}},value=${{ needs.release-please.outputs.version }}
             type=raw,value=latest
 
+      # NEW (Round 10 D34): SOURCE_DATE_EPOCH from git commit timestamp.
+      # Two builds of the same source produce identical image digests when this is set.
+      # Without it, two CI runs of the same commit produce different image digests,
+      # defeating the point of cosign signing for reproducibility verification.
+      - name: Compute SOURCE_DATE_EPOCH from git
+        id: sde
+        run: echo "value=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
+
       - id: build
         name: Build and push Docker image
         uses: docker/build-push-action@<SHA>      # v7.1.0
@@ -141,6 +149,12 @@ Files:
           # NEW: SLSA provenance + SBOM
           provenance: mode=max
           sbom: true
+          # NEW (Round 10 D34): reproducible builds. BuildKit ≥0.12 honors this; same source +
+          # same SOURCE_DATE_EPOCH → same digest. `--build-arg PYTHON_BASE_DIGEST=...` is
+          # already set by PR 5's Dockerfile changes; SOURCE_DATE_EPOCH closes the gap.
+          build-args: |
+            SOURCE_DATE_EPOCH=${{ steps.sde.outputs.value }}
+          outputs: type=image,rewrite-timestamp=true
 
       # NEW: cosign keyless signing for both registries
       - uses: sigstore/cosign-installer@<SHA>     # v4.1.1 — SHA must resolve to v4.1.1; v3.x cannot install Cosign 3.0+
@@ -179,6 +193,10 @@ grep -q 'cosign sign --yes --bundle' .github/workflows/release-please.yml   # --
 grep -q 'actions/attest-build-provenance' .github/workflows/release-please.yml
 grep -q 'sbom: true' .github/workflows/release-please.yml
 grep -q 'provenance: mode=max' .github/workflows/release-please.yml
+
+# Round 10 D34 — reproducible builds via SOURCE_DATE_EPOCH
+grep -q 'SOURCE_DATE_EPOCH=' .github/workflows/release-please.yml
+grep -q 'rewrite-timestamp=true' .github/workflows/release-please.yml
 
 # CVE-2025-32955 fix
 grep -q 'disable-sudo-and-containers: true' .github/workflows/release-please.yml
@@ -313,11 +331,40 @@ jobs:
 
 **Post-revert protocol**: post-mortem within 24h; identify the unallowlisted egress destination; either add to allowlist OR investigate whether the call is suspicious; flip back to block-mode after fix.
 
-### Commit 4 — `ci: add dependency-review-action as PR-blocking check`
+### Commit 4 — `ci: add dependency-review-action as PR-blocking check (config-extracted; pinned minor)`
 
 Files:
 - `.github/workflows/security.yml` — add `dependency-review` job
+- `.github/dependency-review-config.yml` (NEW — per Round 10 SF-15: extract config from inline `with:` block; matches canonical pattern)
+- `tests/unit/test_architecture_required_ci_checks_frozen.py` (modify expected list — per R36, guard's expected check list grows from 14 to 15 to include `Security / Dependency Review`)
 - Branch-protection update — **ADMIN-ONLY action**, runs after merge via `scripts/add-required-check.sh "Security / Dependency Review"` (NEW companion to `flip-branch-protection.sh`); the executor agent does NOT run `gh api -X PATCH branches/main/...` per `feedback_user_owns_git_push.md`.
+
+`.github/dependency-review-config.yml`:
+
+```yaml
+# .github/dependency-review-config.yml — extracted from inline workflow `with:` block
+# (Round 10 SF-15). As deny/allow lists grow (Prebid governance may require ≥10 license
+# entries for transitive deps), inline YAML becomes unreadable. Separate config keeps it
+# auditable in one location.
+fail-on-severity: moderate
+comment-summary-in-pr: on-failure
+deny-licenses:
+  - GPL-3.0
+  - GPL-3.0-only
+  - GPL-3.0-or-later
+  - AGPL-3.0
+  - AGPL-3.0-only
+  - AGPL-3.0-or-later
+# allow-licenses (commented; deny-list is the canonical posture today):
+#   - Apache-2.0
+#   - MIT
+#   - BSD-2-Clause
+#   - BSD-3-Clause
+#   - ISC
+#   - MPL-2.0
+```
+
+`security.yml` job:
 
 ```yaml
   dependency-review:
@@ -338,11 +385,11 @@ Files:
       - uses: actions/checkout@<SHA>
         with:
           persist-credentials: false
-      - uses: actions/dependency-review-action@<SHA>  # v4
+      # Per Round 10 SF-17 — pin to specific minor, not floating major.
+      # CVE-mitigation churn in dependency-review-action makes floating-major risky.
+      - uses: actions/dependency-review-action@<SHA>  # v4.6.0 — re-verify latest minor at PR-6 author time
         with:
-          fail-on-severity: moderate
-          comment-summary-in-pr: on-failure
-          deny-licenses: GPL-3.0, AGPL-3.0
+          config-file: ./.github/dependency-review-config.yml
 ```
 
 **ADMIN ACTION (executor MUST NOT run this):** after this commit merges, the user adds `Security / Dependency Review` to branch protection's required checks list:
@@ -368,12 +415,68 @@ EOF
 Verification:
 ```bash
 grep -q 'actions/dependency-review-action' .github/workflows/security.yml
-grep -q 'fail-on-severity: moderate' .github/workflows/security.yml
+test -f .github/dependency-review-config.yml
+grep -q 'fail-on-severity: moderate' .github/dependency-review-config.yml
+grep -q 'config-file: ./.github/dependency-review-config.yml' .github/workflows/security.yml
 grep -q 'disable-sudo-and-containers: true' .github/workflows/security.yml
 yamllint -d relaxed .github/workflows/security.yml
+yamllint -d relaxed .github/dependency-review-config.yml
+# Per R36: structural guard's expected list MUST include the new check name BEFORE this PR merges.
+grep -q '"Security / Dependency Review"' tests/unit/test_architecture_required_ci_checks_frozen.py
+uv run pytest tests/unit/test_architecture_required_ci_checks_frozen.py -v
 ```
 
-Acceptance: PR adding a known-CVE'd dependency fails "Security / Dependency Review" with a comment listing the offending package.
+Acceptance: PR adding a known-CVE'd dependency fails "Security / Dependency Review" with a comment listing the offending package. Without the structural-guard update (R36), `make quality` would fail post-merge — the guard sees a 15th required check that isn't in its expected-list.
+
+### Commit 4c — `ci: add Trivy OS-layer image scan post-build (D34)`
+
+Files:
+- `.github/workflows/release-please.yml` — append a new Trivy scan step to the `publish-docker` job (after `cosign sign`, before `attest-build-provenance`; ordering keeps the scan in the same job as build for cheap image reuse)
+
+Per **D34** (Round 10 sweep). pip-audit and dependency-review cover Python deps only. The built image's OS-layer packages (libpq5, glibc, openssl, zlib, nginx, supercronic) are unscanned. `python:3.12-slim` inherits 30-50 OS CVEs/month from upstream Debian; cosign-signing without scanning ships verifiably-attested vulnerable images.
+
+```yaml
+      # Round 10 D34 — Trivy OS-layer scan. Runs in the publish-docker job AFTER push
+      # (so the image is in the registry); fails the job on CRITICAL/HIGH unfixed-OK
+      # severities. Pin SHA — Trivy-action had a 2026-03 supply-chain incident; pin to
+      # a known-good SHA (resolve via `gh api` at PR-6 author time).
+      - name: Scan image for OS-layer CVEs
+        uses: aquasecurity/trivy-action@<SHA>      # 0.21.x or later — re-verify SHA at PR-6 author time
+        with:
+          image-ref: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          severity: 'CRITICAL,HIGH'
+          vuln-type: 'os,library'
+          ignore-unfixed: true
+          exit-code: 1
+          format: sarif
+          output: trivy-results.sarif
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@<SHA>   # v4 — same SHA as PR 1 codeql-action pin
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-os-layer
+```
+
+Notes on configuration choices:
+- **`severity: CRITICAL,HIGH`** — MEDIUM/LOW would generate noise from glibc-class transitive findings; we accept LOW/MEDIUM as advisory only via the SARIF upload to Security tab.
+- **`ignore-unfixed: true`** — many base-image CVEs have no upstream fix yet. Failing on unfixed-with-no-patch is unactionable.
+- **`vuln-type: os,library`** — covers OS packages plus language-level packages. Combined with pip-audit (PR 1 commit 5 — Python only) and dependency-review (commit 4 — Python only), this provides full surface coverage.
+- **SARIF upload** — surfaces findings in GitHub Security tab regardless of pass/fail; lets the user triage MEDIUM/LOW asynchronously without blocking releases.
+
+Verification:
+```bash
+grep -q 'aquasecurity/trivy-action' .github/workflows/release-please.yml
+grep -q "severity: 'CRITICAL,HIGH'" .github/workflows/release-please.yml
+grep -q 'ignore-unfixed: true' .github/workflows/release-please.yml
+grep -q 'category: trivy-os-layer' .github/workflows/release-please.yml
+yamllint -d relaxed .github/workflows/release-please.yml
+# After running publish-docker once, verify SARIF upload appears in GitHub Security tab:
+#   gh api repos/prebid/salesagent/code-scanning/analyses --jq '.[].category' | grep trivy-os-layer
+```
+
+Acceptance: image published with a known CVE in glibc/openssl fails this step with a SARIF reporting the offending package. The signed image is tagged but the workflow exits non-zero, so the release process surfaces the issue.
 
 ### Commit 4b — `ci: enable zizmor auditor persona for secrets-outside-env rule`
 

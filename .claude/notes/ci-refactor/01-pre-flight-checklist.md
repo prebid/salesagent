@@ -27,7 +27,7 @@ gh api repos/prebid/salesagent/branches/main/protection/required_status_checks \
 
 `.checks[].context` is the canonical field per GitHub's branch-protection API; the deprecated `.contexts[]` form was scrubbed in 2026-04-25 Round 8 sweep.
 
-This is the list PR 3 Phase B will atomically replace with the 11 frozen names from D17.
+This is the list PR 3 Phase B will atomically replace with the **14** frozen names from D17 amended by D30 (Round 10 sweep added Smoke Tests, Security Audit, Quickstart).
 
 ### A3 — Verify GitHub private vulnerability reporting is ON
 
@@ -137,7 +137,7 @@ Captures the current dead-plugin state (`pydantic.mypy` listed but dependency mi
 
 `origin/develop` exists and is 35 commits ahead / 2 behind `main` (Round 8 drift-verified). Both `test.yml` (current) and `ci.yml` (PR 3 introduces) trigger on `branches: [main, develop]`. Branch protection is configured on `main` only — `develop` is unprotected.
 
-**Risk:** silent governance bypass. Any PR merged to `develop` escapes the 11 frozen required checks.
+**Risk:** silent governance bypass. Any PR merged to `develop` escapes the 14 frozen required checks (D17 amended by D30).
 
 **Decision required before PR 1 launches** — pick one:
 
@@ -198,6 +198,100 @@ gh api repos/prebid/salesagent/branches/main/protection/bypass_pull_request_allo
 ```
 
 If @chrishuie is not in the list and current GH role doesn't have org-admin to add, escalate to org admin before PR 1 lands.
+
+### A20 — Snapshot in-flight fork PRs before Phase B flip (Round 11 R11C-07)
+
+Phase B Step 2.5's in-flight PR drain fails for fork PRs because `gh workflow run --ref refs/pull/<n>/head` returns 403 (no write access on contributor fork). Capture the fork-PR list pre-flight so the maintainer can post coordination comments before the flip:
+
+```bash
+gh pr list --state open --search "is:pr -author:@me draft:false" --json number,headRepository,headRefName,author \
+  --jq '.[] | select(.headRepository.owner.login != "prebid")' \
+  > .claude/notes/ci-refactor/inflight-fork-prs-snapshot.json
+wc -l .claude/notes/ci-refactor/inflight-fork-prs-snapshot.json
+```
+
+Before Phase B Step 2 PATCH, post a coordination comment on each fork PR: "Branch-protection-rename Phase B is happening at <time>. After the flip, please push a no-op commit (e.g., `git commit --allow-empty -m 'chore: refresh CI'`) to refresh status checks. Without this, your PR will show 'expected — waiting for status' indefinitely."
+
+### A21 — Validate CODEOWNERS + dependabot.yml syntax post-PR-1-merge (Round 11 R41)
+
+GitHub silently disables CODEOWNERS routing on syntax error (no failure surface). Dependabot stops opening PRs entirely on dependabot.yml syntax error. Both can be detected via API:
+
+```bash
+# CODEOWNERS validator (returns errors[] array; should be empty)
+gh api repos/prebid/salesagent/codeowners/errors --jq '.errors | length'   # expect: 0
+# If non-zero, fix-forward in a follow-up PR before any other PR merges (R41 mitigation).
+
+# Dependabot config validator (no native API; check by Dependabot opening at least one PR within 1 week)
+# After PR 1 lands, watch:
+gh pr list --author "app/dependabot" --state open --json number --jq 'length'   # expect: ≥1 within 7 days
+```
+
+If `codeowners/errors` is non-empty: do NOT merge any other PR until fixed; routing is silently broken.
+
+### A22 — Phase B day-of-week + holiday guard (Round 11 D45)
+
+Per **D45** (Round 11 sweep), Phase B atomic flip is FORBIDDEN on Fri/Sat/Sun + holiday eve. Pre-flight check before executing Phase B:
+
+```bash
+# Day-of-week check (1=Mon, 7=Sun)
+DOW=$(date +%u)
+[[ "$DOW" -ge 1 && "$DOW" -le 4 ]] || { echo "ABORT: Phase B is forbidden on Fri-Sun per D45. Today is dow=$DOW. Reschedule to Mon-Thu."; exit 1; }
+
+# Holiday-eve check (extend with org calendar; minimal version: US federal next-day holidays)
+NEXT_DAY=$(date -d "+1 day" +%Y-%m-%d 2>/dev/null || date -v+1d +%Y-%m-%d)
+HOLIDAYS_2026="2026-01-01 2026-01-19 2026-02-16 2026-05-25 2026-06-19 2026-07-03 2026-07-04 2026-09-07 2026-10-12 2026-11-11 2026-11-26 2026-12-24 2026-12-25 2026-12-31"
+for h in $HOLIDAYS_2026; do
+  [[ "$NEXT_DAY" == "$h" ]] && { echo "ABORT: Phase B forbidden on holiday eve ($NEXT_DAY is a US federal holiday). Reschedule."; exit 1; }
+done
+echo "Phase B day-of-week + holiday checks passed."
+```
+
+If a Phase-B-class operation is unavoidable on a Fri/weekend (e.g., security incident), require a second admin temporarily added to the bypass list with a known-revoke time — document the exception in an explicit ADR before executing.
+
+### A23 — Creative-agent commit pin freshness check (Round 11 D32 tripwire)
+
+D32 requires the pinned creative-agent commit `ca70dd1e2a6c` to be <3 months old at PR-3 author time. Verify:
+
+```bash
+# Resolve commit timestamp
+COMMIT_TS=$(curl -sH "Accept: application/vnd.github+json" \
+  https://api.github.com/repos/adcontextprotocol/adcp/commits/ca70dd1e2a6c \
+  | jq -r '.commit.committer.date')
+COMMIT_AGE_DAYS=$(( ($(date +%s) - $(date -d "$COMMIT_TS" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$COMMIT_TS" +%s)) / 86400 ))
+echo "creative-agent pin commit age: $COMMIT_AGE_DAYS days"
+[[ "$COMMIT_AGE_DAYS" -le 90 ]] || { echo "WARNING: pin >3 months old; bump to current main and re-verify env-var schema before authoring PR 3 commit 9."; exit 0; }
+```
+
+If the pin is stale, bump to a current commit AND verify the 10 env vars in D32 still match upstream's expected schema:
+
+```bash
+curl -sL https://github.com/adcontextprotocol/adcp/archive/<NEW_SHA>.tar.gz | tar xz -C /tmp/adcp-pinned --strip-components=1
+grep -RhE 'process\.env\.[A-Z_]+' /tmp/adcp-pinned/src/ | sort -u
+```
+
+If new required env vars surfaced, file an issue and update D32 before authoring PR 3 commit 9.
+
+### A19 — Clean stale `tests/migration/__pycache__/` bytecode (Round 10 sweep)
+
+Round 10 audit surfaced misleading `.pyc` files at `tests/migration/__pycache__/` for `test_a2a_agent_card_snapshot`, `test_mcp_tool_inventory_frozen`, `test_openapi_byte_stability`. These are leftover from a prior local checkout of the v2.0 branch (`feat/v2.0.0-flask-to-fastapi`) — the `.py` source files exist on that branch (commits `a2d3b350`, `c736f6c5`, `def4a4ea`), NOT on main or HEAD.
+
+Verification:
+
+```bash
+git ls-tree main -- tests/migration/    # expect: empty (directory not tracked)
+git ls-tree HEAD -- tests/migration/    # expect: empty
+ls tests/migration/__pycache__/ 2>/dev/null   # may show stale .pyc files
+```
+
+Cleanup (one-time, on every contributor machine that has touched the v2.0 branch locally):
+
+```bash
+rm -rf tests/migration/__pycache__/
+# Followed by, if the empty parent dir bothers you:
+rmdir tests/migration/ 2>/dev/null || true
+```
+
+The contract-snapshot tests themselves arrive on main when v2.0 phase PRs land — they are NOT this rollout's responsibility per D20 (Path 1 sequencing). Cleanup is a one-time admin step to silence false-positive on-disk artifacts; not part of any PR.
 
 ## Agent-runnable preparation steps
 
@@ -273,6 +367,40 @@ ls tests/ui/
 
 D14 assumes `tests/ui/` is live. If the directory has been removed since 2026-04, demote D14 to "delete the extras block" instead of "migrate."
 
+### P7 — Post-PR-4 verify `default_install_hook_types` directive (D31 / R33 detection)
+
+After PR 4 lands, before merging any subsequent PR, verify the pre-push hook tier is actually installed on contributor machines:
+
+```bash
+# 1. Verify .pre-commit-config.yaml has the directive (D31)
+grep -E '^default_install_hook_types:.*pre-commit.*pre-push' .pre-commit-config.yaml
+
+# 2. Simulate a fresh contributor clone — does `pre-commit install` (no flags) auto-install both?
+TMPDIR=$(mktemp -d)
+git clone . "$TMPDIR/scratch"
+cd "$TMPDIR/scratch"
+uv run pre-commit install  # no --hook-type flag
+ls .git/hooks/ | grep -E '^(pre-commit|pre-push)$' | wc -l   # expect: 2
+cd - && rm -rf "$TMPDIR"
+```
+
+Mitigates R33 (Critical, High probability — pre-push tier silently disabled). If the directive is missing or contributors aren't getting both hooks, file a P0 follow-up before authoring PR 5.
+
+### P8 — Mypy warm-time pre-flight measurement (PR 4 fallback gate)
+
+Per PR 4 spec, mypy moves to pre-push (D27) as the 10th hook ONLY if warm wall-clock is ≤20s. Measure before authoring PR 4 commit 5:
+
+```bash
+uv sync --group dev   # warm cache
+uv run mypy src/ --config-file=mypy.ini > /dev/null 2>&1   # warm
+T1=$(date +%s%N)
+uv run mypy src/ --config-file=mypy.ini > /dev/null 2>&1
+T2=$(date +%s%N)
+echo "Warm mypy wall-clock: $(( (T2 - T1) / 1000000 ))ms"
+```
+
+If >20000ms, do NOT include mypy in the 10 pre-push moves; instead activate the P8 fallback in PR 4 spec (move `no-hardcoded-urls` to pre-push as the 10th swap). Document the decision in the PR 4 PR description.
+
 ## Sign-off
 
 Before PR 1 is authored, this file should be marked complete:
@@ -295,6 +423,13 @@ Before PR 1 is authored, this file should be marked complete:
 - [ ] A16 — xdist soak completed (≥3 `-n 4` runs + ≥1 `-n auto` run, timings captured)
 - [ ] A17 — AST guard pre-existing-violation audit run (each new guard executed; remediate-or-allowlist choice documented)
 - [ ] A18 — mypy plugin canary verified (`tests/unit/_pydantic_mypy_canary.py` triggers expected error)
+- [ ] A19 — `tests/migration/__pycache__/` cleaned (Round 10; one-time stale-bytecode removal)
+- [ ] A20 — In-flight fork PR snapshot captured + coordination comments posted (Round 11; before Phase B)
+- [ ] A21 — CODEOWNERS + dependabot.yml syntax validated post-PR-1-merge (Round 11; R41 mitigation)
+- [ ] A22 — Phase B day-of-week + holiday-eve guard checked (Round 11; D45 enforcement)
+- [ ] A23 — Creative-agent commit pin freshness verified (<3 months old) before authoring PR 3 (Round 11; D32 tripwire)
+- [ ] P7 — `default_install_hook_types` directive verified post-PR-4 (D31 / R33 detection — only relevant after PR 4 lands)
+- [ ] P8 — mypy warm-time measured before PR 4 commit 5 (gate for pre-push migration vs fallback)
 - [ ] P1 — drift evidence re-verified (or noted as still-current)
 - [ ] P2 — pydantic.mypy baseline captured (`.mypy-baseline.txt`)
 - [ ] P3 — zizmor pre-flight captured (`.zizmor-preflight.txt`)

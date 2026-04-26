@@ -47,28 +47,34 @@ Document the decision and the measured warm time in the PR description.
 
 ORDER IS LOAD-BEARING. Guards added before hook deletions.
 
-### Commit 1 — `test: register @pytest.mark.arch_guard marker; extend _architecture_helpers.py`
+### Commit 1 — `chore(pre-commit): add default_install_hook_types; verify arch_guard marker; extend _architecture_helpers.py`
 
 Files:
-- `pytest.ini` (add to `[pytest]` section's `markers = ` list — empirical: `pytest.ini` is the project's pytest config source; `--strict-markers` is set there)
+- `.pre-commit-config.yaml` (add `default_install_hook_types: [pre-commit, pre-push]` directive at top — per D31)
 - `tests/unit/_architecture_helpers.py` (**EXTEND** — file already created in PR 2 commit 8 as ~30-line baseline; this PR grows it to ~221 lines with the AST-walking helpers below)
+- `pytest.ini` — **NOT modified by this PR**. Marker registration is owned by PR 2 commit 8 (per D29 + Round 10 MF-1 ownership clarification). This commit VERIFIES (grep) registration; does not re-write.
 
-Per D12.
+Per D12 (helpers structure), D29 (marker name), D31 (`default_install_hook_types` directive).
 
-**Ownership rule (resolves Blocker #3):** PR 2 commit 8 creates the baseline (`repo_root`, `parse_module` mtime-keyed cache, `iter_function_defs`, `iter_call_expressions`, `src_python_files`). PR 4 commit 1 EXTENDS by appending the additional helpers (`iter_workflow_files`, `iter_compose_files`, `iter_action_uses`, `iter_python_version_anchors`, `iter_postgres_image_refs`, `assert_violations_match_allowlist`, `assert_anchor_consistency`, `format_failure`). The final reconciled module is at `.claude/notes/ci-refactor/drafts/_architecture_helpers.py` (221 lines) — lift verbatim during execution.
+**Ownership rule (resolves Blocker #3 + Round 10 MF-1):**
+- `_architecture_helpers.py`: PR 2 commit 8 creates the baseline (`repo_root`, `parse_module` mtime-keyed cache, `iter_function_defs`, `iter_call_expressions`, `src_python_files`). PR 4 commit 1 EXTENDS by appending the additional helpers (`iter_workflow_files`, `iter_compose_files`, `iter_action_uses`, `iter_python_version_anchors`, `iter_postgres_image_refs`, `assert_violations_match_allowlist`, `assert_anchor_consistency`, `format_failure`). The final reconciled module is at `.claude/notes/ci-refactor/drafts/_architecture_helpers.py` (221 lines) — lift verbatim during execution.
+- `pytest.ini [pytest].markers` `arch_guard` registration: PR 2 commit 8 OWNS the write. PR 4 commit 1 VERIFIES only. Round 10 audit (MF-1) caught a dual-registration in earlier spec revisions; the verify-only stance here resolves it.
 
-`pytest.ini` change (add the marker line; preserve all existing markers):
+`.pre-commit-config.yaml` change (add the directive at the top of the file, before any `repos:` block):
 
-```ini
-[pytest]
-markers =
-    smoke: Critical path tests that MUST always pass
-    # ... existing markers preserved verbatim ...
-    admin: Tests for admin UI template rendering and web interface
-    arch_guard: structural guards (AST-scanning invariant tests; run with -m arch_guard)
+```yaml
+# .pre-commit-config.yaml — top of file
+# Auto-install both pre-commit AND pre-push hook types when contributors run
+# `pre-commit install` (no need for `--hook-type pre-push` qualifier).
+# Without this, the 10 hooks moved to stages: [pre-push] (per D27) silently
+# don't run on contributor machines — see D31 / R33.
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  # ... existing repos preserved verbatim ...
 ```
 
-**Marker name = `arch_guard`, NOT `architecture`.** The entity-marker `architecture` is registered in `tests/conftest.py:25-45` and auto-applied by filename pattern; reusing that name would conflate two different selection semantics.
+This is the load-bearing one-liner that makes D27's hook math operational. Top-OSS norm (pydantic, FastAPI, ruff). Without it, `pre-commit install` only installs pre-commit-stage hooks; pre-push tier silently no-ops.
 
 `tests/unit/_architecture_helpers.py`:
 
@@ -124,10 +130,16 @@ def repo_root() -> pathlib.Path:
 
 Verification:
 ```bash
+# default_install_hook_types directive (D31 — load-bearing)
+grep -q '^default_install_hook_types:' .pre-commit-config.yaml || \
+  { echo "FAIL: default_install_hook_types missing from .pre-commit-config.yaml"; exit 1; }
+grep -E '^default_install_hook_types:.*pre-commit.*pre-push' .pre-commit-config.yaml || \
+  { echo "FAIL: directive present but missing pre-commit + pre-push values"; exit 1; }
+
 # File exists from PR 2 commit 8 baseline
 test -f tests/unit/_architecture_helpers.py
 grep -q 'parse_module' tests/unit/_architecture_helpers.py   # baseline marker
-# Marker registered in pytest.ini (NOT pyproject.toml — pytest.ini is the project's pytest config source)
+# Marker registered in pytest.ini by PR 2 commit 8 (verify-only; PR 4 does NOT write here)
 grep -q '^[[:space:]]*arch_guard:' pytest.ini
 
 # This commit adds the extended helpers (must all be importable):
@@ -140,6 +152,12 @@ uv run python -c "from tests.unit._architecture_helpers import (
 
 # `--strict-markers` is set in pytest.ini, so an unregistered `arch_guard` would error
 # before any guard test runs — verifying registration is required.
+
+# After this commit, contributors who run `pre-commit install` get BOTH hook types
+# automatically (no --hook-type pre-push needed). Verify on a fresh clone:
+#   git clone <repo> /tmp/scratch && cd /tmp/scratch
+#   uv run pre-commit install
+#   ls .git/hooks/ | grep -E '^(pre-commit|pre-push)$'   # both present
 ```
 
 ### Commit 1.5 — `test: AST guard pre-existing-violation audit (P0 gate before hook deletion)`
@@ -777,7 +795,7 @@ Outline for `ci-pipeline.md` post-rollout:
 2. Layer 1 — pre-commit stage (~1-2s)
 3. Layer 2 — pre-push stage (~10-20s)
 4. Layer 3 — pytest structural guards (in tox -e unit)
-5. Layer 4 — CI required checks (the 11 frozen names)
+5. Layer 4 — CI required checks (the 14 frozen names per D17 amended by D30)
 6. Layer 5 — manual / on-demand
 7. Decision tree (when to run what)
 8. Coverage baseline mechanics
@@ -867,9 +885,13 @@ Canonical post-PR-4 mapping. Lift verbatim into `docs/development/ci-pipeline.md
 
 Run via `pytest tests/unit/ -m arch_guard -x` (Layer 2 hook above runs same command). 27 baseline + 4 new + 1 extended = 32 guards post-PR-4 (count rises post-v2.0).
 
-### Layer 4 — CI required checks (the 11 frozen names, see PR 3)
+### Layer 4 — CI required checks (the 14 frozen names per D17 amended by D30; see PR 3)
 
-`CI / Quality Gate`, `CI / Unit Tests`, `CI / Integration Tests`, `CI / E2E Tests`, `CI / Admin Tests`, `CI / BDD Tests`, `CI / Type Check`, `CI / Schema Contract`, `CI / Lint`, `CI / Format`, `CI / Coverage Report`.
+The canonical 14 (rendered names — workflow `name: CI` + bare job name; GitHub auto-prefixes per D26):
+
+`CI / Quality Gate` · `CI / Type Check` · `CI / Schema Contract` · `CI / Security Audit` · `CI / Quickstart` · `CI / Smoke Tests` · `CI / Unit Tests` · `CI / Integration Tests` · `CI / E2E Tests` · `CI / Admin UI Tests` · `CI / BDD Tests` · `CI / Migration Roundtrip` · `CI / Coverage` · `CI / Summary`.
+
+(Round 10 sweep correction: this table previously listed 11 names with several inventions — `Lint`, `Format`, `Coverage Report` — and shorthand `Admin Tests` instead of `Admin UI Tests`. None of those exist. The list above mirrors D17/D30/D26 verbatim. PR 6's `Security / Dependency Review` is OUTSIDE the 14; it lives in `security.yml` namespace.)
 
 ### Layer 5 — manual / on-demand (`stages: [manual]`)
 
@@ -929,15 +951,18 @@ secs = int(m[1]) * 60 + float(m[2])
 sys.exit(0 if secs < 5 else 1)
 "
 
-echo "[4/8] New guards exist and pass..."
+echo "[4/8] New guards exist and pass + default_install_hook_types directive..."
 for f in test_architecture_no_tenant_config test_architecture_jsontype_columns \
          test_architecture_no_defensive_rootmodel test_architecture_import_usage; do
   test -f "tests/unit/${f}.py"
 done
 # Use the new structural-guard marker `arch_guard` (not the entity-marker `architecture`)
 uv run pytest tests/unit/ -m arch_guard -x
-# Sanity: marker is registered in pytest.ini
+# Sanity: marker is registered in pytest.ini (PR 2 commit 8 owns the write; PR 4 verifies)
 grep -q '^[[:space:]]*arch_guard:' pytest.ini
+# D31 — default_install_hook_types directive (load-bearing for D27 hook math; mitigates R33)
+grep -q '^default_install_hook_types:' .pre-commit-config.yaml || { echo "MISSING D31 directive"; exit 1; }
+grep -E '^default_install_hook_types:.*pre-commit.*pre-push' .pre-commit-config.yaml || { echo "D31 directive incomplete"; exit 1; }
 
 echo "[5/8] CI absorption..."
 grep -q 'CI / Quality Gate' .github/workflows/ci.yml

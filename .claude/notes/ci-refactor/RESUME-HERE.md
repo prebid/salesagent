@@ -1,8 +1,124 @@
 # Resume Here — CI/Pre-commit Refactor
 
-**Date snapshot:** 2026-04-25 (post-integrity-audit + Round 5+6 P0 sweep applied, blockers fixed, executor-handoff ready).
+**Date snapshot:** 2026-04-26 (Round 10 completeness audit sweep applied; 9 audit passes total).
 
-**Rollout status:** **READY FOR EXECUTOR HANDOFF (after Round 7 verification).** 4 rounds of opus-subagent research + integrity audit + Round 5+6 P0 sweep applied 2026-04-25. The 3 critical blockers (workflow naming, hook count, helpers collision) are fixed in the per-PR specs. External technical corrections applied (mirrors-mypy reframed, harden-runner CVE-2025-32955 + DoH-bypass v2.16+ floor, persist-credentials propagation, rendered-name capture). D-pending-1..4 promoted to D22-D25; D26 + D27 + D28 added; R19/R20/R23 promoted from edge-case-stress-test; R26-R30 added.
+**Rollout status:** **READY FOR EXECUTOR HANDOFF (after Round 11 verification).** 9 rounds of opus-subagent research + integrity audit + Round 5+6 P0 sweep applied 2026-04-25 + Round 9 verification 2026-04-25 + Round 10 completeness audit sweep applied 2026-04-26. The 3 critical blockers (workflow naming, hook count, helpers collision) are fixed. External technical corrections applied (mirrors-mypy reframed, harden-runner CVE-2025-32955 + DoH-bypass v2.16+ floor, persist-credentials propagation, rendered-name capture). D-pending-1..4 promoted to D22-D25; D26 + D27 + D28 added; D29 (marker rename); D30-D38 added in Round 10. R19/R20/R23 promoted; R26-R32 added; R33-R37 added in Round 10.
+
+## 2026-04-26 Round 10 completeness audit sweep applied
+
+User caught a smoke-tests-class gap (Smoke Tests dropped from frozen-name list); 9 parallel opus subagents ran across 4 verification + 5 extension axes. Pattern of findings: load-bearing one-liners that look correct on paper but silently no-op in practice. 1 false claim retracted (CRIT-4 PR 3 commit 11 fictional Gemini diff — it was explicitly aspirational, not contradictory). 12 verified, 5 partial, 1 false out of 18 P0 claims.
+
+**Top finding (load-bearing one-liner):** `default_install_hook_types: [pre-commit, pre-push]` was missing from `.pre-commit-config.yaml`. Without it, the 10-hook pre-push tier (D27, including mypy per D3) silently does not execute on any contributor machine. Hook math is mathematically correct but operationally ineffective. Fixed: D31 + PR 4 commit 1 add the directive.
+
+**Top-level docs:**
+- D30 added: frozen check names **11 → 14** (adds Smoke Tests, Security Audit, Quickstart). All three currently-running CI jobs in `test.yml` were silently dropped. D17 amended to forward to D30 for the canonical 14-name list.
+- D31 added: `default_install_hook_types: [pre-commit, pre-push]` mandatory in PR 4.
+- D32 added: creative-agent containerized service bootstrap fully spec'd in PR 3 commit 9 (43 lines, 10 env vars, pinned commit `ca70dd1e2a6c`, `creative-net` Docker network, second `postgres:16-alpine`).
+- D33 added: `pytest-xdist≥3.6` + `pytest-randomly` to `[dependency-groups].dev` (PR 2 commit 4.5); `--dist=loadscope` in `_pytest/action.yml`.
+- D34 added: container hardening — `@sha256:` digest pin + `USER` non-root in PR 5; `SOURCE_DATE_EPOCH` + Trivy OS-layer scanning in PR 6.
+- D35 added: gitleaks adopted (pre-commit hook + workflow with SARIF upload) in PR 1.
+- D36 added: ADR file location — drafts/ during planning; docs/decisions/ in production after PR 5. ADR-001/002/003 promoted from inline references in PR 1 spec to standalone draft files.
+- D37 added: `workflow_dispatch` trigger preserved in `ci.yml` (matches `test.yml:8`).
+- D38 added: `Schema Contract` job runs under `tox -e integration` env, not `unit` (which unsets DATABASE_URL).
+
+**New risks:**
+- R33 (Critical): pre-push tier silently disabled if `default_install_hook_types` missing.
+- R34 (High): `ADCP_AUTH_TEST_MODE` module-level env mutation leaks across xdist workers.
+- R35 (Med): Schema Contract job runs under wrong tox env.
+- R36 (Med): PR 6 `Security / Dependency Review` breaks PR 3's frozen-checks structural guard if guard isn't updated.
+- R37 (Med): new pre-commit hook added between PR 1 author and merge slips past SHA-freeze.
+
+**v2.0 collision list expanded** (`00-MASTER-INDEX.md`): added `release-please.yml`, `.github/CODEOWNERS` glob, `pytest.ini`, `tests/conftest_db.py` to the warning block.
+
+**PR scope additions:**
+- **PR 1:** gitleaks pre-commit hook + workflow (per D35); ADR-001/002/003 promoted to standalone drafts (per D36); `ipr-agreement.yml` permissions narrowed per-job; structural guard `test_architecture_pre_commit_sha_pinned` confirmed in commit list (mitigates R37).
+- **PR 2:** new commit 4.5 (between current 4 and 5) adds `pytest-xdist>=3.6` + `pytest-randomly` to `[dependency-groups].dev` (per D33); arch_guard registration ownership clarified (PR 2 commit 8 owns; PR 4 commit 1 verifies-only — closes Round 10 MF-1).
+- **PR 3:** 14-name list per D30 (Smoke Tests + Security Audit + Quickstart added as new job declarations); commit 9 expanded to full creative-agent bootstrap per D32 (~50 lines YAML); `_pytest/action.yml` env block adds `ENCRYPTION_KEY=PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=` + `DELIVERY_WEBHOOK_INTERVAL=5` + `CREATIVE_AGENT_URL=http://creative-agent:3000`; `--dist=loadscope` in pytest invocation (per D33); `workflow_dispatch:` preserved in ci.yml `on:` block (per D37); `Schema Contract` job invokes `tox -e integration` (per D38); uv default version bumped to `0.11.7` (Round 9 fix half-applied — completes here); `retention-days: 7` on all `actions/upload-artifact` invocations; concurrency `group:` formula extended with `${{ github.event.pull_request.number || github.sha }}`; conftest_db.py filelock+worker-id gate promoted from prose-only to a standalone commit.
+- **PR 4:** Layer 4 reference table at `pr4-hook-relocation.md:872` rewritten to mirror D17 / D30 verbatim (was inventing `Lint`, `Format`, `Coverage Report`); `default_install_hook_types: [pre-commit, pre-push]` added to top of `.pre-commit-config.yaml` (per D31); P8 fallback commit pre-authored if mypy warm-time exceeds 20s (move `no-hardcoded-urls` to pre-push as the swap); TROUBLESHOOTING.md scoped section added alongside contributing.md update.
+- **PR 5:** `Dockerfile:4,43` `FROM python:3.12-slim` → `FROM python:3.12-slim@sha256:<64hex>` (per D34); `RUN groupadd -r app && useradd -r -g app app` + `USER app:app` stanza (per D34); structural guard `test_architecture_dockerfile_digest_pinned`; ADR-008 (target-version deferral) copied from drafts/ to `docs/decisions/` (per D36); ADR-001/002/003 ALSO copied to docs/decisions/ at this PR.
+- **PR 6:** Trivy OS-layer scan (`aquasecurity/trivy-action@<SHA>`, fail on CRITICAL/HIGH severity, `vuln-type: os,library`, `ignore-unfixed: true`) per D34; `release-please.yml` permissions narrowed (top-level `contents: read`, broader perms only on `release-please` job); dep-review config extracted to `.github/dependency-review-config.yml`; `dependency-review-action` pinned to specific minor (`v4.6.0+`); `SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)` + BuildKit `--source-date-epoch` flag in publish-docker job (per D34); structural guard `test_architecture_required_ci_checks_frozen` expected-list updated to include `Security / Dependency Review` (mitigates R36); OpenSSF Best Practices Badge enrollment as admin-only step (post-PR-6).
+
+**ADR file lifecycle (per D36):**
+- ADR-001/002/003: their canonical text lives **inline in `pr1-supply-chain-hardening.md`** (sections "Embedded ADR-001" / "Embedded ADR-002" / "Embedded ADR-003"). PR 1 commit 7 + 11 lift this content directly to `docs/decisions/`. They are intentionally NOT staged in `drafts/` — see `drafts/README.md` for the inline-vs-standalone split. (Round 11 R11D-01 caught earlier rev's "promoted to standalone drafts" claim that contradicted disk truth — corrected here.)
+- ADR-004 through ADR-009: standalone drafts at `.claude/notes/ci-refactor/drafts/adr-<NNN>-*.md` (already existed; planning artifacts ratified in earlier rounds). Each has a `## Status` block.
+- ADR-008 (target-version deferral): in drafts/ AND copied to `docs/decisions/` by PR 5 commit 7b.
+
+**Pre-flight additions:**
+- A15: `rm -rf tests/migration/__pycache__/` (one-time cleanup — stale bytecode from prior v2.0 branch checkout; the .py source files for `test_a2a_agent_card_snapshot.py`, `test_mcp_tool_inventory_frozen.py`, `test_openapi_byte_stability.py` exist on `feat/v2.0.0-flask-to-fastapi`, NOT on main; arrive when v2.0 lands)
+- P7: post-PR-4 verify `default_install_hook_types: [pre-commit, pre-push]` is in `.pre-commit-config.yaml` line 1-3 (mitigates R33 detection-window gap)
+
+**False finding retracted:**
+- CRIT-4 (Round 10 verification): "PR 3 commit 11 references nonexistent template content" — verification proved the "Before" block is explicitly labeled "if migrated literally from test.yml," aspirational/conditional, not a contradiction. Audit hallucinated. Do NOT remove or rewrite PR 3 commit 11; it's correct as-is.
+
+**Re-characterization (NOT a regression):**
+- `tests/migration/__pycache__/` retains stale `.pyc` files for three contract-snapshot tests (`test_a2a_agent_card_snapshot`, `test_mcp_tool_inventory_frozen`, `test_openapi_byte_stability`). The `.py` source files exist on `feat/v2.0.0-flask-to-fastapi` (commits `a2d3b350`, `c736f6c5`, `def4a4ea`), NOT on main or HEAD. `git ls-tree main -- tests/migration/` returns empty. **We did not cause regression coverage loss.** The tests arrive when v2.0 phase PRs land. Pre-flight A15 cleans up the misleading bytecode.
+
+**Total effort delta from Round 10 sweep:** +3.5-4 days across the 6 PRs.
+- PR 1: +0.5 day (gitleaks + ADR promotion + ipr-agreement perms)
+- PR 2: +0.25 day (commit 4.5)
+- PR 3: +1.5 day (3 new jobs + creative-agent bootstrap + env var passthrough + conftest_db.py filelock + concurrency formula + retention-days)
+- PR 4: +0.5 day (Layer 4 rewrite + default_install_hook_types + P8 fallback + TROUBLESHOOTING.md)
+- PR 5: +0.5 day (Dockerfile @sha256: + USER non-root + ADR copies)
+- PR 6: +0.5 day (Trivy + dep-review fixes + SOURCE_DATE_EPOCH + frozen-checks guard update)
+
+**New total:** **~19-23 engineer-days** (was 15-19), still ~6 calendar weeks part-time.
+
+## 2026-04-26 Round 11 verification + extension sweep applied
+
+5 parallel opus subagents covered: (A) drift detection over Round 10 sweep, (B) cross-environment parity matrix (Docker compose / CI / local-uv), (C) failure modes + disaster recovery completeness, (D) documentation lifecycle + reviewer artifacts, (E) resource budgets + observability. ~27 P0 findings + ~30 P1.
+
+**Most critical findings:**
+
+- **R11A-03 (severe — Round 10 self-introduced break):** Round 10's creative-agent `services:` block spec was technically broken in GHA. Service containers cannot resolve each other by hostname (each runs on its own bridge network with the runner host). The OLD `test.yml:180-223` pattern uses `docker network create creative-net` + `docker run` script steps for exactly this reason. **Round 11 fix:** PR 3 commit 3 + commit 9 reverted to the script-step pattern with disk-truth env values (`NODE_ENV=production`, port 9999→8080, path `/api/creative-agent`, 10 env vars matching test.yml verbatim).
+- **R11A-04:** Health-check `curl` likely missing from Node creative-agent image. **Fix:** moved health probe from `services.creative-agent.options.--health-cmd` (inside container) to a script step on the host (where curl is preinstalled).
+- **R11A-02:** PR 6's `SOURCE_DATE_EPOCH` build-arg silently no-ops because PR 5 Dockerfile didn't declare `ARG SOURCE_DATE_EPOCH`. **Fix:** PR 5 Dockerfile now declares the ARG.
+- **R11A-01 / R11C-04 (deadlock risk):** `drafts/guards/test_architecture_required_ci_checks_frozen.py` still hardcoded 11 names. Without update, every PR fails the structural guard once ci.yml emits 14 names — including PR 4 itself. **Fix:** updated the draft to 14 names; PR 3 commit 3 must land guard with the new ci.yml jobs.
+- **R11D-01 (false claim contradicting disk):** RESUME-HERE / 00-MASTER-INDEX / EXECUTIVE-SUMMARY all said "ADR-001/002/003 promoted to standalone drafts" but `drafts/README.md` correctly states they're inline in PR 1 spec. **Fix:** struck the false claim from the three top-level docs.
+- **R11E-02:** Postgres `max_connections=100` default + 30 conn/worker × 4 xdist workers = 120 → flaky. GHA `services:` cannot pass postgres CLI args. **Fix:** `_pytest` composite sets `DB_POOL_SIZE=4` + `DB_MAX_OVERFLOW=8` env vars (peak 48 connections). Tripwire R31 monitors.
+- **R11E-03:** Tox writes pytest-json-report to `{toxworkdir}/<env>.json` but composite uploaded `path: test-results/` → silently empty artifact on every job. **Fix:** composite path now globs both `test-results/` and `.tox/<env>.json`.
+- **R11B (11 env-var divergences across 3 environments):** DATABASE_URL credential triple-mismatch (`secure_password_change_me` vs `test_password`); CREATIVE_AGENT_URL port/path mismatch (R10 follow-up — fixed); `ADCP_SALES_PORT` defaults vary across 4 sources; `POSTGRES_PORT` not set in CI causing UI tests to skip silently; `ENCRYPTION_KEY` missing from main `docker-compose.yml`; `SUPER_ADMIN_EMAILS` baseline differs. **Round 11 partial fix:** `_pytest` composite now sets `SUPER_ADMIN_EMAILS=test@example.com`. Remaining items are documented in D43 (canonical DATABASE_URL credentials) and require coordination across PR 3 + PR 5.
+- **R11C-04 (cascading deadlock):** see R11A-01.
+- **R11C-01 (snapshot SPOF):** Phase B rollback depends on `branch-protection-snapshot.json` being intact and admin token still valid. Single point of failure. New R39 captures.
+- **R11C-02 (Phase B Friday lockout):** if Phase B fails Friday and admin is unavailable, main is unmergeable for the weekend. New D45 forbids Phase B on Fri/weekend/holiday eve.
+- **R11C-09 + R11C-10 (cosign + tag-immutability cascade):** Sigstore Rekor outage during release leaves an unsigned but published tag, AND tag-immutability locks out fix-by-republish. New R40 captures the chain.
+
+**Net-new decisions D39-D45:**
+- D39: creative-agent integration uses script-step pattern (`docker network create + docker run`), NOT GHA `services:` blocks. Codifies R11A-03 fix.
+- D40: Postgres `max_connections` cannot be set via GHA `services:` (no `command:` field); reduce app's `DB_POOL_SIZE` + `DB_MAX_OVERFLOW` in CI env instead. Codifies R11E-02 fix.
+- D41: pytest-json-report path standardized at `{toxworkdir}/<env>.json`; upload-artifact globs both `test-results/` and `.tox/<env>.json`. Codifies R11E-03 fix.
+- D42: `integration_db` test fixture should converge with Alembic schema (long-term — currently uses `Base.metadata.create_all`). Tripwire: post-PR-3, monitor for production drift; if drift detected, schedule a follow-up to route through `migrate.py`. Documents R11B-2.
+- D43: DATABASE_URL canonical credentials (user/password/db) — `adcp_user`/`test_password`/`adcp_test` is the CI canonical; compose uses production-like `secure_password_change_me`/`adcp` for dev realism. Tests must NOT hardcode credentials; use the env var. Codifies R11B-1 framing (full unification deferred to a P1 cleanup PR).
+- D44: `minimum_pre_commit_version: 3.2.0` directive in `.pre-commit-config.yaml` so `default_install_hook_types` (D31) actually fires. Codifies R11C-06 fix.
+- D45: Phase B branch-protection flip is FORBIDDEN on Fri/Sat/Sun + holiday eve; pre-flight A22 enforces. Codifies R11C-02 mitigation.
+
+**Net-new risks R38-R42:**
+- R38: Frozen-checks structural guard 11→14 transition deadlock (R11C-04 / R11A-01).
+- R39: Phase B snapshot file single point of failure (R11C-01).
+- R40: Cosign + Rekor outage + tag immutability cascade (R11C-09 + R11C-10).
+- R41: CODEOWNERS or dependabot.yml syntax error silently breaks routing or stops dep updates (R11C-16).
+- R42: Phase A overlap window exhausts GHA runner-minutes / memory under double workflow load (R11C-08).
+
+**PR scope additions / corrections:**
+- **PR 3 (major correction):** integration-tests job rewritten to use docker-run script-step pattern for creative-agent + adcp-postgres on a custom `creative-net` network (matches test.yml:180-223 verbatim with disk-truth env values). Postgres anchor adds documentation explaining why max_connections can't be tuned via GHA services + the DB_POOL_SIZE workaround. Composite env block sets `SUPER_ADMIN_EMAILS`, `DB_POOL_SIZE=4`, `DB_MAX_OVERFLOW=8`. Composite upload-artifact path globs both `test-results/` and `.tox/<env>.json`.
+- **PR 5 Dockerfile:** added `ARG SOURCE_DATE_EPOCH=0` (default 0 = epoch; PR 6's --build-arg overrides). Without ARG declaration, BuildKit silently ignored the build-arg → reproducible-build claim broken.
+- **PR 4 (pending application):** add `minimum_pre_commit_version: 3.2.0` directive (D44); fix duplicate "Commit 10" headings; simplify contributor instructions (D31 cascade — remove `--hook-type pre-push` qualifier from CONTRIBUTING references); use `python3 scripts/ops/migrate.py` (matches disk) instead of `uv run python ...`.
+- **Pre-flight (pending application):** A20 fork-PR snapshot before Phase B; A21 CODEOWNERS + dependabot.yml syntax validators; A22 Phase B day-of-week guard (no Fri/weekend/holiday eve); A23 creative-agent commit pin freshness check (<3 months old).
+
+**Top-level docs corrected:**
+- RESUME-HERE.md, 00-MASTER-INDEX.md, EXECUTIVE-SUMMARY.md no longer claim "ADR-001/002/003 promoted to standalone drafts" — they're inline in PR 1 per drafts/README.md. (R11D-01)
+- D1-D28 / R1-R10 stale ranges updated to D1-D45 / R1-R42 (R11D-02).
+
+**Documentation drift (P1 — pending later sweep, not blocking handoff):** architecture.md still has 7 stale "11 frozen" mentions despite §1 banner. PR 1 / PR 4 contributor instructions still say `pre-commit install --hook-type pre-commit --hook-type pre-push` despite D31 simplification.
+
+**Public issue body** still cites "11 frozen check names" (user owns the edit). Reviewer who lands on the issue first gets the wrong canonical count; the planning corpus is correct. Recommend the user update the issue body before handoff.
+
+**Round 11 audit reliability:** R11-A re-verified Round 10 P0 claims; found 5 NEW P0s introduced by Round 10 sweep. R11-B/C/D/E covered axes Round 10 didn't. R11A-03 (creative-agent services break) is the most critical finding — confirms the user's instinct that we keep finding things, AND validates the sweep approach (without R11 verification, the executor would have shipped a broken integration job).
+
+**Net effort delta from Round 11:** +0.5 day across PRs 3/4/5; total now **~19.5-23.5 engineer-days, ~6 calendar weeks part-time** (calendar slack absorbs).
+
+**Round 12 verification** — recommend re-running R11-A only (drift over Round 11) before launching PR 1. R11-B/C/D/E findings are mostly mechanical edits or risk acknowledgments, low drift risk.
+
+
 
 ## 2026-04-25 P0 sweep applied (Round 5 + Round 6)
 
@@ -98,8 +214,8 @@ Concurrent work: v2.0 (Flask-to-FastAPI) under [PR #1221](https://github.com/pre
 1. **This file** (`RESUME-HERE.md`) — orientation
 2. **[`EXECUTIVE-SUMMARY.md`](EXECUTIVE-SUMMARY.md)** — single-screen orientation; if you read no other research file, read this
 3. [`00-MASTER-INDEX.md`](00-MASTER-INDEX.md) — status table, calendar, sequencing
-4. [`03-decision-log.md`](03-decision-log.md) — every locked decision (D1-D28)
-5. [`02-risk-register.md`](02-risk-register.md) — R1-R10 + R19/R20/R23 promoted + R26-R30 added; R11-R18, R24-R25 remain LOW info in `research/edge-case-stress-test.md`
+4. [`03-decision-log.md`](03-decision-log.md) — every locked decision (D1-D45 as of Round 11)
+5. [`02-risk-register.md`](02-risk-register.md) — R1-R42 (Round 10 added R33-R37; Round 11 added R38-R42); R11-R18, R24-R25 remain LOW info in `research/edge-case-stress-test.md`
 6. [`01-pre-flight-checklist.md`](01-pre-flight-checklist.md) — admin actions A1-A14 + agent steps P1-P6
 7. **The per-PR spec for the PR you're working on** (`pr1-supply-chain-hardening.md` … `pr6-image-supply-chain.md`)
 8. [`templates/executor-prompt.md`](templates/executor-prompt.md) — agent operating contract (now embeds the 18 continuity-hygiene rules; rules 16/17/18 added in P0 sweep)
@@ -247,8 +363,8 @@ The plan refactor is complete. To launch an executor on PR 1:
 ├── REFACTOR-RUNBOOK.md             ← 11-step plan (now superseded — most steps applied 2026-04-25; kept as audit trail)
 ├── 00-MASTER-INDEX.md              ← status, calendar (6 weeks), 6 PRs
 ├── 01-pre-flight-checklist.md
-├── 02-risk-register.md             ← R1-R10 + R19/R20/R23 promoted + R26-R30 added in P0 sweep
-├── 03-decision-log.md              ← D1-D28
+├── 02-risk-register.md             ← R1-R42 (Round 10 added R33-R37; Round 11 added R38-R42)
+├── 03-decision-log.md              ← D1-D45 (Round 10 added D30-D38; Round 11 added D39-D45)
 ├── architecture.md                 ← current vs target
 ├── landing-schedule.md             ← 6-week dependency graph
 ├── preflight-ttl-guard.md          ← TTL bash block for per-PR checklists
