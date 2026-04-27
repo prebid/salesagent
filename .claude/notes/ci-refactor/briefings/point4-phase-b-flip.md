@@ -30,6 +30,11 @@ Per R1 (HIGH severity), a misconfigured branch-protection flip locks out merging
    # Bare names in ci.yml — use the rendered form for the PATCH body
    grep -hoE "name:\s+['\"]?[A-Z][A-Za-z ]+['\"]?\s*$" .github/workflows/ci.yml | sort -u
    ```
+5. Pre-flight A24 dry-run evidence on disk: `test -f .claude/notes/ci-refactor/escalations/phase-b-dry-run-evidence.md` (BLOCKER — Round 13 addition; the actual sandbox-repo dry-run record, not just the pre-flight checkbox)
+6. Pre-flight A25 hardware MFA + SPOF acceptance recorded (BLOCKER — verify pre-flight sign-off `[ ]` is checked; ADR-002 lifted in PR 1)
+7. Pre-flight A20 fork-PR snapshot exists AND coordination comments posted: `test -f .claude/notes/ci-refactor/inflight-fork-prs-snapshot.json` AND verify each listed fork PR has a maintainer coordination comment (otherwise post-flip drain leaves forks indefinitely "expected")
+8. Pre-flight A22 holiday-eve check passed (the flip script enforces day-of-week; the holiday-eve loop in A22 is operator-run)
+9. R39 SHA-256 of `branch-protection-snapshot.json` matches the value recorded at A1 capture time (corruption check; rollback depends on this file)
 
 **USER vs AGENT actions for Phase B**
 
@@ -68,7 +73,7 @@ None. Phase B is admin-only. No code changes; only branch-protection state chang
 7. After user runs flip: execute Step 6 verification
 
 **Decisions in effect**
-D2 (branch protection + bypass — `@chrishuie` on bypass list, was set in PR 1 admin steps), D17 amended by D30 (the 14 frozen names — frozen as a contract; do not deviate), D11 (`.coverage-baseline = 53.5` hard-gate from PR 3 day 1), D26 (workflow naming — bare job names; the rendered-name probe in Step 1b is mandatory), D45 (Phase B forbidden Fri/Sat/Sun)
+D2 (branch protection + bypass — `@chrishuie` on bypass list, was set in PR 1 admin steps), D17 amended by D30 (the 14 frozen names — frozen as a contract; do not deviate), D11 (`.coverage-baseline = 53.5` hard-gate from PR 3 day 1), D26 (workflow naming — bare job names; the rendered-name probe in Step 1b is mandatory), D45 (Phase B forbidden Fri/Sat/Sun + holiday eve — script enforces day-of-week, A22 enforces holiday-eve)
 
 **Risks active right now**
 - R1 (HIGH severity, low prob): branch-protection flip locks out merging. Mitigation: pre-flight snapshot + atomic flip + ≤5-minute window. Recovery: <5 minutes via inverse PATCH

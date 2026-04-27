@@ -239,6 +239,9 @@ DOW=$(date +%u)
 
 # Holiday-eve check (extend with org calendar; minimal version: US federal next-day holidays)
 NEXT_DAY=$(date -d "+1 day" +%Y-%m-%d 2>/dev/null || date -v+1d +%Y-%m-%d)
+# WARNING: HOLIDAYS_2026 below is hard-coded for calendar year 2026 (Round 14 deep-verify Gap 3 bonus B3).
+# If the rollout extends past Jan 1, 2027, rename the variable and refresh the date list:
+# US federal holidays: https://www.opm.gov/policy-data-oversight/pay-leave/federal-holidays/
 HOLIDAYS_2026="2026-01-01 2026-01-19 2026-02-16 2026-05-25 2026-06-19 2026-07-03 2026-07-04 2026-09-07 2026-10-12 2026-11-11 2026-11-26 2026-12-24 2026-12-25 2026-12-31"
 for h in $HOLIDAYS_2026; do
   [[ "$NEXT_DAY" == "$h" ]] && { echo "ABORT: Phase B forbidden on holiday eve ($NEXT_DAY is a US federal holiday). Reschedule."; exit 1; }
@@ -289,6 +292,21 @@ If new required env vars surfaced, file an issue and update D32 before authoring
 **Status:** [ ] Complete (admin) — record date + sandbox repo URL
 
 **Blocks:** PR 3 Phase B execution. Without A24 complete, do not proceed.
+
+**Setup prerequisite — `phase-b-in-progress` label (R23 mutex; Round 14 deep-verify Gap 3 bonus B6):**
+The `flip-branch-protection.sh` script (lines 36-50) opens a GitHub Issue with label `phase-b-in-progress` to enforce a mutex during Phase B execution. The label must exist one-time before any Phase B run (also referenced in `pr3-phase-b-checklist.md`):
+
+```bash
+# Create the label (one-time setup):
+gh label create phase-b-in-progress --color FFA500 --description="Phase B atomic-flip in progress; do not merge or admin-action" 2>/dev/null || true
+
+# Verify:
+gh label list | grep -q phase-b-in-progress && echo "label exists" || echo "MISSING"
+```
+
+The script will create an Issue using this label at flip time; the issue auto-closes on success. If you see an unexpected issue with this label appear in your inbox during Phase B execution, this is the mutex doing its job — do not close it manually until the script completes.
+
+**Status:** [ ] Label exists in repo
 
 ### A25 — Confirm hardware MFA on @chrishuie + document SPOF acceptance (BLOCKER for PR 3 Phase B)
 

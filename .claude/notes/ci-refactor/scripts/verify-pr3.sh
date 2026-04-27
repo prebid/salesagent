@@ -237,11 +237,30 @@ if missing:
   ok "all ci.yml jobs have explicit timeout-minutes (#1228 A5 closed)"
 fi
 
-# #1228 C5 — uv cache key hashes pyproject.toml too
+# #1228 C5 — uv cache-dependency-glob hashes BOTH uv.lock AND pyproject.toml.
+# Without both, a lock-only or manifest-only change can silently get a stale cache hit.
+# Anchor the check to the cache-dependency-glob: block via a YAML walk so a comment
+# mentioning either file (e.g., the rationale comment) does not produce a false-positive PASS.
+# (Round 14 deep-verify Gap 2 — was file-wide grep with comment-coincidence risk; uv.lock unchecked.)
 if [[ -f .github/actions/setup-env/action.yml ]]; then
-  grep -q 'pyproject.toml' .github/actions/setup-env/action.yml \
-    || fail "setup-env/action.yml cache-dependency-glob must include pyproject.toml (#1228 C5; stale-cache class)"
-  ok "uv cache-dependency-glob includes pyproject.toml (#1228 C5 closed)"
+  glob_body=$(uv run python -c "
+import yaml, sys
+doc = yaml.safe_load(open('.github/actions/setup-env/action.yml'))
+for step in doc.get('runs', {}).get('steps', []):
+    if isinstance(step, dict) and 'uses' in step and 'astral-sh/setup-uv' in str(step.get('uses', '')):
+        glob = step.get('with', {}).get('cache-dependency-glob', '')
+        if isinstance(glob, list):
+            print(' '.join(glob))
+        else:
+            print(str(glob))
+        sys.exit(0)
+print('')
+" 2>/dev/null)
+  echo "$glob_body" | grep -qE '(^|\s|/)uv\.lock(\s|$)' \
+    || fail "setup-env/action.yml cache-dependency-glob must include uv.lock (#1228 C5; lock-only stale-cache class)"
+  echo "$glob_body" | grep -qE '(^|\s|/)pyproject\.toml(\s|$)' \
+    || fail "setup-env/action.yml cache-dependency-glob must include pyproject.toml (#1228 C5; manifest-only stale-cache class)"
+  ok "uv cache-dependency-glob includes BOTH uv.lock AND pyproject.toml (#1228 C5 fully closed)"
 fi
 
 fi   # end Phase A block

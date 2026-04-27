@@ -8,6 +8,18 @@
 
 Operator confirms dry-run completion via `[ ]` in pre-flight A24 checklist BEFORE STEP 1 below.
 
+**PRE-REQUISITE (per A25 — BLOCKER):** Hardware MFA confirmed on @chrishuie + SPOF acceptance documented in ADR-002. Without A25 completed in pre-flight sign-off, R20 + R30 (CRITICAL severity) attack chains have no mitigation in place. Verify the `[ ]` for A25 in `01-pre-flight-checklist.md` is checked before STEP 1 below.
+
+**PRE-REQUISITE (per A20 — Round 11 R11C-07):** In-flight fork PRs snapshotted, coordination comments posted to each. Without A20, fork PRs will show "expected — waiting for status" indefinitely post-flip because `gh workflow run --ref refs/pull/<n>/head` returns 403 for fork branches. Verify `.claude/notes/ci-refactor/inflight-fork-prs-snapshot.json` exists AND each listed fork PR has a coordination comment from the maintainer.
+
+**PRE-REQUISITE (per A22 — D45 enforcement):** Today is Mon-Thu AND tomorrow is NOT a US/EU federal holiday. Day-of-week is enforced by the flip script (`date +%u`); holiday-eve check is jurisdiction-bound and operator-verified — run the loop in pre-flight A22 manually before STEP 1.
+
+**PRE-REQUISITE (per R39):** SHA-256 of `branch-protection-snapshot.json` recorded in pre-flight notes; re-verify before flip:
+```bash
+sha256sum .claude/notes/ci-refactor/branch-protection-snapshot.json
+# Compare to value recorded at A1 capture time. If mismatch, snapshot was corrupted — DO NOT FLIP.
+```
+
 **PRE-REQUISITE (per A24 setup):** Repo must have a `phase-b-in-progress` label created (used by the script's mutex):
 ```bash
 gh label create phase-b-in-progress --color FFA500 --description "Phase B branch-protection flip is currently being executed; do not run a second flip"
@@ -18,7 +30,19 @@ gh label create phase-b-in-progress --color FFA500 --description "Phase B branch
 ```
 [ ] A24 dry-run completed on sandbox repo (snapshot → PATCH → rollback → idempotency check all green)
 
-[ ] Verify pre-flip snapshot exists:
+[ ] A24 dry-run evidence file on disk (closes A24 trust gap; checkbox alone is not sufficient):
+    test -f .claude/notes/ci-refactor/escalations/phase-b-dry-run-evidence.md
+
+[ ] A25 hardware MFA confirmed on @chrishuie + SPOF acceptance documented in ADR-002 (BLOCKER per pre-flight)
+
+[ ] A20 in-flight fork PRs snapshotted (`.claude/notes/ci-refactor/inflight-fork-prs-snapshot.json`) and coordination comments posted to each fork PR (Round 11 R11C-07)
+
+[ ] A22 holiday-eve check passed (script enforces day-of-week; holiday lookup is operator-run from pre-flight A22)
+
+[ ] R39 SHA-256 of branch-protection-snapshot.json matches recorded value at A1 capture (corruption check)
+
+[ ] Verify pre-flip snapshots exist (BOTH files; A1 captures full snapshot, extract derived from it):
+    test -f .claude/notes/ci-refactor/branch-protection-snapshot.json && \
     test -f .claude/notes/ci-refactor/branch-protection-snapshot-required-checks.json
     [[ -s .claude/notes/ci-refactor/branch-protection-snapshot-required-checks.json ]]
 

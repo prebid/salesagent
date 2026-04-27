@@ -417,7 +417,7 @@ Plus agent-derived:
 - [ ] `mypy.ini:3` plugins line still references `pydantic.mypy` (not commented out)
 - [ ] `tox -e ui --notest` succeeds (verifies ui-tests group migration)
 - [ ] CLAUDE.md guards table accurate against disk
-- [ ] adcp library version ≥3.10 (per D16; verified by verify-pr2.sh line 466-468)
+- [ ] adcp library version ≥3.10 (per D16; verified by verify-pr2.sh §[D16 / adcp library version >= 3.10])
 - [ ] Commit 4.6: DB_POOL_SIZE / DB_MAX_OVERFLOW env vars wired in `src/core/database/database_session.py` (per D40 / R12A-01; replaces hardcoded pool sizes with `os.getenv`). Brief code expectation — **per-branch defaults preserved**: PgBouncer branch (`is_pgbouncer == True`, lines 108-109) keeps default `(2, 5)`; direct PG branch (lines 124-125) keeps default `(10, 20)`. Wrong-default landing causes silent PgBouncer prod regression — see spec body §Commit 4.6 + Round 14 B1.
 - [ ] No duplicate factory-boy entries in pyproject.toml (`grep -c 'factory-boy>=3.3.0' pyproject.toml` returns 1)
 

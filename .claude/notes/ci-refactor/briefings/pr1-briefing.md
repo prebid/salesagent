@@ -14,7 +14,7 @@
 **Concurrent activity.** PR #1217 (adcp 3.12) is open; PR 1 doesn't touch `adcp` so tolerated. v2.0 phase PRs may land on `pyproject.toml` — rebase mechanically, but do NOT re-introduce `[project.optional-dependencies].dev` if v2.0 has deleted it.
 
 **Files (heat map).**
-- Heavy edits: `.pre-commit-config.yaml` (lines 262, 275, 281, 289 SHA-freeze), `CONTRIBUTING.md` (full rewrite), all 4 `.github/workflows/*.yml` (perms + SHA-pinning).
+- Heavy edits: `.pre-commit-config.yaml` (lines 263, 276, 282, 290 SHA-freeze), `CONTRIBUTING.md` (full rewrite), all 4 `.github/workflows/*.yml` (perms + SHA-pinning).
 - New files: `.github/CODEOWNERS`, `.github/dependabot.yml`, `.github/workflows/security.yml`, `.github/workflows/codeql.yml`, `.github/codeql/codeql-config.yml`, `.github/zizmor.yml`, `SECURITY.md`, `docs/decisions/adr-001-…md`, `adr-002-…md`, `adr-003-…md`.
 - One-line edit: `pyproject.toml` (description + `[project.urls]`).
 - **MOVED to PR 3: Gemini fallback fix** (`test.yml:342`) — PR 3 rewrites test.yml wholesale; the fix lands in `_pytest/action.yml`'s env block as part of PR 3's commit sequence.
@@ -30,7 +30,7 @@
 
 **Key facts (you must know).**
 1. zizmor's CLI mutually excludes `--annotations` and `--advanced-security`; if you write `.github/zizmor.yml`, don't enable both.
-2. The external pre-commit hooks that get SHA-frozen are: `pre-commit-hooks` (line 262), `astral-sh/ruff-pre-commit` (281), `pre-commit/mirrors-mypy` (289 — replaced in PR 2). **`psf/black` is INTENTIONALLY OMITTED from autoupdate-freeze** per ADR-008 — autoupdate would jump 25.1.0 → 26.3.0 (2026-style global reformat). Use `pre-commit autoupdate --freeze --repo <url>` for each non-black hook. Don't worry that mirrors-mypy is about to be deleted in PR 2; freeze it anyway for clean blame.
+2. The external pre-commit hooks that get SHA-frozen are: `pre-commit-hooks` (line 263), `astral-sh/ruff-pre-commit` (282), `pre-commit/mirrors-mypy` (290 — replaced in PR 2). **`psf/black` is INTENTIONALLY OMITTED from autoupdate-freeze** per ADR-008 — autoupdate would jump 25.1.0 → 26.3.0 (2026-style global reformat). Use `pre-commit autoupdate --freeze --repo <url>` for each non-black hook. Don't worry that mirrors-mypy is about to be deleted in PR 2; freeze it anyway for clean blame.
 3. The CONTRIBUTING.md outline in the spec §"Embedded CONTRIBUTING.md outline" lists the 14 frozen check names from D17 — paste them verbatim.
 4. `[project.urls]` block must use these 5 keys (matched by `verify-pr1.sh`): `Homepage`, `Repository`, `Issues`, `Documentation`, `Changelog`. (Earlier "Source" framing was wrong; spec uses `Repository`.)
 5. ADR-001 is referenced by PR 2 but committed here so the directory exists. ADR-002 documents the bypass; ADR-003 documents `pull_request_target` trust boundary for `pr-title-check.yml` + `ipr-agreement.yml`.

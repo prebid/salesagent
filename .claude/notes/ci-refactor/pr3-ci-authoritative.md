@@ -86,7 +86,7 @@ runs:
   using: 'composite'
   steps:
     - uses: actions/checkout@<SHA>  # v4
-    - uses: astral-sh/setup-uv@<SHA>  # v4
+    - uses: astral-sh/setup-uv@<SHA>  # v8.x
       with:
         version: ${{ inputs.uv-version }}
         python-version-file: ${{ inputs.python-version-file }}

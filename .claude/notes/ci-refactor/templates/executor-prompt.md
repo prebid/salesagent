@@ -30,13 +30,18 @@ context. Read everything before writing code.
 9. `.claude/notes/ci-refactor/COORDINATION.md`    — parallel-agent PR claim registry
 10. `.claude/notes/ci-refactor/REBASE-PROTOCOL.md` — rebase order for shared files
 
-## Pre-flight (mandatory)
+## Pre-flight (informational — escalate if missing, do not silently proceed)
 
-Before the first commit:
+Before the first commit, verify these artifacts on disk (per `01-pre-flight-checklist.md`):
 - [ ] You're on a fresh branch from latest main (`git checkout -b <prefix>/ci-refactor-pr<N>-<slug>`)
 - [ ] `git status` clean
-- [ ] Pre-flight artifacts exist (per `01-pre-flight-checklist.md`): `.zizmor-preflight.txt`, `.mypy-baseline.txt`, `branch-protection-snapshot.json` (if applicable to your PR), `.claude/notes/ci-refactor/.hook-baseline.txt` (P10 — captured at PR 1 author time; PR 4 verify-script reads this for drift detection)
+- [ ] `.zizmor-preflight.txt` (P3)
+- [ ] `.mypy-baseline.txt` (P2)
+- [ ] `branch-protection-snapshot.json` (A1 — only required for PR 3 Phase B; informational for other PRs)
+- [ ] `.claude/notes/ci-refactor/.hook-baseline.txt` (P10 — captured at PR 1 author time; PR 4 verify-script reads this for drift detection)
 - [ ] `make quality` passes on the starting state
+
+**If any artifact is missing:** the user owns admin pre-flight steps and may not have completed them yet. Do NOT proceed with commits — write `escalations/pr<N>-missing-preflight-artifacts.md` listing which artifacts are missing, then STOP per Rule 6/17. The user will tell you to either run the missing P-item (if agent-runnable) or wait for them to complete the missing A-item (admin).
 
 ## Scope statement
 

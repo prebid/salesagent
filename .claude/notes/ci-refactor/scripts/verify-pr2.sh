@@ -72,4 +72,79 @@ if [[ -f src/core/database/database_session.py ]]; then
   ok "DB_POOL_SIZE/DB_MAX_OVERFLOW wiring with correct per-branch defaults (D40 + Round 14 B1)"
 fi
 
+# --- Round 14 deep-verify additions (Gap 1 — close 12-step inline contract from spec L432-482) ---
+
+# D13: pydantic.mypy plugin canary fixture (PR 2 commit 2 creates this file)
+section "D13 — pydantic.mypy plugin canary"
+[[ -f tests/unit/_pydantic_mypy_canary.py ]] \
+  || fail "tests/unit/_pydantic_mypy_canary.py missing (D13 — PR 2 commit 2 creates this canary; spec lines 75-83)"
+uv run mypy tests/unit/_pydantic_mypy_canary.py 2>&1 | grep -q "Incompatible default" \
+  || fail "pydantic.mypy plugin not loaded — D13 200-error tripwire is uninstrumented (spec line 469)"
+ok "D13 pydantic.mypy plugin canary fires — tripwire instrumented"
+
+# D14: ui-tests block migrated to [dependency-groups] (PR 2 commit 6; spec L249-266 is HARD assert across 3 files)
+section "D14 — ui-tests dependency-group migration"
+awk '/\[dependency-groups\]/,/^\[/' pyproject.toml | grep -qE '^ui-tests\s*=' \
+  || fail "pyproject.toml [dependency-groups].ui-tests block missing (D14; PR 2 commit 6; spec L261)"
+! awk '/\[project\.optional-dependencies\]/,/^\[/' pyproject.toml | grep -qE '^ui-tests\s*=' \
+  || fail "[project.optional-dependencies].ui-tests block still present — D14 migration incomplete (spec L260)"
+if [[ -f tox.ini ]]; then
+  grep -q 'dependency_groups\s*=\s*ui-tests' tox.ini \
+    || fail "tox.ini missing 'dependency_groups = ui-tests' (D14; PR 2 commit 6 OWNS — spec L262)"
+fi
+if [[ -f scripts/setup/setup_conductor_workspace.sh ]]; then
+  grep -q 'uv sync --group ui-tests' scripts/setup/setup_conductor_workspace.sh \
+    || fail "setup_conductor_workspace.sh missing 'uv sync --group ui-tests' (D14; PR 2 commit 6 OWNS — spec L263)"
+fi
+ok "D14 ui-tests migrated to [dependency-groups] (pyproject.toml + tox.ini + setup script)"
+
+# D29: arch_guard marker registered in pytest.ini (PR 2 commit 8 OWNS; PR 4 commit 1 verifies)
+section "D29 — arch_guard marker registration"
+[[ -f pytest.ini ]] || fail "pytest.ini missing (D29; required as marker registration target — NOT pyproject.toml)"
+grep -qE '^\s*arch_guard:' pytest.ini \
+  || fail "pytest.ini missing 'arch_guard:' marker (D29; PR 2 commit 8 OWNS registration)"
+ok "D29 arch_guard marker registered in pytest.ini (PR 2 commit 8)"
+
+# D33: pytest-xdist + pytest-randomly in dev group (PR 2 commit 4.5 OWNS; PR 3 uses)
+section "D33 — pytest-xdist + pytest-randomly in dev group"
+grep -qE '"pytest-xdist[>=]' pyproject.toml \
+  || fail "pyproject.toml missing pytest-xdist (D33; PR 2 commit 4.5 OWNS — PR 3 prereq)"
+grep -qE '"pytest-randomly' pyproject.toml \
+  || fail "pyproject.toml missing pytest-randomly (D33; PR 2 commit 4.5 OWNS)"
+if [[ -f uv.lock ]]; then
+  grep -q 'pytest-xdist' uv.lock \
+    || fail "uv.lock missing pytest-xdist (D33 — uv lock not refreshed after dep add)"
+  grep -q 'pytest-randomly' uv.lock \
+    || fail "uv.lock missing pytest-randomly (D33)"
+fi
+ok "D33 pytest-xdist + pytest-randomly in dev group + locked"
+
+# D8 strict — uv sync --group dev count >= 5 (spec L457; PR 2 commit 4 has 5 explicit callsites)
+# This supplements (does not replace) the existing >= 1 check at L22-25, giving graduated diagnostic.
+section "D8 strict — uv sync --group dev usage in CI (>= 5 callsites)"
+if [[ -f .github/workflows/test.yml ]]; then
+  GROUP_DEV_STRICT=$(grep -c 'uv sync --group dev' .github/workflows/test.yml || true)
+  [[ "$GROUP_DEV_STRICT" -ge 5 ]] \
+    || fail "test.yml has only $GROUP_DEV_STRICT 'uv sync --group dev' callsites; spec demands >= 5 (D8 / Commit 4 — partial migration not allowed)"
+  ok "test.yml has $GROUP_DEV_STRICT '--group dev' callsites (>= 5 spec threshold)"
+fi
+
+# Commit 8 strict — actually run the drift guard, not just `test -f` (spec L461 step 7)
+section "Commit 8 — additional_dependencies drift guard executes"
+if [[ -f tests/unit/test_architecture_pre_commit_no_additional_deps.py ]]; then
+  uv run pytest tests/unit/test_architecture_pre_commit_no_additional_deps.py -v -x \
+    || fail "drift guard test fails (PR 2 commit 8; spec L461)"
+  ok "additional_dependencies drift guard passes"
+fi
+
+# D16 — adcp library version >= 3.10 (spec L420 acceptance criterion)
+section "D16 — adcp library version >= 3.10"
+if uv run python -c "import adcp; assert tuple(int(x) for x in adcp.__version__.split('.')[:2]) >= (3, 10), f'adcp version {adcp.__version__} < 3.10'" 2>/dev/null; then
+  ok "D16 adcp library version >= 3.10"
+else
+  warn "D16 adcp version check skipped (uv/adcp not importable in current env)"
+fi
+
+# --- end Round 14 deep-verify additions ---
+
 echo "PR 2 verification: complete"

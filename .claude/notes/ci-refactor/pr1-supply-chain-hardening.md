@@ -314,7 +314,7 @@ grep -q '## Status' docs/decisions/adr-002-solo-maintainer-bypass.md
 ### Commit 8 — `chore: pre-commit autoupdate --freeze (SHA-pin all external hooks)`
 
 Files:
-- `.pre-commit-config.yaml` (modify lines 262, 275, 281, 289)
+- `.pre-commit-config.yaml` (modify lines 263, 276, 282, 290)
 
 Closes PD3. Per D12, bumps each hook to its latest tag and rewrites `rev:` to a 40-char SHA with `# frozen: <tag>` trailing comment (relaxed regex `# frozen: \S+` matches both `v6.0.0` and `25.1.0` formats — black ships without `v` prefix).
 

@@ -36,13 +36,13 @@ if [[ -f CONTRIBUTING.md ]]; then
   ok "docs/development/contributing.md preserved at $DOCS_LINES lines (D21-canonical)"
 fi
 
-# Commit 3: SECURITY.md
+# Commit 1: SECURITY.md
 if [[ -f SECURITY.md ]]; then
   grep -qE 'reporting|disclosure|security@' SECURITY.md || fail "SECURITY.md lacks reporting policy"
   ok "SECURITY.md present"
 fi
 
-# Commit 4: CODEOWNERS
+# Commit 3: CODEOWNERS
 if [[ -f CODEOWNERS ]] || [[ -f .github/CODEOWNERS ]]; then
   cf=$([[ -f .github/CODEOWNERS ]] && echo .github/CODEOWNERS || echo CODEOWNERS)
   grep -qE '^\* @' "$cf" || fail "$cf has no global owner"
@@ -60,7 +60,7 @@ if [[ -f CODEOWNERS ]] || [[ -f .github/CODEOWNERS ]]; then
   fi
 fi
 
-# Commit 5: dependabot
+# Commit 4: dependabot
 if [[ -f .github/dependabot.yml ]]; then
   grep -qE '^version: 2' .github/dependabot.yml || fail "dependabot.yml missing 'version: 2'"
   for eco in pip pre-commit github-actions docker; do

@@ -21,7 +21,25 @@ if [[ "$DAY" -ge 5 ]]; then
   echo "ERROR: D45 forbids Phase B execution on Friday (5), Saturday (6), or Sunday (7)." >&2
   echo "Today is day $DAY of week. Reschedule for Mon-Thu." >&2
   echo "Override with FORCE=1 ./flip-branch-protection.sh (NOT RECOMMENDED — see D45 rationale)." >&2
-  [[ "${FORCE:-0}" == "1" ]] || exit 1
+  if [[ "${FORCE:-0}" == "1" ]]; then
+    # FORCE=1 audit trail (Round 14 deep-verify Gap 3 bonus B5 — bypass requires forensic record)
+    AUDIT_FILE="$(dirname "$0")/../escalations/phase-b-force-override-$(date +%Y%m%d-%H%M%S).md"
+    mkdir -p "$(dirname "$AUDIT_FILE")"
+    {
+      echo "# Phase B FORCE=1 Day-of-Week Override"
+      echo ""
+      echo "- date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "- day-of-week: $DAY (1=Mon, 7=Sun)"
+      echo "- operator: ${USER:-unknown}@${HOSTNAME:-unknown}"
+      echo "- justification: TODO — operator must edit and commit this file with ADR-style rationale"
+      echo ""
+      echo "Audit trail required by Round 14 deep-verification (Gap 3 bonus B5)."
+    } > "$AUDIT_FILE"
+    echo "FORCE=1 used; audit trail written to: $AUDIT_FILE" >&2
+    echo "  → Operator MUST edit this file with justification + commit before claiming Phase B success." >&2
+  else
+    exit 1
+  fi
   echo "WARNING: FORCE=1 override active; proceeding against D45 guidance." >&2
 fi
 
@@ -30,6 +48,26 @@ SNAPSHOT="${SNAPSHOT:-.claude/notes/ci-refactor/branch-protection-snapshot.json}
 DRY_RUN="${DRY_RUN:-0}"
 
 [[ -f "$SNAPSHOT" ]] || { echo "ERROR: pre-flip snapshot missing: $SNAPSHOT (see pre-flight A1)" >&2; exit 2; }
+
+# R39 mitigation — SHA-256 verify of branch-protection-snapshot.json (Round 14 deep-verify Gap 3 bonus B4).
+# Snapshot is the rollback target; if corrupted, rollback fails silently.
+# Recorded SHA lives in escalations/phase-b-dry-run-evidence.md (per A24 + A25 docs).
+RECORDED_SHA_FILE="$(dirname "$0")/../escalations/phase-b-dry-run-evidence.md"
+if [[ -f "$RECORDED_SHA_FILE" ]] && grep -qE '^snapshot-sha256:\s+[a-f0-9]{64}$' "$RECORDED_SHA_FILE"; then
+  RECORDED_SHA=$(grep -E '^snapshot-sha256:\s+' "$RECORDED_SHA_FILE" | head -1 | awk '{print $2}')
+  CURRENT_SHA=$(sha256sum "$SNAPSHOT" 2>/dev/null | awk '{print $1}')
+  if [[ "$RECORDED_SHA" != "$CURRENT_SHA" ]]; then
+    echo "ERROR: branch-protection-snapshot.json SHA mismatch (R39)" >&2
+    echo "  recorded: $RECORDED_SHA" >&2
+    echo "  current:  $CURRENT_SHA" >&2
+    echo "Snapshot has been modified since A1 capture. DO NOT FLIP." >&2
+    exit 3
+  fi
+  echo "R39: snapshot SHA-256 verified."
+else
+  echo "WARNING: snapshot SHA not recorded in $RECORDED_SHA_FILE — R39 corruption-check skipped." >&2
+  echo "  To enable: at A1 capture time, append 'snapshot-sha256: <value>' to phase-b-dry-run-evidence.md." >&2
+fi
 
 # Phase B mutex — prevent concurrent flips by multiple admins. Uses a GitHub-issue
 # semaphore: open issue = lock held; closed = released. Stale locks must be cleared
@@ -93,6 +131,15 @@ if [[ "$DRY_RUN" == "1" ]]; then
 EOF
   exit 0
 fi
+
+echo ""
+echo "PRE-FLIP HUMAN GATES (script cannot verify; operator self-attest — Round 14 deep-verify Gap 3):"
+echo "  [ ] A25: hardware MFA confirmed on @chrishuie account"
+echo "  [ ] A20: fork-PR coordination comments posted (snapshot at inflight-fork-prs-snapshot.json)"
+echo "  [ ] A22 holiday-eve: tomorrow is NOT a US federal holiday (day-of-week is auto-checked above)"
+echo ""
+read -p "All three pre-flight A-items attested (y/N)? " ATTEST
+[[ "$ATTEST" == "y" || "$ATTEST" == "Y" ]] || { echo "Cancelled — complete pre-flight A-items first." >&2; exit 0; }
 
 read -p "Phase B atomic flip — type 'FLIP' to proceed (any other input cancels): " CONFIRM
 [[ "$CONFIRM" == "FLIP" ]] || { echo "Cancelled." >&2; exit 0; }
