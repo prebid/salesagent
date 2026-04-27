@@ -88,6 +88,27 @@ After Sub-PR A:
 
 Commits:
 
+[ ] 2.5. test(ci): scratch-test harden-runner emergency revert workflow (Round 14 M8)
+       Pre-merge verification only — no source changes in this commit; only adds
+       evidence file: escalations/harden-runner-revert-test-evidence.md
+       MUST land BEFORE Commit 3 (audit→block flip). The block-mode failure path
+       is the emergency-revert workflow; an untested escape hatch is operational
+       malpractice. Procedure: dispatch the workflow on a scratch branch, verify
+       it opens a revert PR with correct sed-substituted YAML, record evidence.
+       Tripwire: if scratch test fails, fix Commit 3b before Commit 3.
+       Verify: escalations/harden-runner-revert-test-evidence.md exists on disk.
+
+[ ] 3b. ci(security): add harden-runner emergency-revert workflow (Round 13)
+       Files: .github/workflows/harden-runner-emergency-revert.yml (NEW)
+       MUST land BEFORE Commit 3 (audit→block flip). Provides operator-side
+       recovery when block-mode locks out CI: any write-access user can
+       gh workflow run harden-runner-emergency-revert.yml with a reason; the
+       workflow sed-substitutes egress-policy: block → audit across all
+       workflows and opens a revert PR.
+       Permissions: { contents: write, pull-requests: write }.
+       Verify: workflow file exists; permissions block correct;
+       persist-credentials: false on checkout step.
+
 [ ] 3. ci(security): flip harden-runner from audit to block mode with allowlist
        Files: .github/workflows/ci.yml (and any other workflows with audit-mode harden-runner)
        Change: egress-policy: audit → block

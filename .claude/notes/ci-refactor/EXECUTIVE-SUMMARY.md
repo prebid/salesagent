@@ -9,7 +9,7 @@ Last refresh: 2026-04-26 (Round 12 verification + sweep applied; D46 added, R43 
 
 ## What is this?
 
-A 6-PR rollout (issue [#1234](https://github.com/prebid/salesagent/issues/1234)) that brings salesagent to top-tier OSS supply-chain posture. **~19.5-23.5 engineer-days, ~6 calendar weeks part-time.** PRs land sequentially; PR 6 is a Week-6 follow-up. (Effort revised across rounds: Round 10 sweep added ~3.5-4 days for `default_install_hook_types`, 14-name expansion, creative-agent bootstrap, container hardening, gitleaks, ADR promotion. Round 11 added ~0.5 day for D39 script-step revert + D44 + ADR-008 copy. Round 12 added ~0.5 day for the DB_POOL_SIZE app-wiring + D46 propagation guard + verify-script extensions. Calendar slack absorbs without extension.)
+A 6-PR rollout (issue [#1234](https://github.com/prebid/salesagent/issues/1234)) that brings salesagent to top-tier OSS supply-chain posture. **~20.25-24.5 engineer-days, ~6 calendar weeks part-time.** PRs land sequentially; PR 6 is a Week-6 follow-up. (Effort revised across rounds: Round 10 sweep added ~3.5-4 days for `default_install_hook_types`, 14-name expansion, creative-agent bootstrap, container hardening, gitleaks, ADR promotion. Round 11 added ~0.5 day for D39 script-step revert + D44 + ADR-008 copy. Round 12 added ~0.5 day for the DB_POOL_SIZE app-wiring + D46 propagation guard + verify-script extensions. Round 13 added ~0.5-0.75 day for comprehensive review + parallel-agent scaffolding. Calendar slack absorbs without extension.)
 
 A concurrent v2.0 (Flask-to-FastAPI) effort runs under [PR #1221](https://github.com/prebid/salesagent/pull/1221). Per **D20** (Path 1 sequencing), issue #1234 lands first; v2.0 phase PRs rebase onto the new layered model.
 
@@ -62,7 +62,7 @@ D1: Solo maintainer (@chrishuie sole CODEOWNERS) ·
 D2: Branch protection + @chrishuie bypass (ADR-002) ·
 D3: Mypy in CI, not pre-commit ·
 D4: Signed commits deferred ·
-D5: NEVER auto-merge Dependabot (sustainability tripwire: 5 backlog → recruit) ·
+D5: NEVER auto-merge Dependabot (sustainability tripwire: 5 backlog → pause forward work, clear backlog; see runbooks/E1-dependabot-backlog-tripwire.md) ·
 D6: No merge queue ·
 D7: Pre-commit (not prek) for CI; prek optional-local ·
 D8: No pre-commit.ci ·
@@ -143,19 +143,19 @@ Branch protection requires exact-string match. Reusable workflow nesting can pro
 
 | Week | Activity | Deliverable |
 |------|----------|-------------|
-| 1 | Pre-flight (A1-A14 incl. allow_auto_merge audit, dependabot drain) + PR 1 (CodeQL advisory; persist-credentials everywhere; pinact + actionlint) | PR 1 merged; Scorecard ≥6.5 |
+| 1 | Pre-flight (A1-A25 incl. A11 allow_auto_merge audit, A12 dependabot drain, A24 sandbox dry-run, A25 hardware-MFA confirmation) + PR 1 (CodeQL advisory; persist-credentials everywhere; pinact + actionlint) | PR 1 merged; Scorecard ≥6.5 |
 | 2 | PR 2 + Dependabot intake | PR 2 merged mid-week |
 | 3 | PR 3 Phase A + 48h soak + rendered-name capture (composite `_pytest`, not reusable) | Phase A merged |
 | 4 | PR 3 Phase B (admin flip; `--paginate` + `--app_id`) + Phase C (cleanup); 48h soak each | PR 3 fully landed; coverage hard-gated from day 1 (D11 revised) |
 | 5 | PR 4 + PR 5 (without target-version bump per D28) + flip CodeQL to gating | Close #1234 |
-| 6 | PR 6 (harden-runner v2.16+ audit→block + cosign + SBOM + scorecard.yml + ghcr immutability) | Scorecard ≥7.5 verified |
+| 6 | PR 6 (harden-runner v2.19.0+ audit→block + cosign + SBOM + scorecard.yml + ghcr immutability) | Scorecard ≥7.5 verified |
 
 ---
 
 ## Cost of Operations (Round 13 addition)
 
 **One-time engineer cost:**
-- ~19.75-23.75 engineer-days for the 6-PR rollout (~$X/day fully-loaded; user fills in)
+- ~20.25-24.5 engineer-days for the 6-PR rollout (~$X/day fully-loaded; user fills in)
 - Solo execution: 6 calendar weeks part-time. Parallel-agent execution (PR 1+2+6 in parallel; PR 3-4-5 sequential): ~3.5-4 weeks.
 
 **GHA usage delta (estimate):**
@@ -176,7 +176,7 @@ Branch protection requires exact-string match. Reusable workflow nesting can pro
 
 **Ongoing maintainer time:**
 - Dependabot triage: ~2-3 hr/week (4 ecosystems × weekly cadence × 5 min/PR review)
-- D5 sustainability tripwire: at 5 PRs backlog → recruit second maintainer (the cost converts to a hiring decision, not a time sink)
+- D5 sustainability tripwire: at 5 PRs backlog → pause forward work, clear backlog (per runbooks/E1-dependabot-backlog-tripwire.md). Solo+agents execution model means human-team scaling is not a recourse; realistic options are tighter dependabot grouping, reduced churn, or threshold-raise via follow-up ADR.
 - Daily branch-protection-snapshot cron: ~5 min/week to glance at issues opened (if any)
 
 **Total annual cost (estimate, year 1):**
@@ -191,12 +191,7 @@ Branch protection requires exact-string match. Reusable workflow nesting can pro
 
 **Current (solo-maintainer-appropriate):** All gates open GitHub Issues with CRITICAL labels. Daily branch-protection-snapshot cron pings CODEOWNERS = @chrishuie.
 
-**For a 40-person team:** GitHub Issues alone are insufficient. **A26 pre-flight (Round 13)** configures notification routing to a team channel. Recommended:
-- **Slack/Teams**: configure GitHub repo notifications → forward CRITICAL labels to `#salesagent-ci-alerts` (or equivalent)
-- **PagerDuty/Opsgenie (optional)**: route P0 alerts (Phase B failure, branch-protection PATCH 422, signed-but-broken-image) to on-call
-- **Dashboard (optional)**: existing observability stack to display: GHA usage spike, Dependabot backlog count, Scorecard score trend, Phase A overlap status during weeks 3-4
-
-**Decision boundary:** notification routing is OUT-OF-SCOPE of this rollout (org infrastructure decision). A26 is the pre-flight checkpoint that ensures it's set up before launch.
+User-side notification routing (Slack/email/dashboard) is out of scope of this rollout.
 
 ---
 
@@ -259,8 +254,8 @@ Then STOP. The user reads, decides, you resume.
 - `RESUME-HERE.md` (orientation)
 - `EXECUTIVE-SUMMARY.md` (this file)
 - `00-MASTER-INDEX.md` (status table)
-- `01-pre-flight-checklist.md` (A1-A23 admin + P1-P9 agent prep)
-- `02-risk-register.md` (R1-R10 + R16/R19/R20/R23 promoted + R26-R47 added; R11-R15, R17-R18, R21-R22, R24-R25 remain LOW info in `research/edge-case-stress-test.md`)
+- `01-pre-flight-checklist.md` (A1-A25 admin + P1-P10 agent prep)
+- `02-risk-register.md` (R1-R10 + R16/R19/R20/R23 promoted + R26-R47 added; R11-R15 RESERVED never-defined; R17-R18, R21-R22, R24-R25 remain LOW info in `research/edge-case-stress-test.md`)
 - `03-decision-log.md` (D1-D48)
 - `architecture.md` (current vs target — partially stale; specs are authoritative)
 - `landing-schedule.md` (6-week calendar)
@@ -280,11 +275,9 @@ Then STOP. The user reads, decides, you resume.
 - `scripts/flip-branch-protection.sh` (admin-only)
 - `preflight-ttl-guard.md` (per-PR freshness checks)
 
-**Multi-team execution scaffolding (Round 13):**
-- `COORDINATION.md` — multi-agent PR-claiming registry (consult on session start)
+**Parallel-agent execution scaffolding (Round 13; reframed Round 14):**
+- `COORDINATION.md` — parallel-agent PR-claiming registry (consult on session start)
 - `REBASE-PROTOCOL.md` — mandatory rebase order for shared files (.pre-commit-config.yaml, pyproject.toml, release-please.yml)
-- `ONBOARDING-CHEAT-SHEET.md` — 10-minute orientation for fresh agents
-- `FAILURE-BROADCAST-PROTOCOL.md` — escalation comms protocol
 
 **Audit trail (read-only; do not edit):**
 - `research/` (6 files + README) — measurements, audits, tool YAML

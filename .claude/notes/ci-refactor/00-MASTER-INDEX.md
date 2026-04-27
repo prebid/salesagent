@@ -10,7 +10,9 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 
 **Round 12 verification + sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 12 section. 3 parallel opus subagents (drift over Round 11, end-to-end PR 1→6 continuity, reviewer cold-start). **Caught Round-11-self-introduced gap** (R12A-01: D40's DB_POOL_SIZE env override was non-operational because `src/core/database/database_session.py` hardcodes pool sizes as Python literals). Mechanical sweep across verify scripts, admin scripts, executor template, briefings: 11→14 frozen names; D1-D28→D1-D46; R1-R10→R1-R43; "18 rules"→"19 rules". D46 (pre-flight P9 grep-guard for stale-string drift) addresses the recurring propagation pattern. R43 (verify-script drift behind spec) added. After Round 12, the corpus is internally consistent across all surfaces.
 
-**Round 13 sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 13 section. **Boss-level review and 6 parallel verification audits** surfaced production-deploy coupling gap (D48), 3 LOAD-BEARING action-version/CVE-attribution/D47-race issues, 48 internal PR-spec contradictions, and 10 multi-team execution gaps. Round 13 sweep applied: D48 added; R45-R47 added; A24-A26 pre-flight added; harden-runner v2.16+ → v2.19.0+ corpus-wide; CVE-2025-32955 attribution corrected to GHSA-46g3-37rh-v698 + GHSA-g699-3x6g-wm3g; release-please.yml outputs.sha + D47 polling loop + R29 split-job mitigation applied; PR 4 duplicate-Commit-9 + 13-vs-16 math + Layer-1 table corrected; setup-uv@v4 → v8.x corpus-wide; CODEOWNERS v2.0 glob added; Phase B checklist 11→14 with flip-branch-protection.sh as canonical; check-stale-strings.sh PATTERNS extended; _lib.sh sourced from all 6 verify scripts; 4 new multi-team scaffolding docs created (COORDINATION.md, REBASE-PROTOCOL.md, ONBOARDING-CHEAT-SHEET.md, FAILURE-BROADCAST-PROTOCOL.md).
+**Round 13 sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 13 section. **Comprehensive review and 6 parallel verification audits** surfaced production-deploy coupling gap (D48), 3 LOAD-BEARING action-version/CVE-attribution/D47-race issues, and 48 internal PR-spec contradictions. Round 13 sweep applied: D48 added; R45-R47 added; A24-A26 pre-flight added (A26 later removed in Round 14 reframe); harden-runner v2.16+ → v2.19.0+ corpus-wide; CVE-2025-32955 attribution corrected to GHSA-46g3-37rh-v698 + GHSA-g699-3x6g-wm3g; release-please.yml outputs.sha + D47 polling loop + R29 split-job mitigation applied; PR 4 duplicate-Commit-9 + 13-vs-16 math + Layer-1 table corrected; setup-uv@v4 → v8.x corpus-wide; CODEOWNERS v2.0 glob added; Phase B checklist 11→14 with flip-branch-protection.sh as canonical; check-stale-strings.sh PATTERNS extended; _lib.sh sourced from all 6 verify scripts; parallel-agent execution scaffolding docs created (COORDINATION.md, REBASE-PROTOCOL.md).
+
+**Round 14 reframe applied 2026-04-27** — agent-team execution model. Stripped 40-person team / CTO / VP-Eng / boss-level / multi-team scaffolding per `feedback_agent_team_execution_model.md`. Deleted `ONBOARDING-CHEAT-SHEET.md` (duplicated EXECUTIVE-SUMMARY orientation) and `FAILURE-BROADCAST-PROTOCOL.md` (assumed human-team Slack/PR-comments; for solo+agents the pattern is `escalations/<file>.md → STOP → wait for user`). A26 (notification routing for 40-person team) deleted; A25 simplified to hardware-MFA-only path (Option A "recruit second maintainer" was impossible — agents are not maintainers).
 
 ## Status
 
@@ -23,7 +25,9 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 | PR 5 | Cross-surface version consolidation | not started | [pr5-version-consolidation.md](pr5-version-consolidation.md) | 2.5 days (+ Round 10: Dockerfile @sha256: pin D34, USER non-root D34, ADR-008 copy from drafts/ to docs/decisions/ D36; + Round 11: ARG SOURCE_DATE_EPOCH declaration R11A-02) |
 | PR 6 | Image supply chain (cosign + harden-runner + SBOM + scorecard.yml + Round 10 additions) | not started | [pr6-image-supply-chain.md](pr6-image-supply-chain.md) | 2-2.5 days (Week 6 follow-up; resolves D25; + Round 10: Trivy OS-layer scan D34, SOURCE_DATE_EPOCH D34, dep-review config extract, dep-review pin minor, frozen-checks guard update R36, OpenSSF Best Practices Badge enrollment) |
 
-**Total realistic effort:** ~16.5-20 engineer-days for the 5-PR core rollout (PRs 1-5); +2-2.5 days for PR 6 follow-up = **19.5-23.5 engineer-days total, ~6 calendar weeks part-time** (Round 10 added ~3.5-4 days; Round 11 added ~0.5 day; Round 12 added ~0.5 day for the DB_POOL_SIZE wiring + verify-script extensions; Round 13 added ~5-6 hours mechanical + boss-level + multi-team scaffolding; calendar slack absorbs). Round 13 added ~0.5-0.75 day; new total: **~20.25-24.5 engineer-days, ~6 calendar weeks part-time**.
+**Total realistic effort:** ~20.25-24.5 engineer-days, ~6 calendar weeks part-time (Round 13 final). Round-by-round audit trail: Round 10 added ~3.5-4 days; Round 11 added ~0.5 day; Round 12 added ~0.5 day for the DB_POOL_SIZE wiring + verify-script extensions; Round 13 added ~5-6 hours mechanical + comprehensive review + parallel-agent scaffolding (~0.5-0.75 day); calendar slack absorbs.
+
+**Pre-flight + sweep overhead (R10-R13):** ~1.75-2.5 days (creative-agent bootstrap, gitleaks, ADR copies, P9 grep guard, propagation discipline; not absorbed back into per-PR cells — explains the gap between hidden-scope cell sum 18.5-22 and headline 20.25-24.5).
 
 ## Read in this order
 
@@ -33,10 +37,8 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 4. The 6 per-PR specs in order — each is self-contained for the executor agent
 5. [templates/executor-prompt.md](templates/executor-prompt.md) — agent prompt template
 6. [templates/pr-description.md](templates/pr-description.md) — PR description template
-6.5 [COORDINATION.md](COORDINATION.md) — multi-agent PR-claiming registry (consult on session start)
+6.5 [COORDINATION.md](COORDINATION.md) — parallel-agent PR-claiming registry (consult on session start)
 6.6 [REBASE-PROTOCOL.md](REBASE-PROTOCOL.md) — mandatory rebase order for shared files
-6.7 [ONBOARDING-CHEAT-SHEET.md](ONBOARDING-CHEAT-SHEET.md) — 10-min orientation for fresh agents
-6.8 [FAILURE-BROADCAST-PROTOCOL.md](FAILURE-BROADCAST-PROTOCOL.md) — escalation comms protocol
 
 ## Sequencing
 
@@ -75,7 +77,7 @@ PR 1 → PR 2 → PR 3 (3-phase) → PR 4 → PR 5. Strict ordering for these re
 - 4 weeks of Dependabot PRs cleared with no >5-PR backlog
 - ≥1 contributor PR has gone through CODEOWNERS auto-request flow
 - Zero post-merge reverts of any of the 6 PRs
-- **All R26-R30 + R19/R20/R23 mitigations in place** (A11-A14 pre-flight passed; daily branch-protection snapshot cron landed; harden-runner v2.16+ pinned; cosign signing split into build+sign jobs)
+- **All R26-R30 + R19/R20/R23 mitigations in place** (A11-A14 pre-flight passed; daily branch-protection snapshot cron landed; harden-runner v2.19.0+ pinned; cosign signing split into build+sign jobs)
 
 ## Calendar (6 weeks part-time)
 
@@ -86,7 +88,7 @@ PR 1 → PR 2 → PR 3 (3-phase) → PR 4 → PR 5. Strict ordering for these re
 | Week 3 | PR 3 Phase A (overlap, both old + new workflows running) + 48h soak; composite `_pytest` (not reusable) | Phase A merged; new workflows running advisory; rendered-name capture for Phase B |
 | Week 4 | PR 3 Phase B (admin flips required-checks list with --paginate + --app_id) + Phase C (cleanup); coverage hard-gated from PR 3 day 1 (D11 revised, no Week 7-8 flip) | PR 3 fully landed; ≥48h soak A→B and B→C |
 | Week 5 | PR 4 (real hook math 33−13−9−1=10) + PR 5 (without target-version bump per D28) + flip CodeQL to gating | PR 4 + PR 5 merged; close #1234 |
-| Week 6 | PR 6 (harden-runner v2.16+ audit→block + cosign + SBOM + scorecard.yml + ghcr immutability) | PR 6 merged; Scorecard ≥7.5 verified |
+| Week 6 | PR 6 (harden-runner v2.19.0+ audit→block + cosign + SBOM + scorecard.yml + ghcr immutability) | PR 6 merged; Scorecard ≥7.5 verified |
 
 Built-in slack: 1-2 days per week absorbs Dependabot review load. Week 4 was previously packed with Phase B + Phase C + PR 4 — too tight for two ≥48h soak windows; PR 4 moved to Week 5 to relieve.
 

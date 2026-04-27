@@ -58,11 +58,18 @@ if [[ -f pyproject.toml ]]; then
   ok "pyproject.toml has 1 canonical factory-boy entry (duplicates collapsed)"
 fi
 
-# Commit 4.6: DB_POOL_SIZE / DB_MAX_OVERFLOW env-var wiring (D40 / R12A-01)
+# Commit 4.6: DB_POOL_SIZE / DB_MAX_OVERFLOW env-var wiring (D40 / R12A-01; per-branch defaults Round 14 B1)
 if [[ -f src/core/database/database_session.py ]]; then
   grep -q 'os.getenv.*DB_POOL_SIZE' src/core/database/database_session.py \
     || fail "src/core/database/database_session.py missing os.getenv(DB_POOL_SIZE) wiring (D40 / R12A-01 — wires the env var set in PR 3 _pytest action)"
-  ok "DB_POOL_SIZE env-var wiring present (D40)"
+  grep -q 'os.getenv.*DB_MAX_OVERFLOW' src/core/database/database_session.py \
+    || fail "src/core/database/database_session.py missing os.getenv(DB_MAX_OVERFLOW) wiring (D40 / R12A-01)"
+  # Per-branch defaults: PgBouncer (2|5), direct PG (10|20). Wrong defaults = silent PgBouncer prod regression.
+  pool_count=$(grep -cE 'os\.getenv\("DB_POOL_SIZE", "(2|10)"\)' src/core/database/database_session.py || true)
+  ovr_count=$(grep -cE 'os\.getenv\("DB_MAX_OVERFLOW", "(5|20)"\)' src/core/database/database_session.py || true)
+  [[ "$pool_count" -eq 2 ]] || fail "DB_POOL_SIZE: expected 2 occurrences with defaults (2|10) (PgBouncer + direct PG), got $pool_count — production regression risk per Round 14 B1"
+  [[ "$ovr_count" -eq 2 ]] || fail "DB_MAX_OVERFLOW: expected 2 occurrences with defaults (5|20), got $ovr_count — production regression risk per Round 14 B1"
+  ok "DB_POOL_SIZE/DB_MAX_OVERFLOW wiring with correct per-branch defaults (D40 + Round 14 B1)"
 fi
 
 echo "PR 2 verification: complete"

@@ -24,14 +24,17 @@ gh pr list --author "app/dependabot" --state open --json number,createdAt
 2. Close any obsolete PRs (Dependabot reopens if still applicable).
 
 **Recovery (longer-term)**
-- If the pattern persists 3+ weeks, revisit D1 (recruit second maintainer) per D5 escalation.
+- If the pattern persists 3+ weeks, revisit capacity strategy. Realistic options under solo+agents execution model:
+  - **Tighter dependabot grouping** — reduce per-week PR count via `groups` config in `.github/dependabot.yml` (e.g., group all minor bumps for a single ecosystem into one PR/week).
+  - **Reduce dependency churn** — pin a wider range or use `update-types: ["security"]` to drop non-security minor/patch noise.
+  - **Accept higher backlog** — explicitly raise the D5 tripwire threshold from 5 to N with an ADR documenting the new bandwidth contract.
 
 **Post-incident**
 - Update D5 with the trigger date.
-- If escalating to D1, file the recruitment issue.
+- File a follow-up ADR if the tripwire threshold or grouping policy needs to change.
 
 **Why this happens (root cause)**
-Solo maintainer + manual-only review of every dep bump is sustainable only at modest dep churn. If churn rises, D1's mitigation (more reviewers) is the right answer — not D5 relaxation.
+Solo+agents review of every dep bump is sustainable only at modest dep churn. Agents cannot replace human judgment on Dependabot PRs (security review, breaking-change assessment). If churn rises, the realistic options are: reduce churn, regroup PRs, or raise the threshold. Human-team scaling ("recruit second maintainer") is NOT a recourse under the user's stated solo+agents execution model.
 
 **Related scenarios**
 - See also: D5, D1, R9, C4 (cold-start version of this).

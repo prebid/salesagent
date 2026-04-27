@@ -38,4 +38,6 @@ harden-runner whitelists known-good egresses. Any new dependency or tool may nee
 **Related scenarios**
 - See also: F1 (compromised PR — overlapping concern), D2 (action force-push — different supply-chain vector).
 
+**Codified revert mechanism (Round 14 M8):** the documented emergency-revert path is `gh workflow run harden-runner-emergency-revert.yml -f reason="<reason>"`. This opens a PR flipping `egress-policy: block` → `audit` in all workflows. Verified working pre-merge per PR 6 Commit 2.5 scratch test (evidence in `escalations/harden-runner-revert-test-evidence.md`).
+
 ---

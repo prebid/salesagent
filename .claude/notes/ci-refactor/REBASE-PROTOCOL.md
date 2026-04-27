@@ -57,7 +57,7 @@ echo "OK: shape contract satisfied"
 1. **Textual conflict on rebase?** → resolve in favor of LATER PR's intent (per dependency order above)
 2. **No textual conflict but shape-test fails?** → rerun the lost PR's diff manually
 3. **Both PRs untouched the same line but semantic meaning changed?** (e.g., PR 1 SHA-pinned a hook PR 2 deleted) → consult the PR with the bigger structural change; smaller PR re-derives its diff
-4. **Cannot resolve?** → escalate via FAILURE-BROADCAST-PROTOCOL.md
+4. **Cannot resolve?** → write `escalations/pr<N>-rebase-conflict.md` describing the conflict + what you tried; update `COORDINATION.md` status to `BLOCKED`; STOP and wait for the user.
 
 ---
 

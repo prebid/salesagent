@@ -7,6 +7,8 @@
 
 **Drift closed.** PD16-PD22.
 
+**Prerequisite:** ensure `.claude/notes/ci-refactor/.hook-baseline.txt` was captured at PR 1 author time (P10). PR 4's verify script reads this file and fails if drift is detected from the expected `effective_commit_stage: 36`. If the file is missing, run `bash .claude/notes/ci-refactor/scripts/capture-hook-baseline.sh` before PR 4 commit 5.
+
 **You can rely on.** PR 3's `ci.yml` runs `check-gam-auth-support.py`, `check_response_attribute_access.py`, `check_roundtrip_tests.py`, `check_code_duplication.py` in `quality-gate`. PR 2's `_architecture_helpers.py` exists; you extend it. `@pytest.mark.arch_guard` marker registered (PR 2 commit 8) — backfill onto existing 27 guards happens here.
 
 **You CANNOT do.** Delete a hook before its replacement guard passes on main. Add new CI checks beyond `CI / Quality Gate` work absorption (PR 3 owns workflow). Touch `.guard-baselines/` (v2.0 territory). Re-litigate D7 (prek). Edit `src/` outside fixing test failures from new guards.
@@ -15,7 +17,7 @@
 
 **Files (heat map).**
 - Heavy: `.pre-commit-config.yaml` (delete 13 commit-stage hooks + 3 already-manual stubs (`pytest-unit`, `mcp-endpoint-tests`, `test-migrations`) = 16 total deletions, **move 10 to `pre-push`** (per D27 — adds `mypy` as 10th per D3), add `repo-invariants` consolidation).
-- Medium: `CLAUDE.md` (guards table audit DEFERRED to post-v2.0-rebase per D18; PR 4 commit 9 adds only residual 2 missing rows — final ~73 post-rebase, NOT 32); `docs/development/ci-pipeline.md` (rewrite to 5-layer model); `docs/development/structural-guards.md` (extend).
+- Medium: `CLAUDE.md` (guards table audit DEFERRED to post-v2.0-rebase per D18; PR 4 commit 9 adds only residual 2 missing rows — final ~81 post-rebase per D18 Round 8 revision (was ~73; corrected after v2.0 architecture/ count was re-verified at 27, not 31)); `docs/development/ci-pipeline.md` (rewrite to 5-layer model); `docs/development/structural-guards.md` (extend).
 - New: `tests/unit/test_architecture_no_tenant_config.py`, `…_jsontype_columns.py`, `…_no_defensive_rootmodel.py`, `…_import_usage.py`, extend `…_query_type_safety.py` with 2 new test functions; `.pre-commit-coverage-map.yml`; `.pre-commit-hooks/check_repo_invariants.py`.
 - Backfill: 27 existing test files (`tests/unit/test_architecture_*.py` + 3 transport boundary files) — add `@pytest.mark.arch_guard` decorator to every test function.
 - DO NOT touch: `.github/workflows/ci.yml` (PR 3), `pyproject.toml` version anchors (PR 5).

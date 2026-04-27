@@ -382,7 +382,7 @@ Files:
 This commit also corrects:
 - Add 5 missing rows for guards on disk (`test_architecture_no_silent_except.py`, `test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_production_session_add.py`, `test_architecture_test_marker_coverage.py`)
 - Remove 3 phantom rows (guards listed but not on disk)
-- Audit table column count (per D18, target post-PR-2: 28; PR 4 adds 4 more; v2.0 contributes 31 architecture tests + 9 baseline JSONs; PR 1/3/6 governance adds 8 — final ~73 post-v2.0-rebase)
+- Audit table column count (per D18, target post-PR-2: 28; PR 4 adds 4 more; v2.0 contributes 27 architecture tests + 9 baseline JSONs; PR 1/3/6 governance adds 8 — final ~81 post-v2.0-rebase per D18 Round 8 revision (was ~73; corrected after v2.0 architecture/ count was re-verified at 27, not 31))
 
 Verification:
 ```bash
@@ -418,7 +418,7 @@ Plus agent-derived:
 - [ ] `tox -e ui --notest` succeeds (verifies ui-tests group migration)
 - [ ] CLAUDE.md guards table accurate against disk
 - [ ] adcp library version ≥3.10 (per D16; verified by verify-pr2.sh line 466-468)
-- [ ] Commit 4.6: DB_POOL_SIZE / DB_MAX_OVERFLOW env vars wired in `src/core/database/database_session.py` (per D40 / R12A-01; replaces hardcoded pool sizes with `os.getenv`). Brief code expectation: `pool_size = int(os.getenv("DB_POOL_SIZE", "5"))` and `max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))`
+- [ ] Commit 4.6: DB_POOL_SIZE / DB_MAX_OVERFLOW env vars wired in `src/core/database/database_session.py` (per D40 / R12A-01; replaces hardcoded pool sizes with `os.getenv`). Brief code expectation — **per-branch defaults preserved**: PgBouncer branch (`is_pgbouncer == True`, lines 108-109) keeps default `(2, 5)`; direct PG branch (lines 124-125) keeps default `(10, 20)`. Wrong-default landing causes silent PgBouncer prod regression — see spec body §Commit 4.6 + Round 14 B1.
 - [ ] No duplicate factory-boy entries in pyproject.toml (`grep -c 'factory-boy>=3.3.0' pyproject.toml` returns 1)
 
 ## Verification (full PR-level)

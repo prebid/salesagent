@@ -27,17 +27,15 @@ context. Read everything before writing code.
 6. `CLAUDE.md`                                    — codebase patterns; NON-NEGOTIABLE
 7. `.claude/rules/workflows/quality-gates.md`     — local quality bar
 8. `.claude/rules/patterns/testing-patterns.md`   — test-integrity policy
-9. `.claude/notes/ci-refactor/COORDINATION.md`    — claim a PR before starting
-10. `.claude/notes/ci-refactor/ONBOARDING-CHEAT-SHEET.md` — 10-min orientation if fresh
-11. `.claude/notes/ci-refactor/REBASE-PROTOCOL.md` — rebase order for shared files
-12. `.claude/notes/ci-refactor/FAILURE-BROADCAST-PROTOCOL.md` — escalation comms
+9. `.claude/notes/ci-refactor/COORDINATION.md`    — parallel-agent PR claim registry
+10. `.claude/notes/ci-refactor/REBASE-PROTOCOL.md` — rebase order for shared files
 
 ## Pre-flight (mandatory)
 
 Before the first commit:
 - [ ] You're on a fresh branch from latest main (`git checkout -b <prefix>/ci-refactor-pr<N>-<slug>`)
 - [ ] `git status` clean
-- [ ] Pre-flight artifacts exist (per `01-pre-flight-checklist.md`): `.zizmor-preflight.txt`, `.mypy-baseline.txt`, `branch-protection-snapshot.json` (if applicable to your PR)
+- [ ] Pre-flight artifacts exist (per `01-pre-flight-checklist.md`): `.zizmor-preflight.txt`, `.mypy-baseline.txt`, `branch-protection-snapshot.json` (if applicable to your PR), `.claude/notes/ci-refactor/.hook-baseline.txt` (P10 — captured at PR 1 author time; PR 4 verify-script reads this for drift detection)
 - [ ] `make quality` passes on the starting state
 
 ## Scope statement
@@ -206,16 +204,16 @@ If a spec assumption fails to match the code, ESCALATE — do not "fix it up" si
 
 Before claiming a PR or starting any work, read `COORDINATION.md`. Find a PR with status `NOT STARTED`. Update its row to `IN PROGRESS` with your agent ID, branch name, and timestamp. Commit with message `chore(coord): agent <id> claims PR N`.
 
-Why: 40-person team execution requires explicit work-claiming to prevent duplicate effort.
+Why: parallel-agent execution requires explicit work-claiming to prevent duplicate effort. The user runs multiple agents on different PRs concurrently.
 
-### Rule 21 — Broadcast on escalation per FAILURE-BROADCAST-PROTOCOL.md
+### Rule 21 — File-based escalation pattern
 
-When you write to `escalations/<file>.md`, you ALSO must:
-1. Comment on the PR-tracking GitHub issue (#1234)
-2. Update your COORDINATION.md row to `BLOCKED` with link to escalation file
-3. STOP work on the PR
+When blocked or when you discover a load-bearing defect:
+1. Write `escalations/pr<N>-<topic>.md` with: what you were trying, what blocked you (with command output), what you tried, what you think should happen
+2. Update your `COORDINATION.md` row to `BLOCKED` with link to the escalation file
+3. STOP work on the PR — do NOT commit further
 
-Why: Other agents working in parallel need to know your block to avoid building on invalidated assumptions.
+Why: solo+agents execution model — the user is the escalation point. Other agents on parallel PRs read `COORDINATION.md` on session start and pause if their PR depends on the blocked one.
 
 ### Rule 22 — Decision-freeze in effect (Round 13)
 

@@ -24,9 +24,10 @@
 > - `.coverage-baseline = 53.5` "advisory 4 weeks" → **superseded** by hard-gate from PR 3 day 1.
 > - PR 1 commit 10 (Gemini fallback) → **moved** to PR 3 commit 11 in the P0 sweep.
 > - Black/ruff `target-version = py312` → **deferred** out of PR 5 per D28 / ADR-008.
-> - "32 rows post-PR-4" / "52 total guards" → **superseded** by D18 revised "~73 final post-v2.0-rebase".
-> - `harden-runner v2.12.0+` → **superseded** by v2.16.0+ floor.
+> - "32 rows post-PR-4" / "52 total guards" → **superseded** by D18 revised "~81 final post-v2.0-rebase" (was ~73; corrected in Round 8 after v2.0 architecture/ count was re-verified at 27, not 31).
+> - `harden-runner v2.12.0+` → **superseded** by v2.16.0+ floor → **further superseded by v2.19.0+ floor (Round 13 boss-level review)**.
 > - Structural-guard marker references throughout this doc (`@pytest.mark.architecture`, `-m architecture`) → **renamed to `arch_guard`** to disambiguate from the entity-marker `architecture` (the latter is auto-applied by filename pattern via `tests/conftest.py` and stays unchanged). `tox -e unit -m architecture` (4 sites) also corrected to `tox -e unit -- -m arch_guard` (the `--` separator is required for tox to forward `-m` to pytest).
+> - **Round 14 corrections:** D40 per-branch defaults; D44 rationale (stage-name rename, not directive); R11-R15 RESERVED never-defined.
 >
 > **Authoritative current state lives in:** `RESUME-HERE.md`, `EXECUTIVE-SUMMARY.md`,
 > `00-MASTER-INDEX.md`, `03-decision-log.md`, and the 6 per-PR specs. This architecture doc

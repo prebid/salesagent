@@ -1042,6 +1042,26 @@ When a second maintainer is added to CODEOWNERS:
 
 Independent of that, this decision is reviewed at the 6-month mark (2026-10) to
 confirm the solo-maintainer model is still the operating reality.
+
+## Recovery procedure when bypass actor is unavailable (Round 14 M7)
+
+The bypass actor (`@chrishuie` individually) is a single point of failure. Four
+distinct lockout scenarios exist (lost MFA, vacation/illness, org-admin SSO
+break, GitHub-side outage / Support ticket open — these last two are folded
+together in E4). The recovery procedure for each is codified in
+`runbooks/E4-account-lockout-recovery.md`. A25 (pre-flight) elevated this from
+out-of-scope to in-scope; the runbook closes A25's mandated deliverable.
+
+Permanent mitigation (recommended, not in this rollout's scope): identify a
+permanent backup admin from prebid org owners with documented bypass-grant
+procedure, rather than rotating temporary bypass grants per E4 runbook's
+Option A (sandbox/temporary admin). Update this ADR when that happens.
+
+The single-maintainer SPOF is a known and accepted constraint of this rollout's
+execution model. See `drafts/adr-010-solo-maintainer-spof-acceptance.md` for the
+full SPOF acceptance rationale, including why human-team scaling is not a
+recourse and the realistic mitigations (E4 recovery procedure, hardware MFA on
+@chrishuie, periodic 6-month review).
 ```
 
 ## Embedded ADR-003 (commit to `docs/decisions/adr-003-pull-request-target-trust.md`)

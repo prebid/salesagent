@@ -47,14 +47,26 @@ if [[ -f .github/actions/setup-env/action.yml ]]; then
 fi
 
 # Postgres version anchor (PG17 across all references)
-PG_REFS=$(grep -rhoE 'postgres:1[0-9](\.[0-9]+)?(-alpine)?' \
-  docker-compose*.yml .github/workflows/ Dockerfile* 2>/dev/null | sort -u | wc -l)
-[[ "$PG_REFS" -le 1 ]] && ok "postgres image refs converged (1 unique tag)" \
-  || echo "  warn: $PG_REFS distinct postgres image tags (should be 1; verify D24-style anchor)"
+PG_TAGS=$(grep -rhoE 'postgres:1[0-9](\.[0-9]+)?(-alpine)?' \
+  docker-compose*.yml .github/workflows/ Dockerfile* 2>/dev/null | sort -u)
+PG_REFS=$(echo -n "$PG_TAGS" | grep -c . || true)
+[[ "$PG_REFS" -le 1 ]] \
+  || fail "$PG_REFS distinct postgres image tags found (should be 1; verify D24-style anchor)"
+if [[ "$PG_REFS" -eq 1 ]]; then
+  [[ "$PG_TAGS" == "postgres:17-alpine" ]] \
+    || fail "postgres image tag is '$PG_TAGS'; PR 5 requires 'postgres:17-alpine' (D24)"
+  ok "postgres image refs converged on postgres:17-alpine (D24)"
+fi
+if [[ "$PG_REFS" -eq 0 ]]; then
+  warn "no postgres image references found — partial PR application or full removal? (PR 5 expects postgres:17-alpine)"
+fi
 
 # PR 5 guard
 if [[ -f tests/unit/test_architecture_uv_version_anchor.py ]]; then
   ok "test_architecture_uv_version_anchor present (D18 +1)"
+  # Execute the structural guard so uv version drift is caught at verify time too
+  uv run pytest tests/unit/test_architecture_uv_version_anchor.py -v -x 2>/dev/null \
+    || warn "uv version anchor structural guard fails (full check requires running tests)"
 fi
 
 # D34 + R11A-02 — Dockerfile hardening additions
@@ -73,6 +85,12 @@ if [[ -f Dockerfile ]]; then
   grep -qE '^ARG SOURCE_DATE_EPOCH' Dockerfile \
     || fail "Dockerfile missing ARG SOURCE_DATE_EPOCH declaration (R11A-02; PR 6 build-arg no-ops without it)"
   ok "Dockerfile ARG SOURCE_DATE_EPOCH declared (R11A-02 fix; reproducible-build claim operational)"
+  # PD12 — install uv via ghcr.io OCI image (COPY --from=) instead of pip install
+  grep -qE 'COPY --from=ghcr\.io/astral-sh/uv:[0-9.]+' Dockerfile \
+    || fail "Dockerfile missing uv COPY --from pattern (PD12)"
+  ! grep -qE '^RUN pip install.*uv' Dockerfile \
+    || fail "Dockerfile still has pip install uv"
+  ok "Dockerfile installs uv via COPY --from=ghcr.io/astral-sh/uv (PD12)"
 fi
 
 # D34 — structural guard for Dockerfile digest+USER

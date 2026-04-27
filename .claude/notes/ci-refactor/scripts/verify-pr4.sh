@@ -51,6 +51,16 @@ done
   || fail "tests/unit/test_architecture_required_ci_checks_frozen.py missing — must be lifted from drafts/guards/ in PR 4 commit 3 (R12B-01)"
 ok "frozen-checks structural guard lifted from drafts/ to tests/unit/ (R12B-01 fix)"
 
+# Commit 1.5 — AST guard pre-existing-violation audit gate.
+# New guards added in commits 3+4 must pass on main BEFORE deletion of corresponding regex hooks.
+uv run pytest tests/unit/test_architecture_no_defensive_rootmodel.py \
+              tests/unit/test_architecture_no_tenant_config.py \
+              tests/unit/test_architecture_jsontype_columns.py \
+              tests/unit/test_architecture_import_usage.py \
+              tests/unit/test_architecture_query_type_safety.py \
+              -v -x 2>/dev/null \
+  || warn "Commit 1.5 audit: new guards must pass on main before deletions (advisory — full check requires running tests)"
+
 # Commit 5: pre-push migrations (10 hooks per D27 — 9 named + mypy per D3)
 PREPUSH=(
   check-docs-links
@@ -67,8 +77,23 @@ PREPUSH=(
 [[ ${#PREPUSH[@]} -eq 10 ]] || fail "PREPUSH list must have exactly 10 entries (D27 + D3); got ${#PREPUSH[@]}"
 for hook in "${PREPUSH[@]}"; do
   yq ".repos[].hooks[] | select(.id == \"$hook\") | .stages" .pre-commit-config.yaml 2>/dev/null \
-    | grep -q pre-push && ok "hook moved to pre-push: $hook" || true
+    | grep -q pre-push \
+    || fail "pre-push hook missing or not at pre-push stage: $hook (D27)"
+  ok "hook moved to pre-push: $hook"
 done
+
+# Commit 10a — arch-guards consolidated pre-push hook
+yq '.repos[].hooks[] | select(.id == "arch-guards") | .stages' .pre-commit-config.yaml 2>/dev/null \
+  | grep -q pre-push \
+  || fail "arch-guards pre-push hook missing (commit 10a)"
+ok "arch-guards consolidated hook present at pre-push (commit 10a)"
+
+# Commit 10a-bis — hook-install nudge in scripts + Makefile
+[[ -x scripts/check-hook-install.sh ]] \
+  || fail "scripts/check-hook-install.sh missing (commit 10a-bis)"
+grep -qE '^[[:space:]]*scripts/check-hook-install\.sh' Makefile \
+  || fail "Makefile quality target missing hook-install nudge"
+ok "scripts/check-hook-install.sh + Makefile nudge present (commit 10a-bis)"
 
 # Commit 7: deleted hooks (16 total — 13 commit-stage + 3 already-manual stubs)
 DELETED=(
@@ -96,6 +121,13 @@ for hook in "${DELETED[@]}"; do
 done
 ok "$DELETED_OK/${#DELETED[@]} deleted hooks confirmed absent"
 
+# Commit 6 — repo-invariants consolidated hook (replaces no-skip-tests + sibling greps)
+[[ -f .pre-commit-hooks/check_repo_invariants.py ]] \
+  || fail "check_repo_invariants.py missing (commit 6)"
+! grep -qE '^\s+- id: no-skip-tests$' .pre-commit-config.yaml \
+  || fail "no-skip-tests not consolidated (commit 6)"
+ok "repo-invariants consolidated hook present (commit 6)"
+
 # No advisory-only steps in workflows (every gate must fail loudly per D-no-advisory).
 # codeql.yml is allowlisted for D10 Path C (advisory until PR 6 commit 5 flips it).
 # security.yml is allowlisted for SARIF upload step (uploads even on findings).
@@ -110,6 +142,19 @@ ok "no advisory-only steps in workflows (D-no-advisory)"
 # Commit 7 acceptance: ≤12 commit-stage hooks (D27 + Blocker #2 resolution)
 # Math (D27): 36 effective commit-stage − 13 deletions − 10 pre-push moves
 # − 2 grep consolidations + 1 new repo-invariants = 12. Exactly at ceiling, zero headroom.
+#
+# M5 (Round 14) — drift detector. PR 1 captures `effective_commit_stage:` baseline; PR 4 compares.
+# If the baseline shifted between PR 1 author time and PR 4 author time, the D27 math
+# stops adding up — surface this as a fail rather than rubber-stamping a wrong total.
+if [[ -f .claude/notes/ci-refactor/.hook-baseline.txt ]]; then
+  BASELINE_EFFECTIVE=$(grep -oE '^effective_commit_stage:\s*[0-9]+' .claude/notes/ci-refactor/.hook-baseline.txt | grep -oE '[0-9]+' | head -1)
+  if [[ -n "${BASELINE_EFFECTIVE:-}" ]]; then
+    [[ "$BASELINE_EFFECTIVE" == "36" ]] \
+      || fail "hook-baseline drift: expected effective=36 at PR 1 capture time, got $BASELINE_EFFECTIVE — D27 math invalidated (M5)"
+    ok "hook-baseline effective=36 stable since PR 1 (M5 drift detector clean)"
+  fi
+fi
+
 if command -v uv >/dev/null 2>&1; then
   HOOKS_COMMIT=$(uv run python -c "
 import yaml
@@ -124,7 +169,8 @@ for r in cfg['repos']:
 print(n)
 ")
   [[ "$HOOKS_COMMIT" -le 12 ]] || fail "commit-stage hook count $HOOKS_COMMIT > 12 (D27 violation)"
-  ok "commit-stage hooks: $HOOKS_COMMIT/12 (D27 acceptance met)"
+  [[ "$HOOKS_COMMIT" -ge 10 ]] || fail "commit-stage hook count $HOOKS_COMMIT < 10 (over-deletion; D27 floor protects required gates)"
+  ok "commit-stage hooks: $HOOKS_COMMIT/12 (D27 acceptance met; ≥10 floor protects required gates)"
 fi
 
 # Commit 8: latency baseline
@@ -135,8 +181,18 @@ fi
 # the full ~81-row audit happens in a post-v2.0-rebase commit, not here.
 if grep -q 'Structural Guards' CLAUDE.md; then
   TABLE_ROWS=$(awk '/^\| Guard/,/^$/' CLAUDE.md | grep -cE '^\|.*test_architecture_')
-  [[ "$TABLE_ROWS" -ge 28 ]] && ok "CLAUDE.md guards table has $TABLE_ROWS rows (target ≥28 post-PR-4; ~73 final post-v2.0-rebase)"
+  [[ "$TABLE_ROWS" -ge 28 ]] && ok "CLAUDE.md guards table has $TABLE_ROWS rows (target ≥28 post-PR-4; ~81 final post-v2.0-rebase)"
 fi
+
+# Layer 4 reference table verbatim mirror of D17/D30 — docs/development/ci-pipeline.md
+# must list all 14 frozen check names so the reference table never drifts from ci.yml.
+for n in 'Quality Gate' 'Type Check' 'Schema Contract' 'Security Audit' 'Quickstart' \
+         'Smoke Tests' 'Unit Tests' 'Integration Tests' 'E2E Tests' 'Admin UI Tests' \
+         'BDD Tests' 'Migration Roundtrip' 'Coverage' 'Summary'; do
+  grep -q "$n" docs/development/ci-pipeline.md 2>/dev/null \
+    || fail "ci-pipeline.md missing Layer 4 name: $n"
+done
+ok "docs/development/ci-pipeline.md mirrors all 14 frozen Layer-4 names (D17/D30)"
 
 # Coverage map
 if [[ -f .pre-commit-coverage-map.yml ]]; then

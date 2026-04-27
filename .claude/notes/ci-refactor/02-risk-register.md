@@ -1,6 +1,8 @@
 # Risk Register
 
-Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R21-R22, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep; R38-R42 added in 2026-04-26 Round 11 verification sweep; R43 added in 2026-04-26 Round 12 verification sweep; R44 added in 2026-04-26 Round 12 post-issue-review (surfaced while rewriting #1228 Cluster A4); R45-R47 added in 2026-04-26 Round 13 boss-level / multi-team review (cache poisoning, GHA minute spike, status-check lag)**.
+Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R17-R18, R21-R22, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep; R38-R42 added in 2026-04-26 Round 11 verification sweep; R43 added in 2026-04-26 Round 12 verification sweep; R44 added in 2026-04-26 Round 12 post-issue-review (surfaced while rewriting #1228 Cluster A4); R45-R47 added in 2026-04-26 Round 13 boss-level / multi-team review (cache poisoning, GHA minute spike, status-check lag)**.
+
+**Numbering note (Round 14 M4):** R11-R15 are RESERVED — never formally defined. They appear in `research/edge-case-stress-test.md:173` as "(existing risk register's later items)" but that file's `Top 10 NEW risks` table starts at R16. The R11-R15 gap reflects a planning-doc artifact (originally anticipated for a round-2 batch that materialized as R16-R25 in round-3 research). Renumbering would invalidate cross-refs in `research/integrity-audit.md`; the gap is preserved as documentation rather than minted with new risks.
 
 | # | Risk | Sev | Prob | PR |
 |---|---|---|---|---|
@@ -461,7 +463,7 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 
 **Mitigation:**
 - Pre-flight A23 (existing): measure baseline GHA minute consumption
-- Pre-flight A26 (new): alert if Phase A projects to exceed 80% of monthly quota
+- Operator-side overlap monitoring (not a pre-flight gate): monitor GHA usage during Phase A overlap (weeks 3-4). If projected monthly burn approaches 80% of quota, accelerate Phase B flip to truncate the overlap window.
 - Hard cap: skip `test.yml` runs once cap is hit (kill switch)
 - Concurrency: `cancel-in-progress` on PR pushes (already in plan)
 
@@ -488,7 +490,7 @@ Documented in D5. Watch the metric:
 gh pr list --author "app/dependabot" --state open --json number --jq 'length'
 ```
 
-If consistently > 5 across two consecutive Mondays, pause forward work on issue #1234 and clear backlog. If backlog persists, revisit D1 (recruit second maintainer) — never D5 (auto-merge).
+If consistently > 5 across two consecutive Mondays, pause forward work on issue #1234 and clear backlog. If backlog persists, revisit capacity strategy (reduce dependency churn via tighter dependabot grouping, or accept higher backlog) — never D5 (auto-merge). Solo+agents execution model means human-team scaling is not a realistic recourse; see `runbooks/E1-dependabot-backlog-tripwire.md` for the operational decision tree.
 
 ## Risk-monitoring cadence
 

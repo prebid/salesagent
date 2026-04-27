@@ -37,6 +37,8 @@ if [[ -f .github/workflows/ci.yml ]]; then
   # Concurrency
   grep -qE '^concurrency:' .github/workflows/ci.yml \
     || fail "ci.yml missing 'concurrency:' block"
+  grep -qE 'group:.*github\.workflow.*github\.ref.*github\.event\.pull_request\.number' .github/workflows/ci.yml \
+    || fail "concurrency group missing PR-number/SHA segment (R28 mitigation)"
 
   # All 14 frozen check names per D17 amended by D30 (D30 added Smoke Tests, Security Audit,
   # Quickstart) exist as bare job-name strings (D26: rendered = `CI` + ` / ` + bare).
@@ -58,6 +60,11 @@ if [[ -f .github/workflows/ci.yml ]]; then
   # Develop branch trigger — covers existing test.yml branches: [main, develop] until v2.0 ships
   grep -qE 'branches:\s+\[main,\s*develop\]|branches:\s+\[\s*main\s*,\s*develop\s*\]' .github/workflows/ci.yml \
     || fail "ci.yml triggers must include 'develop' branch (formal deprecation deferred)"
+
+  # D38 — Schema Contract job runs under integration env (needs DB-backed contract tests)
+  grep -B2 -A5 "name: 'Schema Contract'" .github/workflows/ci.yml | grep -q 'tox-env: integration' \
+    || fail "Schema Contract not running under integration env (D38)"
+  ok "Schema Contract runs under tox-env: integration (D38)"
 
   ok "ci.yml present, properly structured, 14 frozen bare names + workflow_dispatch + develop branch"
 fi
@@ -94,6 +101,15 @@ if [[ -f .coverage-baseline ]]; then
   # Hard-gate must be in ci.yml — `--fail-under=$(cat .coverage-baseline)`
   grep -q -- '--fail-under=$(cat .coverage-baseline)' .github/workflows/ci.yml \
     || fail "ci.yml coverage job missing --fail-under=\$(cat .coverage-baseline) (D11 hard gate)"
+fi
+
+# tox.ini coverage gate must be synced to .coverage-baseline (PR 3 commit 6)
+if [[ -f tox.ini ]]; then
+  grep -qE '\.coverage-baseline' tox.ini \
+    || fail "tox.ini coverage gate not synced to .coverage-baseline (PR 3 commit 6)"
+  ! grep -qE 'coverage report --fail-under=30\b' tox.ini \
+    || fail "tox.ini still has hardcoded --fail-under=30"
+  ok "tox.ini coverage gate sourced from .coverage-baseline (PR 3 commit 6)"
 fi
 
 # Gemini fallback fix (PR 3 commit 11 — moved from PR 1 commit 10)
@@ -137,12 +153,33 @@ if [[ -f .github/workflows/ci.yml ]]; then
     || fail "ci.yml missing pinned creative-agent commit ca70dd1e2a6c (D32; refresh per A23 if stale)"
   grep -qE "CREATIVE_AGENT_URL: 'http://localhost:9999/api/creative-agent'" .github/workflows/ci.yml \
     || fail "ci.yml integration-tests env: CREATIVE_AGENT_URL must be 'http://localhost:9999/api/creative-agent'"
-  ok "creative-agent docker-run script-step pattern present (D39)"
+  # D32 — all 10 expected creative-agent env vars must be wired
+  for var in NODE_ENV PORT DATABASE_URL RUN_MIGRATIONS ALLOW_INSECURE_COOKIES \
+             DEV_USER_EMAIL DEV_USER_ID AGENT_TOKEN_ENCRYPTION_SECRET \
+             WORKOS_API_KEY WORKOS_CLIENT_ID; do
+    grep -q "$var" .github/workflows/ci.yml \
+      || fail "ci.yml missing creative-agent env var: $var (D32)"
+  done
+  ok "creative-agent docker-run script-step pattern present + all 10 env vars wired (D32, D39)"
 fi
 
 # D33 — pytest-xdist + pytest-randomly in dev group (added by PR 2 commit 4.5)
 grep -qE '"pytest-xdist[>=]' pyproject.toml || fail "pyproject.toml missing pytest-xdist (D33; added by PR 2 commit 4.5)"
 grep -qE '"pytest-randomly' pyproject.toml || fail "pyproject.toml missing pytest-randomly (D33; added by PR 2 commit 4.5)"
+
+# D33 — composite must invoke xdist with --dist=loadscope (test-class affinity for shared fixtures)
+if [[ -f .github/actions/_pytest/action.yml ]]; then
+  grep -q -- '--dist=loadscope' .github/actions/_pytest/action.yml \
+    || fail "_pytest/action.yml missing --dist=loadscope (D33)"
+  ok "_pytest composite uses --dist=loadscope (D33)"
+fi
+
+# D33 — integration-tests job wires xdist-workers input
+if [[ -f .github/workflows/ci.yml ]]; then
+  grep -qE "xdist-workers:\s*'auto'" .github/workflows/ci.yml \
+    || fail "integration-tests missing xdist-workers: 'auto'"
+  ok "integration-tests passes xdist-workers: 'auto' to _pytest composite"
+fi
 
 # Filelock + worker-id gate around migrate.py (PR 3 commit 4c)
 if [[ -f tests/conftest_db.py ]]; then
@@ -151,21 +188,39 @@ if [[ -f tests/conftest_db.py ]]; then
   grep -q 'PYTEST_XDIST_WORKER' tests/conftest_db.py \
     || fail "tests/conftest_db.py missing PYTEST_XDIST_WORKER worker-id gate (PR 3 commit 4c)"
   ok "filelock + worker-id gate present in conftest_db.py (PR 3 commit 4c)"
+  # PR 3 commit 4b — template-clone optimization (CREATE DATABASE ... TEMPLATE template_db)
+  grep -q 'CREATE DATABASE.*TEMPLATE template_db' tests/conftest_db.py \
+    || fail "template-clone optimization missing (PR 3 commit 4b)"
+  ok "template-clone optimization present in conftest_db.py (PR 3 commit 4b)"
 fi
 
-# D40 — DB_POOL_SIZE wired in app code
+# D40 — DB_POOL_SIZE wired in app code (per-branch defaults Round 14 B1)
 if [[ -f src/core/database/database_session.py ]]; then
   grep -q 'os.getenv("DB_POOL_SIZE"' src/core/database/database_session.py \
     || fail "database_session.py must read DB_POOL_SIZE env var (D40; pre-PR-3 commit)"
   grep -q 'os.getenv("DB_MAX_OVERFLOW"' src/core/database/database_session.py \
     || fail "database_session.py must read DB_MAX_OVERFLOW env var (D40)"
-  ok "DB_POOL_SIZE + DB_MAX_OVERFLOW env vars wired in app code (D40 operational)"
+  # Per-branch defaults: PgBouncer (2|5), direct PG (10|20). Wrong defaults silently regress PgBouncer prod.
+  pool_count=$(grep -cE 'os\.getenv\("DB_POOL_SIZE", "(2|10)"\)' src/core/database/database_session.py || true)
+  ovr_count=$(grep -cE 'os\.getenv\("DB_MAX_OVERFLOW", "(5|20)"\)' src/core/database/database_session.py || true)
+  [[ "$pool_count" -eq 2 ]] || fail "DB_POOL_SIZE: expected 2 occurrences with defaults (2|10), got $pool_count — production regression risk per Round 14 B1"
+  [[ "$ovr_count" -eq 2 ]] || fail "DB_MAX_OVERFLOW: expected 2 occurrences with defaults (5|20), got $ovr_count — production regression risk per Round 14 B1"
+  ok "DB_POOL_SIZE + DB_MAX_OVERFLOW env vars wired with correct per-branch defaults (D40 operational + Round 14 B1)"
 fi
 
 # Retention-days on upload-artifact (caps quota burn at 7d default vs GHA's 90d)
 if [[ -f .github/actions/_pytest/action.yml ]]; then
   grep -q 'retention-days: 7' .github/actions/_pytest/action.yml \
     || fail "_pytest/action.yml missing retention-days: 7"
+  # D41 — dual-path glob for pytest-json-report artifacts (covers both project-root and .tox/<env>/ outputs)
+  grep -A5 'pytest-report' .github/actions/_pytest/action.yml | grep -q '\.tox/.*\.json' \
+    || fail "_pytest dual-path glob missing (D41)"
+  ok "_pytest pytest-report glob covers .tox/<env>/ path (D41)"
+  # Round 14 — exactly 2 retention-days entries (coverage + pytest-report); single entry indicates regression
+  RD_COUNT=$(grep -c 'retention-days: 7' .github/actions/_pytest/action.yml)
+  [[ "$RD_COUNT" -eq 2 ]] \
+    || fail "expected 2 retention-days entries (coverage + pytest-report), got $RD_COUNT"
+  ok "_pytest has 2 retention-days: 7 entries (coverage + pytest-report)"
 fi
 
 # #1228 A5 — every ci.yml job has explicit timeout-minutes

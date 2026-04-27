@@ -1,13 +1,13 @@
-### B4 — All 11 CI jobs green but `Test Summary` shows failure on a PR
+### B4 — All 14 CI jobs green but `Test Summary` shows failure on a PR
 
 
-**Trigger**: post-Phase-B; the `Summary` job (with `if: always()`) reports failure even though all 10 prior jobs are individually green.
+**Trigger**: post-Phase-B; the `Summary` job (with `if: always()`) reports failure even though all 13 prior jobs are individually green.
 **Severity**: P2.
 **Detection time**: immediate.
 **Affected PR(s)**: any PR after PR 3 Phase B.
 
 **Symptoms**
-- 10 of 11 required checks: green checkmark.
+- 13 of 14 required checks: green checkmark.
 - `CI / Summary`: red X.
 - PR shows "All required checks passed" in some places but not in `Merge` button.
 
@@ -46,5 +46,7 @@ GitHub Actions `needs:` dependencies treat `skipped` as a non-success result by 
 
 **Related scenarios**
 - See also: B5 (old + new check overlap — different cause), R8 (coverage — Summary may also be affected).
+
+> **History:** This runbook was authored against the original D17 contract (a smaller name set). D30 (Round 10) expanded that set to 14 by adding Smoke Tests, Security Audit, Quickstart. Operational copy above reflects the current 14-name contract per D17 amended by D30.
 
 ---

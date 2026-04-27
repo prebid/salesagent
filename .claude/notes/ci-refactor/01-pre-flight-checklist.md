@@ -273,7 +273,7 @@ If new required env vars surfaced, file an issue and update D32 before authoring
 
 ### A24 — Phase B dry-run on sandbox repo (Round 13 addition; BLOCKER for PR 3 Phase B)
 
-**Why:** Phase B is irreversible without snapshot rollback. R39 (snapshot SPOF) mitigation requires that the rollback procedure works. Plan currently has documentation but no evidence of execution. CTO-level review (Round 13) flagged this as a blocker.
+**Why:** Phase B is irreversible without snapshot rollback. R39 (snapshot SPOF) mitigation requires that the rollback procedure works. Plan currently has documentation but no evidence of execution. Comprehensive review (Round 13) flagged this as a blocker.
 
 **What:**
 1. Create a throwaway GitHub repo (`<your-org>/salesagent-phase-b-sandbox` or fork)
@@ -290,32 +290,20 @@ If new required env vars surfaced, file an issue and update D32 before authoring
 
 **Blocks:** PR 3 Phase B execution. Without A24 complete, do not proceed.
 
-### A25 — Recruit second maintainer OR confirm hardware MFA on bypass actor (Round 13 addition; BLOCKER for PR 3 Phase B)
+### A25 — Confirm hardware MFA on @chrishuie + document SPOF acceptance (BLOCKER for PR 3 Phase B)
 
-**Why:** R20 + R30 are both CRITICAL severity, both depend on @chrishuie not being compromised AND not being unavailable for 5 weeks. Single human in the bypass path is single point of failure for both governance AND incident response. Hardware MFA on bypass actor was previously cited as "out of scope (organizational)" — Round 13 elevates to in-scope per CTO-level review.
+**Why:** R20 + R30 are both CRITICAL severity, both depend on @chrishuie not being compromised AND not being unavailable for 5 weeks. Single human in the bypass path is single point of failure for both governance AND incident response. Under the solo+agents execution model, recruiting a second maintainer is not an available path (agents are not maintainers); the only mitigation is hardware MFA + a documented SPOF-acceptance runbook for the unavailability case. Comprehensive review (Round 13) elevated this from "out of scope (organizational)" to in-scope blocker.
 
-**What (pick one):**
-- **Option A (preferred):** Recruit a second maintainer with branch-protection bypass during PR 3 Phase B execution week ONLY. Document: who, which dates, revoke procedure.
-- **Option B (acceptable):** Confirm @chrishuie's GitHub account has hardware MFA enabled (FIDO2 / hardware key). Document: model, registration date, recovery procedure.
+**Action:**
+- Confirm @chrishuie's GitHub account has hardware MFA enabled (FIDO2 / hardware key).
+- Document: model, registration date, recovery procedure.
+- Document SPOF acceptance in ADR-002 (already drafted; lifts in PR 1).
 
-Either way: document a "what if @chrishuie is unavailable" runbook covering: rollout pause, escalation contact, who has authority to revert.
+**Recovery for the unavailability case:** see `runbooks/E4-account-lockout-recovery.md` (Round 14 M7 — covers the "what if @chrishuie unavailable" case: rollout pause, escalation contact, who has authority to revert).
 
 **Status:** [ ] Complete (admin) — record evidence
 
 **Blocks:** PR 3 Phase B execution.
-
-### A26 — Configure notification routing for 40-person team (Round 13 addition)
-
-**Why:** Solo-maintainer plan uses GitHub Issues as the only alerting surface. 40-person team requires Slack/email/dashboard routing.
-
-**What:**
-1. Configure GitHub repo notifications → Slack channel (or team email alias) for issues with CRITICAL label
-2. (Optional) Set up PagerDuty/Opsgenie integration for P0 alerts (Phase B failure, signed-but-broken-image)
-3. (Optional) Dashboard for rollout health metrics during weeks 3-4 (Phase A overlap)
-
-**Status:** [ ] Complete (admin) — record routing destinations
-
-**Blocks:** Best-practice for any-PR launch; not a hard blocker.
 
 ### A19 — Clean stale `tests/migration/__pycache__/` bytecode (Round 10 sweep)
 
@@ -432,6 +420,21 @@ cd - && rm -rf "$TMPDIR"
 
 Mitigates R33 (Critical, High probability — pre-push tier silently disabled). If the directive is missing or contributors aren't getting both hooks, file a P0 follow-up before authoring PR 5.
 
+### P8 — Mypy warm-time pre-flight measurement (PR 4 fallback gate)
+
+Per PR 4 spec, mypy moves to pre-push (D27) as the 10th hook ONLY if warm wall-clock is ≤20s. Measure before authoring PR 4 commit 5:
+
+```bash
+uv sync --group dev   # warm cache
+uv run mypy src/ --config-file=mypy.ini > /dev/null 2>&1   # warm
+T1=$(date +%s%N)
+uv run mypy src/ --config-file=mypy.ini > /dev/null 2>&1
+T2=$(date +%s%N)
+echo "Warm mypy wall-clock: $(( (T2 - T1) / 1000000 ))ms"
+```
+
+If >20000ms, do NOT include mypy in the 10 pre-push moves; instead activate the P8 fallback in PR 4 spec (move `no-hardcoded-urls` to pre-push as the 10th swap). Document the decision in the PR 4 PR description.
+
 ### P9 — Stale-string drift guard (Round 12 D46)
 
 Each sweep round adds new content to per-PR specs. Historically the propagation across non-spec surfaces (verify scripts, briefings, executor template, admin scripts, architecture.md) trails by 1-2 rounds, leading to stale strings like "11 frozen", "D1-D28", "R1-R10" misleading executors and reviewers. Per **D46**, run before declaring a sweep round complete:
@@ -452,20 +455,19 @@ If a script outside the allowlist contains a stale string, the next sweep MUST u
 
 **Round 13 patterns extension:** P9 patterns extended in Round 13 to cover '11 check names', '11 required checks', '0.11.6', '33 effective', '9 to pre-push', '73-row', D1-D40 through D1-D47, R1-R37 through R1-R44.
 
-### P8 — Mypy warm-time pre-flight measurement (PR 4 fallback gate)
+### P10 — Capture pre-commit hook count baseline (Round 14 M5)
 
-Per PR 4 spec, mypy moves to pre-push (D27) as the 10th hook ONLY if warm wall-clock is ≤20s. Measure before authoring PR 4 commit 5:
+Per **Round 14 M5** (deep-dive analysis), PR 4's hook math `36 − 13 − 10 − 1 = 12` has zero headroom. A contributor adding a hook between PR 1 author start and PR 4 merge causes silent math overflow. Git log of `.pre-commit-config.yaml` shows ~1 mod every ~6 weeks → 5-week rollout window has ~70% drift probability.
+
+**Mandatory before PR 1 authoring:**
 
 ```bash
-uv sync --group dev   # warm cache
-uv run mypy src/ --config-file=mypy.ini > /dev/null 2>&1   # warm
-T1=$(date +%s%N)
-uv run mypy src/ --config-file=mypy.ini > /dev/null 2>&1
-T2=$(date +%s%N)
-echo "Warm mypy wall-clock: $(( (T2 - T1) / 1000000 ))ms"
+bash .claude/notes/ci-refactor/scripts/capture-hook-baseline.sh
 ```
 
-If >20000ms, do NOT include mypy in the 10 pre-push moves; instead activate the P8 fallback in PR 4 spec (move `no-hardcoded-urls` to pre-push as the 10th swap). Document the decision in the PR 4 PR description.
+Writes `.claude/notes/ci-refactor/.hook-baseline.txt`. `verify-pr4.sh` reads this file to fail noisily if the baseline shifted. If drift detected mid-rollout, see `runbooks/PR4-partial-deletion-recovery.md` for the decision tree.
+
+**Status:** [ ] Complete — `.hook-baseline.txt` exists with `effective_commit_stage: 36`
 
 ## Sign-off
 
@@ -495,11 +497,11 @@ Before PR 1 is authored, this file should be marked complete:
 - [ ] A22 — Phase B day-of-week + holiday-eve guard checked (Round 11; D45 enforcement)
 - [ ] A23 — Creative-agent commit pin freshness verified (<3 months old) before authoring PR 3 (Round 11; D32 tripwire)
 - [ ] A24 — Phase B dry-run on sandbox repo executed; evidence recorded (Round 13; BLOCKER for PR 3 Phase B)
-- [ ] A25 — Second maintainer recruited OR @chrishuie hardware-MFA confirmed (Round 13; BLOCKER for PR 3 Phase B)
-- [ ] A26 — Notification routing configured for 40-person team (Round 13)
+- [ ] A25 — Hardware MFA confirmed on @chrishuie + SPOF acceptance documented (Round 13/14; BLOCKER for PR 3 Phase B)
 - [ ] P7 — `default_install_hook_types` directive verified post-PR-4 (D31 / R33 detection — only relevant after PR 4 lands)
 - [ ] P8 — mypy warm-time measured before PR 4 commit 5 (gate for pre-push migration vs fallback)
 - [ ] P9 — `check-stale-strings.sh` exit 0 (Round 12 D46 — propagation discipline; run before any sweep round closes)
+- [ ] P10 — Hook count baseline captured (`.hook-baseline.txt` shows 36 effective; Round 14 M5)
 - [ ] P1 — drift evidence re-verified (or noted as still-current)
 - [ ] P2 — pydantic.mypy baseline captured (`.mypy-baseline.txt`)
 - [ ] P3 — zizmor pre-flight captured (`.zizmor-preflight.txt`)

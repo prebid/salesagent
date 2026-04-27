@@ -83,6 +83,12 @@ if [[ -f .github/workflows/release-please.yml ]]; then
     || fail "release-please.yml missing disable-sudo-and-containers (CVE-2025-32955)"
 
   ok "release-please.yml: cosign + attest + SBOM + provenance:max + multi-arch + Docker Hub + R29 split + D47 polling preserved"
+
+  # PR 1 commit 9 contract + PR 6 acceptance — release-please.yml must declare
+  # top-level `permissions:` to narrow the default GITHUB_TOKEN scope.
+  head -20 .github/workflows/release-please.yml | grep -qE '^permissions:' \
+    || fail "release-please.yml missing top-level 'permissions:' narrowing (PR 1 commit 9 contract + PR 6 acceptance)"
+  ok "release-please.yml has top-level permissions: narrowing"
 fi
 
 # Commit 4: dependency-review-action
@@ -105,6 +111,16 @@ fi
 if [[ -f .github/workflows/release-please.yml ]]; then
   UNPINNED=$(grep -oE 'uses: [^ ]+@v?[0-9]+(\.[0-9]+)*\s*$' .github/workflows/release-please.yml | wc -l)
   [[ "$UNPINNED" == "0" ]] || fail "$UNPINNED uses: refs in release-please.yml are tag-pinned, not SHA-pinned"
+
+  # Trailing version comments for SHA-pinned actions — surface stale floors
+  grep -qE 'sigstore/cosign-installer@[a-f0-9]{40}\s+#\s+v4' .github/workflows/release-please.yml \
+    || warn "cosign-installer version comment may be stale (expected v4.x)"
+  grep -qE 'actions/attest-build-provenance@[a-f0-9]{40}\s+#\s+v4' .github/workflows/release-please.yml \
+    || warn "attest-build-provenance version comment may be stale (expected v4.x)"
+fi
+if [[ -f .github/workflows/security.yml ]]; then
+  grep -qE 'actions/dependency-review-action@[a-f0-9]{40}\s+#\s+v4\.([6-9]|[0-9]{2,})' .github/workflows/security.yml \
+    || warn "dependency-review-action version comment may be stale (expected v4.6+)"
 fi
 
 # Commit 3: harden-runner block-mode (only after 2-week soak)
@@ -112,6 +128,23 @@ if grep -q 'egress-policy: block' .github/workflows/ci.yml 2>/dev/null; then
   grep -q 'allowed-endpoints:' .github/workflows/ci.yml \
     || fail "block-mode requires allowed-endpoints"
   ok "harden-runner flipped to block-mode with allowed-endpoints"
+
+  # Commit 3b — emergency-revert workflow MUST exist before block-mode flips,
+  # so an operator can immediately revert without re-deploying the codebase.
+  [[ -f .github/workflows/harden-runner-emergency-revert.yml ]] \
+    || fail ".github/workflows/harden-runner-emergency-revert.yml missing — required before block-mode flip (commit 3b)"
+  grep -q 'workflow_dispatch:' .github/workflows/harden-runner-emergency-revert.yml \
+    || fail "emergency-revert.yml missing workflow_dispatch trigger"
+  grep -qE 'permissions:.*contents:\s*write' .github/workflows/harden-runner-emergency-revert.yml \
+    || fail "emergency-revert workflow missing contents:write permission"
+  grep -qE 'permissions:.*pull-requests:\s*write' .github/workflows/harden-runner-emergency-revert.yml \
+    || fail "emergency-revert workflow missing pull-requests:write permission"
+  ok "harden-runner emergency revert workflow present (commit 3b)"
+
+  # Commit 2.5 (Round 14 M8) — emergency-revert scratch-test evidence required before block-mode flip
+  [[ -f escalations/harden-runner-revert-test-evidence.md ]] \
+    || fail "escalations/harden-runner-revert-test-evidence.md missing — Commit 2.5 scratch-test must run before audit→block flip (Round 14 M8)"
+  ok "harden-runner emergency-revert scratch-test evidence present (Commit 2.5)"
 fi
 
 # Commit 7b: self-hosted Scorecard workflow file exists

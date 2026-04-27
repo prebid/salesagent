@@ -71,6 +71,6 @@ D1, D2, D5, D10, D12, D15, D16, D17, D21. Most load-bearing: D10 (Path C — Cod
 - CodeQL workflow can't be added because Advanced mode wasn't actually flipped: re-run A5 procedure
 
 **How to resume the work**
-Read `.claude/notes/ci-refactor/pr1-supply-chain-hardening.md` end-to-end. It has 11 internal commits, each self-contained with verification one-liners. Use templates/executor-prompt.md as your operating contract. Each commit corresponds to ~1 file group; do not batch.
+Read `.claude/notes/ci-refactor/pr1-supply-chain-hardening.md` end-to-end. It has 10 internal commits, each self-contained with verification one-liners. Use templates/executor-prompt.md as your operating contract. Each commit corresponds to ~1 file group; do not batch. (Commit 10 — Gemini fallback fix — was moved to PR 3 per Round 5/6 P0 sweep; see RESUME-HERE.md.)
 
 ---

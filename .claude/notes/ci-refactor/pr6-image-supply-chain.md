@@ -346,6 +346,61 @@ cosign verify ghcr.io/prebid/salesagent:vX.Y.Z \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
 
+### Commit 2.5 — `test(ci): scratch-test harden-runner emergency revert workflow (Round 14 M8)`
+
+Files (no source changes; pre-merge verification):
+- New evidence file: `escalations/harden-runner-revert-test-evidence.md`
+
+**Why this commit (Round 14 M8):** Commit 3 flips harden-runner from `egress-policy: audit` to `egress-policy: block`. The block-mode failure path is the emergency-revert workflow added in Commit 3b. **An untested escape hatch is operational malpractice.** Before flipping to block, the workflow must be validated end-to-end on a scratch branch.
+
+**Ordering note:** This commit (2.5) sorts before Commit 3 by number AND by spec position. Commit 3b (the workflow file itself) is a prerequisite — its YAML must exist on a scratch branch before this scratch test can run. The execution order across PRs is: land Commit 3b's workflow file → run scratch test (this commit's procedure) → record evidence → only then land Commit 3 (audit→block flip).
+
+**Scratch test procedure:**
+
+```bash
+# 1. Land Commit 3b (workflow file) on a scratch branch:
+git checkout -b harden-runner-emergency-revert-scratch
+# (apply Commit 3b's diff to .github/workflows/harden-runner-emergency-revert.yml)
+git push origin harden-runner-emergency-revert-scratch
+
+# 2. Manually dispatch the workflow:
+gh workflow run harden-runner-emergency-revert.yml \
+  --ref harden-runner-emergency-revert-scratch \
+  -f reason="scratch test: verify workflow opens revert PR end-to-end"
+
+# 3. Wait + verify:
+sleep 30
+RUN_ID=$(gh run list --workflow=harden-runner-emergency-revert.yml --limit=1 --json databaseId --jq '.[].databaseId')
+gh run watch "$RUN_ID"
+
+# Expect: workflow concludes successfully; opens a PR titled
+# "ops: emergency revert harden-runner to audit" with the sed-substituted YAML
+gh pr list --search "ops: emergency revert harden-runner to audit" \
+  --json number,title,state,headRefName
+
+# 4. Cleanup: close the scratch PR; delete scratch branch.
+
+# 5. Record evidence:
+cat > escalations/harden-runner-revert-test-evidence.md <<EOF
+# Emergency-revert workflow scratch test (Round 14 M8)
+
+**Tested:** $(date -Iseconds)
+**Tester:** @chrishuie
+**Branch:** harden-runner-emergency-revert-scratch
+**PR opened:** <link>
+**Result:** workflow concluded \`success\`; PR opened with correct sed-substituted YAML.
+**Cleanup:** scratch PR closed; branch deleted.
+
+OK to proceed with Commit 3 (audit→block flip).
+EOF
+```
+
+**Acceptance:** Commit 3 (audit→block flip) MUST NOT land until this scratch-test evidence is recorded.
+
+**Tripwire:** if the scratch test fails (workflow errors, no PR opened, wrong YAML diff), Commit 3b must be fixed BEFORE Commit 3. Common failure: missing `permissions: pull-requests: write` (verify-pr6.sh now greps for this).
+
+---
+
 ### Commit 3 — `ci: flip harden-runner from audit to block-mode with allowlist`
 
 **Prerequisite:** ≥2 weeks of audit data after commit 1 has merged. Open as a follow-up PR, not bundled with commit 1.

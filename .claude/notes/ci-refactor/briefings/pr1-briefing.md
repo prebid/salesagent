@@ -1,11 +1,11 @@
 # PR 1 — Supply-chain hardening
 
 ## Briefing
-**Where we are.** Week 1. Nothing has merged yet. You are the first executor; `@chrishuie` has completed pre-flight A1-A10, P1-P6. Calendar position: rollout opens.
+**Where we are.** Week 1. Nothing has merged yet. You are the first executor; `@chrishuie` has completed pre-flight A1-A25, P1-P10. Calendar position: rollout opens.
 
 **What this PR does.** Adds the supply-chain governance layer: CODEOWNERS auto-routes reviews to `@chrishuie`; `dependabot.yml` opens grouped weekly PRs (capped 5/ecosystem, no auto-merge per D5); `SECURITY.md` exposes the private-vuln channel; root `CONTRIBUTING.md` becomes a thin pointer to `docs/development/contributing.md` (594 lines — canonical content, per D21); `.pre-commit-config.yaml` external `rev:` strings are SHA-frozen via `pre-commit autoupdate --freeze` per D12 — **psf/black HELD at 25.1.0** per ADR-008 (autoupdate would jump to 26.3.0 with 2026-style reformat — deferred to post-#1234 PR); every workflow `uses:` line is SHA-pinned with a `# v<tag>` trailing comment; `permissions:` blocks added to every workflow (BOTH `release-please.yml` AND `ipr-agreement.yml` already have top-level — verified disk-truth); **`persist-credentials: false`** on every `actions/checkout`; **codeql-action pinned to v4** (was v3 — v3 deprecates Dec 2026); `security.yml` (zizmor + pip-audit + **pinact + actionlint**) and `codeql.yml` (advisory per D10 Path C) ship; ADR-001/2/3 land. **Commit 10 (Gemini) MOVED to PR 3** (PR 3 rewrites test.yml wholesale; redundant to fix it twice). Drift items closed: PD3, PD4, PD5, PD6, PD7, PD13, PD14, PD15, PD23.
 
-**Pre-flight dependencies.** A24 (Phase B dry-run) and A25 (recruit-second-maintainer / hardware MFA) were added to pre-flight scope. These are NOT PR 1 prerequisites — PR 1 can land without them — but they DO block PR 3 Phase B. Situational awareness only.
+**Pre-flight dependencies.** A24 (Phase B dry-run on sandbox repo) and A25 (hardware MFA on @chrishuie + ADR-010 SPOF acceptance) were added to pre-flight scope. These are NOT PR 1 prerequisites — PR 1 can land without them — but they DO block PR 3 Phase B. Situational awareness only.
 
 **You can rely on (already done).** Pre-flight artifacts in `.claude/notes/ci-refactor/`: `branch-protection-snapshot.json`, `branch-protection-snapshot-required-checks.json`, `.zizmor-preflight.txt` (~35 findings), guards-on-disk.txt, OpenSSF Scorecard baseline, `mypy-plugins-baseline.txt` (A13). `@chrishuie` has set CodeQL to "Advanced" mode (A5), enabled Dependabot + private vuln reporting (A3, A4), audited `allow_auto_merge` to be `false` (A11 — R30 mitigation), drained Dependabot queue ≤2 (A12), and confirmed bypass-list addition feasibility (A14).
 

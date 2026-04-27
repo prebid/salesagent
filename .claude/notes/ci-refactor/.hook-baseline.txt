@@ -1,0 +1,7 @@
+captured_at: 2026-04-27T11:45:45Z
+captured_from_sha: ffcbf16a7d7d6bd353bcddcf3719a453a78d96d1
+config_file: .pre-commit-config.yaml
+total_hooks: 40
+manual_hooks: 4
+effective_commit_stage: 36
+expected_baseline: 36

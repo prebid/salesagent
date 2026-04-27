@@ -54,11 +54,12 @@ Document the decision and the measured warm time in the PR description.
 
 ORDER IS LOAD-BEARING. Guards added before hook deletions.
 
-### Commit 1 — `chore(pre-commit): add default_install_hook_types; verify arch_guard marker; extend _architecture_helpers.py`
+### Commit 1 — `chore(pre-commit): add default_install_hook_types + minimum_pre_commit_version; verify arch_guard marker; extend _architecture_helpers.py; document pre-commit floor in contributing.md`
 
 Files:
-- `.pre-commit-config.yaml` (add `default_install_hook_types: [pre-commit, pre-push]` directive at top — per D31)
+- `.pre-commit-config.yaml` (add `default_install_hook_types: [pre-commit, pre-push]` per D31 AND `minimum_pre_commit_version: 3.2.0` per D44 at top, before `repos:`)
 - `tests/unit/_architecture_helpers.py` (**EXTEND** — file already created in PR 2 commit 8 as ~30-line baseline; this PR grows it to ~221 lines with the AST-walking helpers below)
+- `docs/development/contributing.md` (**Round 14 B4 add**: document the 3.2.0 minimum pre-commit version + upgrade commands. Currently neither `CONTRIBUTING.md` nor `docs/development/contributing.md` mentions any pre-commit floor; without this, a contributor on Debian-stable's older pre-commit will hit a `FatalError` from `minimum_pre_commit_version` and have no in-doc remediation path. Add a 3-4 line block under the existing "pre-commit" subsection: "This repo requires pre-commit ≥3.2.0 (for the `pre-push` stage name introduced in 3.2.0). If `pre-commit install` errors with a version-too-old `FatalError`, run `uv tool install pre-commit` (preferred) or `pip install --upgrade pre-commit`.")
 - `pytest.ini` — **NOT modified by this PR**. Marker registration is owned by PR 2 commit 8 (per D29). This commit VERIFIES (grep) registration; does not re-write.
 
 Per D12 (helpers structure), D29 (marker name), D31 (`default_install_hook_types` directive).
@@ -71,11 +72,14 @@ Per D12 (helpers structure), D29 (marker name), D31 (`default_install_hook_types
 
 ```yaml
 # .pre-commit-config.yaml — top of file
-# D44: minimum_pre_commit_version surfaces version-too-old errors at
-# `pre-commit install` time rather than silently ignoring `default_install_hook_types`.
-# Without this, contributors with pre-commit < 3.2 silently get no pre-push hooks
-# even though they ran `pre-commit install` — exactly the failure D31 was supposed
-# to prevent.
+# D44: minimum_pre_commit_version raises a FatalError at `pre-commit install` time
+# on pre-commit < 3.2.0. The 3.2.0 floor is required because PR 4 uses the modern
+# `pre-push` stage name (introduced in 3.2.0; legacy name is `push`). On pre-commit
+# 2.11–3.1.x, `pre-push` is unrecognized → the 10 hooks at `stages: [pre-push]`
+# silently do not register. minimum_pre_commit_version makes the version mismatch
+# loud (FatalError, exits non-zero) rather than letting the warning slip past.
+# (Round 14 B4: rationale corrected — `default_install_hook_types` itself is a
+# pre-commit ≥2.11.0 feature; the 3.2.0 floor is for the `pre-push` stage name.)
 minimum_pre_commit_version: 3.2.0
 
 # D31: auto-install both pre-commit AND pre-push hook types when contributors
@@ -88,7 +92,7 @@ repos:
   # ... existing repos preserved verbatim ...
 ```
 
-This is the load-bearing two-liner that makes D27's hook math operational. Top-OSS norm (pydantic, FastAPI, ruff). Without `default_install_hook_types`, `pre-commit install` only installs pre-commit-stage hooks; pre-push tier silently no-ops. Without `minimum_pre_commit_version`, contributors on older pre-commit versions silently bypass the directive (which is an unknown key to them).
+This is the load-bearing two-liner that makes D27's hook math operational. Top-OSS norm (pydantic, FastAPI, ruff). Without `default_install_hook_types`, `pre-commit install` only installs pre-commit-stage hooks; pre-push tier silently no-ops. Without `minimum_pre_commit_version: 3.2.0`, contributors on older pre-commit versions get a warning about the unknown `default_install_hook_types` key (easy to miss in install output) AND have the modern `pre-push` stage name silently rejected — both failure modes are made loud by the version floor.
 
 `tests/unit/_architecture_helpers.py`:
 
@@ -702,7 +706,7 @@ even those should land AFTER v2.0 rebases to avoid table churn. The full ~81-row
 (post-v2.0; D18 revised in Round 8 — was 73, drift-corrected after v2.0 architecture/ count re-verified at 27 not 31) is a separate follow-up, not a PR 4 deliverable.
 
 **PR 4 commit 9 minimal scope:** add ONLY the 2 residual rows; verify all PR 4-introduced
-guards (4 new + 1 extended) appear in the table. Defer the broader 23→~73 audit.
+guards (4 new + 1 extended) appear in the table. Defer the broader 23→~81 audit (per D18 Round 8 revision — was ~73; corrected after v2.0 architecture/ count was re-verified at 27, not 31).
 
 ---
 **EXECUTOR: SKIP THIS LEGACY BLOCK. The deferral above is canonical.**
@@ -722,9 +726,9 @@ Add 4 new rows (B1-B5 minus the extension):
 CLAUDE.md guard count post-PR-4: the table audit DEFERS to post-v2.0-rebase. PR 4 commit 9
 adds only the 2 residual rows (`test_architecture_no_silent_except.py`,
 `test_architecture_production_session_add.py`) plus the 4 new + 1 extended PR 4 guards.
-Final count after v2.0 lands: **~73** rows (27 baseline + 1 PR 2 + 4 PR 4 + 1 PR 5 + 8 PR 1/3/6
-governance + 31 v2.0 architecture tests + 9 v2.0 baseline JSONs) per D18. Do NOT update the
-"~73" number in CLAUDE.md until v2.0 phase PRs land — premature update creates phantom rows.
+Final count after v2.0 lands: **~81** rows (27 baseline + 1 PR 2 + 4 PR 4 + 1 PR 5 + 8 PR 1/3/6
+governance + 27 v2.0 architecture tests + 4 v2.0 top-level + 9 v2.0 baseline JSONs) per D18 Round 8 revision (was ~73; corrected after v2.0 architecture/ count was re-verified at 27, not 31). Do NOT update the
+"~81" number in CLAUDE.md until v2.0 phase PRs land — premature update creates phantom rows.
 
 Verification:
 ```bash

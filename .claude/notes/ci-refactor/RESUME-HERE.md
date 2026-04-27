@@ -1,16 +1,54 @@
 # Resume Here — CI/Pre-commit Refactor
 
-**Date snapshot:** 2026-04-26 (Round 13 sweep applied — boss-level + multi-team scaffolding; 13 audit rounds total).
+**Date snapshot:** 2026-04-27 (Round 14 reframe applied — agent-team execution model; 14 audit rounds total).
 
-**Rollout status:** **READY FOR EXECUTOR HANDOFF.** 13 rounds of opus-subagent research + integrity audit + Round 5+6 P0 sweep applied 2026-04-25 + Round 9 verification 2026-04-25 + Round 10 completeness audit sweep applied 2026-04-26 + Round 11 verification + extension sweep applied 2026-04-26 + Round 12 verification + sweep applied 2026-04-26 + Round 13 boss-level + multi-team scaffolding sweep applied 2026-04-26. The 3 critical blockers (workflow naming, hook count, helpers collision) are fixed. Round 11 caught + fixed 5 P0s introduced by Round 10 (creative-agent services networking, SOURCE_DATE_EPOCH ARG missing, structural-guard list 11 vs 14). Round 12 caught + fixed 19 P0s introduced by Round 11 sweep (DB_POOL_SIZE app-side wiring, 11→14 in admin scripts/briefings/executor template, structural-guard lift commit, D44 minimum_pre_commit_version). Round 13 surfaced D48 production-deploy coupling, 3 LOAD-BEARING action-version/CVE-attribution/D47-race fixes, 48 internal contradictions, 10 multi-team gaps. External technical corrections applied (mirrors-mypy reframed, harden-runner CVE-2025-32955 + DoH-bypass v2.16+ floor, persist-credentials propagation, rendered-name capture). D-pending-1..4 promoted to D22-D25; D26 + D27 + D28 added; D29 (marker rename); D30-D38 added in Round 10; D39-D45 added in Round 11; D46 added in Round 12; D47 added in post-issue-review; D48 added in Round 13. R19/R20/R23 promoted; R26-R32 added; R33-R37 added in Round 10; R38-R42 added in Round 11; R43 added in Round 12; R44 added in post-issue-review; R45-R47 added in Round 13.
+**Rollout status:** **PRE-FLIGHT GATES OPEN.** 14 audit rounds complete. Per Round 14 closure, the corpus is internally consistent, all known load-bearing technical defects are closed, and propagation drift has been swept. **Before PR 1 author handoff, the user must:**
+1. Run admin pre-flight items A1-A14 + A15 (develop-branch fate)
+2. Run agent pre-flight items P1-P5, P10 (P10 already captured)
+3. Decide A25 path (hardware MFA on @chrishuie + ADR-010 SPOF acceptance)
+4. Decide Path 1 vs Path 2 (D20 tripwire fires ~2026-05-04; consult `briefings/path-2-fallback.md` if v2.0 PR #1221 advances)
+5. Run A24 sandbox dry-run on a throwaway repo before PR 3 Phase B
 
-## 2026-04-26 Round 13 sweep applied (boss-level + multi-team scaffolding)
+After these gates clear, the executor handoff is genuinely ready.
 
-6 parallel opus subagents applied: (A) PR 1+2 fixes; (B) PR 3 + Phase B + cross-PR scripts; (C) PR 4 internal-consistency cleanup; (D) PR 5 + PR 6 + action-version bumps; (E) boss-level + multi-team scaffolding; (F) range sweeps. **3 new D / 3 new R / 3 new A / 4 new docs / ~80 file edits applied as a single sweep commit.**
+## 2026-04-27 Round 14 reframe applied (agent-team execution model)
 
-**Top boss-level findings closed:**
+User feedback: "It is me and agents reviewing the work" — strip 40-person / CTO / VP-Eng / boss-level / multi-team scaffolding per `feedback_agent_team_execution_model.md`. Round 13's human-team framing was theatrical for a solo+agents execution model.
+
+**Files deleted:**
+- `ONBOARDING-CHEAT-SHEET.md` (duplicated EXECUTIVE-SUMMARY orientation)
+- `FAILURE-BROADCAST-PROTOCOL.md` (Slack/PR-comments pattern; for solo+agents the pattern is `escalations/<file>.md → STOP → wait for user`)
+
+**Files retained (reframed for parallel-agent execution):**
+- `COORDINATION.md` — parallel-agent PR-claiming registry
+- `REBASE-PROTOCOL.md` — file-collision logic for sequential PR landing
+
+**Pre-flight items reframed:**
+- A25 simplified to hardware-MFA-only path (Option A "recruit second maintainer" was impossible — agents are not maintainers)
+- A26 (notification routing for 40-person team) deleted entirely
+
+**Other Round 14 closures (already applied):**
+- B1: D40 per-branch defaults contradiction (production regression risk closed)
+- B4: D44 rationale corrected (`default_install_hook_types` is pre-commit ≥2.11.0; floor 3.2.0 is for `pre-push` stage-name rename)
+- M1: 25 verify-script patches across 5 PRs
+- M2/M3/M6: propagation drift sweep + check-stale-strings.sh fixed broken regex + 18 new patterns
+- M4: R11-R15 RESERVED documented
+- M5: P10 hook-baseline pre-flight + .hook-baseline.txt evidence
+- M7: runbooks/E4-account-lockout-recovery.md authored (closes A25's mandate)
+- M8: PR 6 Commit 2.5 emergency-revert scratch test
+- B3: briefings/path-2-fallback.md + D20 operational definition
+
+## Round 13 audit-trail reference
+
+13 rounds of opus-subagent research + integrity audit + Round 5+6 P0 sweep applied 2026-04-25 + Round 9 verification 2026-04-25 + Round 10 completeness audit sweep applied 2026-04-26 + Round 11 verification + extension sweep applied 2026-04-26 + Round 12 verification + sweep applied 2026-04-26 + Round 13 comprehensive review + parallel-agent scaffolding sweep applied 2026-04-26 + Round 14 reframe applied 2026-04-27. The 3 critical blockers (workflow naming, hook count, helpers collision) are fixed. Round 11 caught + fixed 5 P0s introduced by Round 10 (creative-agent services networking, SOURCE_DATE_EPOCH ARG missing, structural-guard list 11 vs 14). Round 12 caught + fixed 19 P0s introduced by Round 11 sweep (DB_POOL_SIZE app-side wiring, 11→14 in admin scripts/briefings/executor template, structural-guard lift commit, D44 minimum_pre_commit_version). Round 13 surfaced D48 production-deploy coupling, 3 LOAD-BEARING action-version/CVE-attribution/D47-race fixes, 48 internal contradictions. External technical corrections applied (mirrors-mypy reframed, harden-runner CVE-2025-32955 + DoH-bypass v2.16+ floor, persist-credentials propagation, rendered-name capture). D-pending-1..4 promoted to D22-D25; D26 + D27 + D28 added; D29 (marker rename); D30-D38 added in Round 10; D39-D45 added in Round 11; D46 added in Round 12; D47 added in post-issue-review; D48 added in Round 13. R19/R20/R23 promoted; R26-R32 added; R33-R37 added in Round 10; R38-R42 added in Round 11; R43 added in Round 12; R44 added in post-issue-review; R45-R47 added in Round 13.
+
+## 2026-04-26 Round 13 sweep applied (comprehensive review + parallel-agent scaffolding)
+
+6 parallel opus subagents applied: (A) PR 1+2 fixes; (B) PR 3 + Phase B + cross-PR scripts; (C) PR 4 internal-consistency cleanup; (D) PR 5 + PR 6 + action-version bumps; (E) comprehensive review + parallel-agent scaffolding; (F) range sweeps. **3 new D / 3 new R / 3 new A / 4 new docs / ~80 file edits applied as a single sweep commit.**
+
+**Top comprehensive-review findings closed:**
 - **D48 (production deploy coupling):** plan never mentioned Fly.io existed — corpus-wide silence on production. Fixed: EXECUTIVE-SUMMARY §"Production Deploy Coupling"; D48 added; rollback via fly deploy documented.
-- **A25 (recruit second maintainer / hardware MFA on critical path):** previously cited as "out of scope (organizational)" — now BLOCKER for PR 3 Phase B per CTO-level review.
+- **A25 (hardware MFA on critical path):** previously cited as "out of scope (organizational)" — now BLOCKER for PR 3 Phase B per comprehensive review.
 - **A24 (Phase B dry-run on sandbox repo):** rollback was documented but never drilled — now mandatory pre-flight before PR 3 Phase B execution.
 
 **Top LOAD-BEARING fixes:**
@@ -20,18 +58,18 @@
 - R29 split-job mitigation never applied — PR 6's publish-docker had cosign as inline step. Fix: split into `build-and-push` + `sign-and-attest needs: build-and-push` jobs per R29.
 - PR 4 duplicate "Commit 9" headings + 13-vs-16 deletions math + Layer-1 reference table referenced non-existent hooks. Fixed.
 
-**Multi-team scaffolding (40-person team prep):**
+**Parallel-agent scaffolding:**
 - Created `COORDINATION.md` (PR-claiming registry)
 - Created `REBASE-PROTOCOL.md` (mandatory order for `.pre-commit-config.yaml`, `pyproject.toml`, `release-please.yml`)
-- Created `ONBOARDING-CHEAT-SHEET.md` (10-min orientation; replaces ~80k-token onboarding via the corpus)
-- Created `FAILURE-BROADCAST-PROTOCOL.md` (escalation comms for parallel agents)
+- Created `ONBOARDING-CHEAT-SHEET.md` (later removed in Round 14 reframe — duplicated EXECUTIVE-SUMMARY orientation)
+- Created `FAILURE-BROADCAST-PROTOCOL.md` (later removed in Round 14 reframe — assumed human-team Slack/PR-comments; for solo+agents the pattern is `escalations/<file>.md → STOP → wait for user`)
 - flip-branch-protection.sh: GitHub-issue-based mutex + D45 day-of-week guard
 
 **Stale-string PATTERNS extended (D46 enforcement):**
 - Added: `\b11 check names\b`, `\b11 required checks\b`, `\b11 names\b`, `\b33 effective\b`, `\b9 to pre-push\b`, `\b73-row\b`, `\b0\.11\.6\b`, `D1-D40` through `D1-D47`, `R1-R37` through `R1-R44`
 - check-stale-strings.sh now detects propagation drift it previously missed
 
-**Net effort delta from Round 13:** ~5-6 hours mechanical + boss-level. Total: **~20.25-24.5 engineer-days, ~6 calendar weeks part-time** (calendar slack absorbs without extension).
+**Net effort delta from Round 13:** ~5-6 hours mechanical + comprehensive review. Total: **~20.25-24.5 engineer-days, ~6 calendar weeks part-time** (calendar slack absorbs without extension).
 
 **Round 14 verification — NOT recommended.** Round 13 closed all known gaps including the structural propagation issue. Further rounds would yield diminishing returns. Next step: launch executor team.
 
@@ -283,7 +321,7 @@ While rewriting the public issue bodies for #1234 / #1233 / #1228 / #1189, three
 
 **Refuted prior findings (do NOT re-apply):**
 - `check_import_usage.py` is already AST-based (243 LOC of `ImportCollector`/`UsageCollector` visitors); the migration is scope expansion, NOT a technique change.
-- `feedback_no_beads_workflow.md` user-memory is INACCURATE for this repo: `.beads/issues.jsonl` exists (107KB, active). However, of 14 distinct `FIXME(salesagent-xxxx)` IDs in src+tests, only 2 have matching beads issues; 12 are dangling (real accountability gap, different cause).
+- `feedback_no_beads_workflow.md` user-memory is INACCURATE for this repo: `.beads/issues.jsonl` exists (~1.3MB, active). However, of 14 distinct `FIXME(salesagent-xxxx)` IDs in src+tests, only 2 have matching beads issues; 12 are dangling (real accountability gap, different cause).
 - factory-boy `Sequence` collision risk under xdist is mitigated by per-test UUID DB pattern (still warrants `worker_id` mixing as defense-in-depth, but P2 not P0).
 - `tests/conftest_db.py` mutations are at lines 478-486 (not 470-486 as prior audit said).
 
@@ -305,13 +343,12 @@ Concurrent work: v2.0 (Flask-to-FastAPI) under [PR #1221](https://github.com/pre
 2. **[`EXECUTIVE-SUMMARY.md`](EXECUTIVE-SUMMARY.md)** — single-screen orientation; if you read no other research file, read this
 3. [`00-MASTER-INDEX.md`](00-MASTER-INDEX.md) — status table, calendar, sequencing
 4. [`03-decision-log.md`](03-decision-log.md) — every locked decision (D1-D48 as of Round 13)
-5. [`02-risk-register.md`](02-risk-register.md) — R1-R47 (Round 10 added R33-R37; Round 11 added R38-R42; Round 12 added R43; post-issue-review added R44; Round 13 added R45-R47); R11-R18, R24-R25 remain LOW info in `research/edge-case-stress-test.md`
-6. [`01-pre-flight-checklist.md`](01-pre-flight-checklist.md) — admin actions A1-A26 + agent steps P1-P9 (Round 13 added A24-A26)
+5. [`02-risk-register.md`](02-risk-register.md) — R1-R47 (Round 10 added R33-R37; Round 11 added R38-R42; Round 12 added R43; post-issue-review added R44; Round 13 added R45-R47); **R11-R15 RESERVED** (Round 14 M4 — never formally defined); R17-R18, R21-R22, R24-R25 remain LOW info in `research/edge-case-stress-test.md`
+6. [`01-pre-flight-checklist.md`](01-pre-flight-checklist.md) — admin actions A1-A25 + agent steps P1-P10 (Round 13 added A24-A25; A26 deleted in Round 14)
 7. **The per-PR spec for the PR you're working on** (`pr1-supply-chain-hardening.md` … `pr6-image-supply-chain.md`)
 8. [`templates/executor-prompt.md`](templates/executor-prompt.md) — agent operating contract (now embeds the 22 continuity-hygiene rules; rules 16/17/18 added in P0 sweep; rules 20/21/22 added in Round 13)
 9. `CLAUDE.md` at repo root — codebase patterns; non-negotiable
 10. [`COORDINATION.md`](COORDINATION.md) — claim a PR before starting work
-11. [`ONBOARDING-CHEAT-SHEET.md`](ONBOARDING-CHEAT-SHEET.md) — 10-min orientation if you're fresh
 
 ---
 
@@ -389,7 +426,7 @@ After the first pass landed, two opus subagents simulated cold-start and surface
 
 These are nice-to-have improvements not blocking executor handoff:
 
-- **R11-R25 integration:** the 15 edge-case risks in `research/edge-case-stress-test.md` are not yet in `02-risk-register.md`. Append when bandwidth allows.
+- **R16-R25 partial integration:** R16, R19, R20, R23 promoted into `02-risk-register.md`; R17-R18, R21-R22, R24-R25 remain LOW-impact informational in `research/edge-case-stress-test.md`. R11-R15 are RESERVED (never minted; see `02-risk-register.md` numbering note added Round 14 M4).
 - **CLAUDE.md guards table** in `drafts/claudemd-guards-table-final.md` not yet lifted to `CLAUDE.md` — that happens during PR 4 commit 9 execution, not pre-execution. Confirmed.
 - **Aggressive briefings/runbooks cleanup:** the redundancy audit identified ~21 of 28 runbooks and ~6 of 13 briefings as low-value. Today's pass deleted 5 briefings; if the user wants further reduction, it's in `research/handoff-readiness-audit.md` recommendations.
 - **PD15a/PD15b disambiguation** is in `00-MASTER-INDEX.md` PR 1 row but not yet reflected throughout PR 1 spec body. The text says "Closes PD15a + PD15b" in commit 9 — sufficient for executor.
@@ -416,7 +453,7 @@ These are nice-to-have improvements not blocking executor handoff:
 - **Touch files outside your PR's spec scope** — strict per-PR boundaries
 - **Use `harden-runner`'s `disable-sudo: true`** — bypassable per CVE-2025-32955; use `disable-sudo-and-containers: true`
 - **Frame mirrors-mypy migration as "deprecation"** — it isn't; reframe as isolated-env import-resolution fix
-- **Amend `03-decision-log.md` mid-execution** (Round 13 decision-freeze; ambiguities → escalate per FAILURE-BROADCAST-PROTOCOL.md)
+- **Amend `03-decision-log.md` mid-execution** (Round 13 decision-freeze; ambiguities → write `escalations/pr<N>-<topic>.md` and STOP)
 
 ---
 
@@ -439,7 +476,7 @@ The plan refactor is complete. To launch an executor on PR 1:
 1. Read `EXECUTIVE-SUMMARY.md` (~3k tokens)
 2. Read `pr1-supply-chain-hardening.md` (~38k tokens, but you only need it once)
 3. Read `templates/executor-prompt.md` (~1.5k tokens)
-4. Confirm pre-flight A1-A14 + P1-P6 are complete (some are admin-only — user runs)
+4. Confirm pre-flight A1-A25 + P1-P10 are complete (some are admin-only — user runs)
 5. Fill in the executor prompt template with PR 1 specifics from spec + briefing + checklist
 6. Launch the executor in a fresh session
 
@@ -461,10 +498,8 @@ The plan refactor is complete. To launch an executor on PR 1:
 ├── architecture.md                 ← current vs target
 ├── landing-schedule.md             ← 6-week dependency graph
 ├── preflight-ttl-guard.md          ← TTL bash block for per-PR checklists
-├── COORDINATION.md                ← NEW Round 13: multi-agent PR-claiming registry
-├── REBASE-PROTOCOL.md             ← NEW Round 13: rebase order for shared files
-├── ONBOARDING-CHEAT-SHEET.md      ← NEW Round 13: 10-min orientation for fresh agents
-├── FAILURE-BROADCAST-PROTOCOL.md  ← NEW Round 13: escalation comms protocol
+├── COORDINATION.md                ← Round 13 / reframed Round 14: parallel-agent PR-claiming registry
+├── REBASE-PROTOCOL.md             ← Round 13: rebase order for shared files
 ├── pr1-supply-chain-hardening.md   ← PR 1 spec (with persist-credentials, .action-shas.txt artifact)
 ├── pr2-uvlock-single-source.md     ← PR 2 spec (with mirrors-mypy reframe + helpers baseline note)
 ├── pr3-ci-authoritative.md         ← PR 3 spec (Blocker #1 fixed; rendered-name capture added)

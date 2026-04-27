@@ -53,6 +53,10 @@ if [[ -f CODEOWNERS ]] || [[ -f .github/CODEOWNERS ]]; then
     grep -qE '^/tests/unit/architecture/\s+@chrishuie' .github/CODEOWNERS \
       || fail "CODEOWNERS missing v2.0 forward-compat glob /tests/unit/architecture/ @chrishuie"
     ok "CODEOWNERS includes v2.0 forward-compat glob /tests/unit/architecture/"
+    # Current-layout glob (PR 1 owns now, before v2.0 migration moves files)
+    grep -qE '^/tests/unit/test_architecture_\*\.py\s+@chrishuie' .github/CODEOWNERS \
+      || fail "CODEOWNERS missing current-layout glob /tests/unit/test_architecture_*.py @chrishuie"
+    ok "CODEOWNERS includes current-layout glob /tests/unit/test_architecture_*.py"
   fi
 fi
 
@@ -131,6 +135,15 @@ fi
 # Commit 11: zizmor
 if [[ -f .github/zizmor.yml ]]; then
   ok ".github/zizmor.yml present"
+  grep -q 'dangerous-triggers' .github/zizmor.yml \
+    || fail ".github/zizmor.yml missing 'dangerous-triggers' rule entry"
+  grep -q 'unpinned-uses' .github/zizmor.yml \
+    || fail ".github/zizmor.yml missing 'unpinned-uses' rule entry"
+  grep -q 'pr-title-check.yml' .github/zizmor.yml \
+    || fail ".github/zizmor.yml missing 'pr-title-check.yml' allowlist entry (ADR-003)"
+  grep -q 'ipr-agreement.yml' .github/zizmor.yml \
+    || fail ".github/zizmor.yml missing 'ipr-agreement.yml' allowlist entry (ADR-003)"
+  ok ".github/zizmor.yml has dangerous-triggers + unpinned-uses + pull_request_target allowlist"
 fi
 
 # Commit 5: security.yml has pinact + actionlint jobs
@@ -154,6 +167,11 @@ if [[ -f .github/workflows/security.yml ]]; then
   grep -q 'gitleaks' .github/workflows/security.yml \
     || fail "security.yml missing gitleaks job (D35)"
   ok "security.yml has gitleaks job (D35)"
+  grep -q 'upload-sarif:.*true' .github/workflows/security.yml \
+    || fail "gitleaks workflow missing SARIF upload (D35)"
+  grep -qE 'security-events:\s*write' .github/workflows/security.yml \
+    || fail "gitleaks workflow missing security-events:write permission"
+  ok "gitleaks SARIF upload + security-events:write permission present (D35)"
 fi
 
 # ADRs
@@ -163,5 +181,9 @@ for adr in adr-001-single-source-pre-commit-deps adr-002-solo-maintainer-bypass 
     ok "ADR ${adr} present with ## Status"
   fi
 done
+
+# ADR-002 canonical-filename guard — prevent stale 'codeowners-bypass' filename from coexisting
+[[ ! -f docs/decisions/adr-002-codeowners-bypass.md ]] \
+  || fail "stale ADR-002 filename 'codeowners-bypass'; canonical is 'solo-maintainer-bypass'"
 
 echo "PR 1 verification: complete (commits implemented so far passed)"

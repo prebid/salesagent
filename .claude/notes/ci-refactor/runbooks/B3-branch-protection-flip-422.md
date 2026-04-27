@@ -26,17 +26,17 @@ If diff is empty, API rejected atomically — no harm done. If non-empty, partia
    ```bash
    gh workflow run ci.yml --ref main
    ```
-3. Wait 5-15 min for the run to complete and emit all 11 check names on main.
+3. Wait 5-15 min for the run to complete and emit all 14 check names on main.
 4. Verify the check appears under the repo's check-name registry:
    ```bash
    gh api repos/prebid/salesagent/commits/main/check-runs \
      --jq '.check_runs[] | select(.app.slug == "github-actions") | .name' | sort -u
    ```
-5. All 11 names should be present. Re-run the atomic flip.
+5. All 14 names should be present. Re-run the atomic flip.
 
 **Stabilization (next 1-4 hours)**
 1. After successful flip, run Step 3 verification from PR 3 spec (diff against expected list).
-2. Open a trivial test PR (Step 4) and watch all 11 names report.
+2. Open a trivial test PR (Step 4) and watch all 14 names report.
 
 **Recovery (longer-term)**
 - None.
@@ -50,5 +50,7 @@ GitHub's `required_status_checks.contexts` validates against names actually regi
 
 **Related scenarios**
 - See also: G2 (rollback the flip), R1 (risk-register entry), B5 (overlap during soak).
+
+> **History:** This runbook was authored against the original D17 contract (a smaller name set). D30 (Round 10) expanded that set to 14 by adding Smoke Tests, Security Audit, Quickstart. Operational copy above reflects the current 14-name contract per D17 amended by D30.
 
 ---

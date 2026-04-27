@@ -18,16 +18,16 @@ test -f .zizmor-preflight.txt && wc -l .zizmor-preflight.txt
 test -f .claude/notes/ci-refactor/branch-protection-snapshot.json
 test -f .claude/notes/ci-refactor/required-checks-current.txt
 ```
-A missing file means a pre-flight step was skipped. Some are admin-only (A1-A10) — agents cannot retroactively run them.
+A missing file means a pre-flight step was skipped. Some are admin-only (A1-A25) — agents cannot retroactively run them.
 
 **Immediate response (first 15 min)**
-1. **STOP authoring.** Do not run agent-runnable steps (P1-P6) yet — running them out of order can mask the missing admin baseline.
+1. **STOP authoring.** Do not run agent-runnable steps (P1-P10) yet — running them out of order can mask the missing admin baseline.
 2. Identify which artifacts are missing (run the verification block above).
-3. Classify: **admin-only** (A1-A10) or **agent-runnable** (P1-P6).
+3. Classify: **admin-only** (A1-A25) or **agent-runnable** (P1-P10).
 4. Escalate to the user (`@chrishuie`) with a list of the missing admin-only artifacts. Quote `01-pre-flight-checklist.md` line ranges.
 
 **Stabilization (next 1-4 hours)**
-1. User runs the missing admin-only steps. Agent runs missing P1-P6 steps.
+1. User runs the missing admin-only steps. Agent runs missing P1-P10 steps.
 2. Re-verify all 16 pre-flight checkboxes.
 3. Sign off in `01-pre-flight-checklist.md` (each `- [ ]` → `- [x]`).
 4. Resume PR authoring from commit 1.
@@ -40,7 +40,7 @@ A missing file means a pre-flight step was skipped. Some are admin-only (A1-A10)
 - Update `01-pre-flight-checklist.md` if any step's command is stale.
 
 **Why this happens (root cause)**
-Pre-flight checklist is split between admin (`gh api`, GitHub UI) and agent. Agents cannot perform admin steps. If the user starts an agent session without running A1-A10 first, the agent has no baseline to compare against.
+Pre-flight checklist is split between admin (`gh api`, GitHub UI) and agent. Agents cannot perform admin steps. If the user starts an agent session without running A1-A25 first, the agent has no baseline to compare against.
 
 **Related scenarios**
 - See also: A4 (pydantic.mypy explosion — relies on P2 baseline), B3 (branch-protection flip relies on A1 snapshot).
