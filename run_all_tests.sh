@@ -45,8 +45,25 @@ collect_reports() {
     # Copy JSON reports from .tox/ to results dir
     mkdir -p "$RESULTS_DIR"
     for name in unit integration e2e admin bdd ui; do
-        [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
+        if [ -f ".tox/${name}.json" ]; then
+            cp ".tox/${name}.json" "$RESULTS_DIR/"
+        fi
     done
+}
+
+print_summary() {
+    echo "================================================================"
+    echo "Reports: $RESULTS_DIR/"
+    for f in "$RESULTS_DIR"/*.json; do
+        [ -e "$f" ] || continue
+        echo "  $(basename "$f")"
+    done
+    if [ -z "$FAILURES" ]; then
+        echo -e "${GREEN}ALL PASSED${NC}"
+        return 0
+    fi
+    echo -e "${RED}FAILED:$FAILURES${NC}"
+    return 1
 }
 
 # --- Quick mode (no Docker) ---
@@ -119,8 +136,4 @@ fi
 
 # --- Summary ---
 FAILURES="${FAILURES:-}"
-echo "================================================================"
-echo "Reports: $RESULTS_DIR/"
-ls "$RESULTS_DIR"/*.json 2>/dev/null | while read f; do echo "  $(basename $f)"; done
-[ -z "$FAILURES" ] && echo -e "${GREEN}ALL PASSED${NC}" && exit 0
-echo -e "${RED}FAILED:$FAILURES${NC}" && exit 1
+print_summary
