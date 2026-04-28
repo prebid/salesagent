@@ -17,10 +17,35 @@
 schema_version: 1
 source:
   repository: adcp-req
-  commit: 8a219ece2b54628c33f1075d386b73082a0f4832
-  compiled_at: "2026-03-20T12:00:24Z"
+  commit: bde820295040e6bbb079c1d1a429571286fafd06
+  compiled_at: "2026-04-28T11:41:10Z"
 
 mappings:
+  COMPAT-001:
+    - adcp_scenario_id: "T-COMPAT-001-brand-manifest"
+      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
+      obligation_id: null
+      upstream_refs: ["BR-COMPAT-001"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-COMPAT-001-campaign-ref"
+      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
+      obligation_id: null
+      upstream_refs: ["BR-COMPAT-001"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-COMPAT-001-account-id"
+      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
+      obligation_id: null
+      upstream_refs: ["BR-COMPAT-001"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-COMPAT-001-precedence"
+      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
+      obligation_id: null
+      upstream_refs: ["BR-COMPAT-001"]
+      business_rules: []
+      status: new
   UC-001:
     - adcp_scenario_id: "T-UC-001-main"
       adcp_feature: "BR-UC-001-discover-available-inventory.feature"
@@ -1878,31 +1903,6 @@ mappings:
       upstream_refs: ["BR-UC-003"]
       business_rules: []
       status: new
-  COMPAT-001:
-    - adcp_scenario_id: "T-COMPAT-001-brand-manifest"
-      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
-      obligation_id: null
-      upstream_refs: ["BR-COMPAT-001"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-COMPAT-001-campaign-ref"
-      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
-      obligation_id: null
-      upstream_refs: ["BR-COMPAT-001"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-COMPAT-001-account-id"
-      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
-      obligation_id: null
-      upstream_refs: ["BR-COMPAT-001"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-COMPAT-001-precedence"
-      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
-      obligation_id: null
-      upstream_refs: ["BR-COMPAT-001"]
-      business_rules: []
-      status: new
   UC-004:
     - adcp_scenario_id: "T-UC-004-main"
       adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"
@@ -2403,18 +2403,6 @@ mappings:
       business_rules: ["BR-RULE-209"]
       status: new
   UC-005:
-    - adcp_scenario_id: "T-UC-005-main-rest"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-REST-01"
-      upstream_refs: ["BR-UC-005-main-rest"]
-      business_rules: []
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-main-mcp"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-01"
-      upstream_refs: ["BR-UC-005-main-mcp"]
-      business_rules: []
-      status: mapped
     - adcp_scenario_id: "T-UC-005-main-filtered"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
       obligation_id: "UC-005-MAIN-MCP-05"
@@ -2594,30 +2582,6 @@ mappings:
       obligation_id: "UC-005-MAIN-MCP-08"
       upstream_refs: ["BR-RULE-049"]
       business_rules: ["BR-RULE-049"]
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-ext-a-rest"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-EXT-A-01"
-      upstream_refs: ["BR-UC-005-ext-a"]
-      business_rules: []
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-ext-a-mcp"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-EXT-A-02"
-      upstream_refs: ["BR-UC-005-ext-a"]
-      business_rules: []
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-ext-b-rest"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-EXT-B-01"
-      upstream_refs: ["BR-UC-005-ext-b"]
-      business_rules: []
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-ext-b-mcp"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-EXT-B-01"
-      upstream_refs: ["BR-UC-005-ext-b"]
-      business_rules: []
       status: mapped
     - adcp_scenario_id: "T-UC-005-ext-b-disclosure-invalid"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
@@ -2835,6 +2799,24 @@ mappings:
       upstream_refs: ["BR-UC-005-main-mcp", "BR-RULE-209"]
       business_rules: ["BR-RULE-209"]
       status: mapped
+    - adcp_scenario_id: "T-UC-005-main"
+      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-005-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-005-ext-a"
+      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-005-ext-a"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-005-ext-b"
+      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-005-ext-b"]
+      business_rules: []
+      status: new
   UC-006:
     - adcp_scenario_id: "T-UC-006-main-rest"
       adcp_feature: "BR-UC-006-sync-creatives.feature"
@@ -3501,6 +3483,36 @@ mappings:
       obligation_id: null
       upstream_refs: ["BR-UC-006-main-mcp", "BR-RULE-209"]
       business_rules: ["BR-RULE-209"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-a"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-a"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-b"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-b"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-e"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-e"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-g"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-g"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-j"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-j"]
+      business_rules: []
       status: new
   UC-007:
     - adcp_scenario_id: "T-UC-007-main-rest"
@@ -8446,6 +8458,12 @@ mappings:
       obligation_id: null
       upstream_refs: ["BR-UC-019-main-mcp", "BR-RULE-209"]
       business_rules: ["BR-RULE-209"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-main"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019-main"]
+      business_rules: []
       status: new
   UC-020:
     - adcp_scenario_id: "T-UC-020-main-rest"

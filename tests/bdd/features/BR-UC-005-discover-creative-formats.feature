@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
+# Generated from adcp-req @ 136dba1cc4728198d1139e4784ab6877b63f354f on 2026-04-28T11:36:02Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-005 Discover Creative Formats
@@ -20,10 +20,10 @@ Feature: BR-UC-005 Discover Creative Formats
     And at least one creative agent is registered with format definitions
 
 
-  @T-UC-005-main-rest @UC-005-MAIN-REST-01 @main-flow @rest @post-s1 @post-s2
-  Scenario: Discover full format catalog via REST
+  @T-UC-005-main @main-flow @post-s1 @post-s2
+  Scenario: Discover full format catalog
     Given the creative agent registry has formats across multiple categories
-    When the Buyer Agent sends a list_creative_formats task via A2A with no filters
+    When the Buyer Agent requests all formats with no filters
     Then the response should include all registered formats
     And each format should include a format_id with agent_url and id
     And each format should include a name and type category
@@ -32,22 +32,10 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-S1: Complete catalog returned
     # POST-S2: Asset requirements included per format
 
-  @T-UC-005-main-mcp @UC-005-MAIN-MCP-01 @main-flow @mcp @post-s1 @post-s2
-  Scenario: Discover full format catalog via MCP
-    Given the creative agent registry has formats across multiple categories
-    When the Buyer Agent calls list_creative_formats MCP tool with no filters
-    Then the response should include all registered formats
-    And each format should include a format_id with agent_url and id
-    And each format should include a name and type category
-    And each format should include asset requirements with type and dimensions
-    And the results should be sorted by format type then name
-    # POST-S1: Complete catalog returned
-    # POST-S2: Asset requirements included per format
-
-  @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @rest @post-s3
-  Scenario: Discover filtered format catalog via REST
+  @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3
+  Scenario: Discover filtered format catalog
     Given the creative agent registry has formats of types "display" and "video"
-    When the Buyer Agent sends a list_creative_formats task via A2A with type filter "display"
+    When the Buyer Agent requests formats with type filter "display"
     Then the response should include only display formats
     And no video formats should be present in the results
     # POST-S3: Only matching formats returned when filters applied
@@ -309,24 +297,11 @@ Feature: BR-UC-005 Discover Creative Formats
     Then "exact-fit" should be returned
     # BR-RULE-049 INV-4: dimension range is inclusive (width == min_width == max_width)
 
-  @T-UC-005-ext-a-rest @UC-005-EXT-A-01 @extension @ext-a @error @rest @post-f1 @post-f2 @post-f3
-  Scenario: No tenant context - REST
+  @T-UC-005-ext-a @extension @ext-a @error @post-f1 @post-f2 @post-f3
+  Scenario: No tenant context
     Given the Buyer has no authentication credentials
     And no hostname-based tenant resolution is possible
-    When the Buyer Agent sends a list_creative_formats task
-    Then the operation should fail
-    And the error code should be "TENANT_REQUIRED"
-    And the error message should indicate tenant context could not be determined
-    And the error should include a "suggestion" field
-    And the suggestion should advise providing authentication credentials
-    # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains tenant context is missing
-    # POST-F3: Suggestion advises providing auth or tenant identification
-
-  @T-UC-005-ext-a-mcp @UC-005-EXT-A-02 @extension @ext-a @error @mcp @post-f1 @post-f2 @post-f3
-  Scenario: No tenant context - MCP
-    Given no tenant can be resolved from the request context
-    When the Buyer Agent calls list_creative_formats MCP tool
+    When the Buyer Agent requests the format catalog
     Then the operation should fail
     And the error code should be "TENANT_REQUIRED"
     And the error message should indicate tenant context could not be determined
@@ -337,23 +312,10 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F3: Suggestion advises providing auth or tenant identification
     # --- ext-b: Invalid Request Parameters ---
 
-  @T-UC-005-ext-b-rest @UC-005-EXT-B-01 @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3
-  Scenario: Invalid request parameters - REST
+  @T-UC-005-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  Scenario: Invalid request parameters
     Given the Buyer has tenant context
-    When the Buyer Agent sends a list_creative_formats task via A2A with type "not_a_category"
-    Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should indicate which parameters are invalid
-    And the error should include a "suggestion" field
-    And the suggestion should provide valid parameter values
-    # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains which parameters are invalid and why
-    # POST-F3: Suggestion provides valid values or format guidance
-
-  @T-UC-005-ext-b-mcp @UC-005-EXT-B-01 @extension @ext-b @error @mcp @post-f1 @post-f2 @post-f3
-  Scenario: Invalid request parameters - MCP
-    Given the Buyer has tenant context via MCP session
-    When the Buyer Agent calls list_creative_formats MCP tool with type "not_a_category"
+    When the Buyer Agent requests formats with type "not_a_category"
     Then the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error message should indicate which parameters are invalid

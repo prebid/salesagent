@@ -150,14 +150,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: T-UC-005-main-referrals (salesagent-v4ol)
     # Partially graduated: dispatch fix landed (salesagent-40kk); error code mismatch remains
     # FIXME(salesagent-40kk): production raises AUTH_TOKEN_INVALID, spec expects TENANT_REQUIRED
-    "T-UC-005-ext-a-rest": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
-    "T-UC-005-ext-a-mcp": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
+    "T-UC-005-ext-a": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
     # Graduated: creative agent partition tests (salesagent-7fqx)
     # Steps now call list_creative_formats as a proxy. Boundary-specific
     # xfails for creative-agent-only restrictions are in _SELECTIVE_XFAIL.
     # FIXME(beads-dul): suggestion field not in production error model
-    "T-UC-005-ext-b-rest": "suggestion field not implemented in error responses",
-    "T-UC-005-ext-b-mcp": "suggestion field not implemented in error responses",
+    "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # FIXME(beads-dul): disclosure validation errors not implemented
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
@@ -734,7 +732,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     break
 
         # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
-        _UC006_AUTH_XFAIL = {"T-UC-006-ext-a-rest", "T-UC-006-ext-a-mcp"}
+        _UC006_AUTH_XFAIL = {"T-UC-006-ext-a"}
         if marker_names & _UC006_AUTH_XFAIL:
             item.add_marker(
                 pytest.mark.xfail(
@@ -784,10 +782,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-006-ext-f-mcp": (
                 "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN"
             ),
-            "T-UC-006-ext-g-rest": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_AGENT_UNREACHABLE"
-            ),
-            "T-UC-006-ext-g-mcp": (
+            "T-UC-006-ext-g": (
                 "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_AGENT_UNREACHABLE"
             ),
             "T-UC-006-ext-h-rest": (
@@ -834,11 +829,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "_SyntheticError, spec expects structured AdCPError with suggestion"
             ),
             # ext-e: missing format_id — wrong error code
-            "T-UC-006-ext-e-rest": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, "
-                "spec expects CREATIVE_FORMAT_REQUIRED for missing format_id"
-            ),
-            "T-UC-006-ext-e-mcp": (
+            "T-UC-006-ext-e": (
                 "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, "
                 "spec expects CREATIVE_FORMAT_REQUIRED for missing format_id"
             ),
@@ -1699,9 +1690,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-ext-e",
             # Main flow snapshots — adapter not wired
             "T-UC-019-main-snapshot",
-            # Transport-specific scenarios
-            "T-UC-019-main-rest",
-            "T-UC-019-main-mcp",
+            # Transport-agnostic main scenario
+            "T-UC-019-main",
         }
         if marker_names & _UC019_XFAIL_TAGS:
             item.add_marker(
