@@ -24,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -147,6 +148,11 @@ class Tenant(Base, JSONValidatorMixin):
     )
     signals_agents = relationship(
         "SignalsAgent",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
+    tmp_providers = relationship(
+        "TMPProvider",
         back_populates="tenant",
         cascade="all, delete-orphan",
     )
@@ -1283,6 +1289,55 @@ class SignalsAgent(Base):
     __table_args__ = (
         Index("idx_signals_agents_tenant", "tenant_id"),
         Index("idx_signals_agents_enabled", "enabled"),
+    )
+
+
+class TMPProvider(Base):
+    """Buyer-side TMP provider endpoint registration.
+
+    Each tenant can register one or more TMP providers (buyer-side agents that
+    implement the Trusted Match Protocol). The Sales Agent exposes these
+    registrations via a REST endpoint (``GET /tmp/providers``). The router polls
+    that endpoint — it never reads from this table directly.
+
+    Schema alignment: ``provider-registration.json`` (AdCP spec PR #2210).
+    """
+
+    __tablename__ = "tmp_providers"
+
+    provider_id: Mapped[str] = mapped_column(
+        PG_UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    endpoint: Mapped[str] = mapped_column(String(500), nullable=False)
+    context_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    identity_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Conditional: MUST be present and non-empty when identity_match is true.
+    countries: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    uid_types: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # Optional: property RIDs this provider serves. When absent, serves all properties.
+    properties: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    tenant = relationship("Tenant", back_populates="tmp_providers")
+
+    __table_args__ = (
+        Index("idx_tmp_providers_tenant", "tenant_id"),
+        Index("idx_tmp_providers_status", "status"),
     )
 
 

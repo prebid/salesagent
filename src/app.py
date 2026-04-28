@@ -265,10 +265,14 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 from src.routes.api_v1 import router as api_v1_router  # noqa: E402
 from src.routes.health import debug_router as health_debug_router  # noqa: E402
 from src.routes.health import router as health_router  # noqa: E402
+from src.routes.tmp_providers import router as tmp_providers_router  # noqa: E402
 
 app.include_router(api_v1_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
+# TMP Router discovery endpoint — internal network only, no auth.
+# GET /tenant/{tenant_id}/tmp-providers/discovery
+app.include_router(tmp_providers_router)
 
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):

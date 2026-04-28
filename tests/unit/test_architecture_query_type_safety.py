@@ -52,6 +52,12 @@ INTEGER_PK_MODELS = {
     "WebhookDeliveryLog": "id",
 }
 
+# Models with UUID PK columns — queries filtering on these need string (UUID) values.
+# TMPProvider uses gen_random_uuid() server-side; provider_id is a string UUID, not int.
+UUID_PK_MODELS = {
+    "TMPProvider": "provider_id",
+}
+
 # Known violations: (file_path, line_number, description)
 # Each entry is a known type mismatch that needs fixing.
 KNOWN_VIOLATIONS: set[str] = set()
