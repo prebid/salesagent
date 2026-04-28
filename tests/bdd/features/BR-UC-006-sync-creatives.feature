@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
+# Generated from adcp-req @ 2b383c1b28323281c31979415a8abe8db4fb634a on 2026-04-28T11:38:27Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-006 Sync Creative Assets
@@ -134,8 +134,8 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response should include the creative with action "updated"
     # POST-S1: Buyer knows creative was updated
 
-  @T-UC-006-ext-a-rest @extension @ext-a @error @rest
-  Scenario: Authentication required — missing principal_id (REST)
+  @T-UC-006-ext-a @extension @ext-a @error
+  Scenario: Authentication required — missing principal_id
     Given the Buyer has no authentication credentials
     And a creative with a known format_id
     When the Buyer Agent syncs the creative
@@ -148,17 +148,6 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F2: Error explains missing authentication
     # POST-F3: Suggestion for recovery
 
-  @T-UC-006-ext-a-mcp @extension @ext-a @error @mcp
-  Scenario: Authentication required — missing principal_id (MCP)
-    Given the Buyer has no authentication credentials
-    And a creative with a known format_id
-    When the Buyer Agent syncs the creative
-    Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
-    And the error should include a "suggestion" field
-    And the suggestion should contain "authentication credentials"
-    # POST-F1, POST-F2, POST-F3
-
   @T-UC-006-ext-a-empty @extension @ext-a @error
   Scenario: Authentication required — empty principal_id
     Given the Buyer has an empty principal_id in the authentication context
@@ -170,8 +159,8 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F1, POST-F2, POST-F3
     # --- ext-b: TENANT_NOT_FOUND ---
 
-  @T-UC-006-ext-b-rest @extension @ext-b @error @rest
-  Scenario: Tenant not found — principal has no tenant (REST)
+  @T-UC-006-ext-b @extension @ext-b @error
+  Scenario: Tenant not found — principal has no tenant
     Given the Buyer is authenticated with a valid principal_id
     But the principal has no associated tenant
     And a creative with a known format_id
@@ -181,17 +170,6 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error message should contain "tenant"
     And the error should include a "suggestion" field
     And the suggestion should contain "tenant"
-    # POST-F1, POST-F2, POST-F3
-
-  @T-UC-006-ext-b-mcp @extension @ext-b @error @mcp
-  Scenario: Tenant not found — principal has no tenant (MCP)
-    Given the Buyer is authenticated with a valid principal_id
-    But the principal has no associated tenant
-    And a creative with a known format_id
-    When the Buyer Agent syncs the creative
-    Then the operation should fail
-    And the error code should be "TENANT_NOT_FOUND"
-    And the error should include a "suggestion" field
     # POST-F1, POST-F2, POST-F3
     # --- ext-c: CREATIVE_VALIDATION_FAILED ---
 
@@ -253,8 +231,8 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F2, POST-F3
     # --- ext-e: CREATIVE_FORMAT_REQUIRED ---
 
-  @T-UC-006-ext-e-rest @extension @ext-e @error @rest
-  Scenario: Creative format required — missing format_id (REST)
+  @T-UC-006-ext-e @extension @ext-e @error
+  Scenario: Creative format required — missing format_id
     Given the Buyer is authenticated with a valid principal_id
     And a creative with name "Banner" but no format_id
     When the Buyer Agent syncs the creative
@@ -263,16 +241,6 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error message should contain "format"
     And the error should include a "suggestion" field
     And the suggestion should contain "format_id"
-    # POST-F2, POST-F3
-
-  @T-UC-006-ext-e-mcp @extension @ext-e @error @mcp
-  Scenario: Creative format required — missing format_id (MCP)
-    Given the Buyer is authenticated with a valid principal_id
-    And a creative with name "Banner" but no format_id
-    When the Buyer Agent syncs the creative
-    Then the creative should have action "failed"
-    And the error code should be "CREATIVE_FORMAT_REQUIRED"
-    And the error should include a "suggestion" field
     # POST-F2, POST-F3
     # --- ext-f: CREATIVE_FORMAT_UNKNOWN ---
 
@@ -300,25 +268,14 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F2, POST-F3
     # --- ext-g: CREATIVE_AGENT_UNREACHABLE ---
 
-  @T-UC-006-ext-g-rest @extension @ext-g @error @rest
-  Scenario: Creative agent unreachable (REST)
+  @T-UC-006-ext-g @extension @ext-g @error
+  Scenario: Creative agent unreachable
     Given the Buyer is authenticated with a valid principal_id
     And a creative with a format_id whose agent_url is unreachable
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "CREATIVE_AGENT_UNREACHABLE"
     And the error message should contain "unreachable"
-    And the error should include a "suggestion" field
-    And the suggestion should contain "try again"
-    # POST-F2, POST-F3
-
-  @T-UC-006-ext-g-mcp @extension @ext-g @error @mcp
-  Scenario: Creative agent unreachable (MCP)
-    Given the Buyer is authenticated with a valid principal_id
-    And a creative with a format_id whose agent_url is unreachable
-    When the Buyer Agent syncs the creative
-    Then the creative should have action "failed"
-    And the error code should be "CREATIVE_AGENT_UNREACHABLE"
     And the error should include a "suggestion" field
     And the suggestion should contain "try again"
     # POST-F2, POST-F3
@@ -375,8 +332,8 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F2, POST-F3
     # --- ext-j: PACKAGE_NOT_FOUND (strict) ---
 
-  @T-UC-006-ext-j-rest @extension @ext-j @error @rest
-  Scenario: Package not found — strict mode aborts (REST)
+  @T-UC-006-ext-j @extension @ext-j @error
+  Scenario: Package not found — strict mode aborts
     Given the Buyer is authenticated with a valid principal_id
     And a creative with a known format_id
     And assignments referencing a non-existent package_id
@@ -387,18 +344,6 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error message should contain "package"
     And the error should include a "suggestion" field
     And the suggestion should contain "media buys"
-    # POST-F2, POST-F3
-
-  @T-UC-006-ext-j-mcp @extension @ext-j @error @mcp
-  Scenario: Package not found — strict mode aborts (MCP)
-    Given the Buyer is authenticated with a valid principal_id
-    And a creative with a known format_id
-    And assignments referencing a non-existent package_id
-    And validation_mode is "strict"
-    When the Buyer Agent syncs the creative
-    Then the operation should fail with an assignment error
-    And the error code should be "PACKAGE_NOT_FOUND"
-    And the error should include a "suggestion" field
     # POST-F2, POST-F3
     # --- ext-k: FORMAT_MISMATCH (strict) ---
 
@@ -1080,8 +1025,6 @@ Feature: BR-UC-006 Sync Creative Assets
       | account_setup_required     | {"account_id": "acc_new_unconfigured"}                                      | the error should be ACCOUNT_SETUP_REQUIRED with suggestion    |
       | account_payment_required   | {"account_id": "acc_overdue"}                                               | the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion  |
       | account_suspended          | {"account_id": "acc_suspended"}                                             | the error should be ACCOUNT_SUSPENDED with suggestion         |
-      | access_denied_id           | {"account_id": "acc_other_agent"}                                           | the error should be AUTHORIZATION_ERROR with suggestion       |
-      | access_denied_natural_key  | {"brand": {"domain": "other-agent.com"}, "operator": "other-agent.com"}    | the error should be AUTHORIZATION_ERROR with suggestion       |
 
   @T-UC-006-partition-idempotency-key @partition @idempotency-key
   Scenario Outline: Idempotency key validation — <partition>
