@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel
@@ -224,8 +224,14 @@ async def list_authorized_properties(
 
 
 @router.post("/media-buys")
-async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def create_media_buy(
+    body: CreateMediaBuyBody,
+    background_tasks: BackgroundTasks,
+    identity: ResolvedIdentity = require_auth,
+):
     """Create a new media buy (auth required)."""
+    from src.services.tmp_provider_sync import sync_packages_for_media_buy
+
     try:
         response = await media_buy_create_module.create_media_buy_raw(
             buyer_ref=body.buyer_ref,
@@ -242,12 +248,28 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     except ToolError as e:
         return _handle_tool_error(e)
 
+    # Sync packages to TMP providers after a successful create.
+    # BackgroundTasks runs after the response is sent — _impl is not touched.
+    if response.media_buy_id and identity.tenant_id:
+        background_tasks.add_task(
+            sync_packages_for_media_buy,
+            identity.tenant_id,
+            response.media_buy_id,
+        )
+
     return response.model_dump(mode="json")
 
 
 @router.put("/media-buys/{media_buy_id}")
-async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def update_media_buy(
+    media_buy_id: str,
+    body: UpdateMediaBuyBody,
+    background_tasks: BackgroundTasks,
+    identity: ResolvedIdentity = require_auth,
+):
     """Update an existing media buy (auth required)."""
+    from src.services.tmp_provider_sync import sync_packages_for_media_buy
+
     try:
         response = media_buy_update_module.update_media_buy_raw(
             media_buy_id=media_buy_id,
@@ -262,6 +284,15 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         )
     except ToolError as e:
         return _handle_tool_error(e)
+
+    # Sync packages to TMP providers after a successful update.
+    # Use the resolved media_buy_id from the response (handles buyer_ref lookups).
+    if response.media_buy_id and identity.tenant_id:
+        background_tasks.add_task(
+            sync_packages_for_media_buy,
+            identity.tenant_id,
+            response.media_buy_id,
+        )
 
     return response.model_dump(mode="json")
 

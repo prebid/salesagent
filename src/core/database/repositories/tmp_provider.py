@@ -45,7 +45,11 @@ class TMPProviderRepository:
     # ------------------------------------------------------------------
 
     def list_active(self) -> list[TMPProvider]:
-        """List active providers for the tenant, ordered by name."""
+        """List active providers for the tenant, ordered by name.
+
+        Returns only providers with status='active'. For package sync,
+        use list_syncable() which also includes 'draining' providers.
+        """
         return list(
             self._session.scalars(
                 select(TMPProvider)
@@ -54,6 +58,28 @@ class TMPProviderRepository:
                     TMPProvider.status == "active",
                 )
                 .order_by(TMPProvider.name)
+            ).all()
+        )
+
+    def list_syncable(self) -> list[TMPProvider]:
+        """List providers that should receive package sync updates.
+
+        Includes both 'active' and 'draining' providers. Draining providers
+        still serve in-flight requests and need current package data — the
+        router stops sending NEW requests to them, but packages must stay
+        up-to-date for requests already in the pipeline.
+
+        This matches the discovery endpoint (tmp_providers.py) which also
+        returns both active and draining providers to the TMP Router.
+        """
+        return list(
+            self._session.scalars(
+                select(TMPProvider)
+                .where(
+                    TMPProvider.tenant_id == self._tenant_id,
+                    TMPProvider.status.in_(["active", "draining"]),
+                )
+                .order_by(TMPProvider.priority.asc(), TMPProvider.name.asc())
             ).all()
         )
 
