@@ -2884,33 +2884,12 @@ mappings:
       upstream_refs: ["BR-UC-006-main-mcp"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-006-ext-a-rest"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-a"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-006-ext-a-mcp"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-a"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-006-ext-a-empty"
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-006-ext-a"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-006-ext-b-rest"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-b"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-006-ext-b-mcp"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
       upstream_refs: ["BR-UC-006-ext-b"]
       business_rules: []
       status: new
@@ -2944,18 +2923,6 @@ mappings:
       upstream_refs: ["BR-UC-006-ext-d"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-006-ext-e-rest"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-e"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-006-ext-e-mcp"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-e"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-006-ext-f-rest"
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null
@@ -2966,18 +2933,6 @@ mappings:
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-006-ext-f"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-006-ext-g-rest"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-g"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-006-ext-g-mcp"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-g"]
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-006-ext-h-rest"
@@ -3002,18 +2957,6 @@ mappings:
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-006-ext-i"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-006-ext-j-rest"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-j"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-006-ext-j-mcp"
-      adcp_feature: "BR-UC-006-sync-creatives.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-006-ext-j"]
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-006-ext-k-rest"
@@ -8195,18 +8138,6 @@ mappings:
       business_rules: ["BR-RULE-209"]
       status: new
   UC-019:
-    - adcp_scenario_id: "T-UC-019-main-rest"
-      adcp_feature: "BR-UC-019-query-media-buys.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-019-main-rest"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-019-main-mcp"
-      adcp_feature: "BR-UC-019-query-media-buys.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-019-main-mcp"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-019-main-filter-ids"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
