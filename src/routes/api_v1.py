@@ -18,7 +18,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
 )
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
@@ -215,12 +215,18 @@ async def list_authorized_properties(
 
 
 @router.post("/media-buys")
-async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def create_media_buy(
+    body: CreateMediaBuyBody,
+    background_tasks: BackgroundTasks,
+    identity: ResolvedIdentity = require_auth,
+):
     """Create a new media buy (auth required).
 
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
+    from src.services.tmp_provider_sync import sync_packages_for_media_buy
+
     response = await media_buy_create_module.create_media_buy_raw(
         brand=body.brand,
         packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
@@ -229,12 +235,29 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
         po_number=body.po_number,
         identity=identity,
     )
+
+    # Sync packages to TMP providers after a successful create.
+    # BackgroundTasks runs after the response is sent — _impl is not touched.
+    if response.media_buy_id and identity.tenant_id:
+        background_tasks.add_task(
+            sync_packages_for_media_buy,
+            identity.tenant_id,
+            response.media_buy_id,
+        )
+
     return response.model_dump(mode="json")
 
 
 @router.put("/media-buys/{media_buy_id}")
-async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def update_media_buy(
+    media_buy_id: str,
+    body: UpdateMediaBuyBody,
+    background_tasks: BackgroundTasks,
+    identity: ResolvedIdentity = require_auth,
+):
     """Update an existing media buy (auth required)."""
+    from src.services.tmp_provider_sync import sync_packages_for_media_buy
+
     response = media_buy_update_module.update_media_buy_raw(
         media_buy_id=media_buy_id,
         paused=body.paused,
@@ -246,6 +269,16 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         end_time=body.end_time,
         identity=identity,
     )
+
+    # Sync packages to TMP providers after a successful update.
+    # Use the resolved media_buy_id from the response (handles buyer_ref lookups).
+    if response.media_buy_id and identity.tenant_id:
+        background_tasks.add_task(
+            sync_packages_for_media_buy,
+            identity.tenant_id,
+            response.media_buy_id,
+        )
+
     return response.model_dump(mode="json")
 
 
