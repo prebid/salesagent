@@ -776,55 +776,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
                 "_SyntheticError, spec expects structured AdCPError with suggestion"
             ),
-            "T-UC-006-ext-f-rest": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN"
-            ),
-            "T-UC-006-ext-f-mcp": (
+            "T-UC-006-ext-f": (
                 "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN"
             ),
             "T-UC-006-ext-g": (
                 "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_AGENT_UNREACHABLE"
             ),
-            "T-UC-006-ext-h-rest": (
+            "T-UC-006-ext-h": (
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
                 "_SyntheticError, spec expects structured AdCPError with suggestion "
                 "(preview-failure path, _processing.py:712-737)"
             ),
-            "T-UC-006-ext-h-mcp": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion "
-                "(preview-failure path, _processing.py:712-737)"
-            ),
-            "T-UC-006-ext-i-rest": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion "
-                "(GEMINI_API_KEY not configured path)"
-            ),
-            "T-UC-006-ext-i-mcp": (
+            "T-UC-006-ext-i": (
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
                 "_SyntheticError, spec expects structured AdCPError with suggestion "
                 "(GEMINI_API_KEY not configured path)"
             ),
             # Creative unchanged: production returns action "updated" not "unchanged"
-            "T-UC-006-main-rest-unchanged": (
+            "T-UC-006-main-unchanged": (
                 "SPEC-PRODUCTION GAP: production returns action 'updated', "
                 "spec expects 'unchanged' when creative data is identical"
             ),
             # ext-c: schema violation — wrong error code
-            "T-UC-006-ext-c-rest": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_FORMAT_REQUIRED, "
-                "spec expects CREATIVE_VALIDATION_FAILED for schema violations"
-            ),
-            "T-UC-006-ext-c-mcp": (
+            "T-UC-006-ext-c": (
                 "SPEC-PRODUCTION GAP: error_code is CREATIVE_FORMAT_REQUIRED, "
                 "spec expects CREATIVE_VALIDATION_FAILED for schema violations"
             ),
             # ext-d: empty name — _SyntheticError lacks suggestion field
-            "T-UC-006-ext-d-rest": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion"
-            ),
-            "T-UC-006-ext-d-mcp": (
+            "T-UC-006-ext-d": (
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
                 "_SyntheticError, spec expects structured AdCPError with suggestion"
             ),
