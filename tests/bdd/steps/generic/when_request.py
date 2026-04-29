@@ -204,6 +204,7 @@ def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> N
 
 
 @when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
+@when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}"'))
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
     try:
         req = ListCreativeFormatsRequest(type=fmt_type)

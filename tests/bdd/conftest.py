@@ -659,16 +659,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(#1270): e2e_rest: Docker auth middleware returns AUTH_REQUIRED
-        # before _impl can produce AdCPAuthenticationError with spec-level details.
+        # UC-002: e2e_rest auth middleware — unauthenticated_request graduated (pzqp),
+        # but identity_missing still fails (error shape differs from spec).
         if is_e2e_rest and "T-UC-002-nfr-001-enforcement" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest: Docker auth middleware rejects with AUTH_REQUIRED "
-                    "before business logic — error shape differs from spec",
-                    strict=True,
+            if "unauthenticated_request" not in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: Docker auth middleware rejects with AUTH_REQUIRED "
+                        "before business logic — error shape differs from spec",
+                        strict=True,
+                    )
                 )
-            )
 
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
@@ -903,10 +904,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "e2e_rest: sync_creatives REST endpoint returns empty body for "
                 "assignment scenarios — JSONDecodeError on response parse"
             ),
-            "T-UC-006-boundary-assignment-package": (
-                "e2e_rest: sync_creatives REST assignment scenarios — "
-                "JSONDecodeError or UniqueViolation on idempotent replay"
-            ),
             # Graduated: T-UC-006-partition-auth missing/empty, T-UC-006-boundary-principal
             # missing/null/empty — unauthenticated rejection works on e2e_rest.
             # Only the "typical" (authenticated) variant still fails → selective xfail below.
@@ -919,6 +916,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 if tag in marker_names:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break
+
+        # UC-006 e2e_rest: assignment-package — idempotent variant graduated (pzqp),
+        # other parametrizations still fail (JSONDecodeError / UniqueViolation).
+        if "e2e_rest" in nodeid and "T-UC-006-boundary-assignment-package" in marker_names:
+            if "idempotent" not in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: sync_creatives REST assignment-package scenarios — "
+                        "JSONDecodeError or UniqueViolation (idempotent variant graduated)",
+                        strict=True,
+                    )
+                )
 
         # UC-006 e2e_rest: auth partition/boundary — only "typical" (authenticated)
         # variant fails (action='failed' instead of 'created'). The missing/empty
@@ -1659,10 +1668,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Sandbox mode — not implemented
             "T-UC-019-sandbox-happy",
             "T-UC-019-sandbox-validation",
-            # Principal scoping failures — all parametrizations still fail
-            "T-UC-019-partition-principal-invalid",
+            # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
+            # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
+            # Graduated: T-UC-019-ext-a (impl/a2a/mcp pass) — moved to selective block below.
             # Extension errors — error code mismatches / not implemented
-            "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
             "T-UC-019-ext-d",
@@ -1702,6 +1711,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
+        # --- UC-019: HTTP transport xfails for auth suggestion mismatch ---
+        # impl/a2a/mcp graduated (kb7y); REST/e2e_rest suggestion string differs
+        # from spec ("authenticate" vs "authentication").
+        if (is_rest or is_e2e_rest) and "T-UC-019-ext-a" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
+                    strict=False,
+                )
+            )
+        if (is_rest or is_e2e_rest) and "T-UC-019-partition-principal-invalid" in marker_names:
+            if "identity_missing" in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
+                        strict=False,
+                    )
+                )
+
         # --- UC-019: parametrization-specific xfails for partially-passing scenarios ---
         # These scenario outlines have some parametrizations that pass (graduated)
         # and some that still fail. Only the failing variants are xfailed.
@@ -1733,6 +1761,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "T-UC-019-boundary-snapshot",
                 {"include_snapshot omitted", "include_snapshot explicitly false", "mixed"},
                 "UC-019: snapshot boundary omitted/false/mixed paths not implemented",
+            ),
+            # Graduated: identity_missing (impl/a2a/mcp) — only missing_principal_id
+            # and principal_not_found still fail.
+            (
+                "T-UC-019-partition-principal-invalid",
+                {"missing_principal_id", "principal_not_found"},
+                "UC-019: principal_id missing/not-found not implemented",
             ),
         ]
         if any(t.startswith("T-UC-019") for t in marker_names):
@@ -1812,21 +1847,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # principal_scoping_boundary error cases are excluded on e2e_rest
             # (handled by the REST+e2e_rest block below, outside this if-block).
 
-            # FIXME(#1270): e2e_rest: creative approval mapping tests —
-            # creative approval data created in-process is not visible to Docker.
-            _UC019_E2E_CREATIVE_APPROVAL_TAGS: set[str] = {
-                "T-UC-019-inv-152-1",
-                # Graduated: T-UC-019-inv-152-2 (rejected_creative now passes on e2e_rest)
-                "T-UC-019-inv-152-5",
-            }
-            if marker_names & _UC019_E2E_CREATIVE_APPROVAL_TAGS:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: creative approval fixtures created in-process are not "
-                        "visible to Docker — action/assertion mismatch",
-                        strict=True,
-                    )
-                )
+            # Graduated: T-UC-019-inv-152-1, T-UC-019-inv-152-2, T-UC-019-inv-152-5
+            # (salesagent-pzqp: creative approval data now visible to e2e_rest Docker)
 
         # --- UC-026: xfails for spec-production gaps ---
         # Transport wiring done (a3xo: MediaBuyDualEnv routes updates correctly).
