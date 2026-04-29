@@ -78,9 +78,9 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc026_package_media_buy.py:2369 then_new_pkg_created",
     "bdd/steps/generic/then_media_buy.py:76 then_response_has_packages",
     "bdd/steps/generic/then_media_buy.py:819 then_response_has_success_fields",
-    "bdd/steps/generic/then_payload.py:182 then_format_assets",
-    "bdd/steps/generic/then_payload.py:91 then_has_referrals",
-    "bdd/steps/generic/then_payload.py:127 then_referral_fields",
+    "bdd/steps/generic/then_payload.py:208 then_format_assets",
+    "bdd/steps/generic/then_payload.py:117 then_has_referrals",
+    "bdd/steps/generic/then_payload.py:153 then_referral_fields",
 }
 
 # Pattern 4 has zero current violations — purely regression prevention.
