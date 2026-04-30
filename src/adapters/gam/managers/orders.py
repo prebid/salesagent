@@ -12,6 +12,7 @@ from typing import Any
 
 from googleads import ad_manager
 
+from src.adapters.gam.schemas import GAMProductConfig
 from src.adapters.gam.utils.timeout_handler import timeout
 from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError
 
@@ -397,9 +398,13 @@ class GAMOrdersManager:
         flight_duration_days = (end_time - start_time).days
 
         for package_index, package in enumerate(packages, start=1):
-            # Get product-specific configuration
+            # Get product-specific configuration. Validate at the adapter
+            # boundary on read; bad shapes raise ValidationError early instead
+            # of silently coercing through dict.get() defaults. Empty/missing
+            # impl_config still produces a typed instance with schema defaults.
             product = products_map.get(package.package_id)
-            impl_config = product.get("implementation_config", {}) if product else {}
+            raw_impl_config = product.get("implementation_config", {}) if product else {}
+            impl_config = GAMProductConfig.model_validate(raw_impl_config or {})
 
             # Get pre-built targeting for this package (built by adapter from targeting_overlay)
             line_item_targeting = {}
@@ -407,13 +412,12 @@ class GAMOrdersManager:
                 line_item_targeting = package_targeting[package.package_id]
 
             # Add ad unit/placement targeting from product config
-            if impl_config.get("targeted_ad_unit_ids"):
+            if impl_config.targeted_ad_unit_ids:
                 if "inventoryTargeting" not in line_item_targeting:
                     line_item_targeting["inventoryTargeting"] = {}
 
                 # Validate ad unit IDs are numeric (GAM requires numeric IDs, not codes/names)
-                ad_unit_ids = impl_config["targeted_ad_unit_ids"]
-                invalid_ids = [id for id in ad_unit_ids if not str(id).isdigit()]
+                invalid_ids = [id for id in impl_config.targeted_ad_unit_ids if not str(id).isdigit()]
                 if invalid_ids:
                     error_msg = (
                         f"Product '{package.package_id}' has invalid ad unit IDs: {invalid_ids}. "
@@ -426,15 +430,15 @@ class GAMOrdersManager:
                     raise ValueError(error_msg)
 
                 line_item_targeting["inventoryTargeting"]["targetedAdUnits"] = [
-                    {"adUnitId": ad_unit_id, "includeDescendants": impl_config.get("include_descendants", True)}
-                    for ad_unit_id in ad_unit_ids
+                    {"adUnitId": ad_unit_id, "includeDescendants": impl_config.include_descendants}
+                    for ad_unit_id in impl_config.targeted_ad_unit_ids
                 ]
 
-            if impl_config.get("targeted_placement_ids"):
+            if impl_config.targeted_placement_ids:
                 if "inventoryTargeting" not in line_item_targeting:
                     line_item_targeting["inventoryTargeting"] = {}
                 line_item_targeting["inventoryTargeting"]["targetedPlacements"] = [
-                    {"placementId": placement_id} for placement_id in impl_config["targeted_placement_ids"]
+                    {"placementId": placement_id} for placement_id in impl_config.targeted_placement_ids
                 ]
 
             # Require inventory targeting - no fallback
@@ -453,11 +457,11 @@ class GAMOrdersManager:
 
             # Add custom targeting from product config
             # IMPORTANT: Merge without overwriting buyer's targeting (e.g., AEE signals from key_value_pairs)
-            if impl_config.get("custom_targeting_keys"):
+            if impl_config.custom_targeting_keys:
                 if "customTargeting" not in line_item_targeting:
                     line_item_targeting["customTargeting"] = {}
                 # Add product custom targeting, but don't overwrite existing keys from buyer
-                for key, value in impl_config["custom_targeting_keys"].items():
+                for key, value in impl_config.custom_targeting_keys.items():
                     if key not in line_item_targeting["customTargeting"]:
                         line_item_targeting["customTargeting"][key] = value
                     else:
@@ -473,7 +477,7 @@ class GAMOrdersManager:
                 from src.core.format_resolver import get_format
 
                 # Validate format types against product supported types
-                supported_format_types = impl_config.get("supported_format_types", ["display", "video", "native"])
+                supported_format_types = impl_config.supported_format_types
 
                 for format_id_obj in package.format_ids:
                     # format_id_obj is a FormatId object with agent_url and id fields
@@ -617,13 +621,13 @@ class GAMOrdersManager:
                     creative_placeholders.append(placeholder)
 
             # Fall back to product config only if no valid placeholders from format_ids
-            if not creative_placeholders and impl_config.get("creative_placeholders"):
-                for placeholder in impl_config["creative_placeholders"]:
+            if not creative_placeholders and impl_config.creative_placeholders:
+                for cp in impl_config.creative_placeholders:
                     creative_placeholders.append(
                         {
-                            "size": {"width": placeholder["width"], "height": placeholder["height"]},
-                            "expectedCreativeCount": placeholder.get("expected_creative_count", 1),
-                            "creativeSizeType": "NATIVE" if placeholder.get("is_native") else "PIXEL",
+                            "size": {"width": cp.width, "height": cp.height},
+                            "expectedCreativeCount": cp.expected_creative_count,
+                            "creativeSizeType": "NATIVE" if cp.is_native else "PIXEL",
                         }
                     )
 
@@ -710,8 +714,8 @@ class GAMOrdersManager:
                 log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
 
             # Determine goal type and units
-            goal_type = impl_config.get("primary_goal_type", "LIFETIME")
-            goal_unit_type = impl_config.get("primary_goal_unit_type", "IMPRESSIONS")
+            goal_type = impl_config.primary_goal_type
+            goal_unit_type = impl_config.primary_goal_unit_type
 
             if goal_type == "LIFETIME":
                 goal_units = package.impressions
@@ -888,21 +892,21 @@ class GAMOrdersManager:
                     "unitType": goal_unit_type,
                     "units": goal_units,
                 },
-                "creativeRotationType": impl_config.get("creative_rotation_type", "EVEN"),
-                "deliveryRateType": impl_config.get("delivery_rate_type", "EVENLY"),
+                "creativeRotationType": impl_config.creative_rotation_type,
+                "deliveryRateType": impl_config.delivery_rate_type,
                 "startDateTime": {
                     "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
                     "hour": start_time.hour,
                     "minute": start_time.minute,
                     "second": start_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
+                    "timeZoneId": impl_config.time_zone,
                 },
                 "endDateTime": {
                     "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
                     "hour": end_time.hour,
                     "minute": end_time.minute,
                     "second": end_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
+                    "timeZoneId": impl_config.time_zone,
                 },
                 # Set status based on whether manual approval is required
                 # DRAFT = needs manual approval, READY = ready to serve (when creatives added)
@@ -913,13 +917,13 @@ class GAMOrdersManager:
             frequency_caps = []
 
             # First, add product-level frequency caps from impl_config
-            if impl_config.get("frequency_caps"):
-                for cap in impl_config["frequency_caps"]:
+            if impl_config.frequency_caps:
+                for cap in impl_config.frequency_caps:
                     frequency_caps.append(
                         {
-                            "maxImpressions": cap["max_impressions"],
-                            "numTimeUnits": cap["time_range"],
-                            "timeUnit": cap["time_unit"],
+                            "maxImpressions": cap.max_impressions,
+                            "numTimeUnits": cap.time_range,
+                            "timeUnit": cap.time_unit,
                         }
                     )
 
@@ -959,20 +963,20 @@ class GAMOrdersManager:
                 line_item["frequencyCaps"] = frequency_caps
 
             # Add competitive exclusion labels
-            if impl_config.get("competitive_exclusion_labels"):
+            if impl_config.competitive_exclusion_labels:
                 line_item["effectiveAppliedLabels"] = [
-                    {"labelId": label} for label in impl_config["competitive_exclusion_labels"]
+                    {"labelId": label} for label in impl_config.competitive_exclusion_labels
                 ]
 
             # Add discount if configured
-            if impl_config.get("discount_type") and impl_config.get("discount_value"):
-                line_item["discount"] = impl_config["discount_value"]
-                line_item["discountType"] = impl_config["discount_type"]
+            if impl_config.discount_type and impl_config.discount_value:
+                line_item["discount"] = impl_config.discount_value
+                line_item["discountType"] = impl_config.discount_type
 
             # Determine environment type - prefer buyer's media_type, fallback to product config
             environment_type = line_item_targeting.get("_media_type_environment")  # From targeting overlay
             if not environment_type:
-                environment_type = impl_config.get("environment_type", "BROWSER")
+                environment_type = impl_config.environment_type
 
             # Clean up internal field from targeting
             if "_media_type_environment" in line_item_targeting:
@@ -981,50 +985,45 @@ class GAMOrdersManager:
             # Add video-specific settings
             if environment_type == "VIDEO_PLAYER":
                 line_item["environmentType"] = "VIDEO_PLAYER"
-                if impl_config.get("companion_delivery_option"):
-                    line_item["companionDeliveryOption"] = impl_config["companion_delivery_option"]
-                if impl_config.get("video_max_duration"):
-                    line_item["videoMaxDuration"] = impl_config["video_max_duration"]
-                if impl_config.get("skip_offset"):
+                if impl_config.companion_delivery_option:
+                    line_item["companionDeliveryOption"] = impl_config.companion_delivery_option
+                if impl_config.video_max_duration:
+                    line_item["videoMaxDuration"] = impl_config.video_max_duration
+                if impl_config.skip_offset:
                     line_item["videoSkippableAdType"] = "ENABLED"
-                    line_item["videoSkipOffset"] = impl_config["skip_offset"]
+                    line_item["videoSkipOffset"] = impl_config.skip_offset
             else:
                 line_item["environmentType"] = environment_type
 
             # Advanced settings
-            if impl_config.get("allow_overbook"):
+            if impl_config.allow_overbook:
                 line_item["allowOverbook"] = True
-            if impl_config.get("skip_inventory_check"):
+            if impl_config.skip_inventory_check:
                 line_item["skipInventoryCheck"] = True
-            if impl_config.get("disable_viewability_avg_revenue_optimization"):
+            if impl_config.disable_viewability_avg_revenue_optimization:
                 line_item["disableViewabilityAvgRevenueOptimization"] = True
 
             # Creative-level placement targeting (adcp#208)
             # Build creativeTargetings from placement_targeting in impl_config
-            if impl_config.get("placement_targeting"):
-                creative_targetings = []
-                for pt in impl_config["placement_targeting"]:
-                    creative_targeting = {
-                        "name": pt["targeting_name"],
-                        "targeting": pt.get("targeting", {}),
-                    }
-                    creative_targetings.append(creative_targeting)
-
-                if creative_targetings:
-                    line_item["creativeTargetings"] = creative_targetings
-                    log(f"Added {len(creative_targetings)} creative targeting rule(s) for placement targeting")
+            if impl_config.placement_targeting:
+                creative_targetings = [
+                    {"name": pt.targeting_name, "targeting": pt.targeting} for pt in impl_config.placement_targeting
+                ]
+                line_item["creativeTargetings"] = creative_targetings
+                log(f"Added {len(creative_targetings)} creative targeting rule(s) for placement targeting")
 
             if self.dry_run:
                 log(f"Would call: line_item_service.createLineItems(['{package.name}'])")
                 log(f"  Package: {package.name}")
-                log(f"  Line Item Type: {impl_config.get('line_item_type', 'STANDARD')}")
-                log(f"  Priority: {impl_config.get('priority', 8)}")
+                log(f"  Line Item Type: {impl_config.line_item_type}")
+                log(f"  Priority: {impl_config.priority}")
                 log(f"  CPM: ${package.cpm}")
                 log(f"  Impressions Goal: {package.impressions:,}")
                 log(f"  Creative Placeholders: {len(creative_placeholders)} sizes")
-                for cp in creative_placeholders[:3]:
+                for ph_dict in creative_placeholders[:3]:
                     log(
-                        f"    - {cp['size']['width']}x{cp['size']['height']} ({'Native' if cp.get('creativeSizeType') == 'NATIVE' else 'Display'})"
+                        f"    - {ph_dict['size']['width']}x{ph_dict['size']['height']} "
+                        f"({'Native' if ph_dict.get('creativeSizeType') == 'NATIVE' else 'Display'})"
                     )
                 if len(creative_placeholders) > 3:
                     log(f"    - ... and {len(creative_placeholders) - 3} more")

@@ -530,10 +530,11 @@ class GoogleAdManager(AdServerAdapter):
                     errors=[Error(code="product_not_configured", message=error_msg, details=None)],
                 )
 
-            # Cast to dict to satisfy mypy (products_map values are dict[str, Any])
-            product_impl_config = cast(dict[str, Any], product_config.get("implementation_config", {}))
-            has_ad_units = product_impl_config.get("targeted_ad_unit_ids")
-            has_placements = product_impl_config.get("targeted_placement_ids")
+            # Validate at adapter boundary; bad config raises ValidationError
+            # rather than silently falling through with empty defaults.
+            product_impl_config = GAMProductConfig.model_validate(product_config.get("implementation_config") or {})
+            has_ad_units = product_impl_config.targeted_ad_unit_ids
+            has_placements = product_impl_config.targeted_placement_ids
 
             if not has_ad_units and not has_placements:
                 pkg_product_id = product_config.get("product_id", package.package_id)
@@ -670,21 +671,17 @@ class GoogleAdManager(AdServerAdapter):
         for _pid, prod_info in products_map.items():
             if not prod_info or not isinstance(prod_info, dict):
                 continue
-            prod_impl_config = cast(dict[str, Any], prod_info.get("implementation_config", {}) or {})
-            placement_targeting = cast(list[dict[str, Any]], prod_impl_config.get("placement_targeting", []))
-            for pt in placement_targeting:
-                placement_id = pt.get("placement_id")
-                targeting_name = pt.get("targeting_name")
-                if placement_id and targeting_name:
+            prod_impl_config = GAMProductConfig.model_validate(prod_info.get("implementation_config") or {})
+            for pt in prod_impl_config.placement_targeting:
+                if pt.placement_id and pt.targeting_name:
                     # Warn if there's a collision from different products
-                    if placement_id in self._placement_targeting_map:
-                        existing = self._placement_targeting_map[placement_id]
-                        if existing != targeting_name:
-                            self.log(
-                                f"[yellow]Warning: placement_id '{placement_id}' has conflicting "
-                                f"targeting_names: '{existing}' vs '{targeting_name}'. Using '{targeting_name}'[/yellow]"
-                            )
-                    self._placement_targeting_map[placement_id] = targeting_name
+                    existing = self._placement_targeting_map.get(pt.placement_id)
+                    if existing and existing != pt.targeting_name:
+                        self.log(
+                            f"[yellow]Warning: placement_id '{pt.placement_id}' has conflicting "
+                            f"targeting_names: '{existing}' vs '{pt.targeting_name}'. Using '{pt.targeting_name}'[/yellow]"
+                        )
+                    self._placement_targeting_map[pt.placement_id] = pt.targeting_name
 
         if self._placement_targeting_map:
             self.log(f"Built placement_targeting_map with {len(self._placement_targeting_map)} placements")

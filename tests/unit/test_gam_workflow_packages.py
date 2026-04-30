@@ -97,12 +97,29 @@ class TestGAMManualApprovalPath:
                 tenant_id="tenant_123",
             )
 
-            # Mock _requires_manual_approval to return True
+            # Mock _requires_manual_approval to return True. Provide minimal
+            # impl_config so the adapter passes its inventory-targeting boundary
+            # check before reaching the manual-approval branch (#1239 wire-up).
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+                patch("src.core.database.database_session.get_db_session") as mock_get_session,
             ):
                 mock_workflow.return_value = "workflow_step_123"
+
+                mock_session = MagicMock()
+                mock_session.__enter__ = MagicMock(return_value=mock_session)
+                mock_session.__exit__ = MagicMock(return_value=None)
+                mock_product = Mock()
+                mock_product.product_id = "prod_test"
+                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
+                mock_product.gemini_api_key = None
+                mock_product.order_name_template = None
+                mock_result = Mock()
+                mock_result.first.return_value = mock_product
+                mock_result.all.return_value = []
+                mock_session.scalars.return_value = mock_result
+                mock_get_session.return_value = mock_session
 
                 # Act
                 start_time = datetime.now()
@@ -151,12 +168,29 @@ class TestGAMManualApprovalPath:
                 tenant_id="tenant_123",
             )
 
-            # Mock workflow manager to fail
+            # Mock workflow manager to fail. Provide minimal impl_config so the
+            # adapter passes its inventory-targeting boundary check before
+            # reaching the manual-approval branch (#1239 wire-up).
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+                patch("src.core.database.database_session.get_db_session") as mock_get_session,
             ):
                 mock_workflow.return_value = None  # Simulate failure
+
+                mock_session = MagicMock()
+                mock_session.__enter__ = MagicMock(return_value=mock_session)
+                mock_session.__exit__ = MagicMock(return_value=None)
+                mock_product = Mock()
+                mock_product.product_id = "prod_test"
+                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
+                mock_product.gemini_api_key = None
+                mock_product.order_name_template = None
+                mock_result = Mock()
+                mock_result.first.return_value = mock_product
+                mock_result.all.return_value = []
+                mock_session.scalars.return_value = mock_result
+                mock_get_session.return_value = mock_session
 
                 # Act
                 start_time = datetime.now()

@@ -24,6 +24,10 @@ def mock_all_external_dependencies():
     mock_first_result = MagicMock()
     mock_first_result.gemini_api_key = None  # Prevents str type validation errors in naming
     mock_first_result.order_name_template = None
+    # Default to empty dict so adapters that validate impl_config via Pydantic
+    # at the boundary (GAM, Mock, Broadstreet — see #1240/#1241/#1242) don't
+    # see a MagicMock object. Tests that need specific impl_config override.
+    mock_first_result.implementation_config = {}
     mock_session.scalars.return_value.first.return_value = mock_first_result
 
     with patch("src.core.database.database_session.get_db_session") as mock_db:
