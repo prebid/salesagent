@@ -9,6 +9,10 @@ the right thing (skipped a missing file).
 These tests source each function from the production script via `sed`
 extraction and exercise it in a tmp dir under the same shell options as
 the live script.
+
+Note: tests/CLAUDE.md mandates the harness/factory system for new tests.
+This file is exempt because it tests a shell script (not Python under
+src/) and has no Python production code to drive through harness envs.
 """
 
 import os
@@ -116,22 +120,48 @@ def test_print_summary_returns_zero_when_failures_empty(tmp_path):
 
 
 @pytest.mark.smoke
-def test_print_summary_returns_one_when_failures_set(tmp_path):
-    """When any suite failed, print_summary must propagate that to the caller's set -e."""
+def test_print_summary_failure_aborts_caller_under_set_e(tmp_path):
+    """Failure-path of print_summary must trip set -e at the call site.
+
+    The hollow-test trap: when print_summary is the final command in the
+    bash subprocess, the subprocess exits with the function's return code
+    regardless of set -e. Asserting only `rc == 1` does not verify the
+    set -e semantic at the standalone call site in the production script.
+
+    This test puts a sentinel echo *after* print_summary. If set -e fires
+    on the function's `return 1`, the sentinel never prints. If set -e
+    were stripped from the production script (or the call-site contract
+    changed), the sentinel would leak to stdout and this test would fail.
+    """
     results = tmp_path / "results"
     results.mkdir()
 
-    rc = _run_extracted_function(
-        "print_summary",
-        tmp_path,
+    bash = textwrap.dedent(
+        """
+        set -eo pipefail
+        eval "$(sed -n '/^print_summary() {{/,/^}}/p' {script})"
+        print_summary
+        echo POST_SUMMARY_SENTINEL
+        """
+    ).format(script=SCRIPT)
+    rc = subprocess.run(
+        ["bash", "-c", bash],
+        cwd=tmp_path,
         env={
+            **os.environ,
             "RESULTS_DIR": str(results),
             "FAILURES": "tox",
             "GREEN": "",
             "RED": "",
             "NC": "",
         },
+        capture_output=True,
+        text=True,
     )
 
     assert rc.returncode == 1, f"rc={rc.returncode}\nstdout: {rc.stdout!r}\nstderr: {rc.stderr!r}"
     assert "FAILED:tox" in rc.stdout
+    assert "POST_SUMMARY_SENTINEL" not in rc.stdout, (
+        "set -e did not abort after print_summary returned 1; "
+        "the function's failure-return contract is no longer enforced at the call site"
+    )

@@ -28,7 +28,7 @@ In quick mode only `unit` and `integration` JSONs are produced, so iterations 3-
 
 **Trigger frequency:** 100% of pushes from a Conductor worktree, because `scripts/setup/setup_conductor_workspace.sh:157-199` installs a pre-push hook that runs `./run_all_tests.sh quick` and aborts on non-zero exit. Worktree pre-push hooks invoke the script from the working tree (not a baked copy), so fixing `run_all_tests.sh` fixes ALL existing AND future worktrees.
 
-**Vintage:** bug pre-dates PR #1176 (which added `ui` to the loop). Has existed since the function was introduced (PR #1107, March 2026).
+**Vintage:** bug pre-dates PR #1176 (which added `ui` to the loop). Introduced in commit `80438e39` on 2026-02-25 (FastAPI/tox migration era — "refactor: replace bash test parallelism with tox + coverage"), when `collect_reports()` was first extracted into a function with the trailing `[ -f ] && cp` pattern. PR #1107 was unrelated DRY tooling.
 
 ---
 
