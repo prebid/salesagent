@@ -1,7 +1,7 @@
 import logging
 import random
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
 # adcp 3.6.0: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.adapters.base import (
     AdapterCapabilities,
@@ -40,14 +40,117 @@ class MockConnectionConfig(BaseConnectionConfig):
     dry_run: bool = Field(default=False, description="When true, simulates operations without persisting state")
 
 
-class MockProductConfig(BaseProductConfig):
-    """Product config for Mock adapter simulation parameters."""
+class MockDeliverySimulation(BaseModel):
+    """Sub-config for time-accelerated delivery simulation."""
 
-    daily_impressions: int = Field(default=10000, ge=0)
-    fill_rate: float = Field(default=0.85, ge=0.0, le=1.0)
-    ctr: float = Field(default=0.02, ge=0.0, le=1.0)
-    viewability: float = Field(default=0.65, ge=0.0, le=1.0)
-    scenario: str = Field(default="normal")
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, description="Enable delivery simulation loop")
+    time_acceleration: int = Field(
+        default=3600,
+        ge=1,
+        description="Seconds of simulated time per real second (default 3600 = 1s real per 1h sim)",
+    )
+    update_interval_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        description="Real-world seconds between simulated delivery updates",
+    )
+
+
+class MockProductConfig(BaseProductConfig):
+    """Product config for Mock adapter simulation parameters.
+
+    Stored in Product.implementation_config; controls the synthetic delivery,
+    pricing, and behavior of the mock ad server when fulfilling media buys
+    against this product. Used for development and testing only.
+
+    Registered as MockAdServer.product_config_class and validated at the
+    adapter boundary on read.
+    """
+
+    adapter_type: Literal["mock"] = Field(
+        default="mock",
+        description="Adapter discriminator for typed implementation_config dispatch.",
+    )
+
+    # Delivery characteristics
+    daily_impressions: int = Field(
+        default=100_000,
+        ge=1000,
+        description="Simulated daily impressions available for this product",
+    )
+    fill_rate: float = Field(
+        default=85.0,
+        ge=0.0,
+        le=100.0,
+        description="Percentage of requested impressions delivered (0-100)",
+    )
+    ctr: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=100.0,
+        description="Simulated click-through rate as percent (0-100)",
+    )
+    viewability_rate: float = Field(
+        default=70.0,
+        ge=0.0,
+        le=100.0,
+        description="Simulated viewability rate as percent (0-100)",
+    )
+    latency_ms: int = Field(
+        default=50,
+        ge=0,
+        description="Simulated ad-serving latency in milliseconds",
+    )
+    error_rate: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=100.0,
+        description="Simulated error rate as percent (0-100)",
+    )
+
+    # Behavior modes
+    test_mode: Literal["normal", "slow", "fast", "uneven", "error"] = Field(
+        default="normal",
+        description="Test mode profile",
+    )
+    price_variance: float = Field(
+        default=10.0,
+        ge=0.0,
+        description="Simulated price variance as percent of base CPM",
+    )
+    seasonal_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Multiplier applied to delivery to simulate seasonality",
+    )
+
+    # Operator toggles
+    verbose_logging: bool = Field(
+        default=False,
+        description="Emit verbose adapter logs for this product",
+    )
+    predictable_ids: bool = Field(
+        default=False,
+        description="Generate deterministic IDs for snapshot-friendly tests",
+    )
+
+    # Time-accelerated delivery loop
+    delivery_simulation: MockDeliverySimulation = Field(
+        default_factory=MockDeliverySimulation,
+        description="Time-acceleration parameters for the delivery simulator",
+    )
+
+
+def parse_implementation_config(config: dict | None) -> MockProductConfig:
+    """Parse Product.implementation_config into MockProductConfig.
+
+    Returns default-constructed instance on empty/None input; validates strict otherwise.
+    """
+    if not config:
+        return MockProductConfig()
+    return MockProductConfig.model_validate(config)
 
 
 class MockAdServer(AdServerAdapter):
@@ -1380,57 +1483,53 @@ class MockAdServer(AdServerAdapter):
                     config = product_obj.implementation_config or {}
 
                     if request.method == "POST":
-                        # Update configuration
-                        new_config = {
-                            "daily_impressions": int(request.form.get("daily_impressions", 100000)),
-                            "fill_rate": float(request.form.get("fill_rate", 85)),
-                            "ctr": float(request.form.get("ctr", 0.5)),
-                            "viewability_rate": float(request.form.get("viewability_rate", 70)),
-                            "latency_ms": int(request.form.get("latency_ms", 50)),
-                            "error_rate": float(request.form.get("error_rate", 0.1)),
-                            "test_mode": request.form.get("test_mode", "normal"),
-                            "price_variance": float(request.form.get("price_variance", 10)),
-                            "seasonal_factor": float(request.form.get("seasonal_factor", 1.0)),
-                            "verbose_logging": "verbose_logging" in request.form,
-                            "predictable_ids": "predictable_ids" in request.form,
-                            "delivery_simulation": {
-                                "enabled": "delivery_simulation_enabled" in request.form,
-                                "time_acceleration": int(request.form.get("time_acceleration", 3600)),
-                                "update_interval_seconds": float(request.form.get("update_interval_seconds", 1.0)),
-                            },
-                        }
+                        from src.admin.blueprints.products import get_creative_formats
 
-                        # Handle format selection
-                        formats = request.form.getlist("formats")
-                        if formats:
-                            product_obj.format_ids = formats
+                        # Read form selections up-front so the user's choices survive
+                        # a validation failure (don't fall back to DB-stored selection).
+                        submitted_formats = request.form.getlist("formats")
+                        available_formats = get_creative_formats(tenant_id=tenant_id)
 
-                        # Validate the configuration
-                        validation_errors = self.validate_product_config(new_config)
-                        if validation_errors:
-                            # Get formats for re-rendering
-                            from src.admin.blueprints.products import get_creative_formats
-
-                            available_formats = get_creative_formats(tenant_id=tenant_id)
-
+                        # Build typed config from form (Pydantic validates ranges,
+                        # test_mode profile, and the adapter_type discriminator).
+                        try:
+                            validated = MockProductConfig(
+                                daily_impressions=int(request.form.get("daily_impressions", 100000)),
+                                fill_rate=float(request.form.get("fill_rate", 85)),
+                                ctr=float(request.form.get("ctr", 0.5)),
+                                viewability_rate=float(request.form.get("viewability_rate", 70)),
+                                latency_ms=int(request.form.get("latency_ms", 50)),
+                                error_rate=float(request.form.get("error_rate", 0.1)),
+                                test_mode=request.form.get("test_mode", "normal"),
+                                price_variance=float(request.form.get("price_variance", 10)),
+                                seasonal_factor=float(request.form.get("seasonal_factor", 1.0)),
+                                verbose_logging="verbose_logging" in request.form,
+                                predictable_ids="predictable_ids" in request.form,
+                                delivery_simulation=MockDeliverySimulation(
+                                    enabled="delivery_simulation_enabled" in request.form,
+                                    time_acceleration=int(request.form.get("time_acceleration", 3600)),
+                                    update_interval_seconds=float(request.form.get("update_interval_seconds", 1.0)),
+                                ),
+                            )
+                        except ValidationError as exc:
                             return render_template(
                                 "adapters/mock_product_config.html",
                                 tenant_id=tenant_id,
                                 product=product,
                                 config=config,
                                 formats=available_formats,
-                                selected_formats=product_obj.format_ids or [],
-                                error=validation_errors[0],
+                                selected_formats=submitted_formats or product_obj.format_ids or [],
+                                error="; ".join(
+                                    f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+                                ),
                             )
 
-                        # Save to database
+                        # Save format selection + validated config (commit together).
+                        if submitted_formats:
+                            product_obj.format_ids = submitted_formats
+                        new_config = validated.model_dump()
                         product_obj.implementation_config = new_config
                         session.commit()
-
-                        # Get formats for success page
-                        from src.admin.blueprints.products import get_creative_formats
-
-                        available_formats = get_creative_formats(tenant_id=tenant_id)
 
                         return render_template(
                             "adapters/mock_product_config.html",
@@ -1459,30 +1558,16 @@ class MockAdServer(AdServerAdapter):
             return wrapped_view()
 
     def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
-        """Validate mock adapter configuration."""
-        errors: list[str] = []
+        """Validate mock adapter configuration via the typed schema.
 
-        # Validate ranges
-        if config.get("fill_rate", 0) < 0 or config.get("fill_rate", 0) > 100:
-            errors.append("Fill rate must be between 0 and 100")
-
-        if config.get("error_rate", 0) < 0 or config.get("error_rate", 0) > 100:
-            errors.append("Error rate must be between 0 and 100")
-
-        if config.get("ctr", 0) < 0 or config.get("ctr", 0) > 100:
-            errors.append("CTR must be between 0 and 100")
-
-        if config.get("viewability_rate", 0) < 0 or config.get("viewability_rate", 0) > 100:
-            errors.append("Viewability rate must be between 0 and 100")
-
-        if config.get("daily_impressions", 0) < 1000:
-            errors.append("Daily impressions must be at least 1000")
-
-        if config.get("latency_ms", 0) < 0:
-            errors.append("Latency cannot be negative")
-
-        if errors:
-            return False, "; ".join(errors)
+        Delegates to parse_implementation_config — Pydantic field validators
+        replace the previous hand-written range checks. Returns (True, None)
+        on success or (False, "field: msg; ...") on validation failure.
+        """
+        try:
+            parse_implementation_config(config)
+        except ValidationError as exc:
+            return False, "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
         return True, None
 
     def _calculate_delivery_progress(self, profile: str, current_day: int, total_days: int) -> float:
