@@ -24,6 +24,48 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.principal import PrincipalFactory
 
 # ═══════════════════════════════════════════════════════════════════════
+# E2E format helpers — real creative agent data for Docker transport
+# ═══════════════════════════════════════════════════════════════════════
+
+# Docker's creative agent URL (internal to Docker network, used by the app container)
+_E2E_AGENT_URL = "http://creative-agent:8080/api/creative-agent"
+# Real format that exists in Docker's creative agent catalog
+_E2E_FORMAT_ID = "display_300x250_image"
+
+
+def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
+    """Return (format_id, agent_url, assets) appropriate for current transport.
+
+    For in-process transports: uses mock format/agent that the patched registry accepts.
+    For e2e_rest: uses real format from Docker's creative agent catalog.
+    """
+    if is_e2e(ctx):
+        return (
+            _E2E_FORMAT_ID,
+            _E2E_AGENT_URL,
+            {
+                "banner_image": {
+                    "url": "https://example.com/banner.png",
+                    "width": 300,
+                    "height": 250,
+                },
+                "click_url": {"url": "https://example.com/landing"},
+            },
+        )
+    return (
+        "display_300x250",
+        env.DEFAULT_AGENT_URL,
+        {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -39,19 +81,13 @@ def given_creative_with_format(ctx: dict) -> None:
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
 
-    format_id = "display_300x250"
+    format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = "creative-known-fmt-001"
     creative_payload = {
         "creative_id": creative_id,
         "name": "Test Creative with Known Format",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "format_id": {"id": format_id, "agent_url": agent_url},
+        "assets": assets,
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -401,19 +437,13 @@ def given_creative_with_name_and_format(ctx: dict, name: str) -> None:
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
 
-    format_id = "display_300x250"
+    format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = f"creative-{name.lower().replace(' ', '-')}-001"
     creative_payload = {
         "creative_id": creative_id,
         "name": name,
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "format_id": {"id": format_id, "agent_url": agent_url},
+        "assets": assets,
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -496,7 +526,7 @@ def _xfail_if_e2e(ctx: dict) -> None:
         import pytest
 
         pytest.xfail(
-            "e2e_rest fixture injection gap — factory-created creatives are not in Docker DB. FIXME(salesagent-ajsb)"
+            "e2e_rest fixture injection gap — factory-created creatives are not in Docker DB. FIXME(salesagent-15cg)"
         )
 
 
@@ -2329,13 +2359,14 @@ def given_creative_already_exists(ctx: dict) -> None:
     principal = ctx["principal"]
     creative_payload = ctx["creatives"][-1]
     creative_id = creative_payload["creative_id"]
+    fmt_id = creative_payload["format_id"]
     CreativeFactory(
         tenant=tenant,
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=env.DEFAULT_AGENT_URL,
-        format="display_300x250",
+        agent_url=fmt_id["agent_url"],
+        format=fmt_id["id"],
     )
     env._commit_factory_data()
 
@@ -2383,17 +2414,12 @@ def given_creative_not_in_library(ctx: dict) -> None:
     """
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)
+    format_id, agent_url, assets = _format_payload(ctx, env)
     creative_payload = {
         "creative_id": "creative-new-no-db-001",
         "name": "Brand New Creative",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "format_id": {"id": format_id, "agent_url": agent_url},
+        "assets": assets,
     }
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -2407,20 +2433,15 @@ def given_creative_with_empty_name(ctx: dict) -> None:
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
+    format_id, agent_url, assets = _format_payload(ctx, env)
     creative_payload = {
         "creative_id": "creative-empty-name-001",
         "name": "",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "format_id": {"id": format_id, "agent_url": agent_url},
+        "assets": assets,
     }
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = "display_300x250"
+    ctx["creative_format_id"] = format_id
 
 
 @given(parsers.parse('a creative with name "{name}" but no format_id'))
@@ -2528,19 +2549,13 @@ def _build_creative_payload(ctx: dict, *, provenance: dict | None = None) -> dic
     """Build a creative payload with optional provenance metadata."""
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    format_id = "display_300x250"
+    format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = f"creative-provenance-{'with' if provenance else 'without'}-001"
     payload: dict = {
         "creative_id": creative_id,
         "name": "Provenance Test Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "format_id": {"id": format_id, "agent_url": agent_url},
+        "assets": assets,
     }
     if provenance is not None:
         payload["provenance"] = provenance
@@ -2671,11 +2686,11 @@ def _setup_product_with_creative_policy(
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
-    agent_url = env.DEFAULT_AGENT_URL
+    format_id, agent_url, _assets = _format_payload(ctx, env)
 
     product_kwargs: dict = {
         "tenant": tenant,
-        "format_ids": [{"agent_url": agent_url, "id": "display_300x250"}],
+        "format_ids": [{"agent_url": agent_url, "id": format_id}],
     }
 
     if creative_policy is None:
@@ -3878,21 +3893,18 @@ def given_two_creatives_one_valid_one_empty_name(ctx: dict) -> None:
     """Set up two creative payloads: one valid, one with empty name (triggers per-creative failure)."""
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
+    format_id, agent_url, assets = _format_payload(ctx, env)
     valid_payload = {
         "creative_id": "creative-valid-001",
         "name": "Valid Creative",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {"url": "https://example.com/banner.png", "width": 300, "height": 250},
-        },
+        "format_id": {"id": format_id, "agent_url": agent_url},
+        "assets": assets,
     }
     invalid_payload = {
         "creative_id": "creative-invalid-empty-name",
         "name": "",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {"url": "https://example.com/banner2.png", "width": 300, "height": 250},
-        },
+        "format_id": {"id": format_id, "agent_url": agent_url},
+        "assets": assets,
     }
     ctx["creatives"] = [valid_payload, invalid_payload]
     ctx["valid_creative_id"] = "creative-valid-001"
@@ -5758,12 +5770,12 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
     _ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
+    format_id, agent_url, _assets = _format_payload(ctx, env)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+        format_ids=[{"agent_url": agent_url, "id": format_id}],
     )
     valid_pkg_1 = MediaPackageFactory(
         media_buy=media_buy,

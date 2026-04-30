@@ -749,9 +749,12 @@ class CreativeAgentRegistry:
             }
         """
         # Use custom MCP client for non-standard tools (preview_creative not in AdCP spec)
+        # The creative agent expects format_id as a FormatId object {id, agent_url},
+        # not a bare string.
+        format_id_obj = {"id": format_id, "agent_url": agent_url}
         async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
             result = await client.call_tool(
-                "preview_creative", {"format_id": format_id, "creative_manifest": creative_manifest}
+                "preview_creative", {"format_id": format_id_obj, "creative_manifest": creative_manifest}
             )
 
             # Use structured_content field for JSON response (MCP protocol update)
