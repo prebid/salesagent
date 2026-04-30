@@ -43,6 +43,7 @@ from src.adapters.gam.managers.orders import (
     NON_GUARANTEED_LINE_ITEM_TYPES,
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
+from src.adapters.gam.schemas import GAMProductConfig
 from src.adapters.gam_data_freshness import validate_and_log_freshness
 from src.core.audit_logger import AuditLogger
 from src.core.schemas import (
@@ -73,6 +74,9 @@ class GoogleAdManager(AdServerAdapter):
     capabilities = AdapterCapabilities(
         supports_realtime_reporting=True,  # Snapshots via cached GAM line item stats
     )
+
+    # Schema registration — runtime + admin UI source of truth (Phase 2 of #996)
+    product_config_class = GAMProductConfig
 
     # GAM supports display, olv (online video), and social advertising
     # V3 channel names: video → olv, native → social

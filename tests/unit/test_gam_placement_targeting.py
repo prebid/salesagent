@@ -15,14 +15,14 @@ class TestPlacementTargetingSchema:
 
     def test_placement_targeting_class_exists(self):
         """Verify PlacementTargeting class exists in schema."""
-        from src.adapters.gam_implementation_config_schema import PlacementTargeting
+        from src.adapters.gam.schemas import PlacementTargeting
 
         # Should be importable
         assert PlacementTargeting is not None
 
     def test_placement_targeting_fields(self):
         """Verify PlacementTargeting has required fields."""
-        from src.adapters.gam_implementation_config_schema import PlacementTargeting
+        from src.adapters.gam.schemas import PlacementTargeting
 
         fields = PlacementTargeting.model_fields
         assert "placement_id" in fields
@@ -31,7 +31,7 @@ class TestPlacementTargetingSchema:
 
     def test_placement_targeting_validation(self):
         """Test PlacementTargeting validates correctly."""
-        from src.adapters.gam_implementation_config_schema import PlacementTargeting
+        from src.adapters.gam.schemas import PlacementTargeting
 
         pt = PlacementTargeting(
             placement_id="homepage_atf",
@@ -50,7 +50,7 @@ class TestPlacementTargetingSchema:
 
     def test_placement_targeting_defaults_empty_targeting(self):
         """Test PlacementTargeting defaults targeting to empty dict."""
-        from src.adapters.gam_implementation_config_schema import PlacementTargeting
+        from src.adapters.gam.schemas import PlacementTargeting
 
         pt = PlacementTargeting(
             placement_id="test_placement",
@@ -59,29 +59,29 @@ class TestPlacementTargetingSchema:
 
         assert pt.targeting == {}
 
-    def test_gam_implementation_config_has_placement_targeting_field(self):
-        """Verify GAMImplementationConfig has placement_targeting field."""
-        from src.adapters.gam_implementation_config_schema import GAMImplementationConfig
+    def test_gam_product_config_has_placement_targeting_field(self):
+        """Verify GAMProductConfig has placement_targeting field."""
+        from src.adapters.gam.schemas import GAMProductConfig
 
-        fields = GAMImplementationConfig.model_fields
+        fields = GAMProductConfig.model_fields
         assert "placement_targeting" in fields
 
-    def test_gam_implementation_config_placement_targeting_default_empty(self):
+    def test_gam_product_config_placement_targeting_default_empty(self):
         """Test placement_targeting defaults to empty list."""
-        from src.adapters.gam_implementation_config_schema import GAMImplementationConfig
+        from src.adapters.gam.schemas import GAMProductConfig
 
-        config = GAMImplementationConfig(creative_placeholders=[{"width": 300, "height": 250}])
+        config = GAMProductConfig(creative_placeholders=[{"width": 300, "height": 250}])
 
         assert config.placement_targeting == []
 
-    def test_gam_implementation_config_with_placement_targeting(self):
-        """Test GAMImplementationConfig accepts placement_targeting."""
-        from src.adapters.gam_implementation_config_schema import (
-            GAMImplementationConfig,
+    def test_gam_product_config_with_placement_targeting(self):
+        """Test GAMProductConfig accepts placement_targeting."""
+        from src.adapters.gam.schemas import (
+            GAMProductConfig,
             PlacementTargeting,
         )
 
-        config = GAMImplementationConfig(
+        config = GAMProductConfig(
             creative_placeholders=[{"width": 300, "height": 250}],
             placement_targeting=[
                 PlacementTargeting(
