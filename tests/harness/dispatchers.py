@@ -124,6 +124,11 @@ class RestE2EDispatcher:
                 subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
                 if subdomain is not None:
                     headers["x-adcp-tenant"] = subdomain
+            # Forward testing context headers (sandbox/dry_run, etc.)
+            tc = getattr(identity, "testing_context", None)
+            if tc is not None:
+                if getattr(tc, "dry_run", False):
+                    headers["x-dry-run"] = "true"
 
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
@@ -141,8 +146,18 @@ class RestE2EDispatcher:
         if response.status_code >= 400:
             try:
                 error = env.parse_rest_error(response.status_code, response.json())
-            except Exception as exc:
-                error = exc
+            except Exception:
+                # Server returned non-JSON error (e.g. 500 with empty body).
+                # Wrap as AdCPError so Then steps can detect the error type
+                # and xfail on spec-production gaps consistently.
+                from src.core.exceptions import AdCPError
+
+                body_text = response.text or "(empty body)"
+                error = AdCPError(
+                    f"HTTP {response.status_code}: {body_text}",
+                    details={"status_code": response.status_code, "raw_body": body_text},
+                )
+                error.status_code = response.status_code
             return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
 
         try:

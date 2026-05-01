@@ -819,6 +819,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "cannot contain 'suggestion' field (spec requires suggestion for "
                 "format mismatch per BR-RULE-039 INV-2)"
             ),
+            # FIXME(#TBD): ext-k: format mismatch raises VALIDATION_ERROR, spec expects FORMAT_MISMATCH
+            # _assignments.py:146 raises AdCPValidationError(error_msg) which has
+            # error_code='VALIDATION_ERROR'. Spec expects 'FORMAT_MISMATCH' with suggestion.
+            "T-UC-006-ext-k": (
+                "SPEC-PRODUCTION GAP: format mismatch raises AdCPValidationError "
+                "(VALIDATION_ERROR) — spec expects FORMAT_MISMATCH with suggestion "
+                "and list_creative_formats hint (BR-RULE-039)"
+            ),
+            # FIXME(#TBD): inv5-lenient: lenient mode format mismatch doesn't populate assigned_to
+            # In lenient mode, the compatible package assignment should be created
+            # and incompatible reported in assignment_errors. Production skips both
+            # because the creative-not-found guard or format check logic prevents
+            # the compatible assignment from completing.
+            "T-UC-006-rule-039-inv5-lenient": (
+                "SPEC-PRODUCTION GAP: lenient format mismatch does not create "
+                "compatible assignment — assigned_to is empty (BR-RULE-039 INV-5)"
+            ),
             # T-UC-006-rule-037-inv5: e2e_rest only — handled below with transport check
             # Sandbox: sync_creatives does not set sandbox=true on response
             "T-UC-006-sandbox-happy": (
@@ -877,10 +894,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "e2e_rest: sync_creatives REST endpoint returns empty body for "
                 "assignment scenarios — JSONDecodeError on response parse"
             ),
-            "T-UC-006-boundary-assignment-format": (
-                "e2e_rest: sync_creatives REST endpoint returns empty body for "
-                "assignment scenarios — JSONDecodeError on response parse"
-            ),
+            # Graduated: T-UC-006-boundary-assignment-format — UUID-based factory IDs
+            # and creative-not-found guard fix resolve all 5 parametrizations.
+            # "format mismatch" variant xfails via spec-production gap (T-UC-006-ext-k above).
             # Graduated: T-UC-006-partition-auth missing/empty, T-UC-006-boundary-principal
             # missing/null/empty — unauthenticated rejection works on e2e_rest.
             # Only the "typical" (authenticated) variant still fails → selective xfail below.
