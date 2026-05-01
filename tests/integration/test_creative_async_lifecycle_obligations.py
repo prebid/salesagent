@@ -127,8 +127,11 @@ class TestAsyncWorkingLifecycle:
         mock_executor.submit.return_value = MagicMock()
 
         with CreativeSyncEnv() as env:
-            env.setup_default_data()
-            env.identity.tenant["approval_mode"] = "ai-powered"
+            tenant, _principal = env.setup_default_data()
+            # Update tenant approval_mode in DB
+            tenant.approval_mode = "ai-powered"
+            env._session.commit()
+            env._identity_cache.clear()  # Force re-resolution with updated tenant
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),

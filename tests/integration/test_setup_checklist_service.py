@@ -109,6 +109,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             enable_axe_signals=True,
             authorized_emails=["test@example.com"],  # Required for access control
             auth_setup_mode=False,  # SSO configured, setup mode disabled
+            line_item_name_template="{{order_name}} - {{product_name}}",  # Custom naming
             created_at=now,
             updated_at=now,
             is_active=True,
@@ -428,6 +429,8 @@ class TestSetupChecklistService:
                 updated_at=now,
                 is_active=True,
                 authorized_domains=["example.com"],
+                slack_webhook_url="https://hooks.slack.com/test",
+                line_item_name_template="{{order_name}} - {{product_name}}",
             )
             db_session.add(tenant3)
 

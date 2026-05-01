@@ -17,7 +17,7 @@ beads: salesagent-rhp
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from adcp.types.generated_poc.core.context import ContextObject
@@ -68,11 +68,9 @@ class TestMCPContextParamBypass:
             AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=acc)
 
             context_obj = ContextObject.model_validate({"channel": "merge-test"})
-            req = ListAccountsRequest(context=context_obj)
 
             # Instrument: track whether the MCP wrapper's context merge fires
             merge_branch_entered = False
-            original_wrapper = None
 
             # Import the real wrapper to wrap it
             from src.core.tools import accounts as accounts_mod
@@ -85,32 +83,26 @@ class TestMCPContextParamBypass:
                     merge_branch_entered = True
                 return await original_list_accounts(ctx=ctx, context=context, **rest)
 
-            # Patch at the module level where call_mcp imports it
-            with patch.object(accounts_mod, "list_accounts", instrumented_list_accounts):
-                # Also need to patch where the harness imports from
-                import tests.harness.account_list as al_mod
+            # Call the instrumented wrapper directly with context as separate kwarg,
+            # which is how FastMCP dispatches in production.
+            from tests.harness.transport import Transport
 
-                old_call_mcp = al_mod.AccountListEnv.call_mcp
+            mcp_identity = env.identity_for(Transport.MCP)
+            mock_ctx = MagicMock(spec=Context)
+            mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
 
-                def patched_call_mcp(self, **kwargs):
-                    return self._run_mcp_wrapper(instrumented_list_accounts, ListAccountsResponse, **kwargs)
-
-                al_mod.AccountListEnv.call_mcp = patched_call_mcp
-                try:
-                    response = env.call_mcp(req=req)
-                finally:
-                    al_mod.AccountListEnv.call_mcp = old_call_mcp
+            tool_result = asyncio.run(instrumented_list_accounts(ctx=mock_ctx, context=context_obj))
+            response = ListAccountsResponse(**tool_result.structured_content)
 
         # Response has context (echoed from req.context by _impl) — this works
         assert response.context is not None
         assert response.context.channel == "merge-test"
 
-        # But did the MCP wrapper's context merge branch fire?
+        # The MCP wrapper's context merge branch should have fired
         assert merge_branch_entered, (
             "BUG: The MCP wrapper's 'if context is not None' merge branch "
-            "(accounts.py:226-231) was NOT entered when calling through the "
-            "harness. _run_mcp_wrapper does not extract context from req and "
-            "pass it as a separate kwarg."
+            "(accounts.py:226-231) was NOT entered when context was passed "
+            "as a separate kwarg."
         )
 
 

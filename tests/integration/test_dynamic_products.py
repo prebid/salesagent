@@ -425,6 +425,20 @@ class TestGenerateVariantsForBrief:
 # ---------------------------------------------------------------------------
 
 
+def _parent_template_kwargs(tenant_id: str, product_id: str = "tmpl_001") -> dict:
+    """Return kwargs for a parent dynamic template product (FK target for variants)."""
+    return {
+        "tenant_id": tenant_id,
+        "product_id": product_id,
+        "name": f"Template {product_id}",
+        "format_ids": [{"agent_url": "https://creative.example.com", "id": "display_300x250"}],
+        "targeting_template": {},
+        "delivery_type": "standard",
+        "property_tags": ["all_inventory"],
+        "is_dynamic": True,
+    }
+
+
 class TestArchiveExpiredVariants:
     """Tests for archive_expired_variants()."""
 
@@ -433,6 +447,7 @@ class TestArchiveExpiredVariants:
         _ensure_tenant("test_tenant")
 
         with get_db_session() as session:
+            session.merge(Product(**_parent_template_kwargs("test_tenant")))
             variant = Product(
                 tenant_id="test_tenant",
                 product_id="variant_expired",
@@ -462,6 +477,7 @@ class TestArchiveExpiredVariants:
         _ensure_tenant("test_tenant")
 
         with get_db_session() as session:
+            session.merge(Product(**_parent_template_kwargs("test_tenant")))
             variant = Product(
                 tenant_id="test_tenant",
                 product_id="variant_active",
@@ -485,6 +501,7 @@ class TestArchiveExpiredVariants:
         _ensure_tenant("test_tenant")
 
         with get_db_session() as session:
+            session.merge(Product(**_parent_template_kwargs("test_tenant")))
             variant = Product(
                 tenant_id="test_tenant",
                 product_id="variant_already_archived",
@@ -510,6 +527,8 @@ class TestArchiveExpiredVariants:
         _ensure_tenant("tenant_b")
 
         with get_db_session() as session:
+            session.merge(Product(**_parent_template_kwargs("tenant_a")))
+            session.merge(Product(**_parent_template_kwargs("tenant_b")))
             for tid in ["tenant_a", "tenant_b"]:
                 variant = Product(
                     tenant_id=tid,
@@ -542,6 +561,8 @@ class TestArchiveExpiredVariants:
         _ensure_tenant("tenant_y")
 
         with get_db_session() as session:
+            session.merge(Product(**_parent_template_kwargs("tenant_x")))
+            session.merge(Product(**_parent_template_kwargs("tenant_y")))
             for tid in ["tenant_x", "tenant_y"]:
                 variant = Product(
                     tenant_id=tid,

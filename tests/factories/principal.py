@@ -48,8 +48,17 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass explicit tenant=None for auth-error tests.
         Pass **tenant_overrides for domain fields (approval_mode, etc).
         """
+        # Separate identity-level fields from tenant-level overrides
+        identity_fields = {}
+        filtered_overrides = {}
+        for key, val in tenant_overrides.items():
+            if key in ("supported_billing", "account_approval_mode"):
+                identity_fields[key] = val
+            else:
+                filtered_overrides[key] = val
+
         resolved_tenant = (
-            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
+            TenantFactory.make_tenant(tenant_id=tenant_id, **filtered_overrides) if tenant is _UNSET else tenant
         )
         return ResolvedIdentity(
             principal_id=principal_id,
@@ -63,4 +72,5 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
                 jump_to_event=None,
                 test_session_id=None,
             ),
+            **identity_fields,
         )

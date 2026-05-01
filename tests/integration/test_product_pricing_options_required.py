@@ -309,7 +309,7 @@ def test_get_product_catalog_raises_on_conversion_error(integration_db):
     errors indicate data integrity issues that must surface — not be swallowed
     with a warning log. A corrupt product in the DB is a bug, not a normal case.
     """
-    from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+    from tests.factories import ProductFactory, TenantFactory
     from tests.harness._base import IntegrationEnv
 
     with IntegrationEnv() as _env:
@@ -317,13 +317,28 @@ def test_get_product_catalog_raises_on_conversion_error(integration_db):
         tenant_id = tenant.tenant_id  # capture before session closes
         product = ProductFactory(tenant=tenant)
 
-        # Fixed CPM with rate=None triggers ValueError in convert_pricing_option
-        PricingOptionFactory(
-            product=product,
-            pricing_model="cpm",
-            rate=None,  # Corruption — fixed CPM requires a rate
-            is_fixed=True,
+        # Temporarily disable check constraint to insert corrupt data
+        # (fixed CPM with rate=None). This simulates data corruption.
+        from sqlalchemy import text
+
+        _env._session.execute(text("ALTER TABLE pricing_options DROP CONSTRAINT IF EXISTS check_fixed_has_rate"))
+        _env._session.execute(
+            text(
+                "INSERT INTO pricing_options (tenant_id, product_id, pricing_model, rate, currency, is_fixed)"
+                " VALUES (:tid, :pid, 'cpm', NULL, 'USD', true)"
+            ),
+            {"tid": tenant_id, "pid": product.product_id},
         )
+        _env._session.commit()
+        # Re-enable constraint (NOT VALID so existing corrupt row isn't checked)
+        _env._session.execute(
+            text(
+                "ALTER TABLE pricing_options ADD CONSTRAINT check_fixed_has_rate"
+                " CHECK ((is_fixed = false) OR (is_fixed = true AND rate IS NOT NULL))"
+                " NOT VALID"
+            ),
+        )
+        _env._session.commit()
 
     # get_product_catalog should raise ValueError, not silently skip the product
     with pytest.raises(ValueError, match="requires rate"):
