@@ -864,31 +864,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # UC-006 INV-5 workflow step attributes (e2e_rest only) — workflow steps
-        # not visible through the e2e_rest transport layer.
-        if "T-UC-006-rule-037-inv5" in marker_names and "e2e_rest" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason=(
-                        "SPEC-PRODUCTION GAP: workflow steps not visible in e2e_rest response — "
-                        "BR-RULE-037 INV-5 requires workflow step attributes"
-                    ),
-                    strict=True,
-                )
-            )
-
-        # UC-006 INV-1 per-creative failure (e2e_rest only) — e2e_rest doesn't
-        # receive the correct creative action due to REST response parsing.
-        if "T-UC-006-rule-033-inv1" in marker_names and "e2e_rest" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason=(
-                        "SPEC-PRODUCTION GAP: e2e_rest returns action='failed' instead "
-                        "of 'created' for the surviving creative (BR-RULE-033 INV-1)"
-                    ),
-                    strict=True,
-                )
-            )
+        # Graduated: UC-006 INV-5 (workflow step attributes) and INV-1 (per-creative
+        # failure) now pass on e2e_rest — xfails removed.
 
         # --- UC-006 e2e_rest-only failures ---
         # The e2e_rest transport goes through real HTTP + JSON parsing.
@@ -907,9 +884,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-006-partition-auth missing/empty, T-UC-006-boundary-principal
             # missing/null/empty — unauthenticated rejection works on e2e_rest.
             # Only the "typical" (authenticated) variant still fails → selective xfail below.
-            # Assignment weight scenarios — empty REST response body
-            "T-UC-006-partition-assignment-weight": ("e2e_rest: assignment weight scenarios — REST returns empty body"),
-            "T-UC-006-boundary-assignment-weight": ("e2e_rest: assignment weight boundary — REST returns empty body"),
+            # Assignment weight scenarios — graduated: weight_absent and weight_boundary_max pass.
+            # Remaining parametrizations (typical, boundary_min, below_min, above_max) still fail.
         }
         if "e2e_rest" in nodeid:
             for tag, reason in _UC006_E2E_REST_XFAIL_TAGS.items():
@@ -917,30 +893,39 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break
 
-        # UC-006 e2e_rest: assignment-package — idempotent variant graduated (pzqp),
-        # other parametrizations still fail (JSONDecodeError / UniqueViolation).
-        if "e2e_rest" in nodeid and "T-UC-006-boundary-assignment-package" in marker_names:
-            if "idempotent" not in nodeid:
+        # UC-006 e2e_rest: assignment weight — weight_absent and weight_boundary_max
+        # graduated (pass with UUID-based factory IDs). Other parametrizations still fail.
+        if "e2e_rest" in nodeid and "T-UC-006-partition-assignment-weight" in marker_names:
+            if "weight_absent" not in nodeid and "weight_boundary_max" not in nodeid:
                 item.add_marker(
                     pytest.mark.xfail(
-                        reason="e2e_rest: sync_creatives REST assignment-package scenarios — "
-                        "JSONDecodeError or UniqueViolation (idempotent variant graduated)",
+                        reason="e2e_rest: assignment weight scenarios — REST returns empty body",
+                        strict=True,
+                    )
+                )
+        if "e2e_rest" in nodeid and "T-UC-006-boundary-assignment-weight" in marker_names:
+            if "weight absent" not in nodeid and "weight = 100" not in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: assignment weight boundary — REST returns empty body",
                         strict=True,
                     )
                 )
 
-        # UC-006 e2e_rest: auth partition/boundary — only "typical" (authenticated)
-        # variant fails (action='failed' instead of 'created'). The missing/empty
-        # variants pass because unauthenticated rejection works on e2e_rest.
-        if "e2e_rest" in nodeid and marker_names & {"T-UC-006-partition-auth", "T-UC-006-boundary-principal"}:
-            if "typical" in nodeid:
+        # UC-006 e2e_rest: assignment-package — idempotent and existing-package
+        # variants graduated. Only "package not found" still fails.
+        if "e2e_rest" in nodeid and "T-UC-006-boundary-assignment-package" in marker_names:
+            if "package not found" in nodeid:
                 item.add_marker(
                     pytest.mark.xfail(
-                        reason="e2e_rest: authenticated creative sync returns action='failed' "
-                        "instead of 'created' — REST response shape difference",
+                        reason="e2e_rest: sync_creatives REST assignment-package 'package not found' — "
+                        "JSONDecodeError on response parse",
                         strict=True,
                     )
                 )
+
+        # Graduated: UC-006 e2e_rest auth partition/boundary "typical" variant now passes
+        # after format_id fix (uses real catalog format for e2e_rest).
 
         # UC-006 e2e_rest: creative scope — action='failed' through REST
         if "e2e_rest" in nodeid and marker_names & {
@@ -966,11 +951,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # UC-006 e2e_rest: assignments-structure tags — only "single_assignment"
-        # examples fail (empty body). "absent" examples pass. Use nodeid substring
-        # to avoid over-broad xfail.
+        # UC-006 e2e_rest: assignments-structure tags — "absent" and "duplicate" examples
+        # pass. Others still fail (empty body).
         if "e2e_rest" in nodeid:
-            # assignments-structure: "absent" example passes, all others fail (empty body)
             if "T-UC-006-partition-assignments-structure" in marker_names and "absent" not in nodeid:
                 item.add_marker(
                     pytest.mark.xfail(
@@ -978,7 +961,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=True,
                     )
                 )
-            if "T-UC-006-boundary-assignments-structure" in marker_names and "absent" not in nodeid:
+            if (
+                "T-UC-006-boundary-assignments-structure" in marker_names
+                and "absent" not in nodeid
+                and "duplicate" not in nodeid
+            ):
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="e2e_rest: sync_creatives REST returns empty body for assignment boundary",
@@ -997,8 +984,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-006 e2e_rest: generative/format/invariant scenarios — action='failed'
         # or build_creative not called through REST transport.
         _UC006_E2E_REST_ACTION_FAILED: set[str] = {
-            "T-UC-006-partition-generative",
-            "T-UC-006-boundary-generative",
             "T-UC-006-rule-036-inv1",
             "T-UC-006-rule-036-inv2",
             "T-UC-006-rule-036-inv3",
@@ -1016,14 +1001,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # UC-006 e2e_rest: format_validation_boundary known-HTTP — action='failed'
-        if "e2e_rest" in nodeid and "T-UC-006-boundary-format-id" in marker_names and "known HTTP" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest: known HTTP format_id → action='failed' through REST transport",
-                    strict=True,
+        # UC-006 e2e_rest: generative partition/boundary — static_creative variants
+        # graduated (pass with real catalog format_id). Non-static variants still fail.
+        if "e2e_rest" in nodeid and marker_names & {"T-UC-006-partition-generative", "T-UC-006-boundary-generative"}:
+            if "static" not in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: generative creative processing returns action='failed' through REST",
+                        strict=True,
+                    )
                 )
-            )
+
+        # Graduated: UC-006 e2e_rest format_validation_boundary "known HTTP" now passes
+        # after format_id fix (uses real catalog format for e2e_rest).
 
         # UC-011 e2e_rest: sync/list account scenarios that need real HTTP stack
         if "e2e_rest" in nodeid and any(t.startswith("T-UC-011") for t in marker_names):
@@ -1039,14 +1029,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             pass  # covered by the SPECGAP tag above
 
         # UC-006 e2e_rest: steps that assert on mocks/harness state unavailable in real HTTP
+        # Graduated: T-UC-006-rule-093-inv2 (inv2 weight omitted) now passes on e2e_rest.
         _UC006_E2E_REST_XFAIL_TAGS: dict[str, str] = {
             "T-UC-006-rule-035-static": (
                 "e2e_rest: then_creative_validated_by_agent asserts registry mock "
                 "call_count which is not wired in e2e_rest (real HTTP, no mock)"
-            ),
-            "T-UC-006-rule-093-inv2": (
-                "e2e_rest: assignment weight/rotation assertion gets empty body "
-                "through REST transport (JSONDecodeError)"
             ),
         }
         if "e2e_rest" in nodeid:

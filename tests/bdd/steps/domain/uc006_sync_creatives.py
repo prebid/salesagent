@@ -65,6 +65,29 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
     )
 
 
+def _product_format_entry(ctx: dict, env: object) -> dict[str, str]:
+    """Return a single ``{"agent_url": ..., "id": ...}`` for ProductFactory.format_ids.
+
+    Must match the creative format_id returned by ``_format_payload`` so that
+    format compatibility checks pass on all transports including e2e_rest.
+    """
+    if is_e2e(ctx):
+        return {"agent_url": _E2E_AGENT_URL, "id": _E2E_FORMAT_ID}
+    return {"agent_url": env.DEFAULT_AGENT_URL, "id": "display_300x250"}
+
+
+def _e2e_unique_id(prefix: str) -> str:
+    """Generate a UUID-based unique ID for e2e tests.
+
+    Factory sequences produce predictable IDs (mb_0000, pkg_0000) that collide
+    with rows persisted in Docker's Postgres from prior runs. Use this for any
+    factory object created for e2e_rest.
+    """
+    import uuid
+
+    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
 # ═══════════════════════════════════════════════════════════════════════
@@ -759,15 +782,24 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
     _ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
+    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
+    prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
+    if is_e2e(ctx):
+        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
+        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+
+    media_buy = MediaBuyFactory(**mb_kwargs)
     # Product accepts the default known format so the format check passes.
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
-    package = MediaPackageFactory(
-        media_buy=media_buy,
-        package_config={"product_id": product.product_id, "budget": 1000.0},
-    )
+    product = ProductFactory(**prod_kwargs)
+    pkg_kwargs: dict = {
+        "media_buy": media_buy,
+        "package_config": {"product_id": product.product_id, "budget": 1000.0},
+    }
+    if is_e2e(ctx):
+        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+    package = MediaPackageFactory(**pkg_kwargs)
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
@@ -790,14 +822,24 @@ def given_assignment_already_exists(ctx: dict) -> None:
     _ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
+    fmt_entry = _product_format_entry(ctx, env)
 
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
-    package = MediaPackageFactory(
-        media_buy=media_buy,
-        package_config={"product_id": product.product_id, "budget": 1000.0},
-    )
+    # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
+    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
+    prod_kwargs: dict = {"tenant": tenant, "format_ids": [fmt_entry]}
+    if is_e2e(ctx):
+        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
+        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+
+    media_buy = MediaBuyFactory(**mb_kwargs)
+    product = ProductFactory(**prod_kwargs)
+    pkg_kwargs: dict = {
+        "media_buy": media_buy,
+        "package_config": {"product_id": product.product_id, "budget": 1000.0},
+    }
+    if is_e2e(ctx):
+        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+    package = MediaPackageFactory(**pkg_kwargs)
     # Use same creative_id as the payload so the pre-existing row matches.
     creative_payload = ctx["creatives"][-1]
     creative_id = creative_payload["creative_id"]
@@ -807,8 +849,8 @@ def given_assignment_already_exists(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=agent_url,
-        format="display_300x250",
+        agent_url=fmt_entry["agent_url"],
+        format=fmt_entry["id"],
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -1123,19 +1165,24 @@ def _setup_assignment_package(
     _ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(
-        tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
-    )
+    # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
+    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
+    prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
+    if is_e2e(ctx):
+        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
+        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+
+    media_buy = MediaBuyFactory(**mb_kwargs)
+    product = ProductFactory(**prod_kwargs)
     pkg_kwargs: dict = {
         "media_buy": media_buy,
         "package_config": {"product_id": product.product_id, "budget": 1000.0},
     }
     if package_id is not None:
         pkg_kwargs["package_id"] = package_id
+    elif is_e2e(ctx):
+        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
