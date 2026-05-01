@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from enum import Enum
 
-from adcp import BrandManifest
+from adcp.types.generated_poc.brand import Brand
 from pydantic import BaseModel, Field
 
 from src.core.schemas import Product
@@ -89,7 +89,7 @@ class PolicyCheckService:
         self,
         brief: str,
         promoted_offering: str | None = None,
-        brand_manifest: BrandManifest | str | None = None,
+        brand_manifest: Brand | str | None = None,
         tenant_policies: dict | None = None,
     ) -> PolicyCheckResult:
         """Check if an advertising brief complies with policies.
@@ -97,7 +97,7 @@ class PolicyCheckService:
         Args:
             brief: The advertising brief description
             promoted_offering: DEPRECATED: Use brand_manifest instead (still supported)
-            brand_manifest: BrandManifest model or URL string (preferred over promoted_offering)
+            brand_manifest: Brand model or URL string (preferred over promoted_offering)
             tenant_policies: Optional tenant-specific policy overrides
 
         Returns:
@@ -106,10 +106,21 @@ class PolicyCheckService:
         # Extract brand info from brand_manifest if provided
         brand_info = None
         if brand_manifest:
-            if isinstance(brand_manifest, BrandManifest):
-                # Extract name and tagline from typed model (adcp 3.6.0: extra="allow" fields)
-                brand_name = getattr(brand_manifest, "name", None)
-                brand_tagline = getattr(brand_manifest, "tagline", None) or ""
+            if isinstance(brand_manifest, Brand):
+                # Extract name and tagline from adcp 3.12 Brand model
+                # names is list[LocalizedName] where LocalizedName is RootModel[dict[str, str]]
+                brand_name = None
+                if brand_manifest.names:
+                    first_name = brand_manifest.names[0]
+                    brand_name = next(iter(first_name.root.values()), None)
+                brand_tagline = ""
+                if brand_manifest.tagline:
+                    if isinstance(brand_manifest.tagline, str):
+                        brand_tagline = brand_manifest.tagline
+                    else:
+                        # Tagline is RootModel[list[LocalizedName]]
+                        first_tl = brand_manifest.tagline.root[0] if brand_manifest.tagline.root else None
+                        brand_tagline = next(iter(first_tl.root.values()), "") if first_tl else ""
                 brand_info = f"{brand_name} - {brand_tagline}" if brand_tagline else brand_name
             elif isinstance(brand_manifest, str):
                 # URL string - use as-is

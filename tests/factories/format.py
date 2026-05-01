@@ -8,7 +8,7 @@ Usage::
     from tests.factories.format import FormatFactory, make_asset
 
     # Simple format
-    fmt = FormatFactory.build(name="banner", type=FormatCategory.display)
+    fmt = FormatFactory.build(name="banner")
 
     # With assets
     fmt = FormatFactory.build(
@@ -37,7 +37,6 @@ from adcp.types.generated_poc.core.format import (
     Renders,
     Responsive,
 )
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.schemas import Format, FormatId
 
@@ -129,16 +128,18 @@ class FormatFactory(factory.Factory):
 
     format_id = factory.SubFactory(FormatIdFactory)
     name = factory.Sequence(lambda n: f"format_{n}")
-    type = FormatCategory.display
     is_standard = True
 
 
-# ── Category mapping ─────────────────────────────────────────────────
+# ── Category mapping (compat shim) ──────────────────────────────────
+# FormatCategory was removed in adcp 3.12. Format.type no longer exists.
+# BDD steps still pass type= as an extra field (Pydantic ignores in dev mode).
+# This mapping provides string values so existing step code doesn't crash.
 
-CATEGORY_MAP: dict[str, FormatCategory] = {
-    "display": FormatCategory.display,
-    "video": FormatCategory.video,
-    "audio": FormatCategory.audio,
-    "native": FormatCategory.native,
-    "dooh": FormatCategory.dooh,
+CATEGORY_MAP: dict[str, str | None] = {
+    "display": "display",
+    "video": "video",
+    "audio": "audio",
+    "native": "native",
+    "dooh": "dooh",
 }

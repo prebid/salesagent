@@ -166,7 +166,6 @@ def list_available_formats(
     is_responsive: bool | None = None,
     asset_types: list[str] | None = None,
     name_search: str | None = None,
-    type_filter: str | None = None,
 ) -> list[Format]:
     """List all formats available to a tenant from all registered creative agents.
 
@@ -179,7 +178,6 @@ def list_available_formats(
         is_responsive: Filter for responsive formats
         asset_types: Filter by asset types
         name_search: Search by name
-        type_filter: Filter by format type (display, video, audio)
 
     Returns:
         List of all available Format objects from all registered agents
@@ -210,7 +208,6 @@ def list_available_formats(
                 is_responsive=is_responsive,
                 asset_types=asset_types,
                 name_search=name_search,
-                type_filter=type_filter,
             )
         )
     except Exception as e:

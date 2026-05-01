@@ -241,7 +241,6 @@ class TestA2AErrorPropagation:
             "brand": {"domain": "testbrand.com"},
             "packages": [
                 create_test_package_request_dict(
-                    buyer_ref="pkg_1",
                     product_id="a2a_error_product",
                     pricing_option_id="cpm_usd_fixed",
                     budget=10000.0,
@@ -294,7 +293,6 @@ class TestA2AErrorPropagation:
             "brand": {"domain": "testbrand.com"},
             "packages": [
                 create_test_package_request_dict(
-                    buyer_ref="pkg_1",
                     product_id="a2a_error_product",
                     pricing_option_id="cpm_usd_fixed",
                     budget=10000.0,
@@ -325,7 +323,7 @@ class TestA2AErrorPropagation:
         """Test that A2A response includes all AdCP domain fields (not just cherry-picked ones).
 
         Per AdCP v2.4 spec and PR #113:
-        - Domain responses contain ONLY domain fields (buyer_ref, media_buy_id, packages, errors)
+        - Domain responses contain ONLY domain fields (media_buy_id, packages, errors)
         - Protocol fields (status, message, task_id, context_id) are added by ProtocolEnvelope wrapper
         - adcp_version is NOT included in individual responses (indicated by schema URL path)
 
@@ -354,7 +352,6 @@ class TestA2AErrorPropagation:
             "brand": {"domain": "testbrand.com"},
             "packages": [
                 create_test_package_request_dict(
-                    buyer_ref="pkg_1",
                     product_id="a2a_error_product",
                     pricing_option_id="cpm_usd_fixed",
                     budget=10000.0,
@@ -374,10 +371,7 @@ class TestA2AErrorPropagation:
         artifact_data = self.extract_data_from_artifact(artifact)
 
         # CRITICAL ASSERTIONS: All AdCP domain fields from CreateMediaBuyResponse schema
-        # Required AdCP domain field
-        assert "buyer_ref" in artifact_data, "Must include buyer_ref (AdCP spec required domain field)"
-
-        # Optional AdCP domain fields that were set (non-None values)
+        # Required AdCP domain fields that were set (non-None values)
         assert "media_buy_id" in artifact_data, "Must include media_buy_id (AdCP spec domain field)"
         assert "packages" in artifact_data, "Must include packages (AdCP spec domain field)"
         assert "creative_deadline" in artifact_data, "Must include creative_deadline (AdCP spec domain field)"

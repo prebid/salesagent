@@ -9,7 +9,6 @@ Refactored from raw ToolContext + manual patches to harness pattern.
 from __future__ import annotations
 
 import pytest
-from adcp.types import FormatCategory
 from adcp.types.generated_poc.core.format import (
     Assets,
     Assets5,
@@ -29,7 +28,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def test_list_creative_formats_request_minimal():
     """Test that ListCreativeFormatsRequest works with no params (all defaults)."""
     req = ListCreativeFormatsRequest()
-    assert req.type is None
     assert req.format_ids is None
 
 
@@ -40,14 +38,12 @@ def test_list_creative_formats_request_with_all_params():
         FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_4x3"),
     ]
     req = ListCreativeFormatsRequest(
-        type="video",
         format_ids=format_ids,
         is_responsive=True,
         name_search="video",
         min_width=640,
         max_height=480,
     )
-    assert req.type == FormatCategory.video or req.type.value == "video"
     assert len(req.format_ids) == 2
     assert req.format_ids[0].id == "video_16x9"
     assert req.format_ids[1].id == "video_4x3"
@@ -60,11 +56,10 @@ def test_list_creative_formats_request_with_all_params():
 AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
-def _fmt(fmt_id: str, name: str, type: FormatCategory = FormatCategory.display, **kwargs) -> Format:
+def _fmt(fmt_id: str, name: str, **kwargs) -> Format:
     """Shorthand for creating a Format object."""
     return Format(
         format_id=FormatId(agent_url=AGENT_URL, id=fmt_id),
-        type=type,
         name=name,
         is_standard=kwargs.pop("is_standard", True),
         **kwargs,
@@ -74,13 +69,13 @@ def _fmt(fmt_id: str, name: str, type: FormatCategory = FormatCategory.display, 
 def test_filtering_by_type(integration_db):
     """Test that type filter works correctly."""
     formats = [
-        _fmt("video_16x9", "Video 16:9", type=FormatCategory.video),
+        _fmt("video_16x9", "Video 16:9"),
         _fmt("display_300x250", "Display 300x250"),
     ]
     with CreativeFormatsEnv() as env:
         TenantFactory(tenant_id="test_tenant")
         env.set_registry_formats(formats)
-        req = ListCreativeFormatsRequest(type="video")
+        req = ListCreativeFormatsRequest(name_search="Video")
         response = env.call_impl(req=req)
 
     assert len(response.formats) == 1
@@ -92,7 +87,7 @@ def test_filtering_by_format_ids(integration_db):
     formats = [
         _fmt("display_300x250", "Display 300x250"),
         _fmt("display_728x90", "Display 728x90"),
-        _fmt("video_16x9", "Video 16:9", type=FormatCategory.video),
+        _fmt("video_16x9", "Video 16:9"),
     ]
     target_ids = [
         FormatId(agent_url=AGENT_URL, id="display_300x250"),
@@ -110,7 +105,11 @@ def test_filtering_by_format_ids(integration_db):
 
 
 def test_filtering_combined(integration_db):
-    """Test that multiple filters work together."""
+    """Test that multiple filters work together.
+
+    The type filter was removed in adcp 3.12, so min_width=500
+    now returns all formats with width >= 500 regardless of type.
+    """
     formats = [
         _fmt(
             "display_300x250",
@@ -125,18 +124,18 @@ def test_filtering_combined(integration_db):
         _fmt(
             "video_16x9",
             "Video 16:9",
-            type=FormatCategory.video,
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
         ),
     ]
     with CreativeFormatsEnv() as env:
         TenantFactory(tenant_id="test_tenant")
         env.set_registry_formats(formats)
-        req = ListCreativeFormatsRequest(type="display", min_width=500)
+        req = ListCreativeFormatsRequest(min_width=500)
         response = env.call_impl(req=req)
 
-    assert len(response.formats) == 1
-    assert response.formats[0].name == "Display 728x90"
+    assert len(response.formats) == 2
+    names = {f.name for f in response.formats}
+    assert names == {"Display 728x90", "Video 16:9"}
 
 
 def test_filtering_by_is_responsive(integration_db):
@@ -216,7 +215,6 @@ def test_filtering_by_asset_types(integration_db):
         _fmt(
             "video_player",
             "Video Player",
-            type=FormatCategory.video,
             assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         _fmt(
@@ -319,7 +317,6 @@ def test_new_filters_combined_with_existing(integration_db):
         _fmt(
             "video_16x9",
             "Video 16:9",
-            type=FormatCategory.video,
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
             assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
@@ -338,11 +335,13 @@ def test_new_filters_combined_with_existing(integration_db):
         TenantFactory(tenant_id="test_tenant")
         env.set_registry_formats(formats)
 
-        # Combine type + dimension
-        req = ListCreativeFormatsRequest(type="display", min_width=500)
+        # Combine dimension filter (type filter removed in adcp 3.12)
+        req = ListCreativeFormatsRequest(min_width=500)
         response = env.call_impl(req=req)
-        assert len(response.formats) == 1
-        assert response.formats[0].name == "Display 728x90"
+        assert len(response.formats) == 2
+        names = [f.name for f in response.formats]
+        assert "Display 728x90" in names
+        assert "Video 16:9" in names
 
         # Combine name_search + dimension
         req = ListCreativeFormatsRequest(name_search="display", max_width=400)
@@ -353,7 +352,7 @@ def test_new_filters_combined_with_existing(integration_db):
         assert "Custom Display" in names
 
         # Combine type + asset_types + dimensions
-        req = ListCreativeFormatsRequest(type="display", asset_types=["image"], max_width=400)
+        req = ListCreativeFormatsRequest(asset_types=["image"], max_width=400)
         response = env.call_impl(req=req)
         assert len(response.formats) == 2
         names = [f.name for f in response.formats]

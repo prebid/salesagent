@@ -49,7 +49,6 @@ Maximum name length: {max_length} characters."""
 
 
 def build_naming_prompt(
-    buyer_ref: str,
     campaign_name: str | None,
     brand_name: str | None,
     budget_info: str | None,
@@ -57,11 +56,11 @@ def build_naming_prompt(
     products: list[str],
     objectives: list[str] | None = None,
     max_length: int = 150,
+    buyer_ref: str = "",
 ) -> str:
     """Build the user prompt for name generation.
 
     Args:
-        buyer_ref: Buyer's reference ID
         campaign_name: Optional campaign name
         brand_name: Brand name from manifest
         budget_info: Budget string (e.g., "$10,000.00 USD")
@@ -69,12 +68,12 @@ def build_naming_prompt(
         products: List of product IDs
         objectives: Optional campaign objectives
         max_length: Maximum name length
+        buyer_ref: Deprecated, kept for backward compat
 
     Returns:
         Formatted prompt string
     """
     context_parts = [
-        f"Buyer Reference: {buyer_ref}",
         f"Campaign: {campaign_name or 'N/A'}",
         f"Brand: {brand_name or 'N/A'}",
     ]
@@ -94,7 +93,6 @@ def build_naming_prompt(
 
 Requirements:
 - Maximum {max_length} characters
-- Include buyer reference "{buyer_ref}" somewhere in the name
 - Professional and scannable
 - Captures the essence of the campaign
 
@@ -104,7 +102,6 @@ Campaign Details:
 
 async def generate_name_async(
     agent: Agent[None, OrderName],
-    buyer_ref: str,
     campaign_name: str | None,
     brand_name: str | None,
     budget_info: str | None,
@@ -112,12 +109,13 @@ async def generate_name_async(
     products: list[str],
     objectives: list[str] | None = None,
     max_length: int = 150,
+    buyer_ref: str = "",
 ) -> str:
     """Generate an order name using the agent.
 
     Args:
         agent: The naming agent
-        buyer_ref: Buyer's reference ID
+        buyer_ref: Deprecated, kept for backward compat
         campaign_name: Optional campaign name
         brand_name: Brand name from manifest
         budget_info: Budget string

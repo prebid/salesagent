@@ -42,11 +42,10 @@ def sample_request():
     end_time = start_time + timedelta(days=30)
     # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
     return CreateMediaBuyRequest(
-        buyer_ref="test_buyer_ref_123",
         brand={"domain": "testbrand.com"},
         packages=[
-            PackageRequest(product_id="prod_123", buyer_ref="pkg_001", budget=5000.0, pricing_option_id="test_pricing"),
-            PackageRequest(product_id="prod_456", buyer_ref="pkg_002", budget=5000.0, pricing_option_id="test_pricing"),
+            PackageRequest(product_id="prod_123", budget=5000.0, pricing_option_id="test_pricing"),
+            PackageRequest(product_id="prod_456", budget=5000.0, pricing_option_id="test_pricing"),
         ],
         start_time=start_time,
         end_time=end_time,
@@ -130,7 +129,7 @@ class TestGAMManualApprovalPath:
                 )
 
                 # Assert - Other required fields
-                assert response.buyer_ref == sample_request.buyer_ref, "buyer_ref must be preserved"
+                # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
                 assert response.workflow_step_id == "workflow_step_123", "workflow_step_id must be set"
 
     def test_manual_approval_failure_still_returns_packages(
@@ -262,7 +261,7 @@ class TestGAMActivationWorkflowPath:
             assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
 
             # Assert - Other required fields
-            assert response.buyer_ref == sample_request.buyer_ref, "buyer_ref must be preserved"
+            # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
             assert response.workflow_step_id == "activation_workflow_123", "workflow_step_id must be set"
             assert response.media_buy_id == mock_order_id, "media_buy_id must match order ID"
 

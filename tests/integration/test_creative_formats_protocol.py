@@ -23,7 +23,6 @@ from adcp.types.generated_poc.core.format import (
     Renders,
 )
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
@@ -44,7 +43,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _make_format(
     format_id: str,
     name: str,
-    type: FormatCategory = FormatCategory.display,
     renders: list | None = None,
     assets: list | None = None,
 ) -> Format:
@@ -52,7 +50,6 @@ def _make_format(
     return Format(
         format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
         name=name,
-        type=type,
         is_standard=True,
         renders=renders,
         assets=assets,
@@ -68,40 +65,37 @@ class TestCombinedFilters:
     """Covers: UC-005-MAIN-MCP-16 -- multiple filters applied conjunctively."""
 
     def test_combined_type_asset_dimension_filters(self, integration_db):
-        """UC-005-MAIN-MCP-16: type=display + asset_types=[image] + max_width=728.
+        """UC-005-MAIN-MCP-16: asset_types=[image] + max_width=728.
 
-        Given diverse formats, only display formats with image assets and
+        Given diverse formats, only formats with image assets and
         at least one render width <= 728 are returned.
+        The type filter was removed in adcp 3.12.
         """
-        # Display with image, width 300 -- SHOULD MATCH
+        # Image asset, width 300 -- SHOULD MATCH
         display_small_image = _make_format(
             "d_small",
             "Small Display Banner",
-            type=FormatCategory.display,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets(item_type="individual", asset_id="hero_image", required=True)],
         )
-        # Display with image, width 970 -- should NOT match (too wide)
+        # Image asset, width 970 -- should NOT match (too wide)
         display_wide_image = _make_format(
             "d_wide",
             "Wide Display Billboard",
-            type=FormatCategory.display,
             renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
             assets=[Assets(item_type="individual", asset_id="billboard_image", required=True)],
         )
-        # Display with video asset, width 300 -- should NOT match (wrong asset type)
+        # Video asset, width 300 -- should NOT match (wrong asset type)
         display_video = _make_format(
             "d_video",
             "Display Video Unit",
-            type=FormatCategory.display,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets5(item_type="individual", asset_id="hero_video", required=True)],
         )
-        # Video with image, width 300 -- should NOT match (wrong type)
+        # Image asset, width 300 -- SHOULD MATCH (type filter no longer applies)
         video_image = _make_format(
             "v_image",
             "Video Companion",
-            type=FormatCategory.video,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets(item_type="individual", asset_id="companion_image", required=True)],
         )
@@ -113,28 +107,26 @@ class TestCombinedFilters:
             env.set_registry_formats(all_formats)
 
             req = ListCreativeFormatsRequest(
-                type="display",
                 asset_types=["image"],
                 max_width=728,
             )
             response = env.call_impl(req=req)
 
-        assert len(response.formats) == 1
-        assert response.formats[0].format_id.id == "d_small"
+        assert len(response.formats) == 2
+        returned_ids = {f.format_id.id for f in response.formats}
+        assert returned_ids == {"d_small", "v_image"}
 
     def test_combined_filters_via_mcp(self, integration_db):
         """UC-005-MAIN-MCP-16: same combined filter logic through MCP wrapper."""
         display_match = _make_format(
             "d_match",
             "Matching Display",
-            type=FormatCategory.display,
             renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
             assets=[Assets(item_type="individual", asset_id="banner_image", required=True)],
         )
         display_no_match = _make_format(
             "d_nomatch",
             "Non-Matching Display",
-            type=FormatCategory.display,
             renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
             assets=[Assets(item_type="individual", asset_id="wide_image", required=True)],
         )
@@ -144,7 +136,6 @@ class TestCombinedFilters:
             env.set_registry_formats([display_match, display_no_match])
 
             response = env.call_mcp(
-                type=FormatCategory.display,
                 asset_types=[AssetContentType.image],
                 max_width=728,
             )
@@ -157,14 +148,12 @@ class TestCombinedFilters:
         display_match = _make_format(
             "d_a2a_match",
             "A2A Display Match",
-            type=FormatCategory.display,
             renders=[Renders(role="primary", dimensions=Dimensions(width=320, height=50))],
             assets=[Assets(item_type="individual", asset_id="mobile_image", required=True)],
         )
         audio_format = _make_format(
             "a_nomatch",
             "Audio Ad",
-            type=FormatCategory.audio,
         )
 
         with CreativeFormatsEnv() as env:
@@ -172,7 +161,6 @@ class TestCombinedFilters:
             env.set_registry_formats([display_match, audio_format])
 
             req = ListCreativeFormatsRequest(
-                type="display",
                 asset_types=["image"],
                 max_width=728,
             )
@@ -183,13 +171,12 @@ class TestCombinedFilters:
 
     def test_all_filters_conjunctive_empty_result(self, integration_db):
         """UC-005-MAIN-MCP-16: if no format matches all filters, result is empty."""
-        # Video format -- fails type=display filter
+        # Video asset format -- fails asset_types=["image"] filter
         only_video = _make_format(
             "v1",
             "Video Only",
-            type=FormatCategory.video,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets(item_type="individual", asset_id="vid", required=True)],
+            assets=[Assets5(item_type="individual", asset_id="vid", required=True)],
         )
 
         with CreativeFormatsEnv() as env:
@@ -197,7 +184,6 @@ class TestCombinedFilters:
             env.set_registry_formats([only_video])
 
             req = ListCreativeFormatsRequest(
-                type="display",
                 asset_types=["image"],
                 max_width=728,
             )
@@ -225,7 +211,7 @@ class TestMcpToolResultWrapping:
 
         formats = [
             _make_format("display_300", "Medium Rectangle"),
-            _make_format("video_15s", "Pre-roll 15s", type=FormatCategory.video),
+            _make_format("video_15s", "Pre-roll 15s"),
         ]
 
         with CreativeFormatsEnv() as env:
@@ -282,7 +268,7 @@ class TestMcpToolResultWrapping:
 
         formats = [
             _make_format("fmt_a", "Format A"),
-            _make_format("fmt_b", "Format B", type=FormatCategory.video),
+            _make_format("fmt_b", "Format B"),
         ]
 
         with CreativeFormatsEnv() as env:
@@ -320,7 +306,7 @@ class TestFullCatalogViaA2A:
         formats = [
             _make_format("display_300x250", "Medium Rectangle"),
             _make_format("display_728x90", "Leaderboard"),
-            _make_format("video_preroll", "Pre-roll 15s", type=FormatCategory.video),
+            _make_format("video_preroll", "Pre-roll 15s"),
         ]
 
         with CreativeFormatsEnv() as env:
@@ -356,7 +342,6 @@ class TestFullCatalogViaA2A:
         assert result_fmt.format_id.id == "display_standard"
         assert str(result_fmt.format_id.agent_url).rstrip("/") == DEFAULT_AGENT_URL
         assert result_fmt.name == "Standard Display"
-        assert result_fmt.type == FormatCategory.display
 
     def test_a2a_empty_catalog_returns_empty_formats(self, integration_db):
         """UC-005-MAIN-REST-01: empty registry returns empty formats list, not error."""
@@ -373,7 +358,7 @@ class TestFullCatalogViaA2A:
         """UC-005-MAIN-REST-01: A2A and _impl return identical results."""
         formats = [
             _make_format("d1", "Display One"),
-            _make_format("v1", "Video One", type=FormatCategory.video),
+            _make_format("v1", "Video One"),
         ]
 
         with CreativeFormatsEnv() as env:

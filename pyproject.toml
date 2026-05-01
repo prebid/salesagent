@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp>=3.10.0",
+    "adcp>=3.12.0",
     "fastmcp>=3.2.0", # v3.2 fixes GHSA-m8x7-r2rg-vh5g, GHSA-rww4-4w9c-7733
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",

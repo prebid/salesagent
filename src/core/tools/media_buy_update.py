@@ -91,8 +91,8 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
 
-    # Query database for media buy (try media_buy_id first, then buyer_ref)
-    media_buy = repo.get_by_id_or_buyer_ref(media_buy_id)
+    # Query database for media buy by ID
+    media_buy = repo.get_by_id(media_buy_id)
 
     if not media_buy:
         raise ValueError(f"Media buy '{media_buy_id}' not found.")
@@ -157,22 +157,11 @@ def _update_media_buy_impl(
         assert uow.session is not None
         session = uow.session
 
-        # Resolve media_buy_id from buyer_ref if needed (AdCP oneOf constraint)
+        # media_buy_id is required by library base class
         media_buy_id_to_use = req.media_buy_id
-        if not media_buy_id_to_use and req.buyer_ref:
-            media_buy = uow.media_buys.get_by_buyer_ref(req.buyer_ref)
-            if not media_buy:
-                raise ValueError(f"Media buy with buyer_ref '{req.buyer_ref}' not found")
-            media_buy_id_to_use = media_buy.media_buy_id
-            logger.info(
-                f"[update_media_buy] Resolved buyer_ref '{req.buyer_ref}' to media_buy_id '{media_buy_id_to_use}'"
-            )
 
         if not media_buy_id_to_use:
-            raise ValueError("Either media_buy_id or buyer_ref is required")
-
-        # Update req.media_buy_id for downstream processing
-        req.media_buy_id = media_buy_id_to_use
+            raise ValueError("media_buy_id is required")
 
         # Verify principal owns this media buy
         _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
@@ -240,7 +229,6 @@ def _update_media_buy_impl(
                 for pkg_update in req.packages:
                     simulated_affected.append(
                         AffectedPackage(
-                            buyer_ref=req.buyer_ref or "",
                             package_id=pkg_update.package_id or "",
                             paused=pkg_update.paused if pkg_update.paused is not None else False,
                             buyer_package_ref=pkg_update.package_id,
@@ -251,7 +239,6 @@ def _update_media_buy_impl(
             # Build simulated response
             dry_run_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
-                buyer_ref=req.buyer_ref or "",
                 affected_packages=simulated_affected,
                 context=req.context,
             )
@@ -272,7 +259,6 @@ def _update_media_buy_impl(
             # This mirrors create_media_buy's raw_request pattern.
             approval_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
-                buyer_ref=req.buyer_ref or "",
                 affected_packages=[],  # Not yet applied — pending approval
                 context=req.context,
             )
@@ -399,7 +385,6 @@ def _update_media_buy_impl(
             action = "pause_media_buy" if req.paused else "resume_media_buy"
             result = adapter.update_media_buy(
                 media_buy_id=req.media_buy_id,
-                buyer_ref=req.buyer_ref or "",
                 action=action,
                 package_id=None,
                 budget=None,
@@ -420,12 +405,10 @@ def _update_media_buy_impl(
                 # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields
                 # Use getattr to safely access discriminated union fields
                 media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
-                buyer_ref_val = getattr(result, "buyer_ref", req.buyer_ref or "")
                 affected_pkgs = getattr(result, "affected_packages", [])
 
                 success_response = UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref_val,
                     affected_packages=affected_pkgs,
                 )
                 # Log successful update_media_buy (pause/resume)
@@ -438,7 +421,6 @@ def _update_media_buy_impl(
                     success=True,
                     details={
                         "media_buy_id": req.media_buy_id,
-                        "buyer_ref": req.buyer_ref,
                         "action": action,
                         "affected_packages_count": len(affected_pkgs),
                     },
@@ -459,7 +441,6 @@ def _update_media_buy_impl(
                     action = "pause_package" if pkg_update.paused else "resume_package"
                     result = adapter.update_media_buy(
                         media_buy_id=req.media_buy_id,
-                        buyer_ref=req.buyer_ref or "",
                         action=action,
                         package_id=pkg_update.package_id,
                         budget=None,
@@ -531,7 +512,6 @@ def _update_media_buy_impl(
 
                     result = adapter.update_media_buy(
                         media_buy_id=req.media_buy_id,
-                        buyer_ref=req.buyer_ref or "",
                         action="update_package_budget",
                         package_id=pkg_update.package_id,
                         budget=int(budget_amount),
@@ -555,7 +535,6 @@ def _update_media_buy_impl(
                     # At this point, pkg_update.package_id is guaranteed to be str (checked above)
                     affected_packages_list.append(
                         AffectedPackage(
-                            buyer_ref=req.buyer_ref or "",  # Required by AdCP
                             package_id=pkg_update.package_id,  # Required by AdCP (guaranteed str)
                             paused=False,  # Package not paused (active)
                             buyer_package_ref=pkg_update.package_id,  # Internal field (for backward compat)
@@ -585,8 +564,8 @@ def _update_media_buy_impl(
                     from src.core.database.models import Creative as DBCreative
                     from src.core.database.models import CreativeAssignment as DBAssignment
 
-                    # Resolve media_buy_id (might be buyer_ref)
-                    media_buy_obj = uow.media_buys.get_by_id_or_buyer_ref(req.media_buy_id)
+                    # Resolve media_buy_id
+                    media_buy_obj = uow.media_buys.get_by_id(req.media_buy_id)
 
                     if not media_buy_obj:
                         error_msg = f"Media buy '{req.media_buy_id}' not found"
@@ -777,7 +756,6 @@ def _update_media_buy_impl(
                     # Store results for affected_packages response
                     affected_packages_list.append(
                         AffectedPackage(
-                            buyer_ref=req.buyer_ref or "",  # Required by AdCP
                             package_id=pkg_update.package_id,  # Required by AdCP
                             paused=False,  # Package not paused (active)
                             buyer_package_ref=pkg_update.package_id,  # Internal field (for backward compat)
@@ -840,7 +818,6 @@ def _update_media_buy_impl(
                     synced_ids = [r.creative_id for r in sync_response.creatives if r.action in ["created", "updated"]]
                     affected_packages_list.append(
                         AffectedPackage(
-                            buyer_ref=req.buyer_ref or "",
                             package_id=pkg_update.package_id,
                             paused=False,
                             buyer_package_ref=pkg_update.package_id,
@@ -869,7 +846,7 @@ def _update_media_buy_impl(
                     from src.core.database.models import Product as ProductModel
 
                     # Resolve media_buy_id
-                    media_buy_obj = uow.media_buys.get_by_id_or_buyer_ref(req.media_buy_id)
+                    media_buy_obj = uow.media_buys.get_by_id(req.media_buy_id)
 
                     if not media_buy_obj:
                         error_msg = f"Media buy '{req.media_buy_id}' not found"
@@ -1013,7 +990,6 @@ def _update_media_buy_impl(
                     # Track in affected_packages
                     affected_packages_list.append(
                         AffectedPackage(
-                            buyer_ref=req.buyer_ref or "",
                             package_id=pkg_update.package_id,
                             paused=False,
                             buyer_package_ref=pkg_update.package_id,
@@ -1067,7 +1043,6 @@ def _update_media_buy_impl(
                     # Track targeting update in affected_packages
                     affected_packages_list.append(
                         AffectedPackage(
-                            buyer_ref=pkg_update.package_id,
                             package_id=pkg_update.package_id,
                             paused=False,  # Package not paused (active)
                             changes_applied={"targeting": pkg_update.targeting_overlay},
@@ -1148,7 +1123,6 @@ def _update_media_buy_impl(
                         package_ref_str: str = package_ref
                         affected_packages_list.append(
                             AffectedPackage(
-                                buyer_ref=package_ref_str,  # Required: buyer's package reference
                                 package_id=package_ref_str,  # Required: package identifier
                                 paused=False,  # Package not paused (active)
                                 buyer_package_ref=None,  # Internal field (not applicable for top-level budget updates)
@@ -1256,12 +1230,11 @@ def _update_media_buy_impl(
 
         # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields (workflow_step_id, affected_packages)
         # affected_packages_list contains AffectedPackage objects with both:
-        # - AdCP-required fields (buyer_ref, package_id) for spec compliance
+        # - AdCP-required fields (package_id) for spec compliance
         # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
         final_response = UpdateMediaBuySuccess(
             media_buy_id=req.media_buy_id or "",
-            buyer_ref=req.buyer_ref or "",
             affected_packages=affected_packages_list,
             context=req.context,
         )
@@ -1276,7 +1249,6 @@ def _update_media_buy_impl(
             success=True,
             details={
                 "media_buy_id": req.media_buy_id,
-                "buyer_ref": req.buyer_ref,
                 "affected_packages_count": len(affected_packages_list),
                 "has_budget_update": req.budget is not None,
                 "has_pause_update": req.paused is not None,
@@ -1297,7 +1269,6 @@ def _update_media_buy_impl(
 
 def _build_update_request(
     media_buy_id: str | None = None,
-    buyer_ref: str | None = None,
     paused: bool | None = None,
     flight_start_date: str | None = None,
     flight_end_date: str | None = None,
@@ -1347,8 +1318,6 @@ def _build_update_request(
     request_params: dict[str, Any] = {}
     if media_buy_id is not None:
         request_params["media_buy_id"] = media_buy_id
-    if buyer_ref is not None:
-        request_params["buyer_ref"] = buyer_ref
     if paused is not None:
         request_params["paused"] = paused
     if effective_start is not None:
@@ -1386,7 +1355,6 @@ def _build_update_request(
 
 async def update_media_buy(
     media_buy_id: str | None = None,
-    buyer_ref: str | None = None,
     paused: bool = None,
     flight_start_date: str = None,
     flight_end_date: str = None,
@@ -1411,8 +1379,7 @@ async def update_media_buy(
     FastMCP automatically validates and coerces JSON inputs to Pydantic models.
 
     Args:
-        media_buy_id: Media buy ID to update (oneOf with buyer_ref - exactly one required)
-        buyer_ref: Buyer reference to identify media buy (oneOf with media_buy_id - exactly one required)
+        media_buy_id: Media buy ID to update (required)
         paused: True to pause campaign, False to resume (adcp 2.12.0+)
         flight_start_date: Change start date (if not started)
         flight_end_date: Extend or shorten campaign
@@ -1438,7 +1405,6 @@ async def update_media_buy(
     # FastMCP already coerced JSON inputs to typed Pydantic models
     req = _build_update_request(
         media_buy_id=media_buy_id,
-        buyer_ref=buyer_ref,
         paused=paused,
         flight_start_date=flight_start_date,
         flight_end_date=flight_end_date,
@@ -1463,7 +1429,6 @@ async def update_media_buy(
 
 def update_media_buy_raw(
     media_buy_id: str | None = None,
-    buyer_ref: str | None = None,
     paused: bool = None,
     flight_start_date: str = None,
     flight_end_date: str = None,
@@ -1488,8 +1453,7 @@ def update_media_buy_raw(
     Delegates to the shared implementation.
 
     Args:
-        media_buy_id: The ID of the media buy to update (oneOf with buyer_ref - exactly one required)
-        buyer_ref: Buyer reference to identify media buy (oneOf with media_buy_id - exactly one required)
+        media_buy_id: The ID of the media buy to update (required)
         paused: True to pause campaign, False to resume (adcp 2.12.0+)
         flight_start_date: Change start date
         flight_end_date: Change end date
@@ -1514,7 +1478,6 @@ def update_media_buy_raw(
     """
     req = _build_update_request(
         media_buy_id=media_buy_id,
-        buyer_ref=buyer_ref,
         paused=paused,
         flight_start_date=flight_start_date,
         flight_end_date=flight_end_date,

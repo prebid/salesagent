@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 from adcp.types.generated_poc.core.format import Dimensions, Renders, Responsive
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory
@@ -30,7 +29,7 @@ FILTER_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP]
 def _fmt(
     fmt_id: str,
     name: str,
-    type: FormatCategory = FormatCategory.display,
+    type: str | None = "display",
     **kwargs,
 ) -> Format:
     """Shorthand for creating a Format object."""
@@ -46,7 +45,7 @@ def _fmt(
 def _responsive_fmt(
     fmt_id: str,
     name: str,
-    type: FormatCategory = FormatCategory.display,
+    type: str | None = "display",
     **kwargs,
 ) -> Format:
     """Create a responsive format (dimensions.responsive.width=True)."""
@@ -73,7 +72,7 @@ def _fixed_fmt(
     name: str,
     width: int = 300,
     height: int = 250,
-    type: FormatCategory = FormatCategory.display,
+    type: str | None = "display",
     **kwargs,
 ) -> Format:
     """Create a non-responsive format with fixed dimensions."""
@@ -123,7 +122,7 @@ class TestFormatIdsFilter:
         formats = [
             _fmt("display_300", "Medium Rectangle"),
             _fmt("display_728", "Leaderboard"),
-            _fmt("video_15s", "Pre-roll 15s", type=FormatCategory.video),
+            _fmt("video_15s", "Pre-roll 15s", type="video"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -214,7 +213,7 @@ class TestIsResponsiveFilter:
         """UC-005-MAIN-MCP-10: is_responsive=True returns only responsive formats."""
         formats = [
             _responsive_fmt("responsive_banner", "Responsive Banner"),
-            _responsive_fmt("responsive_video", "Responsive Video", type=FormatCategory.video),
+            _responsive_fmt("responsive_video", "Responsive Video", type="video"),
             _fixed_fmt("fixed_300", "Fixed 300x250"),
         ]
         with CreativeFormatsEnv() as env:

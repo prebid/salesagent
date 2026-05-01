@@ -26,7 +26,6 @@ from typing import Any
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
-from adcp.types import FormatCategory as FormatType
 from adcp.types.generated_poc.core.error import Error as AdCPResponseError
 from adcp.types.generated_poc.core.format import Assets
 from yarl import URL
@@ -49,7 +48,7 @@ class FormatFetchResult:
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
 
 
-def _create_mock_format(format_id_str: str, name: str, format_type: FormatType, asset_type: str) -> Format:
+def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Format:
     """Create a single mock format with proper typing for testing."""
     from adcp.types.generated_poc.core.format import Assets5
 
@@ -75,7 +74,6 @@ def _create_mock_format(format_id_str: str, name: str, format_type: FormatType, 
     return Format(
         format_id=FormatId(id=format_id_str, agent_url=url("https://creative.adcontextprotocol.org")),
         name=name,
-        type=format_type,
         assets=assets,
         is_standard=True,  # Mock formats are standard formats
         platform_config=None,
@@ -94,17 +92,17 @@ def _get_mock_formats() -> list[Format]:
     """
     # Create mock formats using our Format class (which includes is_standard field)
     return [
-        _create_mock_format("display_300x250_image", "Medium Rectangle", FormatType.display, "image"),
-        _create_mock_format("display_728x90_image", "Leaderboard", FormatType.display, "image"),
-        _create_mock_format("display_300x600_image", "Half Page", FormatType.display, "image"),
-        _create_mock_format("display_160x600_image", "Wide Skyscraper", FormatType.display, "image"),
-        _create_mock_format("display_320x50_image", "Mobile Leaderboard", FormatType.display, "image"),
-        _create_mock_format("video_standard", "Standard Video", FormatType.video, "video"),
-        _create_mock_format("video_standard_30s", "Standard Video 30s", FormatType.video, "video"),
-        _create_mock_format("video_vast", "VAST Video", FormatType.video, "video"),
-        _create_mock_format("display_image", "Display Image", FormatType.display, "image"),
-        _create_mock_format("display_html", "Display HTML", FormatType.display, "image"),
-        _create_mock_format("display_js", "Display JavaScript", FormatType.display, "image"),
+        _create_mock_format("display_300x250_image", "Medium Rectangle", "image"),
+        _create_mock_format("display_728x90_image", "Leaderboard", "image"),
+        _create_mock_format("display_300x600_image", "Half Page", "image"),
+        _create_mock_format("display_160x600_image", "Wide Skyscraper", "image"),
+        _create_mock_format("display_320x50_image", "Mobile Leaderboard", "image"),
+        _create_mock_format("video_standard", "Standard Video", "video"),
+        _create_mock_format("video_standard_30s", "Standard Video 30s", "video"),
+        _create_mock_format("video_vast", "VAST Video", "video"),
+        _create_mock_format("display_image", "Display Image", "image"),
+        _create_mock_format("display_html", "Display HTML", "image"),
+        _create_mock_format("display_js", "Display JavaScript", "image"),
     ]
 
 
@@ -272,12 +270,9 @@ class CreativeAgentRegistry:
             if asset_types:
                 typed_asset_types = [AssetType(at) for at in asset_types]
 
-            # Convert string type_filter to FormatType enum
-            typed_format_type: FormatType | None = None
-            if type_filter:
-                typed_format_type = FormatType(type_filter)
-
             # Build request parameters
+            # Note: type_filter (FormatCategory) removed in adcp 3.12 — formats are
+            # categorized structurally via assets[].asset_type, not a top-level enum.
             request = ListCreativeFormatsRequest(
                 max_width=max_width,
                 max_height=max_height,
@@ -286,7 +281,6 @@ class CreativeAgentRegistry:
                 is_responsive=is_responsive,
                 asset_types=typed_asset_types,
                 name_search=name_search,
-                type=typed_format_type,
             )
 
             # Call agent using adcp library
@@ -694,10 +688,6 @@ class CreativeAgentRegistry:
                 or query_lower in fmt.name.lower()
                 or (fmt.description and query_lower in fmt.description.lower())
             ):
-                # Apply type filter if provided
-                if type_filter and fmt.type != type_filter:
-                    continue
-
                 results.append(fmt)
 
         return results

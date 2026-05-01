@@ -77,7 +77,6 @@ class TestAccountModel:
                 governance_agents=[
                     {
                         "url": "https://gov.example.com",
-                        "authentication": {"schemes": ["Bearer"], "credentials": "x" * 32},
                     }
                 ],
                 sandbox=False,

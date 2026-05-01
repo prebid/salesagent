@@ -33,7 +33,6 @@ class TestBuildNamingPrompt:
     def test_basic_prompt(self):
         """Builds prompt with required fields."""
         prompt = build_naming_prompt(
-            buyer_ref="ACME-001",
             campaign_name="Holiday Campaign",
             brand_name="Nike",
             budget_info="$10,000.00 USD",
@@ -41,7 +40,7 @@ class TestBuildNamingPrompt:
             products=["video_premium", "display_standard"],
         )
 
-        assert "ACME-001" in prompt
+        # buyer_ref no longer included in prompt (removed from AdCP in 3.12)
         assert "Holiday Campaign" in prompt
         assert "Nike" in prompt
         assert "$10,000.00 USD" in prompt
@@ -52,7 +51,6 @@ class TestBuildNamingPrompt:
     def test_prompt_with_objectives(self):
         """Includes objectives when provided."""
         prompt = build_naming_prompt(
-            buyer_ref="ACME-001",
             campaign_name=None,
             brand_name=None,
             budget_info=None,
@@ -69,7 +67,6 @@ class TestBuildNamingPrompt:
     def test_prompt_with_none_values(self):
         """Handles None values gracefully."""
         prompt = build_naming_prompt(
-            buyer_ref="TEST-001",
             campaign_name=None,
             brand_name=None,
             budget_info=None,
@@ -77,14 +74,13 @@ class TestBuildNamingPrompt:
             products=["product_1"],
         )
 
-        assert "TEST-001" in prompt
+        # buyer_ref no longer included in prompt (removed from AdCP in 3.12)
         assert "N/A" in prompt  # None values become N/A
         assert "Jan 1-7, 2025" in prompt
 
     def test_max_length_in_prompt(self):
         """Max length is included in prompt."""
         prompt = build_naming_prompt(
-            buyer_ref="TEST-001",
             campaign_name="Test",
             brand_name="Brand",
             budget_info=None,
@@ -130,7 +126,6 @@ class TestGenerateNameAsync:
 
         name = await generate_name_async(
             agent=mock_agent,
-            buyer_ref="ACME-001",
             campaign_name="Holiday Campaign",
             brand_name="Nike",
             budget_info="$10,000.00 USD",
@@ -151,7 +146,6 @@ class TestGenerateNameAsync:
 
         name = await generate_name_async(
             agent=mock_agent,
-            buyer_ref="ACME-001",
             campaign_name="Campaign",
             brand_name=None,
             budget_info=None,
@@ -173,7 +167,6 @@ class TestGenerateNameAsync:
 
         name = await generate_name_async(
             agent=mock_agent,
-            buyer_ref="ACME-001",
             campaign_name="Campaign",
             brand_name=None,
             budget_info=None,
@@ -194,7 +187,6 @@ class TestGenerateNameAsync:
         with pytest.raises(Exception, match="API Error"):
             await generate_name_async(
                 agent=mock_agent,
-                buyer_ref="ACME-001",
                 campaign_name="Campaign",
                 brand_name=None,
                 budget_info=None,

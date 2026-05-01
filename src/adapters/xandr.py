@@ -512,7 +512,7 @@ class XandrAdapter(AdServerAdapter):
                     campaign_name = brand.domain
                 elif isinstance(brand, dict):
                     campaign_name = brand.get("domain")
-            campaign_name = campaign_name or f"AdCP Campaign {request.buyer_ref}"
+            campaign_name = campaign_name or "AdCP Campaign"
 
             io_data = {
                 "insertion-order": {
@@ -618,7 +618,6 @@ class XandrAdapter(AdServerAdapter):
     def update_media_buy(
         self,
         media_buy_id: str,
-        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,

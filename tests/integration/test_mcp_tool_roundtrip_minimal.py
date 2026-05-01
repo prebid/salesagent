@@ -60,11 +60,9 @@ class TestMCPToolRoundtripMinimal:
             result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "buyer_ref": "test_buyer_minimal",
                     "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
-                            "buyer_ref": "test_buyer_minimal_pkg1",
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                             "budget": 1000.0,
@@ -99,11 +97,9 @@ class TestMCPToolRoundtripMinimal:
             create_result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "buyer_ref": "test_buyer_update",
                     "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
-                            "buyer_ref": "test_buyer_update_pkg1",
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                             "budget": 1000.0,
@@ -244,11 +240,9 @@ class TestMCPToolRoundtripMinimal:
             create_result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "buyer_ref": "test_buyer_perf",
                     "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
-                            "buyer_ref": "test_buyer_perf_pkg1",
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                             "budget": 1000.0,
