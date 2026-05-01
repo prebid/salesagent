@@ -23,10 +23,7 @@ Then in your template, add browse buttons:
         <div style="padding: 1.5rem; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
             <h3 id="picker-modal-title" style="margin: 0;">Select Items</h3>
             <div id="picker-tree-controls" style="display: none; gap: 0.5rem;">
-                <button type="button" onclick="window.inventoryPicker.expandToSelected()" class="btn btn-sm btn-primary" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">
-                    Expand to Selected
-                </button>
-                <button type="button" onclick="window.inventoryPicker.expandAll()" class="btn btn-sm btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">
+<button type="button" onclick="window.inventoryPicker.expandAll()" class="btn btn-sm btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">
                     Expand All
                 </button>
                 <button type="button" onclick="window.inventoryPicker.collapseAll()" class="btn btn-sm btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">
@@ -79,6 +76,7 @@ Then in your template, add browse buttons:
 
     // State
     let currentPickerType = null;
+    let adUnitTree = null;
     let inventoryPickerCache = {
         adUnits: new Map(),
         placements: new Map()
@@ -93,9 +91,8 @@ Then in your template, add browse buttons:
         close: closeInventoryPicker,
         apply: applyInventorySelection,
         triggerSearch: triggerSearch,
-        expandAll: expandAllTreeNodes,
-        collapseAll: collapseAllTreeNodes,
-        expandToSelected: expandToSelected,
+        expandAll: () => adUnitTree && adUnitTree.expandAll(),
+        collapseAll: () => adUnitTree && adUnitTree.collapseAll(),
         setOnApplyCallback: (callback) => { onApplyCallback = callback; },
         cache: inventoryPickerCache,  // Expose cache for external access
         config: config
@@ -148,8 +145,24 @@ Then in your template, add browse buttons:
 
     function loadInventory(type, search = '') {
         if (type === 'ad_unit') {
-            // Use shared tree partial for ad unit hierarchy
-            loadInventoryTree(search, treeApiUrl, 'inventory-picker-list', config.adUnitFieldId, inventoryPickerCache.adUnits);
+            // Get current selections from hidden field
+            const field = document.getElementById(config.adUnitFieldId);
+            const selectedIds = new Set(field ? field.value.split(',').filter(Boolean) : []);
+
+            if (!adUnitTree) {
+                adUnitTree = initInventoryTree({
+                    apiUrl: treeApiUrl,
+                    containerId: 'inventory-picker-list',
+                    showCheckboxes: true,
+                    selectedIds: selectedIds,
+                    onSelect: (nodeId, nodeData) => {
+                        inventoryPickerCache.adUnits.set(nodeId, nodeData);
+                    },
+                });
+            } else {
+                adUnitTree.setSelectedIds(selectedIds);
+            }
+            if (search) adUnitTree.search(search);
         } else {
             loadPlacementsList(search);
         }
@@ -216,9 +229,10 @@ Then in your template, add browse buttons:
     }
 
     function applyInventorySelection() {
-        const list = document.getElementById('inventory-picker-list');
-        const checkboxes = list.querySelectorAll('input[type="checkbox"]:checked');
-        const selectedIds = Array.from(checkboxes).map(cb => cb.value);
+        const selectedIds = (currentPickerType === 'ad_unit' && adUnitTree)
+            ? Array.from(adUnitTree.getSelectedIds())
+            : Array.from(document.getElementById('inventory-picker-list')
+                .querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
 
         if (currentPickerType === 'ad_unit') {
             // Update hidden field
@@ -233,9 +247,9 @@ Then in your template, add browse buttons:
                 if (selectedIds.length === 0) {
                     display.innerHTML = '<span class="text-muted">No ad units selected</span>';
                 } else {
-                    // Get names from cache
+                    // Get names from tree cache or picker cache
                     const names = selectedIds.map(id => {
-                        const item = inventoryPickerCache.adUnits.get(id);
+                        const item = (adUnitTree && adUnitTree.getNodeData(id)) || inventoryPickerCache.adUnits.get(id);
                         return item ? item.name : id;
                     });
                     display.innerHTML = names.map((name, idx) =>

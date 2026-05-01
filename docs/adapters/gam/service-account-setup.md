@@ -14,7 +14,7 @@ The Prebid Sales Agent supports two authentication methods for Google Ad Manager
 Instead of partners sending us their service account JSON credentials, we:
 1. Create a service account in our GCP project
 2. Provide you with the service account email
-3. You add this email as a user in your GAM with Trafficker role
+3. You authorize this email as an API user in your GAM (under Admin → Global Settings → API access)
 4. We handle all credential management securely
 
 ## Service Account Benefits
@@ -126,22 +126,30 @@ If you haven't set these up yet, see your system administrator or cloud platform
 6. Wait a few seconds while we create the service account in our GCP project
 7. Copy the service account email that appears
 
-### Step 2: Add Service Account to Your GAM
+### Step 2: Authorize the Service Account in Your GAM
+
+> **Important:** Service accounts are **not** added through the regular
+> **Access & authorization → Users** flow. That flow sends an email invitation,
+> which a service account has no inbox to accept. Use the **API access** flow
+> under Global Settings instead.
 
 1. Log into your [Google Ad Manager](https://admanager.google.com/) account
-2. Navigate to **Admin** → **Access & authorization** → **Users**
-3. Click **New user**
-4. Paste the service account email from Step 1
-5. Assign role: **Trafficker** (recommended)
-6. Under **Teams**, select specific advertisers (optional but recommended for security)
-7. Click **Save**
+2. Navigate to **Admin** → **Global Settings**
+3. Scroll to the **API access** section and ensure **API access** is toggled on
+4. Click **Add a service account user**
+5. Paste the service account email from Step 1
+6. Assign role: **Trafficker** (recommended)
+7. Under **Teams**, select specific advertisers (optional but recommended for security)
+8. Click **Save**
 
 ### Step 3: Test Connection
 
 1. Return to the Admin UI settings page
 2. Click **Test Connection** button
 3. If successful, you're done! If not, verify:
-   - Service account email was added correctly in GAM
+   - API access is enabled under GAM Admin → Global Settings
+   - The service account was added via **Add a service account user** (not the Users page)
+   - The service account email now appears on GAM Admin → **Access & authorization** → **Users** as an active user — this is how you confirm the authorization took effect
    - Trafficker role was assigned
    - You clicked Save in GAM
 
@@ -251,9 +259,10 @@ curl -X POST http://localhost:8000/tenant/{tenant_id}/gam/configure \
 **Cause**: Service account doesn't have required permissions in GAM
 
 **Solution**:
-1. Verify the service account is added as a user in GAM
-2. Check that "Trafficker" role (or equivalent) is assigned
-3. Ensure the service account has access to the specific advertiser
+1. Confirm the service account was authorized under Admin → Global Settings → **API access** → **Add a service account user** (not through the Users page — that path sends an email invitation and does not work for service accounts)
+2. Open Admin → **Access & authorization** → **Users** and confirm the service account email appears there as an active user — this is how you verify the authorization took effect
+3. Check that "Trafficker" role (or equivalent) is assigned
+4. Ensure the service account has access to the specific advertiser
 
 ### "Network Code Not Found" Error
 

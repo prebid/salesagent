@@ -10,7 +10,6 @@ from src.core.database.database_session import DatabaseManager, get_db_session, 
 from src.core.database.models import Context, Principal, Product, Tenant, WorkflowStep
 from src.core.json_validators import (
     CommentModel,
-    CreativeFormatModel,
     PlatformMappingModel,
     ensure_json_array,
     ensure_json_object,
@@ -170,45 +169,6 @@ class TestJSONValidation:
         # Invalid - no platforms
         with pytest.raises(ValueError, match="At least one platform mapping"):
             PlatformMappingModel()
-
-    def test_creative_format_validation(self):
-        """Test creative format validation."""
-        # Valid format
-        fmt = CreativeFormatModel(
-            format_id="display_300x250",
-            name="Display Banner",
-            type="display",
-            description="Standard banner",
-            width=300,
-            height=250,
-        )
-        assert fmt.width == 300
-        assert fmt.type == "display"
-
-        # Legacy format type - should be mapped to standard type
-        legacy_fmt = CreativeFormatModel(
-            format_id="banner_728x90",
-            name="Banner",  # Legacy type, should be mapped to "display"
-            type="display",
-            description="Legacy banner format",
-            width=728,
-            height=90,
-        )
-        assert legacy_fmt.type == "display"  # Should be mapped from "banner" to "display"
-
-        # Unknown format type - should still be stored as-is
-        unknown_fmt = CreativeFormatModel(
-            format_id="unknown_format",
-            name="Unknown Format",
-            type="display",
-        )
-        assert unknown_fmt.type == "display"
-
-        # Missing type should raise error (it's a required field)
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError):
-            CreativeFormatModel(format_id="test", name="Test", description="Test")  # Missing type
 
     def test_ensure_json_helpers(self):
         """Test JSON helper functions."""

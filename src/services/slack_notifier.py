@@ -646,7 +646,7 @@ class SlackNotifier:
                 detail_parts.append(f"*Duration:* {duration} days")
                 detail_parts.append(f"*Flight:* {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
             except Exception:
-                pass  # Skip if date parsing fails
+                logger.debug("Could not parse flight dates for Slack notification", exc_info=True)
 
         if details.get("approval_reason"):
             detail_parts.append(f"*Approval Required:* {details['approval_reason']}")

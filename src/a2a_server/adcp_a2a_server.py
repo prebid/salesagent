@@ -607,7 +607,7 @@ class AdCPRequestHandler(RequestHandler):
                             if response_obj and hasattr(response_obj, "__str__"):
                                 text_message = str(response_obj)
                         except Exception:
-                            pass  # If reconstruction fails, skip text part
+                            logger.debug("Response reconstruction failed, skipping text part", exc_info=True)
 
                     # Build parts list per A2A spec: optional TextPart + required DataPart
                     parts = []
