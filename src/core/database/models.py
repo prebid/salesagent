@@ -957,6 +957,14 @@ class MediaBuy(Base):
         Index("idx_media_buys_status", "status"),
         Index("idx_media_buys_strategy", "strategy_id"),
         Index("idx_media_buys_account", "account_id"),
+        Index(
+            "idx_media_buys_idempotency_key",
+            "tenant_id",
+            "principal_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
 

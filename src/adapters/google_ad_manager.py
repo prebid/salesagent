@@ -14,7 +14,7 @@ __all__ = [
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlalchemy.exc
@@ -604,7 +604,7 @@ class GoogleAdManager(AdServerAdapter):
         from src.adapters.gam.utils.naming import truncate_name_with_suffix
         from src.core.utils.naming import apply_naming_template, build_order_name_context
 
-        order_name_template = self._order_name_template or "{campaign_name|brand_name} - {date_range}"
+        order_name_template = self._order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
         tenant_gemini_key = None
 
         # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
@@ -630,11 +630,15 @@ class GoogleAdManager(AdServerAdapter):
         except sqlalchemy.exc.SQLAlchemyError as e:
             logger.warning(f"Could not load tenant Gemini key: {e}")
 
-        context = build_order_name_context(request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key)
+        # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
+        pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
+        context = build_order_name_context(
+            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=pre_order_id
+        )
         base_order_name = apply_naming_template(order_name_template, context)
 
         # Add unique identifier to prevent duplicate order names
-        unique_suffix = f"mb_{int(datetime.now(UTC).timestamp())}"
+        unique_suffix = f"mb_{pre_order_id}"
         full_order_name = f"{base_order_name} [{unique_suffix}]"
 
         # Truncate to GAM's 255-character limit while preserving the unique suffix

@@ -226,6 +226,7 @@ def build_order_name_context(
     end_time: datetime,
     tenant_ai_config=None,
     tenant_gemini_key: str | None = None,  # Deprecated: use tenant_ai_config
+    media_buy_id: str | None = None,
 ) -> dict:
     """Build context dictionary for order name template.
 
@@ -236,6 +237,7 @@ def build_order_name_context(
         end_time: Order end datetime
         tenant_ai_config: Tenant's AI configuration (TenantAIConfig or dict)
         tenant_gemini_key: Deprecated - Tenant's Gemini API key
+        media_buy_id: Media buy identifier for template substitution
 
     Returns:
         Dictionary of variables available for template substitution
@@ -265,6 +267,8 @@ def build_order_name_context(
         "auto_name": auto_name,
         "date_range": format_date_range(start_time, end_time),
         "month_year": format_month_year(start_time),
+        "media_buy_id": media_buy_id or "",
+        "buyer_ref": media_buy_id or "",  # Backward compatibility alias for {buyer_ref} templates
         "package_count": len(packages),
         "start_date": start_time.strftime("%Y-%m-%d"),
         "end_date": end_time.strftime("%Y-%m-%d"),

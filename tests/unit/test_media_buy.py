@@ -1176,6 +1176,178 @@ class TestCreateMediaBuyImplAuth:
             assert exc_info.value.recovery == "terminal"
 
 
+class TestCreateMediaBuyIdempotency:
+    """UC-002 idempotency: _create_media_buy_impl returns existing media buy on replay.
+
+    Per adcp 3.12, retrying with the same idempotency_key must return the original
+    media_buy_id without creating a duplicate ad-server booking.
+    Covers: UC-002-MAIN-IDEMPOTENCY
+    """
+
+    @pytest.mark.asyncio
+    async def test_idempotency_replay_returns_existing(self):
+        """Retry with same idempotency_key returns the original media buy.
+
+        Covers: UC-002-MAIN-IDEMPOTENCY
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        idem_key = "550e8400-e29b-41d4-a716-446655440000"
+        req = _make_request(idempotency_key=idem_key)
+        identity = _make_identity()
+
+        # Mock the existing media buy that was previously created
+        existing_buy = MagicMock()
+        existing_buy.media_buy_id = "mb_original_123"
+        existing_buy.status = "active"
+
+        existing_pkg = MagicMock()
+        existing_pkg.package_id = "pkg_original_1"
+
+        mock_repo = MagicMock()
+        mock_repo.find_by_idempotency_key.return_value = existing_buy
+        mock_repo.get_packages.return_value = [existing_pkg]
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_uow.media_buys = mock_repo
+
+        with (
+            patch("src.core.tools.media_buy_create.validate_setup_complete"),
+            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
+        ):
+            mock_princ = MagicMock()
+            mock_princ.principal_id = "test_principal"
+            mock_princ.name = "Test Buyer"
+            mock_principal.return_value = mock_princ
+
+            result = await _create_media_buy_impl(req, identity=identity)
+
+        assert isinstance(result, CreateMediaBuyResult)
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_original_123"
+        assert len(result.response.packages) == 1
+        assert result.response.packages[0].package_id == "pkg_original_1"
+        assert result.status == "completed"
+
+        # Verify the repo was called with correct args — called twice:
+        # once for the initial lookup, once inside _build_idempotency_hit_result
+        assert mock_repo.find_by_idempotency_key.call_count == 2
+        mock_repo.find_by_idempotency_key.assert_called_with(idem_key, "test_principal")
+
+    @pytest.mark.asyncio
+    async def test_idempotency_absent_proceeds_normally(self):
+        """Request without idempotency_key proceeds to normal creation.
+
+        Covers: UC-002-MAIN-IDEMPOTENCY
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request()  # No idempotency_key
+        identity = _make_identity()
+
+        session = MagicMock()
+        scalars_result = MagicMock()
+        scalars_result.all.return_value = []
+        scalars_result.first.return_value = None
+        session.scalars.return_value = scalars_result
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_uow.session = session
+        mock_uow.media_buys = MagicMock()
+        mock_uow.media_buys.get_by_principal.return_value = []
+
+        with (
+            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
+            patch("src.core.tools.media_buy_create.validate_setup_complete"),
+            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
+            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
+        ):
+            mock_princ = MagicMock()
+            mock_princ.principal_id = "test_principal"
+            mock_princ.name = "Test Buyer"
+            mock_principal.return_value = mock_princ
+
+            ctx_mgr = MagicMock()
+            ctx_mgr.create_context.return_value = MagicMock(context_id="ctx_1")
+            ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
+            mock_ctx_mgr.return_value = ctx_mgr
+
+            result = await _create_media_buy_impl(req, identity=identity)
+
+        # Without idempotency_key, the function proceeds past the check.
+        # It will fail at product validation (no products in mock DB) — that's fine.
+        # The point is that find_by_idempotency_key was never called.
+        assert isinstance(result, CreateMediaBuyResult)
+        mock_uow.media_buys.find_by_idempotency_key.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_idempotency_new_key_proceeds(self):
+        """Different idempotency_key creates a new media buy (no match found).
+
+        Covers: UC-002-MAIN-IDEMPOTENCY
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request(idempotency_key="new-key-never-seen")
+        identity = _make_identity()
+
+        # Mock repo returns None (no match for this key)
+        mock_idem_repo = MagicMock()
+        mock_idem_repo.find_by_idempotency_key.return_value = None
+
+        mock_idem_uow = MagicMock()
+        mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
+        mock_idem_uow.__exit__ = MagicMock(return_value=None)
+        mock_idem_uow.media_buys = mock_idem_repo
+
+        # Validation UoW (for product lookup — will fail with no products)
+        session = MagicMock()
+        scalars_result = MagicMock()
+        scalars_result.all.return_value = []
+        scalars_result.first.return_value = None
+        session.scalars.return_value = scalars_result
+
+        mock_validation_uow = MagicMock()
+        mock_validation_uow.__enter__ = MagicMock(return_value=mock_validation_uow)
+        mock_validation_uow.__exit__ = MagicMock(return_value=None)
+        mock_validation_uow.session = session
+        mock_validation_uow.media_buys = MagicMock()
+        mock_validation_uow.media_buys.get_by_principal.return_value = []
+
+        # Two separate MediaBuyUoW calls: first for idempotency, second for validation
+        uow_instances = [mock_idem_uow, mock_validation_uow]
+
+        with (
+            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
+            patch("src.core.tools.media_buy_create.validate_setup_complete"),
+            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
+            patch("src.core.database.repositories.MediaBuyUoW", side_effect=uow_instances),
+        ):
+            mock_princ = MagicMock()
+            mock_princ.principal_id = "test_principal"
+            mock_princ.name = "Test Buyer"
+            mock_principal.return_value = mock_princ
+
+            ctx_mgr = MagicMock()
+            ctx_mgr.create_context.return_value = MagicMock(context_id="ctx_1")
+            ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
+            mock_ctx_mgr.return_value = ctx_mgr
+
+            result = await _create_media_buy_impl(req, identity=identity)
+
+        # Idempotency check ran but found nothing — proceeded to normal flow
+        mock_idem_repo.find_by_idempotency_key.assert_called_once_with("new-key-never-seen", "test_principal")
+        # Result is an error because product validation fails (expected)
+        assert isinstance(result, CreateMediaBuyResult)
+
+
 class TestCreateMediaBuyAdapterInteraction:
     """UC-002 adapter call: _execute_adapter_media_buy_creation behavior."""
 

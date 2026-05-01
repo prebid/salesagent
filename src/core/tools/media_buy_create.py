@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
+from sqlalchemy.exc import IntegrityError
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -1266,6 +1268,47 @@ from src.services.setup_checklist_service import SetupIncompleteError, validate_
 from src.services.slack_notifier import get_slack_notifier
 
 
+def _build_idempotency_hit_result(
+    tenant_id: str,
+    idempotency_key: str,
+    principal_id: str,
+    context: ContextObject | None,
+) -> CreateMediaBuyResult:
+    """Re-query the winner of an idempotency race and return its result.
+
+    Used both for the happy-path idempotency lookup and for the TOCTOU
+    race-condition recovery (IntegrityError on commit).
+    """
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id)
+        if existing is None:
+            raise AdCPValidationError(
+                f"Idempotency key {idempotency_key} not found after race resolution",
+                recovery="terminal",
+            )
+
+        db_packages = uow.media_buys.get_packages(existing.media_buy_id)
+        response_packages = [Package(package_id=pkg.package_id) for pkg in db_packages]
+
+        try:
+            adcp_status = MediaBuyStatus(existing.status)
+        except ValueError:
+            adcp_status = MediaBuyStatus.pending_activation
+
+        return CreateMediaBuyResult(
+            response=CreateMediaBuySuccess(
+                media_buy_id=existing.media_buy_id,
+                packages=response_packages,
+                status=adcp_status,
+                context=context,
+            ),
+            status=AdcpTaskStatus.completed.value,
+        )
+
+
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | None = None,
@@ -1336,6 +1379,29 @@ async def _create_media_buy_impl(
             ),
             status=AdcpTaskStatus.failed.value,
         )
+
+    # Idempotency check: if request carries an idempotency_key, look up an existing
+    # media buy for the same (tenant, principal, key) triple.  Per adcp 3.12 spec,
+    # retrying with the same key must return the original media_buy_id without
+    # creating a duplicate ad-server booking.
+    if req.idempotency_key:
+        from src.core.database.repositories import MediaBuyUoW as _IdempotencyUoW
+
+        with _IdempotencyUoW(tenant["tenant_id"]) as idem_uow:
+            assert idem_uow.media_buys is not None
+            existing = idem_uow.media_buys.find_by_idempotency_key(req.idempotency_key, principal_id)
+            if existing is not None:
+                logger.info(
+                    "Idempotency hit: returning existing media buy %s for key %s",
+                    existing.media_buy_id,
+                    req.idempotency_key,
+                )
+                return _build_idempotency_hit_result(
+                    tenant_id=tenant["tenant_id"],
+                    idempotency_key=req.idempotency_key,
+                    principal_id=principal_id,
+                    context=req.context,
+                )
 
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
@@ -2047,25 +2113,40 @@ async def _create_media_buy_impl(
             # Create media buy record in the database with permanent ID
             # Status is "pending_approval" but the ID is final
             # Repository handles raw_request serialization + package_id injection at the DB boundary
-            with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
-                assert pending_uow.media_buys is not None
-                pending_uow.media_buys.create_from_request(
-                    media_buy_id=media_buy_id,
-                    req=req,
-                    principal_id=principal.principal_id,
-                    advertiser_name=principal.name,
-                    budget=total_budget,
-                    currency=request_currency or "USD",
-                    start_time=start_time,
-                    end_time=end_time,
-                    status="pending_approval",
-                    order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
-                    package_id_map=package_id_map,
-                    by_alias=True,
-                    account_id=identity.account_id if identity else None,
-                    created_at=datetime.now(UTC),
+            try:
+                with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
+                    assert pending_uow.media_buys is not None
+                    pending_uow.media_buys.create_from_request(
+                        media_buy_id=media_buy_id,
+                        req=req,
+                        principal_id=principal.principal_id,
+                        advertiser_name=principal.name,
+                        budget=total_budget,
+                        currency=request_currency or "USD",
+                        start_time=start_time,
+                        end_time=end_time,
+                        status="pending_approval",
+                        order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
+                        package_id_map=package_id_map,
+                        by_alias=True,
+                        account_id=identity.account_id if identity else None,
+                        created_at=datetime.now(UTC),
+                    )
+                    logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
+            except IntegrityError as exc:
+                if "idempotency_key" not in str(exc.orig):
+                    raise
+                logger.warning(
+                    "Idempotency race (pending_approval): another request won the commit for key %s. "
+                    "Returning the winner. An orphan adapter-side order may exist.",
+                    req.idempotency_key,
                 )
-                logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
+                return _build_idempotency_hit_result(
+                    tenant_id=tenant["tenant_id"],
+                    idempotency_key=req.idempotency_key,  # type: ignore[arg-type]
+                    principal_id=principal.principal_id,
+                    context=req.context,
+                )
 
             # Log to activity feed for manual approval case
             try:
@@ -2902,23 +2983,39 @@ async def _create_media_buy_impl(
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
         # Repository handles raw_request serialization at the DB boundary
-        with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
-            assert create_uow.media_buys is not None
-            create_uow.media_buys.create_from_request(
-                media_buy_id=response.media_buy_id,
-                req=req,
-                principal_id=principal_id,
-                advertiser_name=principal.name,
-                budget=total_budget,
-                currency=request_currency,
-                start_time=start_time,
-                end_time=end_time,
-                status=media_buy_status,
-                campaign_objective=getattr(req, "campaign_objective", "") or "",
-                kpi_goal=getattr(req, "kpi_goal", "") or "",
-                account_id=identity.account_id if identity else None,
+        try:
+            with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
+                assert create_uow.media_buys is not None
+                create_uow.media_buys.create_from_request(
+                    media_buy_id=response.media_buy_id,
+                    req=req,
+                    principal_id=principal_id,
+                    advertiser_name=principal.name,
+                    budget=total_budget,
+                    currency=request_currency,
+                    start_time=start_time,
+                    end_time=end_time,
+                    status=media_buy_status,
+                    campaign_objective=getattr(req, "campaign_objective", "") or "",
+                    kpi_goal=getattr(req, "kpi_goal", "") or "",
+                    account_id=identity.account_id if identity else None,
+                )
+                # UoW auto-commits on clean exit
+        except IntegrityError as exc:
+            if "idempotency_key" not in str(exc.orig):
+                raise
+            logger.warning(
+                "Idempotency race (auto-approved): another request won the commit for key %s. "
+                "Returning the winner. An orphan adapter-side order may exist for %s.",
+                req.idempotency_key,
+                response.media_buy_id,
             )
-            # UoW auto-commits on clean exit
+            return _build_idempotency_hit_result(
+                tenant_id=tenant["tenant_id"],
+                idempotency_key=req.idempotency_key,  # type: ignore[arg-type]
+                principal_id=principal_id,
+                context=req.context,
+            )
 
         # Populate media_packages table for structured querying
         # This enables creative_assignments to work properly
