@@ -428,7 +428,6 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
 
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
-        buyer_ref=f"e2e_{po_number}",
         po_number=po_number,
         start_time=start_time,
         end_time=end_time,
@@ -462,7 +461,6 @@ def _persist_media_buy(response, request, packages, start_time, end_time):
             media_buy_id=response.media_buy_id,
             tenant_id=GAM_LIFECYCLE_TENANT_ID,
             principal_id="e2e_lifecycle_test",
-            buyer_ref=request.buyer_ref,
             order_name=f"E2E Order {response.media_buy_id}",
             advertiser_name="E2E Test Advertiser",
             budget=10.00,
@@ -472,7 +470,7 @@ def _persist_media_buy(response, request, packages, start_time, end_time):
             start_time=start_time,
             end_time=end_time,
             status="approved",
-            raw_request={"brand": {"domain": "testbrand.com"}, "buyer_ref": request.buyer_ref},
+            raw_request={"brand": {"domain": "testbrand.com"}},
         )
         session.add(media_buy)
         session.flush()
@@ -615,7 +613,6 @@ class TestGAMLifecycle:
         # Pause the order via adapter's update_media_buy
         pause_response = gam_adapter.update_media_buy(
             media_buy_id=order_id,
-            buyer_ref=request.buyer_ref,
             action="pause_media_buy",
             package_id=None,
             budget=None,
@@ -648,7 +645,6 @@ class TestGAMLifecycle:
         # Step 1: Pause the order (like the manual script does before archiving)
         pause_response = gam_adapter.update_media_buy(
             media_buy_id=order_id,
-            buyer_ref=request.buyer_ref,
             action="pause_media_buy",
             package_id=None,
             budget=None,
@@ -691,7 +687,6 @@ class TestGAMLifecycle:
         # Try to activate — should be blocked because it has guaranteed items
         update_response = gam_adapter.update_media_buy(
             media_buy_id=order_id,
-            buyer_ref="e2e_test",
             action="activate_order",
             package_id=None,
             budget=None,

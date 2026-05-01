@@ -27,13 +27,6 @@ def _get_formats(ctx: dict) -> list[Any]:
     return []
 
 
-def _fmt_type_str(f: Any) -> str | None:
-    """Get format type as a string value (enum .value or str)."""
-    if f.type is None:
-        return None
-    return f.type.value if hasattr(f.type, "value") else str(f.type)
-
-
 def _fmt_name(f: Any) -> str | None:
     """Get format name."""
     return f.name if hasattr(f, "name") else None
@@ -73,16 +66,29 @@ def then_empty_formats(ctx: dict) -> None:
     assert len(formats) == 0, f"Expected 0 formats, got {len(formats)}"
 
 
-@then("the response should include only display formats")
-def then_only_display(ctx: dict) -> None:
-    for f in _get_formats(ctx):
-        assert _fmt_type_str(f) == "display", f"Expected type 'display', got '{_fmt_type_str(f)}'"
+def _asset_type_strs(f: Any) -> set[str]:
+    """Extract normalized asset type strings from a Format object."""
+    assets = getattr(f, "assets", None) or []
+    raw = {getattr(a, "asset_type", None) for a in assets}
+    return {at.value if hasattr(at, "value") else str(at) for at in raw if at is not None}
 
 
-@then("no video formats should be present in the results")
-def then_no_video(ctx: dict) -> None:
+@then("the response should include only formats with image assets")
+def then_only_image_assets(ctx: dict) -> None:
+    """Assert every returned format has at least one image asset."""
+    formats = _get_formats(ctx)
+    assert len(formats) > 0, "Expected at least one format, got 0"
+    for f in formats:
+        types = _asset_type_strs(f)
+        assert "image" in types, f"Format '{_fmt_name(f)}' has no image assets, asset_types={types}"
+
+
+@then("no video-only formats should be present in the results")
+def then_no_video_only(ctx: dict) -> None:
+    """Assert no returned format has only video assets (no image assets)."""
     for f in _get_formats(ctx):
-        assert _fmt_type_str(f) != "video", f"Unexpected video format: {_fmt_name(f)}"
+        if _asset_type_strs(f) == {"video"}:
+            raise AssertionError(f"Format '{_fmt_name(f)}' is video-only, should be excluded")
 
 
 @then("the response should include creative_agents referrals")
@@ -116,13 +122,6 @@ def then_format_id_fields(ctx: dict) -> None:
         assert getattr(fid, "id", None), f"Format '{_fmt_name(f)}' format_id missing id"
 
 
-@then("each format should include a name and type category")
-def then_format_name_type(ctx: dict) -> None:
-    for f in _get_formats(ctx):
-        assert _fmt_name(f), f"Format missing name: {f}"
-        assert _fmt_type_str(f), f"Format missing type: {f}"
-
-
 @then("each format should include asset requirements with type and dimensions")
 def then_format_assets(ctx: dict) -> None:
     """Assert formats with assets have typed assets and formats with renders have dimensions."""
@@ -142,21 +141,21 @@ def then_format_assets(ctx: dict) -> None:
 # ── Sorting assertions ──────────────────────────────────────────────
 
 
-@then("the results should be sorted by format type then name")
-def then_sorted_type_name(ctx: dict) -> None:
+@then("the results should be sorted by name")
+def then_sorted_name(ctx: dict) -> None:
     formats = _get_formats(ctx)
     if len(formats) <= 1:
         return
-    sort_keys = [(_fmt_type_str(f) or "", _fmt_name(f) or "") for f in formats]
-    assert sort_keys == sorted(sort_keys), f"Formats not sorted by type then name: {sort_keys}"
+    names = [_fmt_name(f) or "" for f in formats]
+    assert names == sorted(names), f"Formats not sorted by name: {names}"
 
 
-@then("the results should be ordered:")
-def then_results_ordered(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
+@then("the results should be ordered by name:")
+def then_results_ordered_by_name(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
     formats = _get_formats(ctx)
     headers = [str(cell) for cell in datatable[0]]
     expected = [{headers[i]: str(cell) for i, cell in enumerate(row)} for row in datatable[1:]]
-    actual = [{"name": _fmt_name(f), "type": _fmt_type_str(f)} for f in formats]
+    actual = [{"name": _fmt_name(f)} for f in formats]
     assert actual == expected, f"Expected order {expected}, got {actual}"
 
 
@@ -196,12 +195,6 @@ def then_three_returned(ctx: dict, a: str, b: str, c: str) -> None:
         assert name in names, f"Expected '{name}' in results, got {names}"
 
 
-@then(parsers.parse('the returned format type should be "{fmt_type}"'))
-def then_returned_type(ctx: dict, fmt_type: str) -> None:
-    for f in _get_formats(ctx):
-        assert _fmt_type_str(f) == fmt_type, f"Expected type '{fmt_type}', got '{_fmt_type_str(f)}'"
-
-
 # ── Partition/boundary test outcomes ──────────────────────────────────
 # These verify that production code either:
 #   - returned a valid response (expected="valid")
@@ -222,7 +215,7 @@ def _assert_partition_outcome(ctx: dict, expected: str) -> None:
     This is intentionally a binary accept/reject gate — it tests whether the
     production code correctly classifies an input as valid or invalid. Content
     verification (what the response contains) belongs in separate Then steps
-    that follow this one in the scenario (e.g., then_only_display, then_all_formats).
+    that follow this one in the scenario (e.g., then_only_image_assets, then_all_formats).
     """
     if expected == "valid":
         assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"

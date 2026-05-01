@@ -14,7 +14,7 @@ __all__ = [
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlalchemy.exc
@@ -604,7 +604,7 @@ class GoogleAdManager(AdServerAdapter):
         from src.adapters.gam.utils.naming import truncate_name_with_suffix
         from src.core.utils.naming import apply_naming_template, build_order_name_context
 
-        order_name_template = self._order_name_template or "{campaign_name|brand_name} - {date_range}"
+        order_name_template = self._order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
         tenant_gemini_key = None
 
         # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
@@ -630,12 +630,15 @@ class GoogleAdManager(AdServerAdapter):
         except sqlalchemy.exc.SQLAlchemyError as e:
             logger.warning(f"Could not load tenant Gemini key: {e}")
 
-        context = build_order_name_context(request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key)
+        # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
+        pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
+        context = build_order_name_context(
+            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=pre_order_id
+        )
         base_order_name = apply_naming_template(order_name_template, context)
 
         # Add unique identifier to prevent duplicate order names
-        # Use media_buy_id if available (from buyer_ref), otherwise timestamp
-        unique_suffix = request.buyer_ref or f"mb_{int(datetime.now(UTC).timestamp())}"
+        unique_suffix = f"mb_{pre_order_id}"
         full_order_name = f"{base_order_name} [{unique_suffix}]"
 
         # Truncate to GAM's 255-character limit while preserving the unique suffix
@@ -988,7 +991,6 @@ class GoogleAdManager(AdServerAdapter):
         status = self.orders_manager.get_order_status(media_buy_id)
 
         return CheckMediaBuyStatusResponse(
-            buyer_ref="",
             media_buy_id=media_buy_id,
             status=status.lower(),  # Would need to be retrieved from database
         )
@@ -1301,7 +1303,6 @@ class GoogleAdManager(AdServerAdapter):
     def update_media_buy(
         self,
         media_buy_id: str,
-        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,
@@ -1330,7 +1331,6 @@ class GoogleAdManager(AdServerAdapter):
                 # Manual approval success - no errors
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
                     affected_packages=[],  # List of package_ids affected by update
                     implementation_date=today,
                 )
@@ -1359,7 +1359,6 @@ class GoogleAdManager(AdServerAdapter):
                     # Activation workflow created - success (no errors)
                     return UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        buyer_ref=buyer_ref,
                         affected_packages=[],
                         implementation_date=today,
                         workflow_step_id=step_id,
@@ -1490,7 +1489,6 @@ class GoogleAdManager(AdServerAdapter):
 
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
                 affected_packages=[],  # Required by AdCP spec
                 implementation_date=today,
             )
@@ -1571,7 +1569,6 @@ class GoogleAdManager(AdServerAdapter):
                     # Return affected package with paused state
                     affected_package = AffectedPackage(
                         package_id=package_id,
-                        buyer_ref=buyer_ref or package_id,
                         paused=is_pause,  # True if paused, False if resumed
                         changes_applied=None,
                         buyer_package_ref=None,
@@ -1579,7 +1576,6 @@ class GoogleAdManager(AdServerAdapter):
 
                     return UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        buyer_ref=buyer_ref,
                         affected_packages=[affected_package],
                         implementation_date=today,
                     )
@@ -1637,7 +1633,6 @@ class GoogleAdManager(AdServerAdapter):
                     affected_packages_list = [
                         AffectedPackage(
                             package_id=pkg.package_id,
-                            buyer_ref=buyer_ref or pkg.package_id,
                             paused=is_pause,  # True if paused, False if resumed
                             changes_applied=None,
                             buyer_package_ref=None,
@@ -1647,7 +1642,6 @@ class GoogleAdManager(AdServerAdapter):
 
                     return UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        buyer_ref=buyer_ref,
                         affected_packages=affected_packages_list,
                         implementation_date=today,
                     )
@@ -1655,7 +1649,6 @@ class GoogleAdManager(AdServerAdapter):
             # Should not reach here - both pause/resume branches return above
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
                 affected_packages=[],
                 implementation_date=today,
             )

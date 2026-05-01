@@ -492,14 +492,14 @@ Then call: window.inventoryProfileEditor.open(profileData)
             return;
         }
 
-        // Group by type
+        // Group by category (format type removed in adcp 3.12)
         const grouped = {};
         formats.forEach(fmt => {
-            const type = fmt.type || 'other';
-            if (!grouped[type]) {
-                grouped[type] = [];
+            const cat = fmt.category || 'standard';
+            if (!grouped[cat]) {
+                grouped[cat] = [];
             }
-            grouped[type].push(fmt);
+            grouped[cat].push(fmt);
         });
 
         let html = '';

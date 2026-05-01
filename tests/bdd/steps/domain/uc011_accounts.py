@@ -88,19 +88,19 @@ def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) 
 
 def _make_governance_agent(
     url: str = "https://compliance.example.com/check",
-    credentials: str = "compliance-token-" + "x" * 32,
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a valid GovernanceAgent dict matching the adcp schema.
 
     Uses the library GovernanceAgent model for validation, then dumps to dict
     for use in SyncAccountsRequest entries.
+
+    Note: authentication was removed from GovernanceAgent in adcp 3.12.
     """
-    from adcp.types.generated_poc.account.sync_accounts_request import GovernanceAgent
+    from adcp.types.generated_poc.core.account import GovernanceAgent
 
     agent = GovernanceAgent(
         url=url,
-        authentication={"schemes": ["Bearer"], "credentials": credentials},
         categories=categories,
     )
     return agent.model_dump()
@@ -747,7 +747,6 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
     governance_agents = [
         _make_governance_agent(
             url="https://governance.example.com/check",
-            credentials="governance-token-" + "x" * 32,
             categories=["budget_authority", "strategic_alignment"],
         )
     ]
@@ -2151,7 +2150,6 @@ def when_sync_different_governance(ctx: dict, domain: str) -> None:
                 "governance_agents": [
                     _make_governance_agent(
                         url="https://new-bot.example.com/check",
-                        credentials="new-bot-token-" + "x" * 32,
                     )
                 ],
             }

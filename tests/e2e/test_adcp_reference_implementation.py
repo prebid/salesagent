@@ -290,7 +290,7 @@ class TestAdCPReferenceImplementation:
             )
             update_data = parse_tool_result(update_result)
 
-            assert "media_buy_id" in update_data or "buyer_ref" in update_data
+            assert "media_buy_id" in update_data
             print("   ✓ Budget update requested: $5000 → $7500")
             print(f"   ✓ Update status: {update_data.get('status', 'unknown')}")
             # Context should echo back on response

@@ -66,15 +66,6 @@ class TestSchemaLibraryInheritance:
         # Pagination for list responses uses page-based pagination (has_more, cursor, total_count)
         assert issubclass(Pagination, LibraryResponsePagination), "Pagination must extend library response pagination."
 
-    def test_brand_manifest_is_library_type(self):
-        """BrandManifest must be the library type directly."""
-        from adcp.types import BrandManifest as LibraryBrandManifest
-
-        from src.core.schemas import BrandManifest
-
-        # BrandManifest should be the exact library type (alias, not subclass)
-        assert BrandManifest is LibraryBrandManifest, "BrandManifest must be the library type directly."
-
     def test_property_is_library_type(self):
         """Property must be the library type directly."""
         from adcp.types import Property as LibraryProperty

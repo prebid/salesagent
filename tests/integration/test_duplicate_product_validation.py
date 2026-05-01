@@ -63,13 +63,11 @@ class TestDuplicateProductValidation:
             # Create packages with duplicate product_id
             packages = [
                 create_test_package_request(
-                    buyer_ref="pkg_1",
                     product_id="prod_test_1",
                     budget=1000.0,  # Float budget per AdCP v2.2.0, currency from pricing_option
                     pricing_option_id="test_pricing",
                 ),
                 create_test_package_request(
-                    buyer_ref="pkg_2",
                     product_id="prod_test_1",  # Same product as pkg_1
                     budget=1500.0,  # Float budget per AdCP v2.2.0, currency from pricing_option
                     pricing_option_id="test_pricing",
@@ -81,7 +79,6 @@ class TestDuplicateProductValidation:
 
             # Should return error response about duplicate products
             req = CreateMediaBuyRequest(
-                buyer_ref="test_media_buy_duplicate",
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
@@ -135,25 +132,21 @@ class TestDuplicateProductValidation:
             # Create packages with multiple duplicates
             packages = [
                 create_test_package_request(
-                    buyer_ref="pkg_1",
                     product_id="prod_test_1",
                     budget=1000.0,  # Float budget per AdCP v2.2.0, currency from pricing_option
                     pricing_option_id="test_pricing",
                 ),
                 create_test_package_request(
-                    buyer_ref="pkg_2",
                     product_id="prod_test_1",  # Duplicate of pkg_1
                     budget=1500.0,  # Float budget per AdCP v2.2.0, currency from pricing_option
                     pricing_option_id="test_pricing",
                 ),
                 create_test_package_request(
-                    buyer_ref="pkg_3",
                     product_id="prod_test_2",
                     budget=2000.0,  # Float budget per AdCP v2.2.0, currency from pricing_option
                     pricing_option_id="test_pricing",
                 ),
                 create_test_package_request(
-                    buyer_ref="pkg_4",
                     product_id="prod_test_2",  # Duplicate of pkg_3
                     budget=1800.0,  # Float budget per AdCP v2.2.0, currency from pricing_option
                     pricing_option_id="test_pricing",
@@ -165,7 +158,6 @@ class TestDuplicateProductValidation:
 
             # Should return error response listing both duplicate products
             req = CreateMediaBuyRequest(
-                buyer_ref="test_media_buy_multiple_duplicates",
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
@@ -218,13 +210,11 @@ class TestDuplicateProductValidation:
             # Create packages with different product_ids
             packages = [
                 create_test_package_request(
-                    buyer_ref="pkg_1",
                     product_id="prod_test_1",
                     budget=1000.0,  # Float budget per AdCP v2.2.0, currency from pricing_option
                     pricing_option_id="test_pricing",
                 ),
                 create_test_package_request(
-                    buyer_ref="pkg_2",
                     product_id="prod_test_2",  # Different product
                     budget=1500.0,  # Float budget per AdCP v2.2.0, currency from pricing_option
                     pricing_option_id="test_pricing",
@@ -237,7 +227,6 @@ class TestDuplicateProductValidation:
             # Should fail on currency validation (since we didn't set that up)
             # but NOT on duplicate product validation
             req = CreateMediaBuyRequest(
-                buyer_ref="test_media_buy_different",
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,

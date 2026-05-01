@@ -1247,6 +1247,60 @@ mappings:
       upstream_refs: ["BR-UC-002-main-mcp", "BR-RULE-209"]
       business_rules: ["BR-RULE-209"]
       status: new
+    - adcp_scenario_id: "T-UC-002-idempotency-replay"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp", "BR-RULE-081"]
+      business_rules: ["BR-RULE-081"]
+      status: new
+    - adcp_scenario_id: "T-UC-002-idempotency-absent"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp", "BR-RULE-081"]
+      business_rules: ["BR-RULE-081"]
+      status: new
+    - adcp_scenario_id: "T-UC-002-idempotency-new-key"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp", "BR-RULE-081"]
+      business_rules: ["BR-RULE-081"]
+      status: new
+    - adcp_scenario_id: "T-UC-002-partition-idempotency-key"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp", "BR-RULE-081"]
+      business_rules: ["BR-RULE-081"]
+      status: new
+    - adcp_scenario_id: "T-UC-002-boundary-idempotency-key"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp", "BR-RULE-081"]
+      business_rules: ["BR-RULE-081"]
+      status: new
+    - adcp_scenario_id: "T-UC-002-order-name-unique"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-order-name-no-empty-vars"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-order-name-media-buy-id"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-order-name-legacy-buyer-ref"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp"]
+      business_rules: []
+      status: new
   UC-003:
     - adcp_scenario_id: "T-UC-003-main"
       adcp_feature: "BR-UC-003-update-media-buy.feature"
@@ -2427,18 +2481,6 @@ mappings:
       upstream_refs: ["BR-RULE-031"]
       business_rules: ["BR-RULE-031"]
       status: mapped
-    - adcp_scenario_id: "T-UC-005-inv-049-1-holds"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-05"
-      upstream_refs: ["BR-RULE-049"]
-      business_rules: ["BR-RULE-049"]
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-inv-049-1-violated"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-05"
-      upstream_refs: ["BR-RULE-049"]
-      business_rules: ["BR-RULE-049"]
-      status: mapped
     - adcp_scenario_id: "T-UC-005-inv-049-2-holds"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
       obligation_id: "UC-005-MAIN-MCP-06"
@@ -2655,12 +2697,6 @@ mappings:
       upstream_refs: ["BR-UC-005-ext-b"]
       business_rules: []
       status: mapped
-    - adcp_scenario_id: "T-UC-005-partition-type-filter"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-05"
-      upstream_refs: ["BR-UC-005", "BR-RULE-049"]
-      business_rules: []
-      status: mapped
     - adcp_scenario_id: "T-UC-005-partition-format-ids"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
       obligation_id: "UC-005-MAIN-MCP-06"
@@ -2712,12 +2748,6 @@ mappings:
     - adcp_scenario_id: "T-UC-005-partition-input-fmtids"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
       obligation_id: "UC-005-MAIN-MCP-20"
-      upstream_refs: ["BR-UC-005", "BR-RULE-049"]
-      business_rules: []
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-boundary-type-filter"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-05"
       upstream_refs: ["BR-UC-005", "BR-RULE-049"]
       business_rules: []
       status: mapped

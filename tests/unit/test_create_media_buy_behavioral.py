@@ -63,18 +63,16 @@ def _future(days: int = 7) -> str:
 def _make_request(**overrides) -> CreateMediaBuyRequest:
     """Build a minimal valid CreateMediaBuyRequest.
 
-    Defaults: one package with product_id, pricing_option_id, budget, buyer_ref.
+    Defaults: one package with product_id, pricing_option_id, budget.
     Start 1 day ahead, end 8 days ahead.
     """
     defaults = {
-        "buyer_ref": "test-buyer",
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
         "packages": [
             {
                 "product_id": "prod_1",
-                "buyer_ref": "pkg-1",
                 "budget": 5000.0,
                 "pricing_option_id": "cpm_usd_fixed",
             }
@@ -86,9 +84,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
 
 def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
     """Create a mock DB Product with pricing_options."""
-    pricing_option = MagicMock(
-        spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "root"],
-    )
+    pricing_option = MagicMock(spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "root"])
     pricing_option.pricing_model = "cpm"
     pricing_option.currency = currency
     pricing_option.is_fixed = True
@@ -104,8 +100,7 @@ def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMoc
 
 
 def _mock_currency_limit(
-    max_daily_package_spend: Decimal | None = None,
-    min_package_budget: Decimal | None = None,
+    max_daily_package_spend: Decimal | None = None, min_package_budget: Decimal | None = None
 ) -> MagicMock:
     """Create a mock CurrencyLimit row."""
     cl = MagicMock()
@@ -251,13 +246,11 @@ class TestProductNotFound:
             packages=[
                 {
                     "product_id": "prod_exists",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
                 {
                     "product_id": "prod_missing",
-                    "buyer_ref": "pkg-2",
                     "budget": 3000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -297,7 +290,6 @@ class TestMaxDailySpendExceeded:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 7000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -335,7 +327,6 @@ class TestMaxDailySpendExceeded:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 3500.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -350,8 +341,7 @@ class TestMaxDailySpendExceeded:
             # daily spend validation (any error beyond it is fine)
             with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
                 mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=["create_media_buy"],
+                    manual_approval_required=False, manual_approval_operations=["create_media_buy"]
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -380,7 +370,6 @@ class TestMaxDailySpendExceeded:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 600.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -411,7 +400,6 @@ class TestMaxDailySpendExceeded:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 999999.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -424,8 +412,7 @@ class TestMaxDailySpendExceeded:
         with _PatchContext(products=[product], currency_limit=cl) as pc:
             with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
                 mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=["create_media_buy"],
+                    manual_approval_required=False, manual_approval_operations=["create_media_buy"]
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -542,7 +529,6 @@ class TestCreativeUploadFailure:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creative_ids": ["creative_no_platform"],
@@ -682,7 +668,6 @@ class TestInlineCreativesProcessedBeforeApproval:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creatives": [
@@ -799,11 +784,7 @@ class TestPricingOptionXOR:
         """
         with pytest.raises(ValidationError) as exc_info:
             PricingOption(
-                pricing_option_id="cpm_usd_both",
-                pricing_model="cpm",
-                currency="USD",
-                fixed_price=5.0,
-                floor_price=2.0,
+                pricing_option_id="cpm_usd_both", pricing_model="cpm", currency="USD", fixed_price=5.0, floor_price=2.0
             )
 
         # Pydantic wraps the ValueError from model_validator
@@ -827,24 +808,14 @@ class TestPricingOptionXOR:
 
     def test_fixed_price_only_accepted(self):
         """PricingOption with only fixed_price is valid."""
-        po = PricingOption(
-            pricing_option_id="cpm_usd_fixed",
-            pricing_model="cpm",
-            currency="USD",
-            fixed_price=5.0,
-        )
+        po = PricingOption(pricing_option_id="cpm_usd_fixed", pricing_model="cpm", currency="USD", fixed_price=5.0)
         assert po.fixed_price == 5.0
         assert po.floor_price is None
         assert po.is_fixed is True
 
     def test_floor_price_only_accepted(self):
         """PricingOption with only floor_price is valid."""
-        po = PricingOption(
-            pricing_option_id="cpm_usd_auction",
-            pricing_model="cpm",
-            currency="USD",
-            floor_price=2.0,
-        )
+        po = PricingOption(pricing_option_id="cpm_usd_auction", pricing_model="cpm", currency="USD", floor_price=2.0)
         assert po.floor_price == 2.0
         assert po.fixed_price is None
         assert po.is_fixed is False
@@ -877,7 +848,6 @@ class TestCreativeIdsNotFound:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creative_ids": ["creative_exists", "creative_missing_1", "creative_missing_2"],
@@ -1039,17 +1009,8 @@ class TestMainFlowObligations:
 
                 from src.core.schemas import Package as RespPkg
 
-                resp_pkg = RespPkg(
-                    package_id="pkg_prod_1_abc_1",
-                    product_id="prod_1",
-                    budget=5000.0,
-                    buyer_ref="pkg-1",
-                )
-                mock_success = CreateMediaBuySuccess(
-                    buyer_ref="test-buyer",
-                    media_buy_id="mb_test123",
-                    packages=[resp_pkg],
-                )
+                resp_pkg = RespPkg(package_id="pkg_prod_1_abc_1", product_id="prod_1", budget=5000.0)
+                mock_success = CreateMediaBuySuccess(media_buy_id="mb_test123", packages=[resp_pkg])
                 mock_exec.return_value = mock_success
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -1057,7 +1018,6 @@ class TestMainFlowObligations:
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.media_buy_id is not None
-        assert result.response.buyer_ref == "test-buyer"
 
     @pytest.mark.asyncio
     async def test_authentication_extracts_principal_id(self):
@@ -1194,7 +1154,6 @@ class TestMainFlowObligations:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "targeting_overlay": {"geo_countries": ["US"]},
@@ -1260,10 +1219,8 @@ class TestMainFlowObligations:
 
                 from src.core.schemas import Package as RespPkg
 
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0, buyer_ref="pkg-1")
-                mock_exec.return_value = CreateMediaBuySuccess(
-                    buyer_ref="test-buyer", media_buy_id="mb_auto", packages=[resp_pkg]
-                )
+                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
+                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_auto", packages=[resp_pkg])
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
@@ -1282,9 +1239,7 @@ class TestMainFlowObligations:
         # Plain string format ID should be rejected
         with pytest.raises(AdCPValidationError) as exc_info:
             await _validate_and_convert_format_ids(
-                format_ids=["banner_300x250"],
-                tenant_id="test_tenant",
-                package_idx=0,
+                format_ids=["banner_300x250"], tenant_id="test_tenant", package_idx=0
             )
 
         assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
@@ -1327,10 +1282,8 @@ class TestMainFlowObligations:
 
                 from src.core.schemas import Package as RespPkg
 
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0, buyer_ref="pkg-1")
-                mock_exec.return_value = CreateMediaBuySuccess(
-                    buyer_ref="test-buyer", media_buy_id="mb_persist", packages=[resp_pkg]
-                )
+                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
+                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_persist", packages=[resp_pkg])
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
@@ -1408,10 +1361,8 @@ class TestAsapStartTimingObligations:
 
                 from src.core.schemas import Package as RespPkg
 
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0, buyer_ref="pkg-1")
-                mock_exec.return_value = CreateMediaBuySuccess(
-                    buyer_ref="test-buyer", media_buy_id="mb_asap", packages=[resp_pkg]
-                )
+                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
+                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_asap", packages=[resp_pkg])
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
@@ -1438,7 +1389,6 @@ class TestAsapStartTimingObligations:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 7000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -1716,7 +1666,6 @@ class TestInlineCreativeObligations:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creatives": [
@@ -1770,9 +1719,7 @@ class TestInlineCreativeObligations:
         # Missing fields in FormatId should be rejected
         with pytest.raises(AdCPValidationError) as exc_info:
             await _validate_and_convert_format_ids(
-                format_ids=[{"agent_url": "", "id": ""}],
-                tenant_id="test_tenant",
-                package_idx=0,
+                format_ids=[{"agent_url": "", "id": ""}], tenant_id="test_tenant", package_idx=0
             )
 
         assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
@@ -1845,13 +1792,10 @@ class TestProposalBasedObligations:
         """
         # proposal_id and total_budget coexist on the schema
         req = CreateMediaBuyRequest(
-            buyer_ref="test",
             brand={"domain": "test.com"},
             start_time=_future(1),
             end_time=_future(8),
-            packages=[
-                {"product_id": "p1", "buyer_ref": "pkg1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
-            ],
+            packages=[{"product_id": "p1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
             proposal_id="prop_abc",
             total_budget={"amount": 10000.0, "currency": "USD"},
         )
@@ -1874,7 +1818,6 @@ class TestProposalBasedObligations:
             packages=[
                 {
                     "product_id": "nonexistent_product",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -1902,7 +1845,7 @@ class TestCrossCuttingObligations:
         from src.core.schemas import Package as RespPkg
 
         success = CreateMediaBuySuccess(
-            buyer_ref="test", media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)]
+            media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)]
         )
         success_result = CreateMediaBuyResult(response=success, status="completed")
 
@@ -2180,9 +2123,7 @@ class TestExtensionObligations:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request(
-            packages=[
-                {"product_id": "prod_1", "buyer_ref": "pkg-1", "budget": 999999.0, "pricing_option_id": "cpm_usd_fixed"}
-            ]
+            packages=[{"product_id": "prod_1", "budget": 999999.0, "pricing_option_id": "cpm_usd_fixed"}]
         )
         product = _mock_product("prod_1")
         cl = _mock_currency_limit(max_daily_package_spend=None)
@@ -2245,9 +2186,7 @@ class TestExtensionObligations:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         # Zero budget should fail validation
-        req = _make_request(
-            packages=[{"product_id": "prod_1", "buyer_ref": "pkg-1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}]
-        )
+        req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
         with _PatchContext() as pc:
             result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -2264,8 +2203,7 @@ class TestExtensionObligations:
         This test verifies the error code pattern.
         """
         error = AdCPValidationError(
-            "Currency EUR does not match proposal currency USD",
-            details={"error_code": "CURRENCY_MISMATCH"},
+            "Currency EUR does not match proposal currency USD", details={"error_code": "CURRENCY_MISMATCH"}
         )
         assert error.details["error_code"] == "CURRENCY_MISMATCH"
 
@@ -2297,8 +2235,7 @@ class TestExtensionObligations:
         # This is covered by TestCreativeIdsNotFound above.
         # Verify the error code pattern.
         error = AdCPNotFoundError(
-            "Creative IDs not found: creative_missing",
-            details={"error_code": "CREATIVES_NOT_FOUND"},
+            "Creative IDs not found: creative_missing", details={"error_code": "CREATIVES_NOT_FOUND"}
         )
         assert error.details["error_code"] == "CREATIVES_NOT_FOUND"
 
@@ -2307,10 +2244,7 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-Q-01
         """
-        error = AdCPAdapterError(
-            "Failed to upload creative to GAM",
-            details={"error_code": "CREATIVE_UPLOAD_FAILED"},
-        )
+        error = AdCPAdapterError("Failed to upload creative to GAM", details={"error_code": "CREATIVE_UPLOAD_FAILED"})
         assert error.details["error_code"] == "CREATIVE_UPLOAD_FAILED"
 
     def test_partial_execution_state_on_creative_upload_failure(self):
@@ -2323,8 +2257,7 @@ class TestExtensionObligations:
         The error is CREATIVE_UPLOAD_FAILED, not a rollback.
         """
         error = AdCPAdapterError(
-            "Failed to upload creative cr_1 to GAM: timeout",
-            details={"error_code": "CREATIVE_UPLOAD_FAILED"},
+            "Failed to upload creative cr_1 to GAM: timeout", details={"error_code": "CREATIVE_UPLOAD_FAILED"}
         )
         # Partial execution: error is about upload, not about the order
         assert "CREATIVE_UPLOAD_FAILED" == error.details["error_code"]
@@ -2347,7 +2280,6 @@ class TestPostconditionObligations:
             packages=[
                 {
                     "product_id": "nonexistent_prod",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -2376,7 +2308,6 @@ class TestPostconditionObligations:
             packages=[
                 {
                     "product_id": "nonexistent_prod",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -2396,23 +2327,22 @@ class TestPostconditionObligations:
 class TestUpgradeObligations:
     """3.6 upgrade boundary field propagation tests."""
 
-    def test_buyer_campaign_ref_accepted(self):
-        """buyer_campaign_ref is accepted in request schema.
+    def test_buyer_campaign_ref_rejected_in_strict_mode(self):
+        """buyer_campaign_ref is no longer in the AdCP spec (removed in 3.12).
 
         Covers: UC-002-UPG-01
         """
-        req = _make_request(buyer_campaign_ref="CAMP-2024-Q1")
-        assert req.buyer_campaign_ref == "CAMP-2024-Q1"
+        with pytest.raises(ValidationError, match="buyer_campaign_ref"):
+            _make_request(buyer_campaign_ref="CAMP-2024-Q1")
 
-    def test_buyer_campaign_ref_roundtrip(self):
-        """buyer_campaign_ref is preserved on the request for later retrieval.
+    def test_ext_field_carries_custom_data(self):
+        """ext field can carry buyer_campaign_ref as custom extension data.
 
         Covers: UC-002-UPG-02
         """
-        req = _make_request(buyer_campaign_ref="CAMP-2024-Q1")
-        # buyer_campaign_ref should be serializable via model_dump
+        req = _make_request(ext={"buyer_campaign_ref": "CAMP-2024-Q1"})
         dumped = req.model_dump()
-        assert dumped["buyer_campaign_ref"] == "CAMP-2024-Q1"
+        assert dumped["ext"]["buyer_campaign_ref"] == "CAMP-2024-Q1"
 
     def test_ext_field_accepted(self):
         """ext field (ExtensionObject) is accepted in request.
@@ -2433,7 +2363,6 @@ class TestUpgradeObligations:
 
         # Verify account can be set on success
         resp = CreateMediaBuySuccess(
-            buyer_ref="test",
             media_buy_id="mb_1",
             packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
             account=None,  # Optional
@@ -2450,9 +2379,6 @@ class TestUpgradeObligations:
         from src.core.schemas import Package as RespPkg
 
         resp = CreateMediaBuySuccess(
-            buyer_ref="test",
-            media_buy_id="mb_1",
-            packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
-            sandbox=True,
+            media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)], sandbox=True
         )
         assert resp.sandbox is True
