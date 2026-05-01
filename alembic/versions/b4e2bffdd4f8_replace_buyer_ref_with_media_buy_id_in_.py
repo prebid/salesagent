@@ -1,7 +1,7 @@
 """replace buyer_ref with media_buy_id in order_name_template
 
 Revision ID: b4e2bffdd4f8
-Revises: cf421634d3c8
+Revises: cf421634d3c8, 9cc36dfc54f6
 Create Date: 2026-05-01 10:28:42.996271
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b4e2bffdd4f8"
-down_revision: str | Sequence[str] | None = "cf421634d3c8"
+down_revision: str | Sequence[str] | None = ("cf421634d3c8", "9cc36dfc54f6")
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
