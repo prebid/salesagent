@@ -16,8 +16,8 @@ from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
-from adcp.types import SignalPricingOption
 from adcp.types.generated_poc.core.signal_id import SignalId, SignalId18
+from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
 
 from src.core.auth import get_principal_object
 from src.core.resolved_identity import ResolvedIdentity
@@ -36,10 +36,10 @@ def _agent_signal_id(segment_id: str) -> SignalId:
     return SignalId(SignalId18(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
 
 
-def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[SignalPricingOption]:
+def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricingOption]:
     """Build a single-element pricing_options list for a CPM signal."""
     return [
-        SignalPricingOption.model_validate(
+        VendorPricingOption.model_validate(
             {"pricing_option_id": f"cpm_{currency.lower()}", "model": "cpm", "cpm": cpm, "currency": currency}
         )
     ]

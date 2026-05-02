@@ -155,20 +155,11 @@ class TestA2AErrorPropagation:
         """Extract DataPart data from A2A artifact.
 
         A2A artifacts may have multiple parts: optional TextPart followed by DataPart.
-        This helper iterates through parts to find the one with structured data.
+        In a2a-sdk 1.0, Part.data is a protobuf Value, not a plain dict.
         """
-        if not artifact or not artifact.parts:
-            return {}
+        from tests.utils.a2a_helpers import extract_data_from_artifact
 
-        for part in artifact.parts:
-            # Check for DataPart with root.data structure
-            if hasattr(part, "root") and hasattr(part.root, "data"):  # noqa: rootmodel
-                return part.root.data
-            # Check for direct data attribute
-            if hasattr(part, "data") and isinstance(part.data, dict):
-                return part.data
-
-        return {}
+        return extract_data_from_artifact(artifact)
 
     async def test_create_media_buy_validation_error_includes_errors_field(self, handler, test_tenant, test_principal):
         """Test that validation errors include errors field in A2A response."""

@@ -381,11 +381,9 @@ class TestCreateMediaBuyAdapterAtomicity:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
             assert mb is not None, "Media buy should be persisted in DB"
             assert mb.media_buy_id is not None
-            # Mock adapter flow results in pending_activation (creatives not yet approved)
+            # Mock adapter flow results in pending_start (creatives not yet approved)
             # The important assertion is that a record EXISTS (atomicity: success -> persisted)
-            assert mb.status in ("active", "pending_activation"), (
-                f"Expected active or pending_activation, got {mb.status}"
-            )
+            assert mb.status in ("active", "pending_start"), f"Expected active or pending_start, got {mb.status}"
 
             packages = session.scalars(
                 select(DBMediaPackage).where(DBMediaPackage.media_buy_id == mb.media_buy_id)
@@ -558,10 +556,10 @@ class TestGetMediaBuysResponseFields:
         media_buy_id = create_result.response.media_buy_id
 
         # Use explicit status_filter to include all statuses — newly created media buys
-        # may be pending_activation (start_date in the future), not active
+        # may be pending_start (start_date in the future), not active
         all_statuses = [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.completed,
             MediaBuyStatus.paused,
         ]
@@ -647,10 +645,10 @@ class TestGetMediaBuysResponseFields:
             )
 
         # Use explicit status_filter to include all statuses — newly created media buys
-        # may be pending_activation (start_date in the future), not active
+        # may be pending_start (start_date in the future), not active
         all_statuses = [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.completed,
             MediaBuyStatus.paused,
         ]

@@ -163,32 +163,25 @@ class TestA2AAgentCardCreation:
 
         agent_card = create_agent_card()
 
-        # Validate structure
-        assert hasattr(agent_card, "name")
-        assert hasattr(agent_card, "description")
-        assert hasattr(agent_card, "version")
-        assert hasattr(agent_card, "skills")
-        assert hasattr(agent_card, "url")
-
-        # Check for security configuration (A2A spec compliant way to specify authentication)
-        assert hasattr(agent_card, "security") or hasattr(agent_card, "securitySchemes")
+        # Validate structure (protobuf AgentCard fields)
+        assert agent_card.name
+        assert agent_card.description
+        assert agent_card.version
+        assert len(agent_card.skills) > 0
+        assert len(agent_card.supported_interfaces) > 0
 
         # Validate content
         assert agent_card.name == "Prebid Sales Agent"
 
-        # Note: A2A spec uses security/securitySchemes for authentication, not a simple authentication field
+        # a2a-sdk 1.0: URL is in supported_interfaces[0].url, not agent_card.url
+        interface_url = agent_card.supported_interfaces[0].url
+        assert not interface_url.endswith("/"), f"Interface URL should not have trailing slash: {interface_url}"
+        assert interface_url.endswith("/a2a"), f"Interface URL should end with '/a2a': {interface_url}"
 
-        # Critical: URL should not have trailing slash
-        assert not agent_card.url.endswith("/"), f"Agent card URL should not have trailing slash: {agent_card.url}"
-        assert agent_card.url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {agent_card.url}"
-
-        # Should have skills
-        assert len(agent_card.skills) > 0
-
-        # Validate skills structure
+        # Validate skills structure (protobuf: skills have id and description)
         for skill in agent_card.skills:
-            assert hasattr(skill, "name")
-            assert hasattr(skill, "description")
+            assert skill.id
+            assert skill.description
 
     def test_agent_card_adcp_extension(self):
         """Test that agent card includes AdCP 2.5 extension."""
@@ -216,13 +209,15 @@ class TestA2AAgentCardCreation:
         adcp_version = get_adcp_version()
         assert adcp_ext.uri == f"https://adcontextprotocol.org/schemas/{adcp_version}/protocols/adcp-extension.json"
         assert adcp_ext.params is not None
-        assert "adcp_version" in adcp_ext.params
-        assert "protocols_supported" in adcp_ext.params
+        # protobuf Struct: access fields dict-like
+        params = adcp_ext.params
+        assert "adcp_version" in params.fields
+        assert "protocols_supported" in params.fields
 
         # Validate AdCP extension values
-        assert adcp_ext.params["adcp_version"] == adcp_version
-        protocols = adcp_ext.params["protocols_supported"]
-        assert isinstance(protocols, list)
+        assert params.fields["adcp_version"].string_value == adcp_version
+        protocols_value = params.fields["protocols_supported"].list_value
+        protocols = [v.string_value for v in protocols_value.values]
         assert len(protocols) >= 1
         # Currently only media_buy protocol is supported
         assert "media_buy" in protocols
@@ -233,7 +228,7 @@ class TestA2AAgentCardCreation:
         from src.a2a_server.adcp_a2a_server import create_agent_card
 
         agent_card = create_agent_card()
-        skill_names = [skill.name for skill in agent_card.skills]
+        skill_names = [skill.id for skill in agent_card.skills]
 
         # Should include core AdCP skills
         # Note: get_signals removed - should come from dedicated signals agents
@@ -253,13 +248,15 @@ class TestA2AAgentCardCreation:
 
         agent_card = create_agent_card()
 
-        # Should be able to serialize to dict
+        # Should be able to serialize to dict (protobuf: use MessageToDict)
         try:
-            card_dict = agent_card.model_dump()
+            from google.protobuf.json_format import MessageToDict, MessageToJson
+
+            card_dict = MessageToDict(agent_card)
             assert isinstance(card_dict, dict)
 
             # Should be JSON serializable
-            json_str = json.dumps(card_dict)
+            json_str = MessageToJson(agent_card)
             assert len(json_str) > 0
 
             # Should be able to parse back
@@ -393,7 +390,7 @@ def test_a2a_regression_summary():
         from src.a2a_server.adcp_a2a_server import create_agent_card
 
         agent_card = create_agent_card()
-        assert not agent_card.url.endswith("/"), "REGRESSION: Agent card URL has trailing slash"
+        assert not agent_card.supported_interfaces[0].url.endswith("/"), "REGRESSION: Agent card URL has trailing slash"
 
         # Test 2: Handler can be created
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler

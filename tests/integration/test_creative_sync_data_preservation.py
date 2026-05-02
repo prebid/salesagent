@@ -288,9 +288,10 @@ class TestCreativeSyncDataPreservation:
                 }
             )
 
-            # User-provided assets (ImageAsset adds alt_text/format/provenance defaults after parsing)
+            # User-provided assets (ImageAsset adds asset_type/alt_text/format/provenance defaults after parsing)
             user_assets = {
                 "banner_image": {
+                    "asset_type": "image",
                     "url": "https://user-creative.example.com/banner.png",
                     "width": 300,
                     "height": 250,

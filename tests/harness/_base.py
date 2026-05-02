@@ -163,9 +163,9 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     if not isinstance(exc, A2AError):
         return exc
 
-    error = exc.error
-    message = getattr(error, "message", str(exc))
-    data = getattr(error, "data", None) or {}
+    # a2a-sdk 1.0: the exception itself carries message/data (no .error wrapper)
+    message = getattr(exc, "message", str(exc))
+    data = getattr(exc, "data", None) or {}
 
     # If _adcp_to_a2a_error stored the error_code, reconstruct the exact subclass.
     error_code = data.get("error_code")
@@ -177,11 +177,11 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
         AdCPValidationError,
     )
 
-    if isinstance(error, InvalidRequestError):
+    if isinstance(exc, InvalidRequestError):
         return AdCPAuthenticationError(message)
-    if isinstance(error, InvalidParamsError):
+    if isinstance(exc, InvalidParamsError):
         return AdCPValidationError(message)
-    if isinstance(error, InternalError):
+    if isinstance(exc, InternalError):
         return RuntimeError(message)
     return exc
 

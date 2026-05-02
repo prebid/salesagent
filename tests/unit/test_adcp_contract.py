@@ -2961,13 +2961,13 @@ class TestProductV36FieldContract:
         assert dump["placements"][0]["name"] == "Top Banner"
         assert dump["placements"][1]["placement_id"] == "sidebar"
 
-    # --- reporting_capabilities (optional, default=None) ---
+    # --- reporting_capabilities (required in adcp 4.3) ---
 
-    def test_reporting_capabilities_absent_when_null(self):
-        """reporting_capabilities not in model_dump when not set."""
+    def test_reporting_capabilities_present_when_null(self):
+        """reporting_capabilities always in model_dump (required in adcp 4.3)."""
         product = self._make_base_product()
         dump = product.model_dump()
-        assert "reporting_capabilities" not in dump
+        assert "reporting_capabilities" in dump
 
     def test_reporting_capabilities_present_when_set(self):
         """reporting_capabilities appears in model_dump with correct structure."""
@@ -3246,12 +3246,12 @@ class TestProductV36FieldContract:
         dump = schema.model_dump()
 
         # None-valued optional fields should be omitted from dump
+        # reporting_capabilities is required in adcp 4.3 — always present with defaults
         absent_fields = [
             "channels",
             "product_card",
             "product_card_detailed",
             "placements",
-            "reporting_capabilities",
             "catalog_match",
             "catalog_types",
             "conversion_tracking",

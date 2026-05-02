@@ -906,7 +906,7 @@ class TestPackageDeliveryStatus:
 
             resp = env.call_impl(
                 media_buy_ids=["mb_future"],
-                status_filter=[MediaBuyStatus.pending_activation],
+                status_filter=[MediaBuyStatus.pending_start],
                 start_date="2025-01-01",
                 end_date="2025-03-15",
             )
@@ -1016,7 +1016,7 @@ class TestPackageDeliveryStatus:
             resp = env.call_impl(
                 media_buy_ids=["mb_future", "mb_active", "mb_completed"],
                 status_filter=[
-                    MediaBuyStatus.pending_activation,
+                    MediaBuyStatus.pending_start,
                     MediaBuyStatus.active,
                     MediaBuyStatus.completed,
                 ],

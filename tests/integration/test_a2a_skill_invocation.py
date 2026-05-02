@@ -65,19 +65,13 @@ class A2AAdCPValidator:
             await self.validator.__aexit__(exc_type, exc_val, exc_tb)
 
     def extract_adcp_payload_from_a2a_artifact(self, artifact) -> dict:
-        """Extract AdCP payload from A2A artifact structure."""
-        if not artifact or not artifact.parts:
-            return {}
+        """Extract AdCP payload from A2A artifact structure.
 
-        # A2A artifacts have: parts = [Part(type="data", data={...})]
-        for part in artifact.parts:
-            if hasattr(part, "data") and isinstance(part.data, dict):
-                return part.data
-            # Handle different A2A Part structures
-            if hasattr(part, "root") and hasattr(part.root, "data"):  # noqa: rootmodel
-                return part.root.data
+        In a2a-sdk 1.0, Part.data is a protobuf Value, not a plain dict.
+        """
+        from tests.utils.a2a_helpers import extract_data_from_artifact
 
-        return {}
+        return extract_data_from_artifact(artifact)
 
     async def validate_a2a_skill_response(
         self, skill_name: str, task_result: Task
@@ -453,7 +447,8 @@ class TestA2ASkillInvocation:
             assert isinstance(result, Task)
             assert result.status.state == TaskState.TASK_STATE_SUBMITTED
             # Per A2A spec, tasks requiring approval should not have artifacts until approved
-            assert result.artifacts is None
+            # (protobuf uses empty repeated field [] instead of None)
+            assert not result.artifacts
 
     @pytest.mark.asyncio
     async def test_hybrid_invocation(
@@ -564,8 +559,8 @@ class TestA2ASkillInvocation:
             for artifact in result.artifacts:
                 data_part_found = False
                 for part in artifact.parts:
-                    if hasattr(part, "root") and hasattr(part.root, "data"):  # noqa: rootmodel
-                        assert part.root.data is not None
+                    # a2a-sdk 1.0 protobuf: Part uses oneof 'content' with text/raw/url/data
+                    if part.HasField("data"):
                         data_part_found = True
                         break
                 assert data_part_found, "Expected DataPart in artifact.parts"
@@ -608,8 +603,7 @@ class TestA2ASkillInvocation:
         mock_task = Task(
             id="test_task_1",
             context_id="test_context_1",
-            kind="task",
-            status=TaskStatus(state="completed"),
+            status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
             artifacts=[artifact],
         )
 
@@ -878,7 +872,14 @@ class TestA2ASkillInvocation:
                         "creative_id": "creative_test_1",
                         "name": "Test Creative",
                         "format_id": "display_300x250",
-                        "assets": {"asset_1": {"asset_type": "image", "url": "https://example.com/creative.jpg"}},
+                        "assets": {
+                            "asset_1": {
+                                "asset_type": "image",
+                                "url": "https://example.com/creative.jpg",
+                                "width": 300,
+                                "height": 250,
+                            }
+                        },
                     }
                 ]
             }

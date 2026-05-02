@@ -7,7 +7,7 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.core.format import Assets, Assets5, Dimensions, Renders
+from adcp.types.generated_poc.core.format import Assets, Assets81, Dimensions, Renders
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsResponse
 from tests.factories import TenantFactory
@@ -66,7 +66,7 @@ class TestFullCatalogNoFilters:
                 "Pre-roll 15s",
                 type="video",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
-                assets=[Assets5(item_type="individual", asset_id="video_file", required=True)],
+                assets=[Assets81(item_type="individual", asset_id="video_file", required=True)],
             ),
             _make_format(
                 "audio_companion",
@@ -113,7 +113,7 @@ class TestFullCatalogNoFilters:
                 "Mid-roll Video",
                 type="video",
                 assets=[
-                    Assets5(
+                    Assets81(
                         item_type="individual",
                         asset_id="video_asset",
                         required=True,

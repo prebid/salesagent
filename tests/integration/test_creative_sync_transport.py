@@ -27,6 +27,14 @@ from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 
+
+def _error_messages(errors: list | None) -> list[str]:
+    """Extract message strings from Error objects or plain strings."""
+    if not errors:
+        return []
+    return [e.message if hasattr(e, "message") else str(e) for e in errors]
+
+
 # All four transports: IMPL, A2A, REST, MCP
 ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
 
@@ -295,7 +303,7 @@ class TestSyncFormatValidationTransport:
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.action == CreativeAction.failed
-        assert any("list_creative_formats" in e for e in (creative_result.errors or []))
+        assert any("list_creative_formats" in e for e in _error_messages(creative_result.errors))
 
 
 @pytest.mark.requires_db
@@ -733,7 +741,7 @@ class TestFormatValidationUnreachable:
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.action == CreativeAction.failed
-        assert any("unreachable" in e.lower() for e in (creative_result.errors or []))
+        assert any("unreachable" in e.lower() for e in _error_messages(creative_result.errors))
 
 
 # ---------------------------------------------------------------------------
@@ -1079,7 +1087,8 @@ class TestStaticPreviewFailed:
             creative_result = result.payload.creatives[0]
             assert creative_result.action == CreativeAction.failed
             assert any(
-                "no previews" in e.lower() or "no media_url" in e.lower() for e in (creative_result.errors or [])
+                "no previews" in e.lower() or "no media_url" in e.lower()
+                for e in _error_messages(creative_result.errors)
             )
 
 
@@ -1117,7 +1126,7 @@ class TestGeminiKeyMissing:
         assert_envelope(result, transport)
         creative_result = result.payload.creatives[0]
         assert creative_result.action == CreativeAction.failed
-        assert any("gemini" in e.lower() for e in (creative_result.errors or []))
+        assert any("gemini" in e.lower() for e in _error_messages(creative_result.errors))
 
 
 # ---------------------------------------------------------------------------

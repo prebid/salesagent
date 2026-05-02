@@ -148,6 +148,9 @@ class Product(LibraryProduct):
         if isinstance(kwargs["exclude"], set):
             kwargs["exclude"].update({"implementation_config", "expires_at"})
 
+        # Override exclude_none so we can handle core-field None values ourselves
+        # (AdCPBaseModel defaults exclude_none=True which would strip required fields)
+        kwargs["exclude_none"] = False
         data = super().model_dump(**kwargs)
 
         # Convert formats to format_ids per AdCP spec
@@ -163,6 +166,7 @@ class Product(LibraryProduct):
             "format_ids",
             "delivery_type",
             "delivery_measurement",
+            "reporting_capabilities",
             "is_custom",
         }
 

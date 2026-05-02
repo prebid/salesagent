@@ -415,7 +415,7 @@ class TestDeliveryStatusFilterIntegration:
         req = GetMediaBuyDeliveryRequest(
             media_buy_ids=["mb_ready", "mb_active", "mb_completed"],
             status_filter=[
-                MediaBuyStatus.pending_activation,
+                MediaBuyStatus.pending_start,
                 MediaBuyStatus.active,
                 MediaBuyStatus.completed,
             ],

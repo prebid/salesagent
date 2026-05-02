@@ -82,10 +82,10 @@ class MediaBuyStatusScheduler:
         try:
             with get_db_session() as session:
                 # Find media buys that need status updates (cross-tenant scheduler query)
-                # 1. pending_activation or scheduled -> should become active if start_time passed
+                # 1. pending_start (or legacy pending_activation/scheduled) -> active if start_time passed
                 # 2. active -> should become completed if end_time passed
                 media_buys = MediaBuyRepository.get_all_by_statuses(
-                    session, ["pending_activation", "scheduled", "active"]
+                    session, ["pending_start", "pending_activation", "scheduled", "active"]
                 )
 
                 for media_buy in media_buys:
@@ -151,9 +151,9 @@ class MediaBuyStatusScheduler:
 
         # Check if campaign should be active
         if now >= start_time:
-            if current_status in ["pending_activation", "scheduled"]:
-                # Before activating, verify creatives are approved (for pending_activation)
-                if current_status == "pending_activation":
+            if current_status in ["pending_start", "pending_activation", "scheduled"]:
+                # Before activating, verify creatives are approved (for pending_start/pending_activation)
+                if current_status in ["pending_start", "pending_activation"]:
                     if self._are_creatives_approved(media_buy, session):
                         return "active"
                     # Creatives not approved yet - stay pending
