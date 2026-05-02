@@ -800,7 +800,10 @@ def _update_media_buy_impl(
                     # Check for sync errors
                     failed_creatives = [r for r in sync_response.creatives if r.action == CreativeAction.failed]
                     if failed_creatives:
-                        error_msgs = [f"{r.creative_id}: {', '.join(r.errors or [])}" for r in failed_creatives]
+                        error_msgs = [
+                            f"{r.creative_id}: {', '.join(e.message for e in (r.errors or []))}"
+                            for r in failed_creatives
+                        ]
                         error_msg = f"Failed to sync creatives: {'; '.join(error_msgs)}"
                         response_data = UpdateMediaBuyError(
                             errors=[Error(code="creative_sync_failed", message=error_msg)],

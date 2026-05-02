@@ -746,13 +746,13 @@ def _get_target_media_buys(
 ) -> list[tuple[str, MediaBuy]]:
     # Resolve status_filter to a set of internal status strings.
     # Internal statuses: ready, active, paused, completed, failed
-    # AdCP MediaBuyStatus: pending_activation, active, paused, completed
-    # Map: pending_activation -> ready (internal)
+    # AdCP MediaBuyStatus: pending_start, active, paused, completed
+    # Map: pending_start -> ready (internal)
     valid_internal_statuses = {"active", "ready", "paused", "completed", "failed"}
 
     def _to_internal(status: MediaBuyStatus) -> str:
         """Convert AdCP MediaBuyStatus enum to internal status string."""
-        if status == MediaBuyStatus.pending_activation:
+        if status == MediaBuyStatus.pending_start:
             return "ready"
         return status.value
 

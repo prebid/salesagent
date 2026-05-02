@@ -149,18 +149,18 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
 
 
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
-    """Translate a2a ServerError back to the corresponding AdCPError.
+    """Translate a2a A2AError back to the corresponding AdCPError.
 
-    The A2A handler wraps AdCPError → ServerError (via _adcp_to_a2a_error).
+    The A2A handler wraps AdCPError → A2AError (via _adcp_to_a2a_error).
     This reverses that translation so callers can ``pytest.raises(AdCPAuthenticationError)``
     instead of catching the transport-level wrapper.
 
-    If the exception is not a ServerError or lacks enough info, returns it unchanged.
+    If the exception is not a A2AError or lacks enough info, returns it unchanged.
     """
     from a2a.types import InternalError, InvalidParamsError, InvalidRequestError
-    from a2a.utils.errors import ServerError
+    from a2a.utils.errors import A2AError
 
-    if not isinstance(exc, ServerError):
+    if not isinstance(exc, A2AError):
         return exc
 
     error = exc.error
@@ -405,7 +405,8 @@ class BaseTestEnv:
         """
         import asyncio
 
-        from a2a.types import MessageSendParams, Task
+        from a2a.server.routes.common import ServerCallContext
+        from a2a.types import SendMessageRequest, Task
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.harness.transport import Transport
@@ -450,15 +451,15 @@ class BaseTestEnv:
             set_current_tenant(a2a_identity.tenant)
 
         message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
-        params = MessageSendParams(message=message)
+        params = SendMessageRequest(message=message)
 
         async def _call():
-            return await handler.on_message_send(params)
+            return await handler.on_message_send(params, ServerCallContext())
 
         try:
             task_result = asyncio.run(_call())
         except Exception as exc:
-            # Translate ServerError back to AdCPError for callers that catch
+            # Translate A2AError back to AdCPError for callers that catch
             # domain exceptions (e.g., pytest.raises(AdCPAuthenticationError)).
             raise _unwrap_a2a_server_error(exc) from exc
 

@@ -1004,9 +1004,9 @@ class TestCreateMediaBuyStatusDetermination:
         assert _determine_media_buy_status(False, True, True, start, end, now) == "active"
 
     def test_pending_when_manual_approval_required(self):
-        """UC-002-ST03: manual approval required -> pending_activation.
+        """UC-002-ST03: manual approval required -> pending_start.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
+        Spec: CONFIRMED -- media-buy-status.json: pending_start = "Media buy created but not yet activated"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-03
         """
@@ -1015,12 +1015,12 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(True, True, True, start, end, now) == "pending_activation"
+        assert _determine_media_buy_status(True, True, True, start, end, now) == "pending_start"
 
     def test_pending_when_missing_creatives(self):
-        """UC-002-ST04: no creatives -> pending_activation.
+        """UC-002-ST04: no creatives -> pending_start.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
+        Spec: CONFIRMED -- media-buy-status.json: pending_start = "Media buy created but not yet activated"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Covers: UC-002-MAIN-21
         """
@@ -1029,12 +1029,12 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_activation"
+        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_start"
 
     def test_pending_when_before_start(self):
-        """UC-002-ST05: before start_time -> pending_activation.
+        """UC-002-ST05: before start_time -> pending_start.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
+        Spec: CONFIRMED -- media-buy-status.json: pending_start = "Media buy created but not yet activated"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Covers: UC-002-MAIN-21
         """
@@ -1043,7 +1043,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 2, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, True, True, start, end, now) == "pending_activation"
+        assert _determine_media_buy_status(False, True, True, start, end, now) == "pending_start"
 
 
 class TestCreateMediaBuyImplAuth:
@@ -3397,7 +3397,7 @@ class TestDeliveryImplStatusFilter:
 
             # "all" is not a valid enum value; use a list of all statuses
             req = GetMediaBuyDeliveryRequest(
-                status_filter=[MBS.active, MBS.completed, MBS.pending_activation, MBS.paused],
+                status_filter=[MBS.active, MBS.completed, MBS.pending_start, MBS.paused],
                 start_date="2025-01-01",
                 end_date="2025-06-30",
             )
@@ -3875,12 +3875,12 @@ class TestDeliveryResponseSerialization:
 class TestGetMediaBuysStatusComputation:
     """get_media_buys: _compute_status logic."""
 
-    def test_pending_activation_before_start(self):
-        """GMB-ST01: before start_date -> pending_activation.
+    def test_pending_start_before_start(self):
+        """GMB-ST01: before start_date -> pending_start.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_activation
+        Spec: CONFIRMED -- media-buy-status.json: pending_start
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_pending_activation_when_before_start
+        Ported from test_get_media_buys.py::test_pending_start_when_before_start
         """
         from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
@@ -3898,7 +3898,7 @@ class TestGetMediaBuysStatusComputation:
             created_at=None,
             updated_at=None,
         )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_activation
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
     def test_active_when_in_flight(self):
         """GMB-ST02: within flight dates -> active.
@@ -3973,7 +3973,7 @@ class TestGetMediaBuysStatusComputation:
             created_at=None,
             updated_at=None,
         )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_activation
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
 
 class TestGetMediaBuysStatusFilter:

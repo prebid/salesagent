@@ -303,6 +303,14 @@ class TestAdCPContract:
                 "provider": "test_provider",
                 "notes": "Test measurement",
             },  # Required per AdCP spec
+            "reporting_capabilities": {
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": True,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": {"minimum_days": 1, "maximum_days": 90},
+            },  # Required per AdCP 4.3 spec
         }
 
         # Should be convertible to AdCP schema
@@ -897,6 +905,11 @@ class TestAdCPContract:
         )
 
         signal = Signal(
+            signal_id={
+                "source": "catalog",
+                "data_provider_domain": "acmedata.com",
+                "id": "signal_auto_intenders_q1_2025",
+            },
             signal_agent_segment_id="signal_auto_intenders_q1_2025",
             name="Auto Intenders Q1 2025",
             description="Consumers showing purchase intent for automotive products in Q1 2025",
@@ -1465,13 +1478,13 @@ class TestAdCPContract:
                 SyncCreativeResult(
                     creative_id="creative_456",
                     action="updated",
-                    status="pending",
+                    status="pending_review",
                     changes=["url", "name"],
                 ),
                 SyncCreativeResult(
                     creative_id="creative_789",
                     action="failed",
-                    errors=["Invalid format"],
+                    errors=[{"code": "invalid_format", "message": "Invalid format"}],
                 ),
             ],
         )
@@ -1564,14 +1577,17 @@ class TestAdCPContract:
         assert "include_assignments" in adcp_response, "Field with default should be present"
         assert adcp_response["include_assignments"] is True, "Default value should match"
 
-        # Verify all spec fields are present (per adcp 3.10 library schema)
+        # Verify all spec fields are present (per adcp 4.3 library schema)
         spec_fields = {
+            "account",
+            "adcp_major_version",
             "context",
             "ext",
             "fields",
             "filters",
             "include_assignments",
             "include_items",
+            "include_pricing",
             "include_snapshot",
             "include_variables",
             "pagination",
@@ -1975,8 +1991,8 @@ class TestAdCPContract:
 
         if adcp_request.get("status_filter") is not None:
             # Can be string or array according to AdCP spec
-            # AdCP MediaBuyStatus enum: pending_activation, active, paused, completed
-            valid_statuses = ["pending_activation", "active", "paused", "completed"]
+            # AdCP MediaBuyStatus enum: pending_start, active, paused, completed
+            valid_statuses = ["pending_start", "active", "paused", "completed"]
             if isinstance(adcp_request["status_filter"], str):
                 assert adcp_request["status_filter"] in valid_statuses, (
                     f"Invalid status: {adcp_request['status_filter']}"
@@ -2701,6 +2717,7 @@ class TestAdCPContract:
         # Test with all fields
         signal_data = {
             "signal_agent_segment_id": "seg_123",
+            "signal_id": {"id": "seg_123", "source": "agent", "agent_url": "https://salesagent.adcontextprotocol.org"},
             "name": "Premium Audiences",
             "description": "High-value customer segment",
             "signal_type": "marketplace",

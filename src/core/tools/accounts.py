@@ -454,7 +454,7 @@ async def _sync_accounts_impl(
         SyncAccountsResponse with per-account action results.
     """
     if req is None:
-        req = SyncAccountsRequest(accounts=[])
+        req = SyncAccountsRequest(accounts=[], idempotency_key=str(uuid.uuid4()))
 
     # BR-RULE-055: sync requires auth
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
@@ -691,6 +691,7 @@ async def sync_accounts(
         delete_missing=delete_missing,
         dry_run=dry_run,
         context=context,
+        idempotency_key=str(uuid.uuid4()),
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)

@@ -28,7 +28,7 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # Line numbers reflect FIXME comment restored in media_buy_update.py (PR04 review item 1).
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 22 violations (workflow step response_data)
-    # Line numbers updated after adcp 3.12 migration (buyer_ref removal shifted lines)
+    # Line numbers updated after adcp 4.3 migration (new fields shifted lines)
     ("media_buy_update.py", 213),
     ("media_buy_update.py", 265),
     ("media_buy_update.py", 266),
@@ -43,14 +43,14 @@ KNOWN_VIOLATIONS = {
     ("media_buy_update.py", 579),
     ("media_buy_update.py", 605),
     ("media_buy_update.py", 784),
-    ("media_buy_update.py", 812),
-    ("media_buy_update.py", 840),
-    ("media_buy_update.py", 1011),
-    ("media_buy_update.py", 1029),
-    ("media_buy_update.py", 1079),
-    ("media_buy_update.py", 1172),
-    ("media_buy_update.py", 1204),
-    ("media_buy_update.py", 1264),
+    ("media_buy_update.py", 815),
+    ("media_buy_update.py", 843),
+    ("media_buy_update.py", 1014),
+    ("media_buy_update.py", 1032),
+    ("media_buy_update.py", 1082),
+    ("media_buy_update.py", 1175),
+    ("media_buy_update.py", 1207),
+    ("media_buy_update.py", 1267),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 617),
     # _list_creatives_impl: 1 violation (filter dict conversion)

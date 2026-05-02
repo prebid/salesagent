@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import logging
 
-from a2a.server.apps.jsonrpc.jsonrpc_app import CallContextBuilder
 from a2a.server.context import ServerCallContext
+from a2a.server.routes.common import ServerCallContextBuilder
 from starlette.requests import Request
 
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
@@ -17,7 +17,7 @@ from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 logger = logging.getLogger(__name__)
 
 
-class AdCPCallContextBuilder(CallContextBuilder):
+class AdCPCallContextBuilder(ServerCallContextBuilder):
     """Builds ServerCallContext from request.state.auth_context.
 
     UnifiedAuthMiddleware sets scope["state"]["auth_context"] which backs

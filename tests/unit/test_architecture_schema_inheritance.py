@@ -220,6 +220,14 @@ class TestSchemaInheritance:
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
             ("UpdateMediaBuyRequest", "packages"),  # list[AdCPPackageUpdate] (local subclass type)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
+            # adcp 4.3 field overrides — library made these required; we keep them
+            # optional because identity/idempotency is resolved at the transport boundary
+            ("CreateMediaBuyRequest", "idempotency_key"),  # optional override (generated at boundary)
+            ("Product", "reporting_capabilities"),  # optional override (not all products have it)
+            ("SyncAccountsRequest", "idempotency_key"),  # optional override (generated at boundary)
+            ("SyncCreativesRequest", "idempotency_key"),  # optional override (generated at boundary)
+            ("UpdateMediaBuyRequest", "account"),  # optional override (resolved from identity)
+            ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (generated at boundary)
         }
 
         violations = []

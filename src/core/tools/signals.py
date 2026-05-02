@@ -17,6 +17,7 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 
 from adcp.types import SignalPricingOption
+from adcp.types.generated_poc.core.signal_id import SignalId, SignalId18
 
 from src.core.auth import get_principal_object
 from src.core.resolved_identity import ResolvedIdentity
@@ -28,6 +29,11 @@ from src.core.schemas import (
     SignalDeployment,
 )
 from src.core.testing_hooks import AdCPTestContext
+
+
+def _agent_signal_id(segment_id: str) -> SignalId:
+    """Build a SignalId for an agent-native signal."""
+    return SignalId(SignalId18(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
 
 
 def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[SignalPricingOption]:
@@ -65,6 +71,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     # Sample signals for demonstration using local types (extend AdCP library types)
     sample_signals = [
         Signal(
+            signal_id=_agent_signal_id("auto_intenders_q1_2025"),
             signal_agent_segment_id="auto_intenders_q1_2025",
             name="Auto Intenders Q1 2025",
             description="Users actively researching new vehicles in Q1 2025",
@@ -75,6 +82,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(3.0),
         ),
         Signal(
+            signal_id=_agent_signal_id("luxury_travel_enthusiasts"),
             signal_agent_segment_id="luxury_travel_enthusiasts",
             name="Luxury Travel Enthusiasts",
             description="High-income individuals interested in premium travel experiences",
@@ -85,6 +93,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(5.0),
         ),
         Signal(
+            signal_id=_agent_signal_id("sports_content"),
             signal_agent_segment_id="sports_content",
             name="Sports Content Pages",
             description="Target ads on sports-related content",
@@ -95,6 +104,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(1.5),
         ),
         Signal(
+            signal_id=_agent_signal_id("finance_content"),
             signal_agent_segment_id="finance_content",
             name="Finance & Business Content",
             description="Target ads on finance and business content",
@@ -105,6 +115,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(2.0),
         ),
         Signal(
+            signal_id=_agent_signal_id("urban_millennials"),
             signal_agent_segment_id="urban_millennials",
             name="Urban Millennials",
             description="Millennials living in major metropolitan areas",
@@ -115,6 +126,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(1.8),
         ),
         Signal(
+            signal_id=_agent_signal_id("pet_owners"),
             signal_agent_segment_id="pet_owners",
             name="Pet Owners",
             description="Households with dogs or cats",

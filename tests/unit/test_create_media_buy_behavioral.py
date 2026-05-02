@@ -1744,8 +1744,8 @@ class TestInlineCreativeObligations:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=8),
         )
-        # Unapproved creatives -> pending_activation (waiting for creative approval)
-        assert status == "pending_activation"
+        # Unapproved creatives -> pending_start (waiting for creative approval)
+        assert status == "pending_start"
 
 
 class TestProposalBasedObligations:

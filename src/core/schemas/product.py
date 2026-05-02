@@ -77,6 +77,10 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
+    # adcp 4.3 makes reporting_capabilities required.  Override as optional
+    # — our product builder sets it when available from the adapter.
+    reporting_capabilities: Any | None = None  # type: ignore[assignment]
+
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
         default=None,

@@ -121,7 +121,7 @@ class CreativeSyncEnv(IntegrationEnv):
             fmt = env.setup_generative_build(format_id="gen_banner")
             creative = {"creative_id": "c1", "name": "Test", "format_id": fmt, ...}
         """
-        from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+        from adcp.types import FormatId as LibraryFormatId
 
         agent = agent_url or self.DEFAULT_AGENT_URL
 

@@ -1392,9 +1392,12 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 3.9 makes account required. Our impl resolves identity at the transport
-    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
+    # adcp 4.3 makes account and idempotency_key required.  Our impl resolves
+    # identity at the transport layer (ResolvedIdentity), not from the request
+    # payload, so account is optional here.  idempotency_key is generated at
+    # the transport boundary when not supplied by the caller.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
@@ -1569,6 +1572,13 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # adcp 4.3 makes account and idempotency_key required.  Override as optional
+    # — identity is resolved at the transport boundary, and idempotency_key is
+    # generated at the boundary when not supplied by the caller.
+    account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
+
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None

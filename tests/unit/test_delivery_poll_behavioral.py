@@ -141,7 +141,7 @@ class TestValidStatusValuesAccepted:
         "status_input",
         [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.paused,
             MediaBuyStatus.completed,
         ],

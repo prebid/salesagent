@@ -166,15 +166,15 @@ def _determine_media_buy_status(
     This ensures consistent status across all adapters (GAM, Mock, Kevel, etc.).
 
     Status Priority (highest to lowest) - ALL SPEC-COMPLIANT:
-    1. pending_activation: Manual approval required OR needs creatives OR scheduled for future
+    1. pending_start: Manual approval required OR needs creatives OR scheduled for future
     2. active: Currently delivering (has creatives, approved, within flight dates)
     3. completed: Past end date
     4. paused: (Reserved for future use - not currently returned)
 
     Internal states mapped to spec statuses:
-    - "pending_approval" → pending_activation (awaiting manual approval)
-    - "needs_creatives" → pending_activation (missing or unapproved creatives)
-    - "ready" → pending_activation (scheduled for future start)
+    - "pending_approval" → pending_start (awaiting manual approval)
+    - "needs_creatives" → pending_start (missing or unapproved creatives)
+    - "ready" → pending_start (scheduled for future start)
 
     Args:
         manual_approval_required: Whether the media buy requires manual approval
@@ -185,12 +185,12 @@ def _determine_media_buy_status(
         now: Current time (defaults to datetime.now(UTC))
 
     Returns:
-        Status string matching AdCP MediaBuyStatus enum (pending_activation, active, paused, completed)
+        Status string matching AdCP MediaBuyStatus enum (pending_start, active, paused, completed)
     """
     if now is None:
         now = datetime.now(UTC)
 
-    # Priority 1: Completed (past end date - check first to avoid false pending_activation)
+    # Priority 1: Completed (past end date - check first to avoid false pending_start)
     if now > end_time:
         return MediaBuyStatus.completed.value
 
@@ -199,7 +199,7 @@ def _determine_media_buy_status(
     # - Missing creatives or unapproved creatives
     # - Scheduled for future start
     if manual_approval_required or not has_creatives or not creatives_approved or now < start_time:
-        return MediaBuyStatus.pending_activation.value
+        return MediaBuyStatus.pending_start.value
 
     # Priority 3: Active (currently delivering - all conditions met)
     return MediaBuyStatus.active.value
@@ -1270,7 +1270,7 @@ from src.services.slack_notifier import get_slack_notifier
 
 def _build_idempotency_hit_result(
     tenant_id: str,
-    idempotency_key: str,
+    idempotency_key: str | None,
     principal_id: str,
     context: ContextObject | None,
 ) -> CreateMediaBuyResult:
@@ -1281,9 +1281,10 @@ def _build_idempotency_hit_result(
     """
     from src.core.database.repositories import MediaBuyUoW
 
+    key = idempotency_key or ""
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
-        existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id)
+        existing = uow.media_buys.find_by_idempotency_key(key, principal_id)
         if existing is None:
             raise AdCPValidationError(
                 f"Idempotency key {idempotency_key} not found after race resolution",
@@ -1296,7 +1297,7 @@ def _build_idempotency_hit_result(
         try:
             adcp_status = MediaBuyStatus(existing.status)
         except ValueError:
-            adcp_status = MediaBuyStatus.pending_activation
+            adcp_status = MediaBuyStatus.pending_start
 
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
@@ -2143,7 +2144,7 @@ async def _create_media_buy_impl(
                 )
                 return _build_idempotency_hit_result(
                     tenant_id=tenant["tenant_id"],
-                    idempotency_key=req.idempotency_key,  # type: ignore[arg-type]
+                    idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
                     context=req.context,
                 )
@@ -3012,7 +3013,7 @@ async def _create_media_buy_impl(
             )
             return _build_idempotency_hit_result(
                 tenant_id=tenant["tenant_id"],
-                idempotency_key=req.idempotency_key,  # type: ignore[arg-type]
+                idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
                 context=req.context,
             )

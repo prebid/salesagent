@@ -89,7 +89,7 @@ class _DataPreservationEnv(IntegrationEnv):
 
 def _make_format_id(agent_url: str, format_id: str):
     """Create a proper FormatId model for test mocks."""
-    from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+    from adcp.types import FormatId as LibraryFormatId
 
     return LibraryFormatId(agent_url=agent_url, id=format_id)
 

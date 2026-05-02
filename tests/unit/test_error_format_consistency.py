@@ -4,7 +4,7 @@ Tests for error format consistency across MCP and A2A transports.
 
 Verifies that:
 1. MCP tool errors have consistent structure (ToolError with message)
-2. A2A skill errors have consistent JSON-RPC error structure (ServerError)
+2. A2A skill errors have consistent JSON-RPC error structure (A2AError)
 3. The SAME error scenario produces consistent error types/messages across transports
 
 These are unit tests that mock database/adapter calls to isolate error formatting.
@@ -13,7 +13,7 @@ These are unit tests that mock database/adapter calls to isolate error formattin
 from unittest.mock import MagicMock, patch
 
 import pytest
-from a2a.utils.errors import ServerError
+from a2a.utils.errors import A2AError
 from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
@@ -126,8 +126,8 @@ class TestA2AErrorShapes:
 
     @pytest.mark.asyncio
     async def test_auth_required_error_is_server_error(self):
-        """A2A non-discovery skills raise ServerError when identity is None."""
-        with pytest.raises(ServerError) as exc_info:
+        """A2A non-discovery skills raise A2AError when identity is None."""
+        with pytest.raises(A2AError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
                 parameters={"brand": {"domain": "testbrand.com"}},
@@ -135,18 +135,18 @@ class TestA2AErrorShapes:
             )
 
         error = exc_info.value
-        assert isinstance(error, ServerError)
+        assert isinstance(error, A2AError)
         assert "Authentication required" in str(error)
 
     @pytest.mark.asyncio
     async def test_unknown_skill_raises_server_error(self):
-        """A2A raises ServerError for unknown skill names."""
+        """A2A raises A2AError for unknown skill names."""
         from src.core.resolved_identity import ResolvedIdentity
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
-        with pytest.raises(ServerError) as exc_info:
+        with pytest.raises(A2AError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="nonexistent_skill",
                 parameters={},
@@ -154,18 +154,18 @@ class TestA2AErrorShapes:
             )
 
         error = exc_info.value
-        assert isinstance(error, ServerError)
+        assert isinstance(error, A2AError)
         assert "Unknown skill" in str(error)
 
     @pytest.mark.asyncio
     async def test_invalid_auth_identity_raises_server_error(self):
-        """A2A raises ServerError when identity has no principal (auth required skill)."""
+        """A2A raises A2AError when identity has no principal (auth required skill)."""
         # Identity with no principal_id simulates invalid auth
         invalid_identity = ResolvedIdentity(
             principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
 
-        with pytest.raises(ServerError) as exc_info:
+        with pytest.raises(A2AError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
                 parameters={"brand": {"domain": "testbrand.com"}},
@@ -235,7 +235,7 @@ class TestA2AErrorShapes:
                     parameters={"brief": "test"},
                     identity=anon_identity,
                 )
-            except ServerError as e:
+            except A2AError as e:
                 assert "Authentication required" not in str(e), "Discovery skills should not require authentication"
 
 
@@ -259,10 +259,10 @@ class TestUpdateMediaBuyErrorShapes:
 
     @pytest.mark.asyncio
     async def test_a2a_missing_auth_raises_server_error(self):
-        """A2A update_media_buy raises ServerError when auth is missing."""
+        """A2A update_media_buy raises A2AError when auth is missing."""
         handler = AdCPRequestHandler()
 
-        with pytest.raises(ServerError) as exc_info:
+        with pytest.raises(A2AError) as exc_info:
             await handler._handle_explicit_skill(
                 skill_name="update_media_buy",
                 parameters={"media_buy_id": "buy_001"},
@@ -270,7 +270,7 @@ class TestUpdateMediaBuyErrorShapes:
             )
 
         error = exc_info.value
-        assert isinstance(error, ServerError)
+        assert isinstance(error, A2AError)
         assert "Authentication required" in str(error)
 
 
@@ -289,10 +289,10 @@ class TestListCreativesErrorShapes:
 
     @pytest.mark.asyncio
     async def test_a2a_missing_auth_raises_server_error(self):
-        """A2A list_creatives raises ServerError when auth is missing."""
+        """A2A list_creatives raises A2AError when auth is missing."""
         handler = AdCPRequestHandler()
 
-        with pytest.raises(ServerError) as exc_info:
+        with pytest.raises(A2AError) as exc_info:
             await handler._handle_explicit_skill(
                 skill_name="list_creatives",
                 parameters={},
@@ -300,7 +300,7 @@ class TestListCreativesErrorShapes:
             )
 
         error = exc_info.value
-        assert isinstance(error, ServerError)
+        assert isinstance(error, A2AError)
         assert "Authentication required" in str(error)
 
 
@@ -321,7 +321,7 @@ class TestCrossTransportErrorConsistency:
         """Both transports produce consistent errors when identity/auth is missing.
 
         MCP path: _create_media_buy_impl(identity=None) -> AdCPValidationError("Identity is required")
-        A2A path: _handle_explicit_skill(identity=None) -> ServerError("Authentication required")
+        A2A path: _handle_explicit_skill(identity=None) -> A2AError("Authentication required")
 
         Both paths reject the request before reaching business logic.
         """
@@ -350,12 +350,12 @@ class TestCrossTransportErrorConsistency:
                 parameters={"brand": {"domain": "testbrand.com"}},
                 identity=None,
             )
-        except ServerError as e:
+        except A2AError as e:
             a2a_error = e
 
         # Both must reject the request
         assert mcp_error is not None, "MCP path must raise error for missing identity"
-        assert a2a_error is not None, "A2A path must raise ServerError for missing auth"
+        assert a2a_error is not None, "A2A path must raise A2AError for missing auth"
 
         # Both errors indicate authentication/authorization failure
         assert "Identity is required" in str(mcp_error) or "required" in str(mcp_error).lower()
@@ -478,7 +478,7 @@ class TestCrossTransportErrorConsistency:
         mock_identity = ResolvedIdentity(
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
-        with pytest.raises(ServerError) as exc_info:
+        with pytest.raises(A2AError) as exc_info:
             await handler._handle_explicit_skill(
                 skill_name="totally_fake_skill",
                 parameters={},
@@ -599,9 +599,9 @@ class TestMCPRecoveryInErrorResponses:
 
 
 class TestA2ARecoveryInErrorResponses:
-    """Verify that A2A ServerError carries recovery in data for every AdCPError subclass.
+    """Verify that A2A A2AError carries recovery in data for every AdCPError subclass.
 
-    The A2A boundary (_handle_explicit_skill) translates AdCPError -> ServerError
+    The A2A boundary (_handle_explicit_skill) translates AdCPError -> A2AError
     with data={"recovery": ...}. Buyer agents parse this to decide retry strategy.
     """
 
@@ -628,8 +628,8 @@ class TestA2ARecoveryInErrorResponses:
         ids=lambda x: x if isinstance(x, str) and x.startswith("AdCP") else "",
     )
     async def test_a2a_server_error_carries_recovery(self, exc_class, msg, expected_recovery):
-        """ServerError from A2A boundary has data.recovery={expected_recovery} for {exc_class}."""
-        from a2a.utils.errors import ServerError
+        """A2AError from A2A boundary has data.recovery={expected_recovery} for {exc_class}."""
+        from a2a.utils.errors import A2AError
 
         import src.core.exceptions as exc_mod
 
@@ -639,13 +639,13 @@ class TestA2ARecoveryInErrorResponses:
             raise klass(msg)
 
         with patch.object(self.handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(A2AError) as exc_info:
                 await self.handler._handle_explicit_skill("get_products", {}, "token")
 
-            error = exc_info.value.error
-            assert error.data is not None, f"ServerError.data must not be None for {exc_class}"
-            assert "recovery" in error.data, f"ServerError.data must contain 'recovery' for {exc_class}"
-            assert error.data["recovery"] == expected_recovery
+            # a2a-sdk 1.0: error attributes are directly on the exception
+            assert exc_info.value.data is not None, f"A2AError.data must not be None for {exc_class}"
+            assert "recovery" in exc_info.value.data, f"A2AError.data must contain 'recovery' for {exc_class}"
+            assert exc_info.value.data["recovery"] == expected_recovery
 
 
 # ---------------------------------------------------------------------------

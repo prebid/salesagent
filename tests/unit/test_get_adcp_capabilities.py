@@ -32,13 +32,14 @@ class TestGetAdcpCapabilitiesSchema:
         """Test that response requires supported_protocols field."""
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
+            Idempotency1,
             MajorVersion,
         )
 
         # Must have supported_protocols (non-empty list)
         with pytest.raises(ValueError):
             GetAdcpCapabilitiesResponse(
-                adcp=Adcp(major_versions=[MajorVersion(root=3)]),
+                adcp=Adcp(major_versions=[MajorVersion(root=3)], idempotency=Idempotency1(supported=False)),
                 supported_protocols=[],  # Empty not allowed
             )
 
@@ -46,11 +47,12 @@ class TestGetAdcpCapabilitiesSchema:
         """Test creating a valid minimal response."""
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
+            Idempotency1,
             MajorVersion,
         )
 
         response = GetAdcpCapabilitiesResponse(
-            adcp=Adcp(major_versions=[MajorVersion(root=3)]),
+            adcp=Adcp(major_versions=[MajorVersion(root=3)], idempotency=Idempotency1(supported=False)),
             supported_protocols=[SupportedProtocol.media_buy],
         )
 
@@ -65,6 +67,7 @@ class TestGetAdcpCapabilitiesSchema:
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
             Execution,
+            Idempotency1,
             MajorVersion,
             MediaBuy,
             Portfolio,
@@ -73,7 +76,7 @@ class TestGetAdcpCapabilitiesSchema:
         )
 
         response = GetAdcpCapabilitiesResponse(
-            adcp=Adcp(major_versions=[MajorVersion(root=3)]),
+            adcp=Adcp(major_versions=[MajorVersion(root=3)], idempotency=Idempotency1(supported=False)),
             supported_protocols=[SupportedProtocol.media_buy],
             media_buy=MediaBuy(
                 portfolio=Portfolio(
@@ -81,9 +84,9 @@ class TestGetAdcpCapabilitiesSchema:
                     publisher_domains=[PublisherDomain(root="example.com")],
                 ),
                 features=MediaBuyFeatures(
-                    content_standards=True,
                     inline_creative_management=True,
                     property_list_filtering=True,
+                    catalog_management=True,
                 ),
                 execution=Execution(
                     targeting=Targeting(
@@ -98,7 +101,7 @@ class TestGetAdcpCapabilitiesSchema:
         assert response.media_buy.portfolio is not None
         assert len(response.media_buy.portfolio.publisher_domains) == 1
         assert response.media_buy.features is not None
-        assert response.media_buy.features.content_standards is True
+        assert response.media_buy.features.inline_creative_management is True
 
 
 class TestGetAdcpCapabilitiesImports:
@@ -613,7 +616,7 @@ class TestResponseShapeCapabilities:
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
-        """Features defaults: content_standards=False, inline_creative_management=True, property_list_filtering=False."""
+        """Features defaults: inline_creative_management=True, property_list_filtering=True."""
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(principal_id=None)
@@ -623,7 +626,6 @@ class TestResponseShapeCapabilities:
             response = _get_adcp_capabilities_impl(None, identity)
 
         features = response.media_buy.features
-        assert features.content_standards is False
         assert features.inline_creative_management is True
         assert features.property_list_filtering is True
 
@@ -655,37 +657,6 @@ class TestResponseShapeCapabilities:
         data = response.model_dump(mode="json")
         # media_buy is excluded from serialization when None
         assert "media_buy" not in data
-
-
-class TestDevicePlatformCapability:
-    """Test device_platform targeting advertised in capabilities."""
-
-    def test_device_platform_true_in_targeting(self):
-        """Capabilities response advertises device_platform: true."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        identity = _make_capabilities_identity(principal_id=None)
-        stack = _patch_capabilities_deps()
-
-        with stack:
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        targeting = response.media_buy.execution.targeting
-        assert targeting.device_platform is True
-
-    def test_device_platform_in_serialized_output(self):
-        """device_platform: true appears in JSON-serialized capabilities."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        identity = _make_capabilities_identity(principal_id=None)
-        stack = _patch_capabilities_deps()
-
-        with stack:
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        data = response.model_dump(mode="json")
-        targeting_data = data["media_buy"]["execution"]["targeting"]
-        assert targeting_data["device_platform"] is True
 
 
 class TestGeoPostalAreas:

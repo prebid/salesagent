@@ -347,7 +347,7 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
 
     if today < start:
-        return MediaBuyStatus.pending_activation
+        return MediaBuyStatus.pending_start
     if today > end:
         return MediaBuyStatus.completed
     return MediaBuyStatus.active

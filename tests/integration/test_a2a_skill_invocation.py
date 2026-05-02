@@ -10,7 +10,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
-from a2a.types import DataPart, Message, MessageSendParams, Part, Role, Task, TaskState, TaskStatus
+from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatus
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, create_a2a_text_message
@@ -165,17 +165,16 @@ class TestA2ASkillInvocation:
 
     def create_message_hybrid(self, text: str, skill: str, parameters: dict) -> Message:
         """Create a message with both text and skill invocation."""
-        from a2a.types import TextPart
+        from tests.utils.a2a_helpers import _dict_to_value
 
-        return Message(
+        msg = Message(
             message_id="msg_789",
             context_id="ctx_789",
-            role=Role.user,
-            parts=[
-                Part(root=TextPart(text=text)),
-                Part(root=DataPart(data={"skill": skill, "parameters": parameters})),
-            ],
+            role=Role.ROLE_USER,
         )
+        msg.parts.append(Part(text=text))
+        msg.parts.append(Part(data=_dict_to_value({"skill": skill, "parameters": parameters})))
+        return msg
 
     @pytest.mark.asyncio
     async def test_natural_language_get_products(
@@ -197,7 +196,7 @@ class TestA2ASkillInvocation:
 
             # Create natural language message
             message = create_a2a_text_message("What video products do you have available?")
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - this will execute the real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -251,7 +250,7 @@ class TestA2ASkillInvocation:
                 "brand": {"domain": "testbrand.com"},
             }
             message = create_a2a_message_with_skill("get_products", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - this will execute the real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -306,7 +305,7 @@ class TestA2ASkillInvocation:
                 "brand": {"domain": "testbrand.com"},
             }
             message = create_a2a_message_with_skill("get_products", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - this will execute the real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -378,7 +377,7 @@ class TestA2ASkillInvocation:
                 "end_time": end_date.isoformat(),
             }
             message = create_a2a_message_with_skill("create_media_buy", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - executes REAL _create_media_buy_impl with mock adapter
             result = await handler.on_message_send(params, context=ctx)
@@ -445,14 +444,14 @@ class TestA2ASkillInvocation:
                 "end_time": end_date.isoformat(),
             }
             message = create_a2a_message_with_skill("create_media_buy", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message
             result = await handler.on_message_send(params, context=ctx)
 
             # Verify the result has status=submitted (manual approval required)
             assert isinstance(result, Task)
-            assert result.status.state == TaskState.submitted
+            assert result.status.state == TaskState.TASK_STATE_SUBMITTED
             # Per A2A spec, tasks requiring approval should not have artifacts until approved
             assert result.artifacts is None
 
@@ -479,7 +478,7 @@ class TestA2ASkillInvocation:
             message = self.create_message_hybrid(
                 "I need video products for sports content", "get_products", skill_params
             )
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - this will execute the real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -499,7 +498,7 @@ class TestA2ASkillInvocation:
             assert len(products) > 0
 
     # TODO: Add test_unknown_skill_error once we understand how A2A server handles unknown skills
-    # TODO: Needs investigation of proper error handling approach (ServerError not in current a2a library)
+    # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
 
     @pytest.mark.asyncio
     async def test_multiple_skill_invocations(
@@ -521,32 +520,34 @@ class TestA2ASkillInvocation:
 
             # Create message with multiple skill invocations
             # Note: get_signals removed - should come from dedicated signals agents
+            from tests.utils.a2a_helpers import _dict_to_value
+
             message = Message(
                 message_id="msg_multi",
                 context_id="ctx_multi",
-                role=Role.user,
-                parts=[
-                    Part(
-                        root=DataPart(
-                            kind="data",
-                            data={
-                                "skill": "get_products",
-                                "parameters": {"brief": "video ads", "brand": {"domain": "testbrand.com"}},
-                            },
-                        )
-                    ),
-                    Part(
-                        root=DataPart(
-                            kind="data",
-                            data={
-                                "skill": "list_creative_formats",
-                                "parameters": {},
-                            },
-                        )
-                    ),
-                ],
+                role=Role.ROLE_USER,
             )
-            params = MessageSendParams(message=message)
+            message.parts.append(
+                Part(
+                    data=_dict_to_value(
+                        {
+                            "skill": "get_products",
+                            "parameters": {"brief": "video ads", "brand": {"domain": "testbrand.com"}},
+                        }
+                    )
+                )
+            )
+            message.parts.append(
+                Part(
+                    data=_dict_to_value(
+                        {
+                            "skill": "list_creative_formats",
+                            "parameters": {},
+                        }
+                    )
+                )
+            )
+            params = SendMessageRequest(message=message)
 
             # Process the message - this will execute the real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -570,7 +571,7 @@ class TestA2ASkillInvocation:
                 assert data_part_found, "Expected DataPart in artifact.parts"
 
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
-    # TODO: Needs investigation of proper error handling approach (ServerError not in current a2a library)
+    # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
 
     @pytest.mark.asyncio
     async def test_adcp_schema_validation_integration(self, validator):
@@ -578,7 +579,6 @@ class TestA2ASkillInvocation:
         # Test the validation helper directly with mock data
 
         # Create mock A2A task with AdCP-compliant product data
-        from a2a.types import Artifact
 
         mock_adcp_products_response = {
             "products": [
@@ -596,12 +596,14 @@ class TestA2ASkillInvocation:
             "message": "Products retrieved successfully",
         }
 
-        # Create A2A artifacts structure
+        # Create A2A artifacts structure (protobuf)
+        from tests.utils.a2a_helpers import _dict_to_value
+
         artifact = Artifact(
-            artifactId="test_artifact_1",
+            artifact_id="test_artifact_1",
             name="get_products_result",
-            parts=[Part(root=DataPart(data=mock_adcp_products_response))],
         )
+        artifact.parts.append(Part(data=_dict_to_value(mock_adcp_products_response)))
 
         mock_task = Task(
             id="test_task_1",
@@ -741,7 +743,7 @@ class TestA2ASkillInvocation:
                 "paused": False,  # adcp 2.12.0+: replaced 'active' with 'paused'
             }
             message = create_a2a_message_with_skill("update_media_buy", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message
             result = await handler.on_message_send(params, context=ctx)
@@ -771,7 +773,7 @@ class TestA2ASkillInvocation:
             # Create skill invocation
             skill_params = {"brief": "display formats"}
             message = create_a2a_message_with_skill("list_creative_formats", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - executes real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -836,7 +838,7 @@ class TestA2ASkillInvocation:
             # Create skill invocation
             skill_params = {}
             message = create_a2a_message_with_skill("list_authorized_properties", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - executes real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -881,7 +883,7 @@ class TestA2ASkillInvocation:
                 ]
             }
             message = create_a2a_message_with_skill("sync_creatives", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - executes real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -914,7 +916,7 @@ class TestA2ASkillInvocation:
             # Create skill invocation
             skill_params = {}
             message = create_a2a_message_with_skill("list_creatives", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - executes real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -952,7 +954,7 @@ class TestA2ASkillInvocation:
                 "performance_index": 1.25,
             }
             message = create_a2a_message_with_skill("update_performance_index", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # This will likely fail because media_buy doesn't exist, but tests the code path
             result = await handler.on_message_send(params, context=ctx)
@@ -984,7 +986,7 @@ class TestA2ASkillInvocation:
                 "media_buy_ids": ["mb_test_123"],
             }
             message = create_a2a_message_with_skill("get_media_buy_delivery", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
             # Process the message - executes real code path
             result = await handler.on_message_send(params, context=ctx)
@@ -998,7 +1000,7 @@ class TestA2ASkillInvocation:
     @pytest.mark.asyncio
     async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test approve_creative skill raises UnsupportedOperationError."""
-        from a2a.utils.errors import ServerError
+        from a2a.utils.errors import A2AError
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -1009,15 +1011,15 @@ class TestA2ASkillInvocation:
 
             skill_params = {"creative_id": "creative_test_123"}
             message = create_a2a_message_with_skill("approve_creative", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
-            with pytest.raises(ServerError):
+            with pytest.raises(A2AError):
                 await handler.on_message_send(params, context=ctx)
 
     @pytest.mark.asyncio
     async def test_get_media_buy_status_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test get_media_buy_status skill raises UnsupportedOperationError."""
-        from a2a.utils.errors import ServerError
+        from a2a.utils.errors import A2AError
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -1028,15 +1030,15 @@ class TestA2ASkillInvocation:
 
             skill_params = {"media_buy_id": "mb_test_123"}
             message = create_a2a_message_with_skill("get_media_buy_status", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
-            with pytest.raises(ServerError):
+            with pytest.raises(A2AError):
                 await handler.on_message_send(params, context=ctx)
 
     @pytest.mark.asyncio
     async def test_optimize_media_buy_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test optimize_media_buy skill raises UnsupportedOperationError."""
-        from a2a.utils.errors import ServerError
+        from a2a.utils.errors import A2AError
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -1047,9 +1049,9 @@ class TestA2ASkillInvocation:
 
             skill_params = {"media_buy_id": "mb_test_123"}
             message = create_a2a_message_with_skill("optimize_media_buy", skill_params)
-            params = MessageSendParams(message=message)
+            params = SendMessageRequest(message=message)
 
-            with pytest.raises(ServerError):
+            with pytest.raises(A2AError):
                 await handler.on_message_send(params, context=ctx)
 
 

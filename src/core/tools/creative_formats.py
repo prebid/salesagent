@@ -13,11 +13,11 @@ from adcp.types import Format as AdcpFormat
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.format import (
     Assets,
-    Assets5,
-    Assets6,
-    Assets7,
-    Assets9,
-    Assets14,
+    Assets81,
+    Assets82,
+    Assets83,
+    Assets85,
+    Assets90,
 )
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from adcp.utils.format_assets import get_format_assets
@@ -82,19 +82,19 @@ def _infer_asset_type(asset_id: str) -> str:
 # Map asset type strings to the correct class.
 _ASSET_TYPE_TO_CLASS: dict[str, type] = {
     "image": Assets,
-    "video": Assets5,
-    "audio": Assets6,
-    "text": Assets7,
-    "html": Assets9,
-    "url": Assets14,
+    "video": Assets81,
+    "audio": Assets82,
+    "text": Assets83,
+    "html": Assets85,
+    "url": Assets90,
 }
 
 
 def _make_asset(
     asset_id: str, asset_type: str, required: bool
-) -> Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14:
+) -> Assets | Assets81 | Assets82 | Assets83 | Assets85 | Assets90:
     """Build the correct Assets variant for a given asset type string."""
-    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, Assets7)  # default to text
+    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, Assets83)  # default to text
     return cls(
         item_type="individual",
         asset_id=asset_id,
@@ -195,7 +195,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14] = []
+                        assets_list: list[Assets | Assets81 | Assets82 | Assets83 | Assets85 | Assets90] = []
                         for asset_id in template.get("required_assets", []):
                             asset_type = _infer_asset_type(asset_id)
                             assets_list.append(_make_asset(asset_id, asset_type, required=True))

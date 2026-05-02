@@ -2,7 +2,7 @@
 
 Validates that:
 - MCP boundary: AdCPError → ToolError with preserved error_code, message, and recovery
-- A2A boundary: AdCPError → ServerError with correct JSON-RPC error code and recovery
+- A2A boundary: AdCPError → A2AError with correct JSON-RPC error code and recovery
 - REST boundary: AdCPError → proper HTTP status code with recovery field
 - ValueError and PermissionError are caught at boundaries
 - extract_error_info handles AdCPError instances
@@ -326,17 +326,17 @@ class TestMCPBoundaryAdCPErrorTranslation:
 
 
 # ---------------------------------------------------------------------------
-# A2A Boundary: AdCPError → ServerError with proper JSON-RPC error code
+# A2A Boundary: AdCPError → A2AError with proper JSON-RPC error code
 # ---------------------------------------------------------------------------
 
 
 class TestA2ABoundaryAdCPErrorTranslation:
-    """_handle_explicit_skill must catch AdCPError and raise ServerError with proper code and recovery."""
+    """_handle_explicit_skill must catch AdCPError and raise A2AError with proper code and recovery."""
 
     @pytest.mark.asyncio
     async def test_adcp_validation_becomes_invalid_params(self):
-        """AdCPValidationError → ServerError(InvalidParamsError) with correctable recovery."""
-        from a2a.utils.errors import ServerError
+        """AdCPValidationError → InvalidParamsError with correctable recovery."""
+        from a2a.types import InvalidParamsError
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
@@ -347,19 +347,17 @@ class TestA2ABoundaryAdCPErrorTranslation:
             raise AdCPValidationError("invalid param")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(InvalidParamsError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            # ServerError should contain InvalidParamsError (code -32602)
-            error = exc_info.value.error
-            assert error.code == -32602
-            assert "invalid param" in error.message
-            assert error.data == {"recovery": "correctable", "error_code": "VALIDATION_ERROR"}
+            # a2a-sdk 1.0: error attributes are directly on the exception
+            assert "invalid param" in exc_info.value.message
+            assert exc_info.value.data == {"recovery": "correctable", "error_code": "VALIDATION_ERROR"}
 
     @pytest.mark.asyncio
     async def test_adcp_auth_becomes_invalid_request(self):
-        """AdCPAuthenticationError → ServerError(InvalidRequestError) with terminal recovery."""
-        from a2a.utils.errors import ServerError
+        """AdCPAuthenticationError → InvalidRequestError with terminal recovery."""
+        from a2a.types import InvalidRequestError
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
@@ -369,18 +367,17 @@ class TestA2ABoundaryAdCPErrorTranslation:
             raise AdCPAuthenticationError("bad token")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(InvalidRequestError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            error = exc_info.value.error
-            assert error.code == -32600
-            assert "bad token" in error.message
-            assert error.data == {"recovery": "terminal", "error_code": "AUTH_TOKEN_INVALID"}
+            # a2a-sdk 1.0: error attributes are directly on the exception
+            assert "bad token" in exc_info.value.message
+            assert exc_info.value.data == {"recovery": "terminal", "error_code": "AUTH_TOKEN_INVALID"}
 
     @pytest.mark.asyncio
     async def test_adcp_adapter_becomes_internal_error(self):
-        """AdCPAdapterError → ServerError(InternalError) with transient recovery."""
-        from a2a.utils.errors import ServerError
+        """AdCPAdapterError → InternalError with transient recovery."""
+        from a2a.types import InternalError
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
@@ -390,33 +387,31 @@ class TestA2ABoundaryAdCPErrorTranslation:
             raise AdCPAdapterError("GAM down")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(InternalError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            error = exc_info.value.error
-            assert error.code == -32603
-            assert "GAM down" in error.message
-            assert error.data == {"recovery": "transient", "error_code": "ADAPTER_ERROR"}
+            # a2a-sdk 1.0: error attributes are directly on the exception
+            assert "GAM down" in exc_info.value.message
+            assert exc_info.value.data == {"recovery": "transient", "error_code": "ADAPTER_ERROR"}
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
-        """Existing ServerError behavior preserved — re-raised unchanged."""
+        """Existing A2AError behavior preserved — re-raised unchanged."""
         from a2a.types import MethodNotFoundError
-        from a2a.utils.errors import ServerError
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
 
         async def mock_skill(params, token):
-            raise ServerError(MethodNotFoundError(message="not found"))
+            raise MethodNotFoundError(message="not found")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(MethodNotFoundError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            # Should be the same ServerError, not wrapped in another
-            assert exc_info.value.error.code == -32601
+            # a2a-sdk 1.0: MethodNotFoundError is an A2AError subclass, re-raised as-is
+            assert exc_info.value.message == "not found"
 
 
 # ---------------------------------------------------------------------------
@@ -650,8 +645,8 @@ class TestCustomRecoveryOverrideA2ABoundary:
 
     @pytest.mark.asyncio
     async def test_custom_recovery_propagates_through_a2a_boundary(self):
-        """AdCPNotFoundError(recovery='transient') -> ServerError.data has 'transient'."""
-        from a2a.utils.errors import ServerError
+        """AdCPNotFoundError(recovery='transient') -> InternalError.data has 'transient'."""
+        from a2a.types import InternalError
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.exceptions import AdCPNotFoundError
@@ -662,11 +657,11 @@ class TestCustomRecoveryOverrideA2ABoundary:
             raise AdCPNotFoundError("temporarily missing", recovery="transient")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(InternalError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            error = exc_info.value.error
-            assert error.data == {"recovery": "transient", "error_code": "NOT_FOUND"}  # Custom, not "terminal"
+            # a2a-sdk 1.0: error attributes are directly on the exception
+            assert exc_info.value.data == {"recovery": "transient", "error_code": "NOT_FOUND"}  # Custom, not "terminal"
 
 
 class TestCustomRecoveryOverrideRESTBoundary:
@@ -758,8 +753,10 @@ class TestRecoveryRoundtrip:
 
     @pytest.mark.asyncio
     async def test_a2a_roundtrip_all_subclasses(self):
-        """All 11 AdCPError subclasses: raise -> _handle_explicit_skill -> ServerError.data.recovery."""
-        from a2a.utils.errors import ServerError
+        """All 11 AdCPError subclasses: raise -> _handle_explicit_skill -> A2AError.data.recovery."""
+        from a2a.types import InternalError as A2AInternalError
+        from a2a.types import InvalidParamsError, InvalidRequestError
+        from a2a.utils.errors import A2AError
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.exceptions import (
@@ -776,44 +773,44 @@ class TestRecoveryRoundtrip:
             AdCPValidationError,
         )
 
-        # JSON-RPC codes match _adcp_to_a2a_error isinstance dispatch:
-        # - Validation/Conflict/BudgetExhausted -> InvalidParamsError (-32602)
-        # - Authentication/Authorization -> InvalidRequestError (-32600)
-        # - Everything else (including NotFound, Gone) -> InternalError (-32603)
+        # a2a-sdk 1.0: _adcp_to_a2a_error isinstance dispatch maps to exception types:
+        # - Validation/Conflict/BudgetExhausted -> InvalidParamsError
+        # - Authentication/Authorization -> InvalidRequestError
+        # - Everything else (including NotFound, Gone) -> InternalError
         cases = [
-            (AdCPError, "internal", -32603, "terminal"),
-            (AdCPValidationError, "bad", -32602, "correctable"),
-            (AdCPAuthenticationError, "unauth", -32600, "terminal"),
-            (AdCPAuthorizationError, "forbidden", -32600, "terminal"),
-            (AdCPNotFoundError, "missing", -32603, "terminal"),
-            (AdCPConflictError, "dup", -32602, "correctable"),
-            (AdCPGoneError, "expired", -32603, "terminal"),
-            (AdCPBudgetExhaustedError, "broke", -32602, "correctable"),
-            (AdCPRateLimitError, "slow", -32603, "transient"),
-            (AdCPAdapterError, "down", -32603, "transient"),
-            (AdCPServiceUnavailableError, "offline", -32603, "transient"),
+            (AdCPError, "internal", A2AInternalError, "terminal"),
+            (AdCPValidationError, "bad", InvalidParamsError, "correctable"),
+            (AdCPAuthenticationError, "unauth", InvalidRequestError, "terminal"),
+            (AdCPAuthorizationError, "forbidden", InvalidRequestError, "terminal"),
+            (AdCPNotFoundError, "missing", A2AInternalError, "terminal"),
+            (AdCPConflictError, "dup", InvalidParamsError, "correctable"),
+            (AdCPGoneError, "expired", A2AInternalError, "terminal"),
+            (AdCPBudgetExhaustedError, "broke", InvalidParamsError, "correctable"),
+            (AdCPRateLimitError, "slow", A2AInternalError, "transient"),
+            (AdCPAdapterError, "down", A2AInternalError, "transient"),
+            (AdCPServiceUnavailableError, "offline", A2AInternalError, "transient"),
         ]
 
         handler = AdCPRequestHandler()
 
-        for exc_class, msg, expected_jsonrpc_code, expected_recovery in cases:
+        for exc_class, msg, expected_a2a_type, expected_recovery in cases:
 
             async def mock_skill(params, token, klass=exc_class, message=msg):
                 raise klass(message)
 
             with patch.object(handler, "_handle_get_products_skill", mock_skill):
-                with pytest.raises(ServerError) as exc_info:
+                with pytest.raises(A2AError) as exc_info:
                     await handler._handle_explicit_skill("get_products", {}, "token")
 
-                error = exc_info.value.error
-                assert error.code == expected_jsonrpc_code, (
-                    f"{exc_class.__name__}: JSON-RPC code {error.code}, expected {expected_jsonrpc_code}"
+                # a2a-sdk 1.0: check exception type and attributes directly
+                assert isinstance(exc_info.value, expected_a2a_type), (
+                    f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(exc_info.value).__name__}"
                 )
-                assert error.data["recovery"] == expected_recovery, (
-                    f"{exc_class.__name__}: recovery={error.data.get('recovery')!r}, expected {expected_recovery!r}"
+                assert exc_info.value.data["recovery"] == expected_recovery, (
+                    f"{exc_class.__name__}: recovery={exc_info.value.data.get('recovery')!r}, expected {expected_recovery!r}"
                 )
-                assert error.data["error_code"] == exc_class.error_code, (
-                    f"{exc_class.__name__}: error_code={error.data.get('error_code')!r}, expected {exc_class.error_code!r}"
+                assert exc_info.value.data["error_code"] == exc_class.error_code, (
+                    f"{exc_class.__name__}: error_code={exc_info.value.data.get('error_code')!r}, expected {exc_class.error_code!r}"
                 )
 
     def test_rest_roundtrip_all_subclasses(self):

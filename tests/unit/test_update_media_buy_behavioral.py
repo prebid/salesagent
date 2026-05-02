@@ -1477,7 +1477,9 @@ class TestUC003UploadInlineCreatives:
         failed_creative = MagicMock()
         failed_creative.creative_id = "c_fail"
         failed_creative.action = CreativeAction.failed
-        failed_creative.errors = ["Upload failed"]
+        mock_error = MagicMock()
+        mock_error.message = "Upload failed"
+        failed_creative.errors = [mock_error]
         mock_sync_response.creatives = [failed_creative]
 
         with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
@@ -2244,7 +2246,9 @@ class TestUC003ExtK:
         failed = MagicMock()
         failed.creative_id = "c_fail"
         failed.action = CreativeAction.failed
-        failed.errors = ["Network error"]
+        mock_err = MagicMock()
+        mock_err.message = "Network error"
+        failed.errors = [mock_err]
         mock_sync_response.creatives = [failed]
 
         with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
@@ -2283,7 +2287,9 @@ class TestUC003ExtK:
         failed = MagicMock()
         failed.creative_id = "c_fail"
         failed.action = CreativeAction.failed
-        failed.errors = ["Error"]
+        mock_err = MagicMock()
+        mock_err.message = "Error"
+        failed.errors = [mock_err]
         mock_sync_response.creatives = [failed]
 
         with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):

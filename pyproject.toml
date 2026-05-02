@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp>=3.12.0",
+    "adcp>=4.3.0",
     "fastmcp>=3.2.0", # v3.2 fixes GHSA-m8x7-r2rg-vh5g, GHSA-rww4-4w9c-7733
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
@@ -33,7 +33,7 @@ dependencies = [
     "simple-websocket>=1.1.0",
     "httpx>=0.28.1",
     "a2a-cli>=0.2.0",
-    "a2a-sdk[http-server]>=0.3.19", # Latest available version
+    "a2a-sdk[http-server]>=1.0.1", # a2a-sdk 1.0 (protobuf API, required by adcp>=4.3.0)
     "jinja2>=3.1.0",
     "prometheus-client>=0.23.1",
     "types-pytz>=2025.2.0.20250809",

@@ -26,15 +26,15 @@ _MOCK_IDENTITY = ResolvedIdentity(
 
 
 def _make_nl_message(text: str):
-    """Build a minimal A2A MessageSendParams with NL text (no skills)."""
-    from a2a.types import Message, MessageSendParams, Part, TextPart
+    """Build a minimal A2A SendMessageRequest with NL text (no skills)."""
+    from a2a.types import Message, Part, Role, SendMessageRequest
 
     message = Message(
-        messageId=str(uuid.uuid4()),
-        role="user",
-        parts=[Part(root=TextPart(text=text))],
+        message_id=str(uuid.uuid4()),
+        role=Role.ROLE_USER,
     )
-    return MessageSendParams(message=message)
+    message.parts.append(Part(text=text))
+    return SendMessageRequest(message=message)
 
 
 @pytest.mark.asyncio

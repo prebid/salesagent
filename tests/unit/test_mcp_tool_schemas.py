@@ -132,9 +132,10 @@ class TestMCPToolTypedSchemas:
 
         # type parameter removed in adcp 3.12
 
-        # Check format_ids uses FormatId type
-        assert "FormatId" in str(params["format_ids"].annotation), (
-            f"format_ids should use FormatId type, got {params['format_ids'].annotation}"
+        # Check format_ids uses FormatId type (alias for FormatReferenceStructuredObject in adcp 4.3)
+        annotation_str = str(params["format_ids"].annotation)
+        assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
+            f"format_ids should use FormatId type, got {annotation_str}"
         )
 
         # Check asset_types uses AssetContentType type (if still present)

@@ -1033,7 +1033,7 @@ class TestStaticPreviewFailed:
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_preview_no_url_fails(self, integration_db, transport):
         """Static format with empty preview_creative result and no url → failed."""
-        from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+        from adcp.types import FormatId as LibraryFormatId
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
