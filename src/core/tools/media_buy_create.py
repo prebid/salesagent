@@ -217,19 +217,22 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
         format_id: Format ID to fetch
 
     Returns:
-        Format specification object or None if not found
+        Format specification object, or None when the registry returned no
+        match for *format_id* on *agent_url* (legitimate "format not found").
+
+    Raises:
+        AdCPError: When the registry could not be reached or its response was
+            anomalous. Callers must distinguish "format not found" (None) from
+            "agent failure" (raise) — the previous broad ``except Exception:
+            return None`` collapsed both into a silent fallback that masked
+            real failures.
     """
     import asyncio
 
     from src.core.creative_agent_registry import get_creative_agent_registry
 
     registry = get_creative_agent_registry()
-
-    try:
-        return asyncio.run(registry.get_format(agent_url, format_id))
-    except Exception as e:
-        logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
-        return None
+    return asyncio.run(registry.get_format(agent_url, format_id))
 
 
 def _validate_creatives_before_adapter_call(
@@ -291,7 +294,17 @@ def _validate_creatives_before_adapter_call(
         # Get format specification from creative agent (uses in-memory cache with 30min TTL)
         format_spec = None
         if creative.format:
-            format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
+            try:
+                format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
+            except AdCPError as e:
+                # Distinguish agent-failure from format-not-found: agent failures get a
+                # richer error message naming the underlying cause; "format not found"
+                # (format_spec=None) falls through to the generic "unknown format" path.
+                validation_errors.append(
+                    f"Creative {creative.creative_id}: could not verify format "
+                    f"'{creative.format}' on agent {creative.agent_url}: {e.message}"
+                )
+                continue
 
         # Fail validation if format spec not found (no skipping!)
         if not format_spec:
@@ -3288,7 +3301,20 @@ async def _create_media_buy_impl(
                                     # Uses shared helper with in-memory cache (30min TTL)
                                     format_spec = None
                                     if creative.format:
-                                        format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
+                                        try:
+                                            format_spec = _get_format_spec_sync(
+                                                creative.agent_url, str(creative.format)
+                                            )
+                                        except AdCPError as e:
+                                            # Auto-approval gracefully degrades: continue with format_spec=None
+                                            # so extract helpers fall back to creative.data, but log the cause
+                                            # loudly instead of swallowing silently.
+                                            logger.warning(
+                                                f"[AUTO-APPROVAL] Creative agent unreachable for format "
+                                                f"{creative.format} on {creative.agent_url}: {e.message}; "
+                                                f"continuing without format hints",
+                                                exc_info=True,
+                                            )
                                         if not format_spec:
                                             logger.warning(
                                                 f"[AUTO-APPROVAL] Could not fetch format {creative.format} "

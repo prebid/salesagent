@@ -7,6 +7,9 @@ and URL extraction.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from src.core.exceptions import AdCPAdapterError
 from src.core.tools.media_buy_create import _get_format_spec_sync
 
 
@@ -31,7 +34,11 @@ class TestGetFormatSpecSync:
             assert format_spec.name == "Medium Rectangle - Image"
 
     def test_unknown_format_returns_none(self):
-        """Test that unknown format returns None."""
+        """Test that unknown format returns None.
+
+        None is the legitimate "format not found" signal — distinct from
+        agent-failure (which raises). Callers must distinguish.
+        """
         # Mock registry returning None for unknown format
         mock_registry = MagicMock()
         mock_registry.get_format = AsyncMock(return_value=None)
@@ -40,11 +47,17 @@ class TestGetFormatSpecSync:
             format_spec = _get_format_spec_sync("https://creative.adcontextprotocol.org", "unknown_format_xyz")
             assert format_spec is None
 
-    def test_exception_returns_none(self):
-        """Test that exceptions are caught and None is returned."""
+    def test_agent_failure_propagates(self):
+        """Registry transport/protocol failures propagate as AdCPError instead of returning None.
+
+        Previously the broad ``except Exception: return None`` collapsed agent
+        failures into the same fallback as "format not found", masking real
+        transport errors. Callers can now catch AdCPError and emit a richer
+        diagnostic.
+        """
         mock_registry = MagicMock()
-        mock_registry.get_format = AsyncMock(side_effect=Exception("Network error"))
+        mock_registry.get_format = AsyncMock(side_effect=AdCPAdapterError("Connection failed: network error"))
 
         with patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry):
-            format_spec = _get_format_spec_sync("https://creative.adcontextprotocol.org", "display_300x250_image")
-            assert format_spec is None
+            with pytest.raises(AdCPAdapterError, match="Connection failed: network error"):
+                _get_format_spec_sync("https://creative.adcontextprotocol.org", "display_300x250_image")
