@@ -273,12 +273,18 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
         else:
             base_msg = f"Found {count} products that match your requirements."
 
-        # Check if this looks like an anonymous response (all pricing options have no rates)
-        # Import here to avoid circular import (schemas -> helpers -> auth -> schemas)
-        from src.core.helpers.pricing_helpers import pricing_option_has_rate
+        # Anonymous heuristic: every product with options has only options that
+        # reveal NO rate-bearing data to the buyer (no rate / fixed_price /
+        # floor_price / price_guidance). See pricing_option_is_priced for the
+        # field set and issue #1246 for the long-term plan to replace this
+        # heuristic with a structured errors[] AUTH_REQUIRED entry.
+        # Imported here to avoid a circular import (schemas -> helpers -> auth -> schemas).
+        from src.core.helpers.pricing_helpers import pricing_option_is_priced
 
         if count > 0 and all(
-            all(not pricing_option_has_rate(po) for po in p.pricing_options) for p in self.products if p.pricing_options
+            all(not pricing_option_is_priced(po) for po in p.pricing_options)
+            for p in self.products
+            if p.pricing_options
         ):
             return f"{base_msg} Please connect through an authorized buying agent for pricing data."
 

@@ -90,7 +90,19 @@ class TestResponseStrMethods:
         assert str(resp) == "Found 3 products that match your requirements."
 
     def test_get_products_response_anonymous_user(self):
-        """GetProductsResponse without pricing (anonymous user) adds auth message."""
+        """GetProductsResponse with no rate-bearing fields adds auth message.
+
+        "Anonymous" means every option exposes no rate, fixed_price,
+        floor_price, or price_guidance — buyer sees nothing about price.
+        Auction options that publish a floor or percentile hints are
+        considered priced (see issue #1246).
+        """
+        bare_option = {
+            "pricing_option_id": "cpm_usd_anonymous",
+            "pricing_model": "cpm",
+            "currency": "USD",
+            # No rate, fixed_price, floor_price, or price_guidance.
+        }
         products = [
             Product(
                 product_id=f"p{i}",
@@ -104,16 +116,7 @@ class TestResponseStrMethods:
                 },
                 is_custom=False,
                 publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
-                pricing_options=[
-                    {
-                        "pricing_option_id": "cpm_usd_auction",
-                        "pricing_model": "cpm",
-                        "currency": "USD",
-                        "is_fixed": False,  # Required in adcp 2.4.0+
-                        "price_guidance": {"floor": 1.0, "p50": 5.0},
-                        # Auction pricing (anonymous user)
-                    }
-                ],
+                pricing_options=[bare_option],
             )
             for i in range(2)
         ]
