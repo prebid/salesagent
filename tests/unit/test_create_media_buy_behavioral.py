@@ -347,9 +347,9 @@ class TestMaxDailySpendExceeded:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
                     # Validation errors must NOT be about daily spend
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
-                        f"Daily spend validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
+                    ), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend validation are fine
 
@@ -721,9 +721,9 @@ class TestInlineCreativesProcessedBeforeApproval:
 
         # Verify creatives were processed before the adapter (approval check) was accessed
         assert "creatives_processed" in call_order, "process_and_upload_package_creatives was not called"
-        assert call_order.index("creatives_processed") < call_order.index("approval_check"), (
-            f"Creatives must be processed before approval check. Order: {call_order}"
-        )
+        assert call_order.index("creatives_processed") < call_order.index(
+            "approval_check"
+        ), f"Creatives must be processed before approval check. Order: {call_order}"
 
 
 class TestMultipleInvalidCreativesAccumulated:
@@ -1108,9 +1108,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "not found" not in str(e).lower() or "product" not in str(e).lower(), (
-                        f"Product validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "not found" not in str(e).lower() or "product" not in str(e).lower()
+                    ), f"Product validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to product validation are fine
 
@@ -1136,9 +1136,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "currency" not in str(e).lower() or "not supported" not in str(e).lower(), (
-                        f"Currency validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "currency" not in str(e).lower() or "not supported" not in str(e).lower()
+                    ), f"Currency validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to currency validation are fine
 
@@ -1408,9 +1408,9 @@ class TestAsapStartTimingObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
-                        f"Daily spend validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
+                    ), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend are fine
 
@@ -2035,6 +2035,49 @@ class TestExtensionObligations:
                 )
 
             assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
+
+    @pytest.mark.asyncio
+    async def test_format_lookup_agent_failure_wrapped_with_package_context(self):
+        """Registry transport failures are wrapped with the package/format index that triggered them.
+
+        When registry.get_format raises AdCPAdapterError (e.g. authentication, timeout, connection),
+        the validator must wrap it with "Package N, format_ids[idx]" context so buyers can identify
+        which format_id failed verification — not bypass the wrap by re-raising the typed exception
+        bare. The original exception is preserved via the cause chain (raise ... from e).
+
+        Covers: UC-002-EXT-H-02 (companion to test_unregistered_creative_agent_rejected)
+        """
+        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+
+        mock_agent = MagicMock()
+        mock_agent.agent_url = "https://creative.example.com"
+
+        with (
+            patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls,
+            patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x),
+        ):
+            mock_registry = MagicMock()
+            mock_registry._get_tenant_agents.return_value = [mock_agent]
+            mock_registry.get_format = AsyncMock(
+                side_effect=AdCPAdapterError("Authentication failed: invalid credentials")
+            )
+            mock_registry_cls.return_value = mock_registry
+
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                await _validate_and_convert_format_ids(
+                    format_ids=[{"agent_url": "https://creative.example.com", "id": "banner_300x250"}],
+                    tenant_id="test_tenant",
+                    package_idx=0,
+                )
+
+            error_str = str(exc_info.value)
+            assert "Package 1, format_ids[0]" in error_str
+            assert "Failed to verify format on agent" in error_str
+            assert "Authentication failed: invalid credentials" in error_str
+            assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
+            # Cause chain preserves original typed exception for debugging
+            assert isinstance(exc_info.value.__cause__, AdCPAdapterError)
+            assert str(exc_info.value.__cause__) == "Authentication failed: invalid credentials"
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):

@@ -1248,15 +1248,18 @@ async def _validate_and_convert_format_ids(
                     details={"error_code": "FORMAT_VALIDATION_ERROR"},
                     recovery="correctable",
                 )
+        except AdCPNotFoundError:
+            # Our deliberate raise above already carries package context.
+            raise
         except Exception as e:
-            if isinstance(e, AdCPError):
-                raise
+            # Wrap everything else (registry transport failures, unexpected errors) with
+            # package context so buyers see which package/format_id failed verification.
             logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
             raise AdCPAdapterError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "
                 f"agent_url={agent_url}, format_id={format_id!r}. Error: {e}",
                 details={"error_code": "FORMAT_VALIDATION_ERROR"},
-            )
+            ) from e
 
         # Format validated - add to results
         validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
@@ -2696,9 +2699,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
