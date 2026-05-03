@@ -30,7 +30,7 @@ from src.core.tools import products as products_module
 from src.core.tools import properties as properties_module
 from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
-from src.core.version_compat import apply_version_compat
+from src.core.version_compat import add_get_products_v2_compat
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
         return _handle_tool_error(e)
 
     result = response.model_dump(mode="json")
-    return apply_version_compat("get_products", result, body.adcp_version)
+    return add_get_products_v2_compat(result, body.adcp_version)
 
 
 @router.get("/capabilities")

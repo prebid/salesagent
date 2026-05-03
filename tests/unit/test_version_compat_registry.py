@@ -1,27 +1,42 @@
-"""Tests for version compat transform registry.
+"""Tests for ``add_get_products_v2_compat`` (dict-in/dict-out v2 backward-compat).
 
-Validates that:
-- apply_version_compat() exists and applies model-level v2 compat
-- get_products transform adds v2 fields from pricing option models
-- Unknown tools serialize with standard model_dump
-- V3+ clients get clean responses without compat fields
-- Dict pass-through works for legacy callers
+Validates the contract:
+- Pre-3.0 clients get ``is_fixed`` / ``rate`` / ``price_guidance.floor`` keys
+  added to every pricing option, derived from the v3 fields already present.
+- V3+ clients get the dict back unchanged.
+- ``adcp_version=None`` is treated as pre-3.0 (safe default).
+- Auction options (``floor_price`` only) get ``is_fixed=False`` and the floor
+  copied into ``price_guidance.floor``; ``rate`` is NOT added.
+- Responses without a ``products`` key (e.g., error envelopes) pass through.
 
-beads: salesagent-b61l.14
+Historical note: previous tests passed a typed ``GetProductsResponse`` to
+``apply_version_compat(tool_name, response, version)``. That contract was
+silently broken for months because every transport caller pre-serialized
+to dict before invoking the function — see PR #1081's squash and issue
+#1246. The current dict-in contract matches what the four production
+callers actually do.
 """
 
-from adcp import CpmPricingOption
+from __future__ import annotations
+
+from adcp.types.generated_poc.pricing_options.cpm_option import CpmPricingOption
 
 from src.core.schemas import GetProductsResponse, Product
+from src.core.version_compat import add_get_products_v2_compat
 from tests.helpers.adcp_factories import (
     create_test_format_id,
     create_test_publisher_properties_by_tag,
 )
 
 
-def _make_response(fixed_price: float | None = None, floor_price: float | None = None) -> GetProductsResponse:
-    """Build a GetProductsResponse with a single product and pricing option."""
-    kwargs = {
+def _make_response_dict(fixed_price: float | None = None, floor_price: float | None = None) -> dict:
+    """Build a serialized response dict matching what production transports pass in.
+
+    Mirrors the model_dump(mode="json") output of GetProductsResponse — i.e.,
+    the adcp library's PricingOption(RootModel) wrapper has been flattened so
+    v3 fields sit at the top level of each pricing-option entry.
+    """
+    kwargs: dict = {
         "pricing_option_id": "cpm_usd_test",
         "pricing_model": "cpm",
         "currency": "USD",
@@ -43,68 +58,82 @@ def _make_response(fixed_price: float | None = None, floor_price: float | None =
         publisher_properties=[create_test_publisher_properties_by_tag()],
         pricing_options=[cpm],
     )
-    return GetProductsResponse(products=[product])
+    return GetProductsResponse(products=[product]).model_dump(mode="json")
 
 
-# ---------------------------------------------------------------------------
-# Registry API Tests
-# ---------------------------------------------------------------------------
-
-
-class TestVersionCompatRegistry:
-    """Verify the version compat registry exists and works."""
-
-    def test_apply_version_compat_exists(self):
-        """apply_version_compat function must exist."""
-        from src.core.version_compat import apply_version_compat
-
-        assert callable(apply_version_compat)
-
-    def test_get_products_v2_adds_is_fixed_and_rate(self):
-        """V2 clients get is_fixed=True and rate from fixed_price model attribute."""
-        from src.core.version_compat import apply_version_compat
-
-        response = _make_response(fixed_price=5.0)
-        result = apply_version_compat("get_products", response, "2.0.0")
+class TestAddGetProductsV2Compat:
+    def test_v2_client_gets_is_fixed_and_rate_from_fixed_price(self) -> None:
+        response = _make_response_dict(fixed_price=5.0)
+        result = add_get_products_v2_compat(response, "2.0.0")
         po = result["products"][0]["pricing_options"][0]
         assert po["is_fixed"] is True
         assert po["rate"] == 5.0
+        # v3 fields are still present alongside (additive transform).
+        assert po["fixed_price"] == 5.0
 
-    def test_get_products_v2_auction_pricing(self):
-        """V2 clients get is_fixed=False and price_guidance.floor for auction pricing."""
-        from src.core.version_compat import apply_version_compat
-
-        response = _make_response(floor_price=2.0)
-        result = apply_version_compat("get_products", response, "2.0.0")
+    def test_v2_client_auction_pricing_gets_floor_in_price_guidance(self) -> None:
+        response = _make_response_dict(floor_price=2.0)
+        result = add_get_products_v2_compat(response, "2.0.0")
         po = result["products"][0]["pricing_options"][0]
         assert po["is_fixed"] is False
         assert "rate" not in po
         assert po["price_guidance"]["floor"] == 2.0
+        assert po["floor_price"] == 2.0
 
-    def test_v3_clients_skip_transform(self):
-        """V3+ clients should get clean response without compat fields."""
-        from src.core.version_compat import apply_version_compat
-
-        response = _make_response(fixed_price=5.0)
-        result = apply_version_compat("get_products", response, "3.0.0")
+    def test_v3_client_gets_clean_response_unchanged(self) -> None:
+        response = _make_response_dict(fixed_price=5.0)
+        before = response["products"][0]["pricing_options"][0].copy()
+        result = add_get_products_v2_compat(response, "3.0.0")
         po = result["products"][0]["pricing_options"][0]
+        # No v2 keys added.
         assert "is_fixed" not in po
         assert "rate" not in po
+        # Original v3 fields preserved.
+        assert po == before
 
-    def test_unknown_tool_passes_through_dict(self):
-        """Dict responses pass through unchanged (legacy path)."""
-        from src.core.version_compat import apply_version_compat
-
-        response = {"data": "unchanged"}
-        result = apply_version_compat("nonexistent_tool", response, "2.0.0")
-        assert result == {"data": "unchanged"}
-
-    def test_none_version_applies_compat(self):
-        """None adcp_version should apply compat (safe default)."""
-        from src.core.version_compat import apply_version_compat
-
-        response = _make_response(fixed_price=3.0)
-        result = apply_version_compat("get_products", response, None)
+    def test_none_version_applies_compat_safe_default(self) -> None:
+        response = _make_response_dict(fixed_price=3.0)
+        result = add_get_products_v2_compat(response, None)
         po = result["products"][0]["pricing_options"][0]
         assert po["is_fixed"] is True
         assert po["rate"] == 3.0
+
+    def test_response_without_products_passes_through(self) -> None:
+        """Response dicts without a ``products`` key are untouched."""
+        response = {"data": "unchanged", "errors": ["something"]}
+        result = add_get_products_v2_compat(response, "2.0.0")
+        assert result == {"data": "unchanged", "errors": ["something"]}
+
+    def test_a2a_envelope_keys_preserved(self) -> None:
+        """A2A wrappers add ``message`` and ``success`` to the dict before calling.
+
+        These envelope keys must survive the transform untouched.
+        """
+        response = _make_response_dict(fixed_price=5.0)
+        response["message"] = "Found 1 product..."
+        response["success"] = True
+        result = add_get_products_v2_compat(response, "2.0.0")
+        assert result["message"] == "Found 1 product..."
+        assert result["success"] is True
+        assert result["products"][0]["pricing_options"][0]["is_fixed"] is True
+
+    def test_returns_same_dict_object(self) -> None:
+        """The transform mutates in place and returns the same object (caller ergonomics)."""
+        response = _make_response_dict(fixed_price=5.0)
+        result = add_get_products_v2_compat(response, "2.0.0")
+        assert result is response
+
+    def test_multiple_products_each_get_v2_keys(self) -> None:
+        """Every product in the list is walked, not just the first."""
+        response = _make_response_dict(fixed_price=5.0)
+        # Duplicate the product to simulate a multi-product response.
+        original_product = response["products"][0]
+        response["products"].append({**original_product, "product_id": "p2"})
+        # Refresh the duplicated nested pricing_options to a separate dict.
+        response["products"][1]["pricing_options"] = [
+            {**original_product["pricing_options"][0], "pricing_option_id": "cpm_usd_test_2"}
+        ]
+        result = add_get_products_v2_compat(response, "2.0.0")
+        for product in result["products"]:
+            assert product["pricing_options"][0]["is_fixed"] is True
+            assert product["pricing_options"][0]["rate"] == 5.0

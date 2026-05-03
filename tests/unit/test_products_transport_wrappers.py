@@ -128,7 +128,7 @@ class TestMcpGetProductsWrapper:
                 new_callable=AsyncMock,
                 return_value=_mock_response(),
             ),
-            patch("src.core.version_compat.apply_version_compat") as mock_compat,
+            patch("src.core.version_compat.add_get_products_v2_compat") as mock_compat,
         ):
             mock_compat.return_value = {"products": [], "compat_field": True}
             from src.core.tools.products import get_products
@@ -149,15 +149,15 @@ class TestMcpGetProductsWrapper:
                 new_callable=AsyncMock,
                 return_value=_mock_response(),
             ),
-            patch("src.core.version_compat.apply_version_compat") as mock_compat,
+            patch("src.core.version_compat.add_get_products_v2_compat") as mock_compat,
         ):
-            # apply_version_compat returns input unchanged for v3+
-            mock_compat.side_effect = lambda tool, resp, ver: resp
+            # add_get_products_v2_compat returns input unchanged for v3+
+            mock_compat.side_effect = lambda resp, ver: resp
             from src.core.tools.products import get_products
 
             result = asyncio.run(get_products(brief="ads", adcp_version="3.0.0", ctx=mock_ctx))
 
-        mock_compat.assert_called_once_with("get_products", result.structured_content, "3.0.0")
+        mock_compat.assert_called_once_with(result.structured_content, "3.0.0")
 
     def test_mcp_wrapper_reads_identity_from_ctx_state(self):
         """MCP wrapper reads identity from ctx.get_state('identity')."""
@@ -254,7 +254,7 @@ class TestA2AGetProductsRawWrapper:
                 new_callable=AsyncMock,
                 return_value=_mock_response(),
             ),
-            patch("src.core.version_compat.apply_version_compat") as mock_compat,
+            patch("src.core.version_compat.add_get_products_v2_compat") as mock_compat,
         ):
             from src.core.tools.products import get_products_raw
 
@@ -327,7 +327,7 @@ class TestRestGetProductsWrapper:
                 new_callable=AsyncMock,
                 return_value=_mock_response(),
             ),
-            patch("src.routes.api_v1.apply_version_compat") as mock_compat,
+            patch("src.routes.api_v1.add_get_products_v2_compat") as mock_compat,
         ):
             mock_compat.return_value = {"products": [], "legacy": True}
 

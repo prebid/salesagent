@@ -408,77 +408,14 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     return Product(**product_data)
 
 
-def dump_pricing_option_v2_compat(po_model) -> dict:
-    """Serialize a pricing option model with v2.x backward-compat fields.
-
-    Takes a pricing option model object (CpmPricingOption, VcpmPricingOption, etc.)
-    and returns a serialized dict that includes v2.x fields:
-    - is_fixed: True if fixed_price is present, False otherwise
-    - rate: Copy of fixed_price when present (v2.x field name)
-    - price_guidance.floor: Copy of floor_price when present
-
-    Handles both RootModel-wrapped and unwrapped pricing option types.
-
-    Args:
-        po_model: A pricing option model (library type or RootModel wrapper).
-
-    Returns:
-        Serialized pricing option dict with v2.x backward-compat fields added.
-    """
-    # Unwrap RootModel if needed (adcp library wraps in PricingOption RootModel)
-    inner = getattr(po_model, "root", po_model)
-
-    # Serialize the model to dict
-    po_dict = inner.model_dump(mode="json", exclude_none=True)
-
-    # Read fields from the model, not the dict, to derive v2 compat values
-    fixed_price = getattr(inner, "fixed_price", None)
-    floor_price = getattr(inner, "floor_price", None)
-
-    # Add is_fixed discriminator (v2.x expected this field)
-    po_dict["is_fixed"] = fixed_price is not None
-
-    # Add rate field (v2.x name for fixed_price)
-    if fixed_price is not None:
-        po_dict["rate"] = fixed_price
-
-    # If floor_price is set, add floor to price_guidance for v2.x compat
-    if floor_price is not None:
-        if "price_guidance" not in po_dict:
-            po_dict["price_guidance"] = {}
-        po_dict["price_guidance"]["floor"] = floor_price
-
-    return po_dict
-
-
-def dump_product_v2_compat(product) -> dict:
-    """Serialize a Product model with v2.x backward-compat pricing options.
-
-    Takes a Product model and returns a serialized dict where pricing_options
-    include v2.x backward-compat fields (is_fixed, rate, price_guidance.floor).
-
-    Args:
-        product: A Product model (schema object with pricing_options).
-
-    Returns:
-        Serialized product dict with v2.x backward-compat pricing options.
-    """
-    product_dict = product.model_dump(mode="json")
-
-    # Replace pricing_options with v2-compat serialization from models
-    if hasattr(product, "pricing_options") and product.pricing_options:
-        product_dict["pricing_options"] = [dump_pricing_option_v2_compat(po) for po in product.pricing_options]
-
-    return product_dict
-
-
-def dump_products_v2_compat(products: list) -> list[dict]:
-    """Serialize a list of Product models with v2.x backward-compat pricing.
-
-    Args:
-        products: List of Product model objects.
-
-    Returns:
-        List of serialized product dicts with v2.x backward-compat fields.
-    """
-    return [dump_product_v2_compat(p) for p in products]
+# NOTE: Earlier versions of this module exported model-level v2-compat dump
+# helpers (dump_pricing_option_v2_compat, dump_product_v2_compat,
+# dump_products_v2_compat). Those required a typed Pydantic input, but every
+# transport boundary in production already calls model_dump(mode="json") on
+# the response before applying v2 compat — so the helpers were unreachable
+# from any production path (silently broken since PR #1081's squash, see
+# issue #1246). The current dict-in/dict-out implementation lives in
+# src/core/version_compat.py:add_get_products_v2_compat — it walks the
+# already-serialized dict and adds v2 keys derived from the v3 fields that
+# model_dump already produced. If a future use case needs the model-in
+# variant, reintroduce it as a separate function with explicit callers.
