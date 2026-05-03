@@ -219,8 +219,8 @@ class TestCreativeAgentRegistry:
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=auth_error)
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Should raise RuntimeError (wrapped)
-        with pytest.raises(RuntimeError, match="Authentication failed"):
+        # Should raise AdCPAdapterError (wrapped)
+        with pytest.raises(AdCPAdapterError, match="Authentication failed"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio
@@ -250,8 +250,8 @@ class TestCreativeAgentRegistry:
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=timeout_error)
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Should raise RuntimeError with timeout message
-        with pytest.raises(RuntimeError, match="Request timed out"):
+        # Should raise AdCPAdapterError with timeout message
+        with pytest.raises(AdCPAdapterError, match="Request timed out"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio
@@ -276,8 +276,8 @@ class TestCreativeAgentRegistry:
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=conn_error)
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Should raise RuntimeError
-        with pytest.raises(RuntimeError, match="Connection failed"):
+        # Should raise AdCPAdapterError
+        with pytest.raises(AdCPAdapterError, match="Connection failed"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio

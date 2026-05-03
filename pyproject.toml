@@ -112,27 +112,6 @@ dev = [
     "types-python-dateutil>=2.9.0.20260408",
 ]
 
-[tool.black]
-line-length = 120
-target-version = ['py311']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-  | alembic/versions  # Never format migration files
-)/
-'''
-
 [tool.ruff]
 line-length = 120
 target-version = "py311"

@@ -172,8 +172,8 @@ class TestFetchFormatsRawMcpErrorHandling:
     """Test error handling in the raw HTTP fallback."""
 
     @pytest.mark.asyncio
-    async def test_timeout_raises_runtime_error(self, registry, agent):
-        """httpx timeout → RuntimeError with message."""
+    async def test_timeout_raises_adapter_error(self, registry, agent):
+        """httpx timeout → AdCPAdapterError with message."""
         import httpx
 
         mock_http = AsyncMock()
@@ -182,12 +182,12 @@ class TestFetchFormatsRawMcpErrorHandling:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="Request timed out"):
+            with pytest.raises(AdCPAdapterError, match="Request timed out"):
                 await registry._fetch_formats_raw_mcp(agent)
 
     @pytest.mark.asyncio
-    async def test_connection_error_raises_runtime_error(self, registry, agent):
-        """httpx connection error → RuntimeError with message."""
+    async def test_connection_error_raises_adapter_error(self, registry, agent):
+        """httpx connection error → AdCPAdapterError with message."""
         import httpx
 
         mock_http = AsyncMock()
@@ -196,12 +196,12 @@ class TestFetchFormatsRawMcpErrorHandling:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="Connection failed"):
+            with pytest.raises(AdCPAdapterError, match="Connection failed"):
                 await registry._fetch_formats_raw_mcp(agent)
 
     @pytest.mark.asyncio
-    async def test_http_status_error_raises_runtime_error(self, registry, agent):
-        """httpx HTTP 500 → RuntimeError with status code."""
+    async def test_http_status_error_raises_adapter_error(self, registry, agent):
+        """httpx HTTP 500 → AdCPAdapterError with status code."""
         import httpx
 
         mock_response = MagicMock()
@@ -216,7 +216,7 @@ class TestFetchFormatsRawMcpErrorHandling:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="HTTP error: 500"):
+            with pytest.raises(AdCPAdapterError, match="HTTP error: 500"):
                 await registry._fetch_formats_raw_mcp(agent)
 
 

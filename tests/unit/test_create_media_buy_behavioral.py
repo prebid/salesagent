@@ -2037,6 +2037,49 @@ class TestExtensionObligations:
             assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
 
     @pytest.mark.asyncio
+    async def test_format_lookup_agent_failure_wrapped_with_package_context(self):
+        """Registry transport failures are wrapped with the package/format index that triggered them.
+
+        When registry.get_format raises AdCPAdapterError (e.g. authentication, timeout, connection),
+        the validator must wrap it with "Package N, format_ids[idx]" context so buyers can identify
+        which format_id failed verification — not bypass the wrap by re-raising the typed exception
+        bare. The original exception is preserved via the cause chain (raise ... from e).
+
+        Covers: UC-002-EXT-H-02 (companion to test_unregistered_creative_agent_rejected)
+        """
+        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+
+        mock_agent = MagicMock()
+        mock_agent.agent_url = "https://creative.example.com"
+
+        with (
+            patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls,
+            patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x),
+        ):
+            mock_registry = MagicMock()
+            mock_registry._get_tenant_agents.return_value = [mock_agent]
+            mock_registry.get_format = AsyncMock(
+                side_effect=AdCPAdapterError("Authentication failed: invalid credentials")
+            )
+            mock_registry_cls.return_value = mock_registry
+
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                await _validate_and_convert_format_ids(
+                    format_ids=[{"agent_url": "https://creative.example.com", "id": "banner_300x250"}],
+                    tenant_id="test_tenant",
+                    package_idx=0,
+                )
+
+            error_str = str(exc_info.value)
+            assert "Package 1, format_ids[0]" in error_str
+            assert "Failed to verify format on agent" in error_str
+            assert "Authentication failed: invalid credentials" in error_str
+            assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
+            # Cause chain preserves original typed exception for debugging
+            assert isinstance(exc_info.value.__cause__, AdCPAdapterError)
+            assert str(exc_info.value.__cause__) == "Authentication failed: invalid credentials"
+
+    @pytest.mark.asyncio
     async def test_authentication_always_required(self):
         """create_media_buy always requires authentication (no anonymous path).
 

@@ -836,6 +836,43 @@ class TestCreateMediaBuyCreativeValidation:
 
         assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
+    def test_format_lookup_agent_failure_emits_richer_validation_error(self):
+        """When _get_format_spec_sync raises AdCPError, the validation loop emits
+        a typed-error-aware message instead of the generic "unknown format" string.
+
+        Distinguishes "agent unreachable" from "format genuinely not registered" so
+        operators see the underlying cause in validation_errors.
+        """
+        from src.core.exceptions import AdCPAdapterError
+        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+
+        mock_creative = MagicMock()
+        mock_creative.creative_id = "c_agent_down"
+        mock_creative.format = "display_300x250"
+        mock_creative.agent_url = "http://agent.test"
+        mock_creative.data = {"media_url": "http://example.com/img.png"}
+        mock_creative.status = "approved"
+
+        package = MagicMock()
+        package.creative_ids = ["c_agent_down"]
+        package.package_id = "pkg_1"
+
+        with patch(
+            "src.core.tools.media_buy_create._get_format_spec_sync",
+            side_effect=AdCPAdapterError("Authentication failed: token expired"),
+        ):
+            session = MagicMock()
+            session.scalars.return_value.all.return_value = [mock_creative]
+
+            with pytest.raises(AdCPValidationError) as exc_info:
+                _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+
+            error_str = str(exc_info.value)
+            assert "could not verify format" in error_str
+            assert "display_300x250" in error_str
+            assert "Authentication failed: token expired" in error_str
+            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+
     def test_creative_format_mismatch_rejected(self):
         """UC-002-C04: creative format not matching product format rejected.
 

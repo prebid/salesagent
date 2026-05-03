@@ -1048,9 +1048,15 @@ class TestStaticPreviewFailed:
             mock_format.output_format_ids = None  # Static, not generative
             env.set_run_async_result([mock_format])
 
-            # preview_creative returns empty dict (no previews)
+            # preview_creative raises AdCPAdapterError to simulate the production
+            # failure mode (see #1177): an unparseable MCP response now surfaces
+            # explicitly instead of returning {} silently.
+            from src.core.exceptions import AdCPAdapterError
+
             registry = env.mock["registry"].return_value
-            registry.preview_creative = AsyncMock(return_value={})
+            registry.preview_creative = AsyncMock(
+                side_effect=AdCPAdapterError("No parseable preview result in MCP response")
+            )
 
             # Creative with format_id but no assets — tests the "no previews" path.
             # Uses dict because the test exercises the dict→CreativeAsset coercion
@@ -1078,8 +1084,12 @@ class TestStaticPreviewFailed:
             assert_envelope(result, transport)
             creative_result = result.payload.creatives[0]
             assert creative_result.action == CreativeAction.failed
-            assert any(
-                "no previews" in e.lower() or "no media_url" in e.lower() for e in (creative_result.errors or [])
+            errors = [e.lower() for e in (creative_result.errors or [])]
+            assert any("unreachable" in e for e in errors), (
+                f"Expected 'Creative agent unreachable...' wrap, got: {creative_result.errors}"
+            )
+            assert any("no parseable preview" in e for e in errors), (
+                f"Expected underlying AdCPAdapterError text preserved, got: {creative_result.errors}"
             )
 
 

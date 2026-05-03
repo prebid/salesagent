@@ -401,7 +401,7 @@ logger.log(
    uv run pytest
 
    # Check formatting
-   black --check .
+   ruff format --check .
    ruff check .
    ```
 

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from pydantic import BaseModel
 
+from src.core.exceptions import AdCPAdapterError
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.validation_helpers import run_async_in_sync_context
@@ -21,6 +22,24 @@ if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _handle_creative_agent_error(
+    e: AdCPAdapterError,
+    creative: CreativeAsset,
+    data: dict[str, Any],
+    *,
+    operation: str,
+    path: str,
+) -> None:
+    """Re-raise unless buyer supplied a fallback media_url; then log and return."""
+    has_media_url = bool(getattr(creative, "url", None) or data.get("url"))
+    if not has_media_url:
+        raise e
+    logger.warning(
+        f"[sync_creatives] Creative agent unreachable for {operation} ({path}): {e}; "
+        f"continuing with buyer-provided media_url"
+    )
 
 
 def _update_existing_creative(
@@ -230,17 +249,21 @@ def _update_existing_creative(
                             f"context_id={context_id}"
                         )
 
-                        build_result = run_async_in_sync_context(
-                            registry.build_creative(
-                                agent_url=format_obj.agent_url,
-                                format_id=creative_format,
-                                message=message,
-                                gemini_api_key=gemini_api_key,
-                                promoted_offerings=promoted_offerings,
-                                context_id=context_id,
-                                finalize=getattr(creative, "approved", False),
+                        try:
+                            build_result = run_async_in_sync_context(
+                                registry.build_creative(
+                                    agent_url=format_obj.agent_url,
+                                    format_id=creative_format,
+                                    message=message,
+                                    gemini_api_key=gemini_api_key,
+                                    promoted_offerings=promoted_offerings,
+                                    context_id=context_id,
+                                    finalize=getattr(creative, "approved", False),
+                                )
                             )
-                        )
+                        except AdCPAdapterError as e:
+                            _handle_creative_agent_error(e, creative, data, operation="build", path="update")
+                            build_result = None
 
                         # Store build result in data
                         if build_result:
@@ -336,13 +359,17 @@ def _update_existing_creative(
                         f"has_url={bool(data.get('url'))}"
                     )
 
-                    preview_result = run_async_in_sync_context(
-                        registry.preview_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            creative_manifest=creative_manifest,
+                    try:
+                        preview_result = run_async_in_sync_context(
+                            registry.preview_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                creative_manifest=creative_manifest,
+                            )
                         )
-                    )
+                    except AdCPAdapterError as e:
+                        _handle_creative_agent_error(e, creative, data, operation="preview", path="update")
+                        preview_result = None
 
                 # Extract preview data and store in data field
                 if preview_result and preview_result.get("previews"):
@@ -578,17 +605,21 @@ def _create_new_creative(
                         f"message_length={len(message) if message else 0}"
                     )
 
-                    build_result = run_async_in_sync_context(
-                        registry.build_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            message=message,
-                            gemini_api_key=gemini_api_key,
-                            promoted_offerings=promoted_offerings,
-                            context_id=getattr(creative, "context_id", None),
-                            finalize=getattr(creative, "approved", False),
+                    try:
+                        build_result = run_async_in_sync_context(
+                            registry.build_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                message=message,
+                                gemini_api_key=gemini_api_key,
+                                promoted_offerings=promoted_offerings,
+                                context_id=getattr(creative, "context_id", None),
+                                finalize=getattr(creative, "approved", False),
+                            )
                         )
-                    )
+                    except AdCPAdapterError as e:
+                        _handle_creative_agent_error(e, creative, data, operation="build", path="new")
+                        build_result = None
 
                     # Store build result
                     if build_result:
@@ -662,13 +693,17 @@ def _create_new_creative(
                         f"has_url={bool(data.get('url'))}"
                     )
 
-                    preview_result = run_async_in_sync_context(
-                        registry.preview_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            creative_manifest=creative_manifest,
+                    try:
+                        preview_result = run_async_in_sync_context(
+                            registry.preview_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                creative_manifest=creative_manifest,
+                            )
                         )
-                    )
+                    except AdCPAdapterError as e:
+                        _handle_creative_agent_error(e, creative, data, operation="preview", path="new")
+                        preview_result = None
 
                 # Extract preview data and store in data field
                 if preview_result and preview_result.get("previews"):
