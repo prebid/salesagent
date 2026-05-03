@@ -42,8 +42,7 @@ def _structured_pricing_option(env: ProductEnv, *, adcp_version: str | None) -> 
 class TestV2BuyerBackwardCompat:
     """Pre-3.0 clients receive v2 mirror keys alongside v3 fields."""
 
-    @pytest.mark.asyncio
-    async def test_v2_buyer_fixed_price_gets_rate_and_is_fixed(self, integration_db):
+    def test_v2_buyer_fixed_price_gets_rate_and_is_fixed(self, integration_db):
         with ProductEnv(tenant_id="v2-bc-1", principal_id="auth-v2-1") as env:
             tenant = TenantFactory(tenant_id="v2-bc-1", subdomain="v2-bc-1")
             PrincipalFactory(tenant=tenant, principal_id="auth-v2-1")
@@ -58,8 +57,7 @@ class TestV2BuyerBackwardCompat:
         assert po["is_fixed"] is True
         assert po["rate"] == 10.0
 
-    @pytest.mark.asyncio
-    async def test_v2_buyer_auction_gets_floor_in_price_guidance(self, integration_db):
+    def test_v2_buyer_auction_gets_floor_in_price_guidance(self, integration_db):
         with ProductEnv(tenant_id="v2-bc-2", principal_id="auth-v2-2") as env:
             tenant = TenantFactory(tenant_id="v2-bc-2", subdomain="v2-bc-2")
             PrincipalFactory(tenant=tenant, principal_id="auth-v2-2")
@@ -88,8 +86,7 @@ class TestV2BuyerBackwardCompat:
 class TestV3BuyerCleanResponse:
     """V3+ clients receive only v3 fields — no v2 mirror keys."""
 
-    @pytest.mark.asyncio
-    async def test_v3_buyer_no_v2_keys_for_fixed_price(self, integration_db):
+    def test_v3_buyer_no_v2_keys_for_fixed_price(self, integration_db):
         with ProductEnv(tenant_id="v2-bc-3", principal_id="auth-v3-1") as env:
             tenant = TenantFactory(tenant_id="v2-bc-3", subdomain="v2-bc-3")
             PrincipalFactory(tenant=tenant, principal_id="auth-v3-1")
@@ -103,8 +100,7 @@ class TestV3BuyerCleanResponse:
         assert "rate" not in po
         assert "is_fixed" not in po
 
-    @pytest.mark.asyncio
-    async def test_v3_buyer_no_v2_keys_for_auction(self, integration_db):
+    def test_v3_buyer_no_v2_keys_for_auction(self, integration_db):
         with ProductEnv(tenant_id="v2-bc-4", principal_id="auth-v3-2") as env:
             tenant = TenantFactory(tenant_id="v2-bc-4", subdomain="v2-bc-4")
             PrincipalFactory(tenant=tenant, principal_id="auth-v3-2")
