@@ -602,3 +602,119 @@ class TestSlackNotificationGuard:
             )
 
             mock_notifier_fn.assert_not_called()
+
+
+# ========================================================================
+# Issue #1237: assignments list-form normalization
+# ========================================================================
+
+
+class TestAssignmentsListFormNormalization:
+    """AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}].
+
+    Prior to the fix, _process_assignments only accepted dict form and silently
+    no-op'd spec-compliant list inputs. Verifies the list is coerced to the
+    internal dict form before processing.
+    """
+
+    def _run_list_assignments(self, assignments, results, tenant, db_package, db_media_buy):
+        mock_uow, mock_repo = _make_creative_uow()
+        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
+        mock_repo.get_creative_by_id.return_value = None
+        mock_repo.get_existing.return_value = None
+
+        def _create_assignment(**kwargs):
+            assignment = Mock()
+            assignment.assignment_id = "asgn_1"
+            assignment.media_buy_id = kwargs.get("media_buy_id")
+            assignment.package_id = kwargs.get("package_id")
+            assignment.creative_id = kwargs.get("creative_id")
+            assignment.weight = kwargs.get("weight", 100)
+            return assignment
+
+        mock_repo.create.side_effect = _create_assignment
+
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+            return _process_assignments(
+                assignments=assignments,
+                results=results,
+                tenant=tenant,
+                validation_mode="strict",
+            )
+
+    def test_list_form_creates_assignment(self, tenant, _make_db_package):
+        """Spec-compliant list[{creative_id, package_id}] produces the same assignment as dict form."""
+        db_package, db_media_buy = _make_db_package()
+        results = [SyncCreativeResult(creative_id="c1", action="created")]
+
+        assignment_list = self._run_list_assignments(
+            assignments=[{"creative_id": "c1", "package_id": "pkg_1"}],
+            results=results,
+            tenant=tenant,
+            db_package=db_package,
+            db_media_buy=db_media_buy,
+        )
+
+        assert len(assignment_list) == 1
+        assert assignment_list[0].package_id == "pkg_1"
+        assert assignment_list[0].creative_id == "c1"
+
+    def test_list_form_multiple_entries_grouped_correctly(self, tenant, _make_db_package):
+        """Multiple list entries for the same creative are grouped into one creative key."""
+        db_package1, db_media_buy = _make_db_package(package_id="pkg_1")
+        db_package2, _ = _make_db_package(package_id="pkg_2")
+        results = [SyncCreativeResult(creative_id="c1", action="created")]
+
+        mock_uow, mock_repo = _make_creative_uow()
+        mock_repo.find_package_with_media_buy.side_effect = [
+            (db_package1, db_media_buy),
+            (db_package2, db_media_buy),
+        ]
+        mock_repo.get_creative_by_id.return_value = None
+        mock_repo.get_existing.return_value = None
+
+        call_count = 0
+
+        def _create_assignment(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            assignment = Mock()
+            assignment.assignment_id = f"asgn_{call_count}"
+            assignment.media_buy_id = kwargs.get("media_buy_id")
+            assignment.package_id = kwargs.get("package_id")
+            assignment.creative_id = kwargs.get("creative_id")
+            assignment.weight = kwargs.get("weight", 100)
+            return assignment
+
+        mock_repo.create.side_effect = _create_assignment
+
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+            assignment_list = _process_assignments(
+                assignments=[
+                    {"creative_id": "c1", "package_id": "pkg_1"},
+                    {"creative_id": "c1", "package_id": "pkg_2"},
+                ],
+                results=results,
+                tenant=tenant,
+                validation_mode="strict",
+            )
+
+        assert len(assignment_list) == 2
+        assert {a.package_id for a in assignment_list} == {"pkg_1", "pkg_2"}
+
+    def test_none_assignments_no_ops(self, tenant, _make_db_package):
+        """None assignments still produce empty list (unchanged behaviour)."""
+        db_package, db_media_buy = _make_db_package()
+        results = [SyncCreativeResult(creative_id="c1", action="created")]
+
+        assignment_list = self._run_list_assignments(
+            assignments=None,
+            results=results,
+            tenant=tenant,
+            db_package=db_package,
+            db_media_buy=db_media_buy,
+        )
+
+        assert assignment_list == []

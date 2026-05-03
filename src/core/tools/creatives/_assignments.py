@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def _process_assignments(
-    assignments: dict | None,
+    assignments: dict | list | None,
     results: list[SyncCreativeResult],
     tenant: dict[str, Any],
     validation_mode: str,
@@ -35,7 +35,15 @@ def _process_assignments(
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
 
-    # Note: assignments should be a dict, but handle both dict and None
+    # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
+    # normalise to dict form {creative_id: [package_ids]} for internal processing.
+    if assignments and isinstance(assignments, list):
+        coerced: dict[str, list[str]] = {}
+        for entry in assignments:
+            if isinstance(entry, dict) and "creative_id" in entry and "package_id" in entry:
+                coerced.setdefault(entry["creative_id"], []).append(entry["package_id"])
+        assignments = coerced if coerced else None
+
     if assignments and isinstance(assignments, dict):
         with CreativeUoW(tenant["tenant_id"]) as uow:
             assert uow.assignments is not None

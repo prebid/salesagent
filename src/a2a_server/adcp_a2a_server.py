@@ -38,6 +38,7 @@ from a2a.types import (
 )
 from a2a.utils.errors import ServerError
 from adcp import create_a2a_webhook_payload
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import GeneratedTaskStatus
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
@@ -1568,7 +1569,9 @@ class AdCPRequestHandler(RequestHandler):
                 validation_mode=parameters.get("validation_mode", "strict"),
                 push_notification_config=parameters.get("push_notification_config"),
                 context=context,
-                account=parameters.get("account"),
+                account=LibraryAccountReference.model_validate(parameters["account"])
+                if isinstance(parameters.get("account"), dict)
+                else parameters.get("account"),
                 identity=identity,
             )
 
