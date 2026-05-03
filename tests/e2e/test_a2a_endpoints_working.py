@@ -213,8 +213,10 @@ class TestA2AAgentCardCreation:
         assert adcp_ext is not None, "AdCP extension not found in capabilities.extensions"
 
         # Validate AdCP extension structure
+        from src.a2a_server.adcp_a2a_server import ADCP_EXTENSION_SCHEMA_URI
+
         adcp_version = get_adcp_version()
-        assert adcp_ext.uri == f"https://adcontextprotocol.org/schemas/{adcp_version}/protocols/adcp-extension.json"
+        assert adcp_ext.uri == ADCP_EXTENSION_SCHEMA_URI
         assert adcp_ext.params is not None
         assert "adcp_version" in adcp_ext.params
         assert "protocols_supported" in adcp_ext.params
@@ -227,6 +229,45 @@ class TestA2AAgentCardCreation:
         # Currently only media_buy protocol is supported
         assert "media_buy" in protocols
         assert set(protocols) == {"media_buy"}, "Only media_buy protocol is currently supported"
+
+    @pytest.mark.integration
+    def test_agent_card_adcp_extension_uri_is_reachable(self):
+        """Regression for #1215: agent card emitted a URI tied to get_adcp_version() that 404'd.
+
+        URI is now pinned to 2.5.0 — this test prevents drift if upstream restructures
+        the schema path again.
+        """
+        from src.a2a_server.adcp_a2a_server import ADCP_EXTENSION_SCHEMA_URI
+
+        try:
+            response = requests.head(ADCP_EXTENSION_SCHEMA_URI, timeout=10, allow_redirects=True)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            pytest.skip(f"Network unavailable for adcontextprotocol.org: {e}")
+
+        assert response.status_code == 200, (
+            f"AdCP extension URI {ADCP_EXTENSION_SCHEMA_URI} returned {response.status_code}; "
+            "upstream may have changed the schema layout"
+        )
+
+    @pytest.mark.integration
+    def test_agent_card_documentation_url_is_reachable(self):
+        """Regression for #1215 sister bug: agent card documentation_url must return 200.
+
+        The card was emitting a `your-org` placeholder URL; it now points at the real
+        repo. This test guards against the placeholder coming back via copy-paste.
+        """
+        from src.a2a_server.adcp_a2a_server import create_agent_card
+
+        agent_card = create_agent_card()
+        url = agent_card.documentation_url
+        assert url is not None, "agent card documentation_url must be set"
+
+        try:
+            response = requests.head(url, timeout=10, allow_redirects=True)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            pytest.skip(f"Network unavailable for {url}: {e}")
+
+        assert response.status_code == 200, f"Agent card documentation_url {url} returned {response.status_code}"
 
     def test_agent_card_skills_coverage(self):
         """Test that agent card includes expected AdCP skills."""
