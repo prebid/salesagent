@@ -83,8 +83,32 @@ class CreativeSyncEnv(IntegrationEnv):
         mock_registry.get_format = AsyncMock(return_value={"id": "display_300x250", "name": "Display 300x250"})
         # build_creative and preview_creative must be AsyncMock because
         # _processing.py uses the REAL run_async_in_sync_context (not patched there).
-        mock_registry.build_creative = AsyncMock(return_value={})
-        mock_registry.preview_creative = AsyncMock(return_value={})
+        # Defaults reflect the production contract: these methods return realistic
+        # success-shaped dicts and never {} (production raises AdCPAdapterError on
+        # unparseable MCP responses — see #1177). Tests exercising the failure path
+        # should set side_effect=AdCPAdapterError(...) explicitly.
+        mock_registry.build_creative = AsyncMock(
+            return_value={
+                "status": "draft",
+                "context_id": "ctx-test-default",
+                "creative_output": {"assets": {}, "output_format": {}},
+            }
+        )
+        mock_registry.preview_creative = AsyncMock(
+            return_value={
+                "previews": [
+                    {
+                        "name": "Default",
+                        "renders": [
+                            {
+                                "preview_url": "https://test.example.com/preview.png",
+                                "dimensions": {"width": 300, "height": 250},
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
         self.mock["registry"].return_value = mock_registry
 
         # run_async: execute the coroutine synchronously (return empty list)
