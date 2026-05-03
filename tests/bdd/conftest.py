@@ -1332,17 +1332,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="reporting_dimensions boundary: validation gaps on some transports", strict=False
                     )
                 )
-            # e2e_rest: invalid dim configs return empty body → JSONDecodeError
-            _rdim_e2e_rest_fail = is_e2e_rest and any(
-                s in nodeid for s in ("geo without geo_level", "limit=0 (below minimum)", "limit negative")
-            )
-            if _rdim_e2e_rest_fail:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: invalid reporting_dimensions returns empty body — JSONDecodeError",
-                        strict=True,
-                    )
-                )
+            # Graduated: e2e_rest invalid reporting_dimensions examples now return 500
+            # (not empty body), so the test handles them correctly.
 
         # Graduated: T-UC-004-boundary-sampling — "Not provided" passes everywhere;
         # "random"/"failures_only" pass on rest only; "Unknown string" passes on impl only.
@@ -1416,14 +1407,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="attribution_window boundary: production gaps on this transport", strict=False
                     )
                 )
-            # e2e_rest: invalid boundary values return empty body → JSONDecodeError
-            if _aw_is_invalid and is_e2e_rest:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: invalid attribution_window returns empty body — JSONDecodeError",
-                        strict=True,
-                    )
-                )
+            # Graduated: e2e_rest invalid attribution_window examples now return 500
+            # (not empty body), so the test handles them correctly.
 
         # Graduated: T-UC-004-boundary-account — transport-aware.
         # "account_id present"/"brand + operator" (valid): fail on mcp/rest only.
@@ -1441,8 +1426,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
             # e2e_rest: account fixture created in-process not visible to Docker DB
-            # Graduated: "not found" passes on e2e_rest (returns proper error)
-            if is_e2e_rest and "omitted" not in nodeid and "not found" not in nodeid:
+            # Graduated: "not found", "both account_id", "empty object" pass on e2e_rest
+            if is_e2e_rest and any(s in nodeid for s in ("account exists", "single match")):
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="e2e_rest: account fixture not in Docker DB — lookup/validation fails",
@@ -1503,23 +1488,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
-            # e2e_rest: invalid status_filter values return empty body → JSONDecodeError
-            if is_e2e_rest and any(s in nodeid for s in ("not in AdCP enum", "empty array, violates")):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: invalid status_filter returns empty body — JSONDecodeError",
-                        strict=True,
-                    )
-                )
+            # Graduated: e2e_rest invalid status_filter examples now return 500
+            # (not empty body), so the test handles them correctly.
 
-        # e2e_rest: media_buy_resolution "empty array" returns empty body → JSONDecodeError
-        if "T-UC-004-boundary-resolution" in marker_names and is_e2e_rest and "empty array" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest: empty array resolution returns empty body — JSONDecodeError",
-                    strict=True,
-                )
-            )
+        # Graduated: e2e_rest media_buy_resolution "empty array" now returns 500
+        # (not empty body), so the test handles it correctly.
 
         # e2e_rest: principal_ownership "differs from owner" — ownership check not enforced
         # through REST layer; test succeeds when it should fail (strict=True xfail).
