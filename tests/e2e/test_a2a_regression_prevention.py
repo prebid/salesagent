@@ -275,10 +275,11 @@ class TestHTTPBehaviorRegression:
                     # Should have agent card data
                     data = response.json()
                     assert "name" in data
-                    assert "url" in data
+                    # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
+                    assert "supportedInterfaces" in data
 
                     # URL should not have trailing slash
-                    url = data["url"]
+                    url = data["supportedInterfaces"][0]["url"]
                     assert not url.endswith("/"), f"Agent card URL has trailing slash: {url}"
 
             except (requests.ConnectionError, requests.Timeout):
