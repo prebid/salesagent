@@ -63,7 +63,7 @@ dev = [
     "factory-boy>=3.3.0",
     "mocker>=1.1.1",
     "mypy>=1.18.2",
-    "pytest>=8.4.2",  # GHSA-6w46-j5rx-g56g (9.x blocked by pytest-playwright<9.0.0)
+    "pytest>=9.0.3",
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
     "pytest-mock>=3.14.1",
@@ -79,8 +79,8 @@ dev = [
     "types-waitress>=3.0.1.20250801",
 ]
 ui-tests = [
-    "playwright==1.48.0",
-    "pytest-playwright==0.6.1",
+    "playwright>=1.48.0",
+    "pytest-playwright>=0.7.2",
     "pytest-asyncio>=1.1.0",
     "allure-pytest==2.13.5",
 ]
@@ -90,7 +90,7 @@ dev = [
     "factory-boy>=3.3.0",
     "mocker>=1.1.1",
     "mypy>=1.18.2",
-    "pytest>=8.4.2",  # GHSA-6w46-j5rx-g56g (9.x blocked by pytest-playwright<9.0.0)
+    "pytest>=9.0.3",
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
     "pytest-mock>=3.14.1",
