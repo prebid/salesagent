@@ -46,7 +46,13 @@ def test_tenant_and_products(integration_db):
             name="Test Product 1",
             format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
         )
-        PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("10.00"), is_fixed=False)
+        PricingOptionFactory(
+            product=p1,
+            pricing_model="cpm",
+            rate=Decimal("10.00"),
+            is_fixed=False,
+            price_guidance={"floor": 10.0},
+        )
 
         p2 = ProductFactory(
             tenant=tenant,
@@ -54,16 +60,28 @@ def test_tenant_and_products(integration_db):
             name="Test Product 2",
             format_ids=[{"agent_url": "https://test.com", "id": "video_30s"}],
         )
-        PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("15.00"), is_fixed=False)
+        PricingOptionFactory(
+            product=p2,
+            pricing_model="cpm",
+            rate=Decimal("15.00"),
+            is_fixed=False,
+            price_guidance={"floor": 15.0},
+        )
 
-        # Product with invalid format data (string, not list) for validation testing
+        # Third product for validation testing
         p3 = ProductFactory(
             tenant=tenant,
             product_id="test_product_invalid",
-            name="Test Product Invalid Format",
-            format_ids='[{"format_id": "test", "type": "invalid_type"}]',
+            name="Test Product for Validation",
+            format_ids=[{"agent_url": "https://test.com", "id": "display_160x600"}],
         )
-        PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("20.00"), is_fixed=False)
+        PricingOptionFactory(
+            product=p3,
+            pricing_model="cpm",
+            rate=Decimal("20.00"),
+            is_fixed=False,
+            price_guidance={"floor": 20.0},
+        )
 
     yield
 

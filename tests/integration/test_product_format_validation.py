@@ -24,7 +24,7 @@ from sqlalchemy import select
 from src.admin.app import create_app
 from src.core.creative_agent_registry import FormatFetchResult
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuthorizedProperty, CurrencyLimit, Product, PropertyTag, Tenant
+from src.core.database.models import AuditLog, AuthorizedProperty, CurrencyLimit, Product, PropertyTag, Tenant
 from src.core.schemas import Format
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -93,6 +93,7 @@ def tenant_with_prereqs(integration_db):
         session.execute(AuthorizedProperty.__table__.delete().where(AuthorizedProperty.tenant_id == "fmt_test_tenant"))
         session.execute(CurrencyLimit.__table__.delete().where(CurrencyLimit.tenant_id == "fmt_test_tenant"))
         session.execute(PropertyTag.__table__.delete().where(PropertyTag.tenant_id == "fmt_test_tenant"))
+        session.execute(AuditLog.__table__.delete().where(AuditLog.tenant_id == "fmt_test_tenant"))
         session.execute(Tenant.__table__.delete().where(Tenant.tenant_id == "fmt_test_tenant"))
         session.commit()
 

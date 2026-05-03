@@ -86,8 +86,22 @@ class AccountSyncEnv(IntegrationEnv):
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
 
-    # build_rest_body: inherited from IntegrationEnv — handles req=PydanticModel
-    # via model_dump(). No override needed.
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Convert kwargs to SyncAccountsBody shape for REST POST.
+
+        Handles both flat kwargs (accounts=[...]) and req=PydanticModel.
+        """
+        from pydantic import BaseModel as PydanticBaseModel
+
+        req = kwargs.get("req")
+        if req is not None and isinstance(req, PydanticBaseModel):
+            return req.model_dump(mode="json", exclude_none=True)
+        # Flat kwargs: pass through directly (matches SyncAccountsBody fields)
+        body: dict[str, Any] = {}
+        for key in ("accounts", "delete_missing", "dry_run", "push_notification_config", "context"):
+            if key in kwargs and kwargs[key] is not None:
+                body[key] = kwargs[key]
+        return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncAccountsResponse:
         """Parse REST JSON into SyncAccountsResponse."""

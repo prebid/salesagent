@@ -13,6 +13,7 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
+    AuditLog,
     CurrencyLimit,
     MediaBuy,
     Tenant,
@@ -20,6 +21,7 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
+from src.core.exceptions import AdCPAuthRequiredError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -86,9 +88,10 @@ def test_tenant_setup(integration_db):
         "token": token,
     }
 
-    # Cleanup
+    # Cleanup (audit_logs FK lacks CASCADE in DB, delete explicitly)
     with get_db_session() as session:
         session.query(MediaBuy).filter_by(tenant_id=tenant_id).delete()
+        session.query(AuditLog).filter_by(tenant_id=tenant_id).delete()
         session.query(CurrencyLimit).filter_by(tenant_id=tenant_id).delete()
         session.query(ModelPrincipal).filter_by(tenant_id=tenant_id).delete()
         session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
@@ -163,7 +166,7 @@ def test_update_media_buy_requires_context():
     """Test update_media_buy raises error when context is None."""
     # Note: This will first hit Pydantic validation if buyer_ref is also provided
     # So we only provide media_buy_id to avoid the oneOf constraint
-    with pytest.raises(ValueError, match="Identity is required"):
+    with pytest.raises(AdCPAuthRequiredError, match="Identity is required"):
         req = UpdateMediaBuyRequest(media_buy_id="buy_test_123")
         _update_media_buy_impl(req=req)
 

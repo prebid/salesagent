@@ -17,6 +17,7 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
+    AuditLog,
     CurrencyLimit,
     GAMInventory,
     MediaBuy,
@@ -362,14 +363,14 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         if media_buy_ids:
             session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids)))
 
-        # Delete in order of foreign key dependencies
+        # Delete in order of foreign key dependencies (Product CASCADE deletes PricingOption)
         session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_gam_pricing_tenant"))
-        session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_gam_pricing_tenant"))
         session.execute(delete(Product).where(Product.tenant_id == "test_gam_pricing_tenant"))
         session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == "test_gam_pricing_tenant"))
         session.execute(delete(Principal).where(Principal.tenant_id == "test_gam_pricing_tenant"))
         session.execute(delete(AdapterConfig).where(AdapterConfig.tenant_id == "test_gam_pricing_tenant"))
         session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_gam_pricing_tenant"))
+        session.execute(delete(AuditLog).where(AuditLog.tenant_id == "test_gam_pricing_tenant"))
         session.execute(delete(Tenant).where(Tenant.tenant_id == "test_gam_pricing_tenant"))
         session.commit()
 

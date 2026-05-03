@@ -77,7 +77,7 @@ class TestGAMProductConfiguration:
                 rate="2.50",
                 is_fixed=True,
                 currency="USD",
-                format_ids=[{"format_id": "display_300x250", "name": "Display 300x250", "type": "display"}],
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
                 targeting_template={},
                 delivery_type="non_guaranteed",
                 implementation_config={
@@ -97,7 +97,7 @@ class TestGAMProductConfiguration:
                 rate="1.00",
                 is_fixed=True,
                 currency="USD",
-                format_ids=[{"format_id": "display_728x90", "name": "Leaderboard 728x90", "type": "display"}],
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"}],
                 targeting_template={},
                 delivery_type="non_guaranteed",
                 implementation_config={

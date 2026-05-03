@@ -182,11 +182,13 @@ class TestDatabasePerformanceOptimization:
                     name=f"Performance Test Product {i}",
                     delivery_type="non_guaranteed",
                 )
+                rate = Decimal("5.0") + (Decimal(str(i)) * Decimal("0.1"))
                 PricingOptionFactory(
                     product=product,
                     pricing_model="cpm",
-                    rate=Decimal("5.0") + (Decimal(str(i)) * Decimal("0.1")),
+                    rate=rate,
                     is_fixed=False,
+                    price_guidance={"floor": float(rate)},
                 )
 
         start_time = time.time()
