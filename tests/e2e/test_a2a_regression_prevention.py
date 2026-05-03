@@ -113,7 +113,8 @@ class TestAgentCardURLRegression:
         """Integration test: Verify actual HTTP endpoint returns correct URL format."""
         # This test requires the server to be running - skip if not available
         try:
-            response = requests.get(f"{_a2a_base_url()}/.well-known/agent.json", timeout=2)
+            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+            response = requests.get(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
             if response.status_code == 200:
                 agent_card = response.json()
                 url = agent_card.get("url")
@@ -252,9 +253,9 @@ class TestHTTPBehaviorRegression:
     @pytest.mark.integration
     def test_no_redirect_on_agent_card_endpoints(self):
         """Integration test: Verify agent card endpoints don't redirect."""
+        # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
         endpoints_to_test = [
-            "/.well-known/agent.json",
-            "/agent.json",
+            "/.well-known/agent-card.json",
         ]
 
         for endpoint in endpoints_to_test:

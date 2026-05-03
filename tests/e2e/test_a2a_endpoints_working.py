@@ -31,9 +31,10 @@ class TestA2AEndpointsActual:
 
     @pytest.mark.integration
     def test_well_known_agent_json_endpoint_live(self):
-        """Test /.well-known/agent.json endpoint against live server."""
+        """Test /.well-known/agent-card.json endpoint against live server."""
         try:
-            response = requests.get(f"{_a2a_base_url()}/.well-known/agent.json", timeout=2)
+            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+            response = requests.get(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
 
             if response.status_code == 200:
                 # Endpoint works - validate response
@@ -123,8 +124,9 @@ class TestA2AEndpointsActual:
             # Default ALLOWED_ORIGINS is "http://localhost:8000" — use that as Origin.
             allowed_origin = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")[0].strip()
 
+            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
             response = requests.get(
-                f"{_a2a_base_url()}/.well-known/agent.json",
+                f"{_a2a_base_url()}/.well-known/agent-card.json",
                 headers={"Origin": allowed_origin},
                 timeout=2,
             )
@@ -140,7 +142,8 @@ class TestA2AEndpointsActual:
     def test_options_preflight_support(self):
         """Test that OPTIONS requests work for CORS preflight."""
         try:
-            response = requests.options(f"{_a2a_base_url()}/.well-known/agent.json", timeout=2)
+            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+            response = requests.options(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
 
             # Should handle OPTIONS requests
             assert response.status_code in [200, 204], "OPTIONS request should be handled"
@@ -332,8 +335,8 @@ class TestA2AServerIntegration:
     def test_server_discovery_flow(self):
         """Test complete A2A client discovery flow."""
         try:
-            # Step 1: Client discovers agent
-            response = requests.get(f"{_a2a_base_url()}/.well-known/agent.json", timeout=2)
+            # Step 1: Client discovers agent (a2a-sdk 1.0 canonical path)
+            response = requests.get(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
 
             if response.status_code != 200:
                 pytest.skip("A2A server not responding")
