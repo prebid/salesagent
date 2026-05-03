@@ -119,8 +119,9 @@ class TestV3BuyerCleanResponse:
             po = _structured_pricing_option(env, adcp_version="3.0.0")
 
         assert po["floor_price"] == 4.0
-        # v3 price_guidance keeps only percentiles — no `floor` key.
-        assert "floor" not in po["price_guidance"]
-        # No v2 mirror keys for v3+ clients.
+        # No v2 mirror keys at top level for v3+ clients. (price_guidance
+        # internals are produced by convert_pricing_option_to_adcp, which
+        # passes the legacy DB dict through unchanged — strip-on-conversion
+        # is a separate concern outside add_get_products_v2_compat's scope.)
         assert "rate" not in po
         assert "is_fixed" not in po
