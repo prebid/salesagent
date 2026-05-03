@@ -839,9 +839,9 @@ async def get_products(
     # Return ToolResult with human-readable text and structured data
     response_dict = response.model_dump(mode="json")
     # Apply v2.x backward-compat fields only for pre-3.0 clients
-    from src.core.version_compat import apply_version_compat
+    from src.core.version_compat import add_get_products_v2_compat
 
-    response_dict = apply_version_compat("get_products", response_dict, adcp_version)
+    response_dict = add_get_products_v2_compat(response_dict, adcp_version)
     return ToolResult(content=str(response), structured_content=response_dict)
 
 

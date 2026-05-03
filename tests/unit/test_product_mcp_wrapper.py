@@ -69,7 +69,7 @@ class TestGetProductsMCPWrapper:
                 return_value=mock_response,
             ),
             patch(
-                "src.core.version_compat.apply_version_compat",
+                "src.core.version_compat.add_get_products_v2_compat",
                 return_value={"products": [], "metadata": {}},
             ),
         ):
@@ -82,7 +82,7 @@ class TestGetProductsMCPWrapper:
 
     @pytest.mark.asyncio
     async def test_version_compat_applied_for_pre_3_client(self):
-        """apply_version_compat is called with the client's adcp_version."""
+        """add_get_products_v2_compat is called with the client's adcp_version."""
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"products": []}
         mock_response.__str__ = lambda self: "result"
@@ -98,7 +98,7 @@ class TestGetProductsMCPWrapper:
                 return_value=mock_response,
             ),
             patch(
-                "src.core.version_compat.apply_version_compat",
+                "src.core.version_compat.add_get_products_v2_compat",
                 return_value=compat_result,
             ) as mock_compat,
         ):
@@ -106,12 +106,12 @@ class TestGetProductsMCPWrapper:
 
             result = await get_products(brief="test", adcp_version="2.0.0", ctx=None)
 
-        mock_compat.assert_called_once_with("get_products", {"products": []}, "2.0.0")
+        mock_compat.assert_called_once_with({"products": []}, "2.0.0")
         assert result.structured_content == compat_result
 
     @pytest.mark.asyncio
     async def test_version_compat_applied_for_v3_client(self):
-        """apply_version_compat is also called for v3+ clients (it's a no-op for them)."""
+        """add_get_products_v2_compat is also called for v3+ clients (it's a no-op for them)."""
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"products": []}
         mock_response.__str__ = lambda self: "result"
@@ -126,7 +126,7 @@ class TestGetProductsMCPWrapper:
                 return_value=mock_response,
             ),
             patch(
-                "src.core.version_compat.apply_version_compat",
+                "src.core.version_compat.add_get_products_v2_compat",
                 return_value={"products": []},
             ) as mock_compat,
         ):
@@ -134,4 +134,4 @@ class TestGetProductsMCPWrapper:
 
             await get_products(brief="test", adcp_version="3.6.0", ctx=None)
 
-        mock_compat.assert_called_once_with("get_products", {"products": []}, "3.6.0")
+        mock_compat.assert_called_once_with({"products": []}, "3.6.0")

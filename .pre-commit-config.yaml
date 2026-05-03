@@ -298,8 +298,9 @@ repos:
           - types-pytz
           - types-Markdown
           - types-waitress
-          - adcp==3.2.0
+          - adcp==3.12.0
           - fastmcp
           - alembic
+          - a2a-sdk[http-server]==0.3.22
         files: '^src/'
         exclude: '^src/adapters/google_ad_manager_original\.py$'

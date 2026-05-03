@@ -14,6 +14,8 @@ from typing import Any
 from adcp import Format, Property
 from adcp.types import CreativeAsset, FormatId, Product
 from adcp.types.generated_poc.brand import Brand
+from adcp.types.generated_poc.core.pricing_option import PricingOption as LibraryPricingOption
+from adcp.types.generated_poc.pricing_options.cpm_option import CpmPricingOption
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url
@@ -583,6 +585,183 @@ def create_test_pricing_option(pricing_model: str = "cpm", currency: str = "USD"
     return {"pricing_model": pricing_model, "currency": currency, **kwargs}
 
 
+def _cpm_pricing_common(
+    pricing_option_id: str,
+    currency: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Shared CPM pricing-option dict fields (DRY helper for v3 dict factories).
+
+    Returns the fields common to every CPM pricing option dict in v3 wire shape:
+    pricing_option_id, pricing_model, currency. Caller adds fixed_price OR
+    floor_price (+ optional price_guidance) via **extra.
+    """
+    return {
+        "pricing_option_id": pricing_option_id,
+        "pricing_model": "cpm",
+        "currency": currency,
+        **extra,
+    }
+
+
+def create_test_cpm_pricing_option_v3(
+    pricing_option_id: str = "cpm_v3_fixed",
+    currency: str = "USD",
+    fixed_price: float = 10.0,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Create a test CPM fixed-price pricing option in AdCP v3 wire shape (dict).
+
+    Produces the v3 dict shape: ``{pricing_option_id, pricing_model, currency,
+    fixed_price}``. No legacy ``rate`` / ``is_fixed`` keys. Use this for tests
+    that need to assert against the production wire format produced by
+    ``convert_pricing_option_to_adcp``.
+
+    Counterpart to ``create_test_cpm_pricing_option`` (v2 shape, kept for
+    backward compatibility with existing tests).
+
+    Args:
+        pricing_option_id: Unique identifier for this pricing option.
+        currency: 3-letter ISO currency code.
+        fixed_price: Fixed CPM rate (v3 spec name; replaces v2 ``rate``).
+        **kwargs: Additional optional fields (min_spend_per_package, etc.).
+
+    Returns:
+        v3-shape CPM pricing option dict suitable for Product.pricing_options.
+
+    Example:
+        >>> create_test_cpm_pricing_option_v3(fixed_price=12.5, currency="EUR")
+        {'pricing_option_id': 'cpm_v3_fixed', 'pricing_model': 'cpm',
+         'currency': 'EUR', 'fixed_price': 12.5}
+    """
+    return _cpm_pricing_common(
+        pricing_option_id=pricing_option_id,
+        currency=currency,
+        fixed_price=fixed_price,
+        **kwargs,
+    )
+
+
+def create_test_cpm_pricing_option_auction(
+    pricing_option_id: str = "cpm_v3_auction",
+    currency: str = "USD",
+    floor_price: float = 5.0,
+    price_guidance: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Create a test CPM auction pricing option in AdCP v3 wire shape (dict).
+
+    Produces the v3 auction shape: top-level ``floor_price`` (replaces the v2
+    ``price_guidance.floor`` location) plus a ``price_guidance`` block with
+    only percentiles. The v3 spec moved ``floor`` out of ``price_guidance``.
+
+    Args:
+        pricing_option_id: Unique identifier.
+        currency: 3-letter ISO currency code.
+        floor_price: Auction floor (v3 spec; was v2 ``price_guidance.floor``).
+        price_guidance: Optional percentile hints. Defaults to
+            ``{"p25": 4.0, "p50": 6.0, "p75": 8.0, "p90": 10.0}``.
+        **kwargs: Additional optional fields.
+
+    Returns:
+        v3-shape auction pricing option dict.
+    """
+    if price_guidance is None:
+        price_guidance = {"p25": 4.0, "p50": 6.0, "p75": 8.0, "p90": 10.0}
+    return _cpm_pricing_common(
+        pricing_option_id=pricing_option_id,
+        currency=currency,
+        floor_price=floor_price,
+        price_guidance=price_guidance,
+        **kwargs,
+    )
+
+
+def create_test_pricing_option_pydantic(
+    *,
+    pricing_option_id: str = "cpm_v3_pydantic",
+    currency: str = "USD",
+    fixed_price: float | None = None,
+    floor_price: float | None = None,
+    pricing_model: str = "cpm",
+    **kwargs: Any,
+):
+    """Create an internal Pydantic PricingOption instance (XOR-validated).
+
+    Returns the internal ``src.core.schemas.PricingOption`` — the validator
+    enforces exactly one of ``fixed_price`` / ``floor_price``. Caller MUST
+    pass exactly one; passing both or neither raises ValidationError.
+
+    Use this when a test needs the internal Pydantic shape (e.g., to exercise
+    the XOR validator). For the production wire RootModel that flows through
+    ``Product.pricing_options``, use ``create_test_pricing_option_library``.
+
+    Args:
+        pricing_option_id: Unique identifier.
+        currency: 3-letter ISO currency code.
+        fixed_price: Fixed price (mutually exclusive with floor_price).
+        floor_price: Auction floor (mutually exclusive with fixed_price).
+        pricing_model: AdCP pricing model name (default "cpm").
+        **kwargs: Additional fields (min_spend_per_package, price_guidance, etc.).
+
+    Returns:
+        Internal Pydantic ``PricingOption`` instance.
+    """
+    from src.core.schemas import PricingOption
+
+    return PricingOption(
+        pricing_option_id=pricing_option_id,
+        pricing_model=pricing_model,
+        currency=currency,
+        fixed_price=fixed_price,
+        floor_price=floor_price,
+        **kwargs,
+    )
+
+
+def create_test_pricing_option_library(
+    *,
+    pricing_option_id: str = "cpm_v3_library",
+    currency: str = "USD",
+    fixed_price: float | None = None,
+    floor_price: float | None = None,
+    price_guidance: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> LibraryPricingOption:
+    """Create the adcp library PricingOption RootModel (production wire type).
+
+    Returns ``adcp.types.PricingOption`` (a RootModel) wrapping a
+    ``CpmPricingOption``. This is the actual shape that flows through
+    ``Product.pricing_options`` after ``convert_pricing_option_to_adcp``,
+    and the shape that consumers of pricing-option helpers see in production.
+
+    The library does NOT enforce XOR between ``fixed_price`` and ``floor_price``
+    — both can be None, allowing tests to exercise edge cases (e.g., a pricing
+    option with only ``price_guidance`` set, which is spec-legal in v3).
+
+    Args:
+        pricing_option_id: Unique identifier.
+        currency: 3-letter ISO currency code.
+        fixed_price: Fixed CPM rate (v3 spec name).
+        floor_price: Auction floor (v3 spec name).
+        price_guidance: Optional percentile hints (dict coerced by Pydantic).
+        **kwargs: Additional fields passed to CpmPricingOption.
+
+    Returns:
+        ``LibraryPricingOption`` RootModel wrapping a ``CpmPricingOption``.
+    """
+    inner = CpmPricingOption(
+        pricing_option_id=pricing_option_id,
+        pricing_model="cpm",
+        currency=currency,
+        fixed_price=fixed_price,
+        floor_price=floor_price,
+        price_guidance=price_guidance,
+        **kwargs,
+    )
+    return LibraryPricingOption(root=inner)
+
+
 def create_test_media_buy_request_dict(
     product_ids: list[str] | None = None,
     total_budget: float = 10000.0,
@@ -668,7 +847,7 @@ def create_test_media_buy_request_dict(
     # Handle targeting_overlay specially (goes in all packages, not top-level)
     targeting_overlay = kwargs.pop("targeting_overlay", None)
     if targeting_overlay is not None:
-        for package in request["packages"]:
+        for package in packages:
             package["targeting_overlay"] = targeting_overlay
 
     # Merge remaining kwargs to top level
