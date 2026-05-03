@@ -78,7 +78,7 @@ def given_authenticated_request(ctx: dict, principal_id: str) -> None:
 def given_creative_agent_registered(ctx: dict) -> None:
     """Background precondition: creative agents exist with real catalog.
 
-    Loads the 49-format real catalog from .creative-agent-catalog.json and
+    Loads the 50-format real catalog from .creative-agent-catalog.json and
     feeds it to the harness mock. Scenarios that need specific formats
     override via their own Given steps (which call _sync_registry).
     """

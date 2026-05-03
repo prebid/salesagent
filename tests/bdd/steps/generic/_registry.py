@@ -2,7 +2,7 @@
 
 Pushes ctx["registry_formats"] (list of real Format objects) into the
 CreativeFormatsEnv harness.  Also provides ``load_real_catalog()`` which
-reads the 49-format catalog from ``.creative-agent-catalog.json``.
+reads the 50-format catalog from ``.creative-agent-catalog.json``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ _REAL_CATALOG: list[Format] | None = None
 
 
 def load_real_catalog() -> list[Format]:
-    """Load the real 49-format creative-agent catalog (cached at module scope).
+    """Load the real 50-format creative-agent catalog (cached at module scope).
 
     Reads ``.creative-agent-catalog.json`` from the project root and converts
     each entry to a real ``Format`` object.

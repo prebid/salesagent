@@ -33,6 +33,9 @@ from adcp.types.generated_poc.core.format import (
     Assets7,
     Assets8,
     Assets9,
+    Assets11,
+    Assets12,
+    Assets14,
     Assets18,
     Assets19,
     Assets20,
@@ -59,6 +62,9 @@ _ASSET_CLASS_MAP = {
     "text": Assets7,
     "markdown": Assets8,
     "html": Assets9,
+    "javascript": Assets11,
+    "vast": Assets12,
+    "url": Assets14,
 }
 
 
