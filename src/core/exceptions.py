@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from adcp.server.helpers import adcp_error
+
 RecoveryHint = Literal["transient", "correctable", "terminal"]
 
 
@@ -24,6 +26,8 @@ class AdCPError(Exception):
         error_code: Machine-readable error code string.
         recovery: Recovery classification for buyer agents.
         details: Optional structured error details.
+        field: Optional field name that caused the error.
+        suggestion: Optional correction hint for buyer agents.
     """
 
     status_code: int = 500
@@ -36,25 +40,49 @@ class AdCPError(Exception):
         *,
         details: dict[str, Any] | None = None,
         recovery: RecoveryHint | None = None,
+        field: str | None = None,
+        suggestion: str | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details
+        self.field = field
+        self.suggestion = suggestion
         if recovery is not None:
             self.recovery = recovery
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to response body dict."""
+        """Serialize to flat response body dict (legacy format).
+
+        Used by FastAPI exception handlers. Returns a flat dict with
+        ``error_code`` as the key name for backwards compatibility.
+        """
         result: dict[str, Any] = {
             "error_code": self.error_code,
             "message": self.message,
             "recovery": self.recovery,
+            "details": self.details,
         }
-        if self.details is not None:
-            result["details"] = self.details
-        else:
-            result["details"] = None
+        if self.field is not None:
+            result["field"] = self.field
+        if self.suggestion is not None:
+            result["suggestion"] = self.suggestion
         return result
+
+    def to_adcp_error(self) -> dict[str, Any]:
+        """Serialize to AdCP spec-compliant ``{"errors": [...]}`` format.
+
+        Uses ``adcp_error()`` from the SDK to produce the canonical
+        error envelope with auto-recovery classification.
+        """
+        return adcp_error(
+            self.error_code,
+            self.message,
+            recovery=self.recovery,
+            field=self.field,
+            suggestion=self.suggestion,
+            details=self.details,
+        )
 
 
 class AdCPValidationError(AdCPError):

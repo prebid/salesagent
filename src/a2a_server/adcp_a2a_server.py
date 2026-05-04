@@ -1467,33 +1467,29 @@ class AdCPRequestHandler(RequestHandler):
             required_params = ["brand", "packages", "start_time", "end_time"]
             missing_params = [p for p in required_params if p not in params]
             if missing_params:
+                from adcp.server.helpers import adcp_error
+
+                error_body = adcp_error("VALIDATION_ERROR", f"Missing required AdCP parameters: {missing_params}")
                 return {
                     "success": False,
                     "message": f"Missing required AdCP parameters: {missing_params}",
                     "required_parameters": required_params,
                     "received_parameters": list(parameters.keys()),
-                    "errors": [
-                        {
-                            "code": "VALIDATION_ERROR",
-                            "message": f"Missing required AdCP parameters: {missing_params}",
-                        }
-                    ],
+                    **error_body,
                 }
 
             try:
                 req = CreateMediaBuyRequest.model_validate(params)
             except ValidationError as e:
+                from adcp.server.helpers import adcp_error
+
+                error_body = adcp_error("VALIDATION_ERROR", str(e))
                 return {
                     "success": False,
                     "message": f"Invalid parameters: {e}",
                     "required_parameters": required_params,
                     "received_parameters": list(parameters.keys()),
-                    "errors": [
-                        {
-                            "code": "VALIDATION_ERROR",
-                            "message": str(e),
-                        }
-                    ],
+                    **error_body,
                 }
 
             # Call core function with validated parameters and identity

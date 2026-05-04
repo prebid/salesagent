@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
+from adcp.types.generated_poc.core.attribution_window import AttributionWindow
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import ReportingDimensions
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
@@ -43,18 +45,14 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 
 def _handle_tool_error(e: ToolError) -> JSONResponse:
-    """Convert MCP ToolError to HTTP error response."""
+    """Convert MCP ToolError to HTTP error response using adcp_error()."""
+    from adcp.server.helpers import adcp_error
     from src.core.tool_error_logging import extract_error_info
 
     error_code, error_message, recovery = extract_error_info(e)
     return JSONResponse(
         status_code=500,
-        content={
-            "error_code": error_code,
-            "message": error_message,
-            "recovery": recovery,
-            "details": None,
-        },
+        content=adcp_error(error_code, error_message, recovery=recovery),
     )
 
 
@@ -98,8 +96,8 @@ class GetMediaBuyDeliveryBody(BaseModel):
     status_filter: Any = None
     start_date: str | None = None
     end_date: str | None = None
-    reporting_dimensions: dict[str, Any] | None = None
-    attribution_window: dict[str, Any] | None = None
+    reporting_dimensions: ReportingDimensions | None = None
+    attribution_window: AttributionWindow | None = None
     include_package_daily_breakdown: bool | None = None
     account: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
