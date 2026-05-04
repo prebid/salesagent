@@ -115,7 +115,7 @@ def test_principal_not_found_returns_error(standard_mocks):
 
     assert isinstance(result, UpdateMediaBuyError)
     assert len(result.errors) == 1
-    assert result.errors[0].code == "PRINCIPAL_NOT_FOUND"
+    assert result.errors[0].code == "AUTH_REQUIRED"
     assert "principal_test" in result.errors[0].message
 
     # Workflow step should be marked failed
@@ -399,7 +399,7 @@ class TestFlightDateValidationAndPersistence:
 
         assert isinstance(result, UpdateMediaBuyError)
         assert len(result.errors) == 1
-        assert result.errors[0].code == "INVALID_DATE_RANGE"
+        assert result.errors[0].code == "VALIDATION_ERROR"
 
     def test_end_equals_start_returns_error(self, standard_mocks):
         """When end_time == start_time, returns code='invalid_date_range'."""
@@ -430,7 +430,7 @@ class TestFlightDateValidationAndPersistence:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "INVALID_DATE_RANGE"
+        assert result.errors[0].code == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -1183,7 +1183,7 @@ class TestUC003UpdateCreativeIds:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "CREATIVES_NOT_FOUND"
+        assert result.errors[0].code == "CREATIVE_REJECTED"
         assert "C999" in result.errors[0].message
 
     def test_creative_error_state_rejected(self, standard_mocks):
@@ -1508,7 +1508,7 @@ class TestUC003UploadInlineCreatives:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "CREATIVE_SYNC_FAILED"
+        assert result.errors[0].code == "SERVICE_UNAVAILABLE"
 
 
 # ---------------------------------------------------------------------------
@@ -1610,7 +1610,7 @@ class TestUC003UpdateCreativeAssignments:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "PLACEMENT_TARGETING_NOT_SUPPORTED"
+        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
 
     def test_creative_existence_validated_for_assignments(self, standard_mocks):
         """Creative not found when using creative_assignments path.
@@ -1836,7 +1836,7 @@ class TestUC003ExtA:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "PRINCIPAL_NOT_FOUND"
+        assert result.errors[0].code == "AUTH_REQUIRED"
 
     def test_state_unchanged_on_auth_failure(self, standard_mocks):
         """No records modified when authentication fails.
@@ -1918,7 +1918,7 @@ class TestUC003ExtE:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "INVALID_DATE_RANGE"
+        assert result.errors[0].code == "VALIDATION_ERROR"
 
     def test_end_before_existing_start(self, standard_mocks):
         """end_time before existing start_time (only end_time updated).
@@ -1948,7 +1948,7 @@ class TestUC003ExtE:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "INVALID_DATE_RANGE"
+        assert result.errors[0].code == "VALIDATION_ERROR"
 
     def test_start_after_existing_end(self, standard_mocks):
         """start_time after existing end_time (only start_time updated).
@@ -1978,7 +1978,7 @@ class TestUC003ExtE:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "INVALID_DATE_RANGE"
+        assert result.errors[0].code == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -2011,7 +2011,7 @@ class TestUC003ExtF:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "CURRENCY_NOT_SUPPORTED"
+        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
 
 
 # ---------------------------------------------------------------------------
@@ -2117,7 +2117,7 @@ class TestUC003ExtI:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "CREATIVES_NOT_FOUND"
+        assert result.errors[0].code == "CREATIVE_REJECTED"
         assert "C999" in result.errors[0].message
         assert "C998" in result.errors[0].message
 
@@ -2277,7 +2277,7 @@ class TestUC003ExtK:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "CREATIVE_SYNC_FAILED"
+        assert result.errors[0].code == "SERVICE_UNAVAILABLE"
 
     def test_media_buy_unmodified_on_sync_failure(self, standard_mocks):
         """Media buy unchanged when creative sync fails.
@@ -2423,7 +2423,7 @@ class TestUC003ExtM:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "INVALID_PLACEMENT_IDS"
+        assert result.errors[0].code == "VALIDATION_ERROR"
 
     def test_placement_targeting_on_unsupported_product(self, standard_mocks):
         """Placement targeting on product without placements rejected.
@@ -2463,7 +2463,7 @@ class TestUC003ExtM:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "PLACEMENT_TARGETING_NOT_SUPPORTED"
+        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
 
 
 # ---------------------------------------------------------------------------
@@ -2490,7 +2490,7 @@ class TestUC003ExtN:
         from adcp.types import Error as AdCPErrorModel
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuyError(
-            errors=[AdCPErrorModel(code="INSUFFICIENT_PRIVILEGES", message="Admin required")]
+            errors=[AdCPErrorModel(code="AUTH_REQUIRED", message="Admin required")]
         )
 
         identity = _make_identity()

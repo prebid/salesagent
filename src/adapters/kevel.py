@@ -226,7 +226,7 @@ class Kevel(AdServerAdapter):
             error_msg = f"Unsupported targeting features for Kevel: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
             return CreateMediaBuyError(
-                errors=[Error(code="UNSUPPORTED_TARGETING", message=error_msg, details={error_msg: error_msg})],
+                errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg, details={error_msg: error_msg})],
             )
 
         # Generate a media buy ID
@@ -613,7 +613,7 @@ class Kevel(AdServerAdapter):
             return UpdateMediaBuyError(
                 errors=[
                     Error(
-                        code="UNSUPPORTED_ACTION",
+                        code="UNSUPPORTED_FEATURE",
                         message=f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}",
                         details=None,
                     )

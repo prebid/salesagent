@@ -915,7 +915,7 @@ class TestCreativeIdsNotFound:
                 with pytest.raises(AdCPNotFoundError) as exc_info:
                     await _create_media_buy_impl(req=req, identity=pc.identity)
 
-                assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
+                assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
                 assert "creative_missing_1" in str(exc_info.value)
                 assert "creative_missing_2" in str(exc_info.value)
 
@@ -941,9 +941,9 @@ class TestCreativeIdsNotFound:
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
             with pytest.raises(AdCPNotFoundError) as exc_info:
-                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVES_NOT_FOUND"})
+                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVE_REJECTED"})
 
-            assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
+            assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 
@@ -2105,7 +2105,7 @@ class TestExtensionObligations:
                 # Adapter returns error
                 from src.core.schemas import Error
 
-                adapter_error = CreateMediaBuyError(errors=[Error(code="ADAPTER_ERROR", message="GAM API error")])
+                adapter_error = CreateMediaBuyError(errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")])
                 mock_exec.return_value = adapter_error
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -2235,9 +2235,9 @@ class TestExtensionObligations:
         # This is covered by TestCreativeIdsNotFound above.
         # Verify the error code pattern.
         error = AdCPNotFoundError(
-            "Creative IDs not found: creative_missing", details={"error_code": "CREATIVES_NOT_FOUND"}
+            "Creative IDs not found: creative_missing", details={"error_code": "CREATIVE_REJECTED"}
         )
-        assert error.details["error_code"] == "CREATIVES_NOT_FOUND"
+        assert error.details["error_code"] == "CREATIVE_REJECTED"
 
     def test_creative_upload_failed_error_code(self):
         """CREATIVE_UPLOAD_FAILED error code is used for upload failures.

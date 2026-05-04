@@ -2487,9 +2487,7 @@ async def _create_media_buy_impl(
                     ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
                 return CreateMediaBuyResult(
                     response=CreateMediaBuyError(
-                        errors=[
-                            Error(code="INVALID_CONFIGURATION", message=err, details=None) for err in config_errors
-                        ],
+                        errors=[Error(code="VALIDATION_ERROR", message=err, details=None) for err in config_errors],
                         context=req.context,
                     ),
                     status=AdcpTaskStatus.failed.value,
@@ -2867,7 +2865,7 @@ async def _create_media_buy_impl(
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
             return CreateMediaBuyResult(
                 response=CreateMediaBuyError(
-                    errors=[Error(code="INVALID_DATETIME", message=error_msg, details=None)],
+                    errors=[Error(code="VALIDATION_ERROR", message=error_msg, details=None)],
                     context=req.context,
                 ),
                 status=AdcpTaskStatus.failed.value,
@@ -3178,7 +3176,7 @@ async def _create_media_buy_impl(
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
                         raise AdCPNotFoundError(
                             error_msg,
-                            details={"error_code": "CREATIVES_NOT_FOUND"},
+                            details={"error_code": "CREATIVE_REJECTED"},
                             recovery="correctable",
                         )
 

@@ -153,7 +153,7 @@ def test_unsupported_action_returns_explicit_error():
     # Verify error response (not success!)
     assert isinstance(result, UpdateMediaBuyError)
     assert len(result.errors) == 1
-    assert result.errors[0].code == "UNSUPPORTED_ACTION"
+    assert result.errors[0].code == "UNSUPPORTED_FEATURE"
     assert "delete_media_buy" in result.errors[0].message
 
 
@@ -362,7 +362,7 @@ def test_update_package_budget_rejects_budget_below_delivery():
         # Verify error response
         assert isinstance(result, UpdateMediaBuyError)
         assert len(result.errors) == 1
-        assert result.errors[0].code == "BUDGET_BELOW_DELIVERY"
+        assert result.errors[0].code == "BUDGET_EXCEEDED"
         assert str(new_budget) in result.errors[0].message
         assert str(current_spend) in result.errors[0].message
 

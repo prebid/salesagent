@@ -96,7 +96,7 @@ def test_a2a_wrapper_rejects_oversized_campaign_budget():
 
     assert isinstance(result, UpdateMediaBuyError)
     assert result.errors
-    assert result.errors[0].code == "BUDGET_CEILING_EXCEEDED"
+    assert result.errors[0].code == "BUDGET_EXCEEDED"
 
 
 def test_a2a_wrapper_rejects_package_budget_below_minimum():

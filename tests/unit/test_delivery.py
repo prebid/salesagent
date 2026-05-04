@@ -1264,7 +1264,7 @@ class TestDeliveryAuthErrors:
 
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "PRINCIPAL_ID_MISSING"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert response.media_buy_deliveries == []
 
     def test_principal_not_found_returns_error(self):
@@ -1280,7 +1280,7 @@ class TestDeliveryAuthErrors:
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.errors is not None
-        assert response.errors[0].code == "PRINCIPAL_NOT_FOUND"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert "ghost_principal" in response.errors[0].message
         assert response.media_buy_deliveries == []
 
@@ -1310,7 +1310,7 @@ class TestDeliveryAuthErrors:
 
         # Auth failed
         assert response.errors is not None
-        assert response.errors[0].code == "PRINCIPAL_ID_MISSING"
+        assert response.errors[0].code == "AUTH_REQUIRED"
 
         # No adapter or DB calls occurred
         mock_adapter.assert_not_called()
@@ -1526,7 +1526,7 @@ class TestDeliveryInvalidDateRange:
         response = _run_impl_with_patches(req)
 
         assert response.errors is not None
-        assert response.errors[0].code == "INVALID_DATE_RANGE"
+        assert response.errors[0].code == "VALIDATION_ERROR"
         assert response.media_buy_deliveries == []
 
     def test_start_date_after_end_date_returns_error(self):
@@ -1543,7 +1543,7 @@ class TestDeliveryInvalidDateRange:
         response = _run_impl_with_patches(req)
 
         assert response.errors is not None
-        assert response.errors[0].code == "INVALID_DATE_RANGE"
+        assert response.errors[0].code == "VALIDATION_ERROR"
         assert response.media_buy_deliveries == []
 
     def test_date_range_error_no_state_change(self):
@@ -1575,7 +1575,7 @@ class TestDeliveryInvalidDateRange:
 
         # Date range error returned
         assert response.errors is not None
-        assert response.errors[0].code == "INVALID_DATE_RANGE"
+        assert response.errors[0].code == "VALIDATION_ERROR"
 
         # No adapter calls or target media buy lookups occurred
         mock_adapter.get_media_buy_delivery.assert_not_called()
@@ -1611,7 +1611,7 @@ class TestDeliveryAdapterError:
         )
 
         assert response.errors is not None
-        assert response.errors[0].code == "ADAPTER_ERROR"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
         assert "mb_err" in response.errors[0].message
         assert response.media_buy_deliveries == []
         assert response.aggregated_totals.impressions == 0.0
@@ -1643,7 +1643,7 @@ class TestDeliveryAdapterError:
 
         assert response.reporting_period.start.month == 3
         assert response.reporting_period.end.month == 3
-        assert response.errors[0].code == "ADAPTER_ERROR"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
 
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
@@ -1667,7 +1667,7 @@ class TestDeliveryAdapterError:
 
         # Error response returned
         assert response.errors is not None
-        assert response.errors[0].code == "ADAPTER_ERROR"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
 
         # Error was logged
         mock_logger.error.assert_called()
@@ -1700,7 +1700,7 @@ class TestDeliveryAdapterError:
 
         # Error returned, no deliveries
         assert response.errors is not None
-        assert response.errors[0].code == "ADAPTER_ERROR"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
         assert response.media_buy_deliveries == []
 
         # Aggregated totals are zeroed (no partial data leaked)

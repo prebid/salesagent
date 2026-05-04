@@ -260,7 +260,7 @@ async def _activate_signal_impl(
             # Create a human task for approval - return error response
             errors = [
                 Error(
-                    code="APPROVAL_REQUIRED",
+                    code="VALIDATION_ERROR",
                     message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
                 )
             ]
@@ -285,7 +285,7 @@ async def _activate_signal_impl(
             )
         else:
             # Failure
-            errors = [Error(code="ACTIVATION_FAILED", message="Signal provider unavailable")]
+            errors = [Error(code="SERVICE_UNAVAILABLE", message="Signal provider unavailable")]
             return ActivateSignalResponse(
                 signal_id=signal_agent_segment_id,
                 activation_details=None,
@@ -300,7 +300,7 @@ async def _activate_signal_impl(
         return ActivateSignalResponse(
             signal_id=signal_agent_segment_id,
             activation_details=None,
-            errors=[Error(code="ACTIVATION_ERROR", message=str(e))],
+            errors=[Error(code="SERVICE_UNAVAILABLE", message=str(e))],
             context=context,
         )
 

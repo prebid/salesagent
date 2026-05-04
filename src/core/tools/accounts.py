@@ -377,7 +377,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
         if brand_domain.endswith(tld):
             return [
                 Error(
-                    code="INVALID_DOMAIN",
+                    code="VALIDATION_ERROR",
                     message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
                     f"and cannot be used for account provisioning.",
                     suggestion="Use a real domain name for production accounts.",
@@ -408,7 +408,7 @@ def _check_billing_policy(
     if billing_val not in supported:
         return [
             Error(
-                code="BILLING_NOT_SUPPORTED",
+                code="UNSUPPORTED_FEATURE",
                 message=f"Billing model '{billing_val}' is not supported by this seller. "
                 f"Supported models: {', '.join(supported)}.",
                 suggestion=f"Use one of the supported billing models: {', '.join(supported)}.",

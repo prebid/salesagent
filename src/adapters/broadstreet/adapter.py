@@ -333,7 +333,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return CreateMediaBuyError(
                     errors=[
                         Error(
-                            code="NO_ZONES_CONFIGURED",
+                            code="VALIDATION_ERROR",
                             message=f"Product {product_id} has no zones configured",
                             details={"product_id": product_id},
                         )
@@ -629,7 +629,7 @@ class BroadstreetAdapter(AdServerAdapter):
             return UpdateMediaBuyError(
                 errors=[
                     Error(
-                        code="UNSUPPORTED_ACTION",
+                        code="UNSUPPORTED_FEATURE",
                         message=f"Action '{action}' not supported. Supported: {REQUIRED_UPDATE_ACTIONS}",
                         details=None,
                     )
@@ -653,7 +653,7 @@ class BroadstreetAdapter(AdServerAdapter):
                     return UpdateMediaBuyError(
                         errors=[
                             Error(
-                                code="NO_PACKAGES_FOUND",
+                                code="PACKAGE_NOT_FOUND",
                                 message=f"No packages found for media buy {media_buy_id}",
                                 details=None,
                             )
@@ -679,7 +679,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             return UpdateMediaBuyError(
                                 errors=[
                                     Error(
-                                        code="PARTIAL_FAILURE",
+                                        code="SERVICE_UNAVAILABLE",
                                         message=f"Failed to update {len(failed)} advertisements",
                                         details={"failed_advertisement_ids": failed},
                                     )
@@ -705,7 +705,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="MISSING_PACKAGE_ID",
+                            code="VALIDATION_ERROR",
                             message=f"package_id is required for {action} action",
                             details=None,
                         )
@@ -766,7 +766,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="MISSING_PACKAGE_ID",
+                            code="VALIDATION_ERROR",
                             message="package_id is required for update_package_budget action",
                             details=None,
                         )
@@ -776,7 +776,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="MISSING_BUDGET",
+                            code="VALIDATION_ERROR",
                             message="budget is required for update_package_budget action",
                             details=None,
                         )
@@ -814,7 +814,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="MISSING_PACKAGE_ID",
+                            code="VALIDATION_ERROR",
                             message="package_id is required for update_package_impressions action",
                             details=None,
                         )
@@ -824,7 +824,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="MISSING_IMPRESSIONS",
+                            code="VALIDATION_ERROR",
                             message="budget (impressions) is required for update_package_impressions action",
                             details=None,
                         )

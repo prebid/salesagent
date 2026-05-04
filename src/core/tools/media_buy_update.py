@@ -206,7 +206,7 @@ def _update_media_buy_impl(
         if not principal:
             error_msg = f"Principal {principal_id} not found"
             response_data = UpdateMediaBuyError(
-                errors=[Error(code="PRINCIPAL_NOT_FOUND", message=error_msg)],
+                errors=[Error(code="AUTH_REQUIRED", message=error_msg)],
                 context=req.context,
             )
             if step:
@@ -322,7 +322,7 @@ def _update_media_buy_impl(
                 if not currency_limit:
                     error_msg = f"Currency {request_currency} is not supported by this publisher."
                     response_data = UpdateMediaBuyError(
-                        errors=[Error(code="CURRENCY_NOT_SUPPORTED", message=error_msg)],
+                        errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg)],
                         context=req.context,
                     )
                     ctx_manager.update_workflow_step(
@@ -479,7 +479,7 @@ def _update_media_buy_impl(
                     if not pkg_update.package_id:
                         error_msg = "package_id is required when updating package budget"
                         response_data = UpdateMediaBuyError(
-                            errors=[Error(code="MISSING_PACKAGE_ID", message=error_msg)],
+                            errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
                             context=req.context,
                         )
                         ctx_manager.update_workflow_step(
@@ -563,7 +563,7 @@ def _update_media_buy_impl(
                     if not pkg_update.package_id:
                         error_msg = "package_id is required when updating creative_ids"
                         response_data = UpdateMediaBuyError(
-                            errors=[Error(code="MISSING_PACKAGE_ID", message=error_msg)],
+                            errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
                             context=req.context,
                         )
                         ctx_manager.update_workflow_step(
@@ -609,7 +609,7 @@ def _update_media_buy_impl(
                     if missing_ids:
                         error_msg = f"Creative IDs not found: {', '.join(missing_ids)}"
                         response_data = UpdateMediaBuyError(
-                            errors=[Error(code="CREATIVES_NOT_FOUND", message=error_msg)],
+                            errors=[Error(code="CREATIVE_REJECTED", message=error_msg)],
                             context=req.context,
                         )
                         ctx_manager.update_workflow_step(
@@ -788,7 +788,7 @@ def _update_media_buy_impl(
                     if not pkg_update.package_id:
                         error_msg = "package_id is required when uploading creatives"
                         response_data = UpdateMediaBuyError(
-                            errors=[Error(code="MISSING_PACKAGE_ID", message=error_msg)],
+                            errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
                             context=req.context,
                         )
                         ctx_manager.update_workflow_step(
@@ -819,7 +819,7 @@ def _update_media_buy_impl(
                         ]
                         error_msg = f"Failed to sync creatives: {'; '.join(error_msgs)}"
                         response_data = UpdateMediaBuyError(
-                            errors=[Error(code="CREATIVE_SYNC_FAILED", message=error_msg)],
+                            errors=[Error(code="SERVICE_UNAVAILABLE", message=error_msg)],
                             context=req.context,
                         )
                         ctx_manager.update_workflow_step(
@@ -847,7 +847,7 @@ def _update_media_buy_impl(
                     if not pkg_update.package_id:
                         error_msg = "package_id is required when updating creative_assignments"
                         response_data = UpdateMediaBuyError(
-                            errors=[Error(code="MISSING_PACKAGE_ID", message=error_msg)],
+                            errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
                             context=req.context,
                         )
                         ctx_manager.update_workflow_step(
@@ -913,7 +913,7 @@ def _update_media_buy_impl(
                                 if invalid_ids:
                                     error_msg = f"Invalid placement_ids: {sorted(invalid_ids)}. Available: {sorted(available_placement_ids)}"
                                     response_data = UpdateMediaBuyError(
-                                        errors=[Error(code="INVALID_PLACEMENT_IDS", message=error_msg)],
+                                        errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
                                         context=req.context,
                                     )
                                     return response_data
@@ -921,7 +921,7 @@ def _update_media_buy_impl(
                                 # Product doesn't define placements, so placement targeting not supported
                                 error_msg = f"Product '{product_id}' does not support placement targeting (no placements defined)"
                                 response_data = UpdateMediaBuyError(
-                                    errors=[Error(code="PLACEMENT_TARGETING_NOT_SUPPORTED", message=error_msg)],
+                                    errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg)],
                                     context=req.context,
                                 )
                                 return response_data
@@ -1019,7 +1019,7 @@ def _update_media_buy_impl(
                     if not pkg_update.package_id:
                         error_msg = "package_id is required when updating targeting_overlay"
                         response_data = UpdateMediaBuyError(
-                            errors=[Error(code="MISSING_PACKAGE_ID", message=error_msg)],
+                            errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
                         )
                         ctx_manager.update_workflow_step(
                             step.step_id,
@@ -1086,7 +1086,7 @@ def _update_media_buy_impl(
             if total_budget <= 0:
                 error_msg = f"Invalid budget: {total_budget}. Budget must be positive."
                 response_data = UpdateMediaBuyError(
-                    errors=[Error(code="INVALID_BUDGET", message=error_msg)],
+                    errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
                     context=req.context,
                 )
                 ctx_manager.update_workflow_step(
@@ -1104,7 +1104,7 @@ def _update_media_buy_impl(
             )
             if budget_error:
                 response_data = UpdateMediaBuyError(
-                    errors=[Error(code="BUDGET_CEILING_EXCEEDED", message=budget_error)],
+                    errors=[Error(code="BUDGET_EXCEEDED", message=budget_error)],
                     context=req.context,
                 )
                 ctx_manager.update_workflow_step(
@@ -1212,7 +1212,7 @@ def _update_media_buy_impl(
                         f"must be after start_time ({final_start_time.isoformat()})"
                     )
                     response_data = UpdateMediaBuyError(
-                        errors=[Error(code="INVALID_DATE_RANGE", message=error_msg)],
+                        errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
                     )
                     ctx_manager.update_workflow_step(
                         step.step_id,

@@ -47,7 +47,7 @@ class TestCheckBillingPolicy:
         errors = _check_billing_policy("operator", identity)
         assert errors is not None
         assert len(errors) == 1
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert errors[0].code == "UNSUPPORTED_FEATURE"
 
     def test_error_message_includes_supported_list(self):
         identity = _identity_with(supported_billing=["agent", "operator"])
@@ -67,7 +67,7 @@ class TestCheckBillingPolicy:
         identity = _identity_with(supported_billing=[])
         errors = _check_billing_policy("agent", identity)
         assert errors is not None
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert errors[0].code == "UNSUPPORTED_FEATURE"
 
     def test_tenant_none_accepts(self):
         identity = PrincipalFactory.make_identity(tenant_id="t1", tenant=None)
@@ -79,7 +79,7 @@ class TestCheckBillingPolicy:
         assert _check_billing_policy("agent", identity) is None
         errors = _check_billing_policy("operator", identity)
         assert errors is not None
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert errors[0].code == "UNSUPPORTED_FEATURE"
 
     def test_dict_access_works(self):
         """When identity.tenant is a raw dict (IMPL transport), same behavior."""

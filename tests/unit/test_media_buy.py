@@ -3595,7 +3595,7 @@ class TestDeliveryImplDateRange:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "INVALID_DATE_RANGE" for e in resp.errors)
+            assert any(e.code == "VALIDATION_ERROR" for e in resp.errors)
 
 
 class TestDeliveryImplErrors:
@@ -3634,7 +3634,7 @@ class TestDeliveryImplErrors:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "PRINCIPAL_NOT_FOUND" for e in resp.errors)
+            assert any(e.code == "AUTH_REQUIRED" for e in resp.errors)
 
     def test_adapter_error_returns_error_code(self):
         """UC-004-E03: adapter failure returns adapter_error.
@@ -3676,7 +3676,7 @@ class TestDeliveryImplErrors:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "ADAPTER_ERROR" for e in resp.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in resp.errors)
 
     def test_ownership_mismatch_returns_not_found(self):
         """UC-004-E04: non-owner sees not_found, not ownership_mismatch.

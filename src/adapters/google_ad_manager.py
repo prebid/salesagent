@@ -402,7 +402,7 @@ class GoogleAdManager(AdServerAdapter):
                     )
                     self.log(f"[red]Error: {error_msg}[/red]")
                     return CreateMediaBuyError(
-                        errors=[Error(code="UNSUPPORTED_PRICING_MODEL", message=error_msg, details=None)],
+                        errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg, details=None)],
                     )
 
                 self.log(
@@ -523,7 +523,7 @@ class GoogleAdManager(AdServerAdapter):
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
                 return CreateMediaBuyError(
-                    errors=[Error(code="PRODUCT_NOT_CONFIGURED", message=error_msg, details=None)],
+                    errors=[Error(code="PRODUCT_UNAVAILABLE", message=error_msg, details=None)],
                 )
 
             # Cast to dict to satisfy mypy (products_map values are dict[str, Any])
@@ -546,7 +546,7 @@ class GoogleAdManager(AdServerAdapter):
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
                 return CreateMediaBuyError(
-                    errors=[Error(code="PRODUCT_NOT_CONFIGURED", message=error_msg, details=None)],
+                    errors=[Error(code="PRODUCT_UNAVAILABLE", message=error_msg, details=None)],
                 )
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
@@ -561,7 +561,7 @@ class GoogleAdManager(AdServerAdapter):
             error_msg = f"Unsupported targeting features: {', '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
             return CreateMediaBuyError(
-                errors=[Error(code="UNSUPPORTED_TARGETING", message=error_msg, details=None)],
+                errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg, details=None)],
             )
 
         # Check if manual approval is required for media buy creation
@@ -1315,9 +1315,7 @@ class GoogleAdManager(AdServerAdapter):
         # Check if action requires admin privileges
         if action in admin_only_actions and not self._is_admin_principal():
             return UpdateMediaBuyError(
-                errors=[
-                    Error(code="INSUFFICIENT_PRIVILEGES", message="Only admin users can approve orders", details=None)
-                ],
+                errors=[Error(code="AUTH_REQUIRED", message="Only admin users can approve orders", details=None)],
             )
 
         # Check if manual approval is required for media buy updates
@@ -1387,7 +1385,7 @@ class GoogleAdManager(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="INVALID_BUDGET",
+                            code="VALIDATION_ERROR",
                             message=f"Budget must be positive, got {budget}",
                             details={"budget": budget},
                         )
@@ -1426,7 +1424,7 @@ class GoogleAdManager(AdServerAdapter):
                     return UpdateMediaBuyError(
                         errors=[
                             Error(
-                                code="BUDGET_BELOW_DELIVERY",
+                                code="BUDGET_EXCEEDED",
                                 message=f"Cannot set budget ${budget} below current spend ${current_spend}",
                                 details={
                                     "requested_budget": budget,
@@ -1444,7 +1442,7 @@ class GoogleAdManager(AdServerAdapter):
                     return UpdateMediaBuyError(
                         errors=[
                             Error(
-                                code="MISSING_PLATFORM_ID",
+                                code="VALIDATION_ERROR",
                                 message=f"Package {package_id} has no GAM line item ID",
                                 details={"package_id": package_id},
                             )
@@ -1511,7 +1509,7 @@ class GoogleAdManager(AdServerAdapter):
                     return UpdateMediaBuyError(
                         errors=[
                             Error(
-                                code="MISSING_PACKAGE_ID",
+                                code="VALIDATION_ERROR",
                                 message=f"package_id required for {action}",
                                 details={"action": action},
                             )
@@ -1539,7 +1537,7 @@ class GoogleAdManager(AdServerAdapter):
                         return UpdateMediaBuyError(
                             errors=[
                                 Error(
-                                    code="MISSING_PLATFORM_ID",
+                                    code="VALIDATION_ERROR",
                                     message=f"Package {package_id} has no GAM line item ID",
                                     details={"package_id": package_id},
                                 )
@@ -1590,7 +1588,7 @@ class GoogleAdManager(AdServerAdapter):
                         return UpdateMediaBuyError(
                             errors=[
                                 Error(
-                                    code="NO_PACKAGES_FOUND",
+                                    code="PACKAGE_NOT_FOUND",
                                     message=f"No packages found for media buy {media_buy_id}",
                                     details={"media_buy_id": media_buy_id},
                                 )
@@ -1620,7 +1618,7 @@ class GoogleAdManager(AdServerAdapter):
                         return UpdateMediaBuyError(
                             errors=[
                                 Error(
-                                    code="PARTIAL_FAILURE",
+                                    code="SERVICE_UNAVAILABLE",
                                     message=f"Failed to {action_verb.lower()} some packages in GAM",
                                     details={"failed_packages": failed_packages},
                                 )
@@ -1658,7 +1656,7 @@ class GoogleAdManager(AdServerAdapter):
         return UpdateMediaBuyError(
             errors=[
                 Error(
-                    code="UNSUPPORTED_ACTION",
+                    code="UNSUPPORTED_FEATURE",
                     message=f"Action '{action}' is not supported by the Google Ad Manager adapter",
                     details={
                         "action": action,

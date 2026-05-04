@@ -99,7 +99,7 @@ def _get_media_buy_delivery_impl(
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
-            errors=[Error(code="PRINCIPAL_ID_MISSING", message="Principal ID not found in context")],
+            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
             context=context_val,
         )
 
@@ -120,7 +120,7 @@ def _get_media_buy_delivery_impl(
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
-            errors=[Error(code="PRINCIPAL_NOT_FOUND", message=f"Principal {principal_id} not found")],
+            errors=[Error(code="AUTH_REQUIRED", message=f"Principal {principal_id} not found")],
             context=context_val,
         )
 
@@ -154,7 +154,7 @@ def _get_media_buy_delivery_impl(
                     media_buy_count=0,
                 ),
                 media_buy_deliveries=[],
-                errors=[Error(code="INVALID_DATE_RANGE", message="Start date must be before end date")],
+                errors=[Error(code="VALIDATION_ERROR", message="Start date must be before end date")],
                 context=context_val,
             )
     else:
@@ -315,7 +315,9 @@ def _get_media_buy_delivery_impl(
                                 media_buy_count=0,
                             ),
                             media_buy_deliveries=[],
-                            errors=[Error(code="ADAPTER_ERROR", message=f"Error getting delivery for {media_buy_id}")],
+                            errors=[
+                                Error(code="SERVICE_UNAVAILABLE", message=f"Error getting delivery for {media_buy_id}")
+                            ],
                             context=context_val,
                         )
                 else:

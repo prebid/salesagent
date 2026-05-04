@@ -215,7 +215,7 @@ class TestBroadstreetAdapterCreateMediaBuy:
         from src.core.schemas import CreateMediaBuyError
 
         assert isinstance(result, CreateMediaBuyError)
-        assert any("no_zones" in str(err.code).lower() for err in result.errors)
+        assert any(err.code == "VALIDATION_ERROR" for err in result.errors)
 
 
 class TestBroadstreetAdapterCreatives:
@@ -369,7 +369,7 @@ class TestBroadstreetAdapterUpdates:
         from src.core.schemas import UpdateMediaBuyError
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert any("NO_PACKAGES_FOUND" in str(err.code) for err in result.errors)
+        assert any(err.code == "PACKAGE_NOT_FOUND" for err in result.errors)
 
     def test_update_media_buy_pause_package_dry_run(self, mock_principal, mock_config):
         """Test pausing a single package in dry-run mode."""
@@ -417,7 +417,7 @@ class TestBroadstreetAdapterUpdates:
         from src.core.schemas import UpdateMediaBuyError
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert any("UNSUPPORTED_ACTION" in str(err.code) for err in result.errors)
+        assert any(err.code == "UNSUPPORTED_FEATURE" for err in result.errors)
 
     def test_check_media_buy_status_dry_run(self, mock_principal, mock_config):
         """Test checking media buy status in dry-run mode."""

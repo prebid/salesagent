@@ -179,7 +179,7 @@ class TestProtocolCompliance:
         from src.core.schemas import CreateMediaBuyError
 
         error_response = CreateMediaBuyError(
-            errors=[{"code": "INVALID_BUDGET", "message": "Invalid budget"}],
+            errors=[{"code": "VALIDATION_ERROR", "message": "Invalid budget"}],
         )
 
         assert error_response.errors is not None

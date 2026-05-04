@@ -192,7 +192,7 @@ class TestProtocolEnvelope:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
-            errors=[{"code": "INVALID_BUDGET", "message": "Budget too low"}],
+            errors=[{"code": "VALIDATION_ERROR", "message": "Budget too low"}],
         )
 
         envelope = ProtocolEnvelope.wrap(payload=response, status="failed", message="Media buy creation failed")
