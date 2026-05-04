@@ -24,8 +24,11 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 console = Console()
 
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import Error, MediaBuyStatus
+from adcp.types.generated_poc.core.attribution_window import AttributionWindow
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import ReportingDimensions
 
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
@@ -96,7 +99,7 @@ def _get_media_buy_delivery_impl(
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
-            errors=[Error(code="principal_id_missing", message="Principal ID not found in context")],
+            errors=[Error(code="PRINCIPAL_ID_MISSING", message="Principal ID not found in context")],
             context=context_val,
         )
 
@@ -117,7 +120,7 @@ def _get_media_buy_delivery_impl(
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
-            errors=[Error(code="principal_not_found", message=f"Principal {principal_id} not found")],
+            errors=[Error(code="PRINCIPAL_NOT_FOUND", message=f"Principal {principal_id} not found")],
             context=context_val,
         )
 
@@ -151,7 +154,7 @@ def _get_media_buy_delivery_impl(
                     media_buy_count=0,
                 ),
                 media_buy_deliveries=[],
-                errors=[Error(code="invalid_date_range", message="Start date must be before end date")],
+                errors=[Error(code="INVALID_DATE_RANGE", message="Start date must be before end date")],
                 context=context_val,
             )
     else:
@@ -181,7 +184,7 @@ def _get_media_buy_delivery_impl(
             for requested_id in req.media_buy_ids:
                 if requested_id not in found_ids:
                     not_found_errors.append(
-                        Error(code="media_buy_not_found", message=f"Media buy {requested_id} not found")
+                        Error(code="MEDIA_BUY_NOT_FOUND", message=f"Media buy {requested_id} not found")
                     )
 
         pricing_option_ids: list[Any] = []
@@ -312,7 +315,7 @@ def _get_media_buy_delivery_impl(
                                 media_buy_count=0,
                             ),
                             media_buy_deliveries=[],
-                            errors=[Error(code="adapter_error", message=f"Error getting delivery for {media_buy_id}")],
+                            errors=[Error(code="ADAPTER_ERROR", message=f"Error getting delivery for {media_buy_id}")],
                             context=context_val,
                         )
                 else:
@@ -577,10 +580,10 @@ async def get_media_buy_delivery(
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    reporting_dimensions: dict[str, Any] | None = None,
-    attribution_window: dict[str, Any] | None = None,
+    reporting_dimensions: ReportingDimensions | None = None,
+    attribution_window: AttributionWindow | None = None,
     include_package_daily_breakdown: bool | None = None,
-    account: dict[str, Any] | None = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -607,12 +610,9 @@ async def get_media_buy_delivery(
 
     # Handle account resolution at boundary (same as sync_creatives pattern)
     if account is not None and identity is not None:
-        from adcp.types import AccountReference as LibraryAccountReference
-
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = LibraryAccountReference(**account) if isinstance(account, dict) else account
-        identity = enrich_identity_with_account(identity, account_ref)
+        identity = enrich_identity_with_account(identity, account)
 
     # Create AdCP-compliant request object
     try:
@@ -639,10 +639,10 @@ def get_media_buy_delivery_raw(
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    reporting_dimensions: dict[str, Any] | None = None,
-    attribution_window: dict[str, Any] | None = None,
+    reporting_dimensions: ReportingDimensions | None = None,
+    attribution_window: AttributionWindow | None = None,
     include_package_daily_breakdown: bool | None = None,
-    account: dict[str, Any] | None = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -672,12 +672,9 @@ def get_media_buy_delivery_raw(
 
     # Handle account resolution at boundary (same as sync_creatives pattern)
     if account is not None and identity is not None:
-        from adcp.types import AccountReference as LibraryAccountReference
-
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = LibraryAccountReference(**account) if isinstance(account, dict) else account
-        identity = enrich_identity_with_account(identity, account_ref)
+        identity = enrich_identity_with_account(identity, account)
 
     # Create request object
     req = GetMediaBuyDeliveryRequest(

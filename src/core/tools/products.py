@@ -787,11 +787,11 @@ async def _get_products_impl(
 
 
 async def get_products(
-    brand: BrandReference | None = None,
+    brand: BrandReference | str | None = None,
     brief: str = "",
     adcp_version: str = "1.0.0",
     filters: ProductFilters | None = None,
-    property_list: dict | None = None,
+    property_list: PropertyListReference | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
@@ -813,6 +813,10 @@ async def get_products(
     Returns:
         ToolResult with human-readable text and structured data
     """
+    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
+    if isinstance(brand, str):
+        brand = BrandReference(domain=brand)
+
     # Build request object for shared implementation
     try:
         req = create_get_products_request(

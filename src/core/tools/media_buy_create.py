@@ -21,9 +21,11 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 from adcp import PushNotificationConfig
+from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from adcp.types.aliases import Package as ResponsePackage
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
@@ -1304,6 +1306,7 @@ def _build_idempotency_hit_result(
                 media_buy_id=existing.media_buy_id,
                 packages=response_packages,
                 status=adcp_status,
+                valid_actions=valid_actions_for_status(adcp_status.value),
                 context=context,
             ),
             status=AdcpTaskStatus.completed.value,
@@ -1375,7 +1378,7 @@ async def _create_media_buy_impl(
         # Cannot create context or workflow step without valid principal
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code="authentication_error", message=error_msg, details=None)],
+                errors=[Error(code="AUTH_REQUIRED", message=error_msg, details=None)],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,
@@ -1924,7 +1927,7 @@ async def _create_media_buy_impl(
         # Return error response with failed status
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code="validation_error", message=str(e), details=None)],
+                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,
@@ -2415,6 +2418,7 @@ async def _create_media_buy_impl(
                     media_buy_id=media_buy_id,
                     creative_deadline=None,
                     packages=pending_packages,
+                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
                     context=req.context,
                 ),
@@ -2484,7 +2488,7 @@ async def _create_media_buy_impl(
                 return CreateMediaBuyResult(
                     response=CreateMediaBuyError(
                         errors=[
-                            Error(code="invalid_configuration", message=err, details=None) for err in config_errors
+                            Error(code="INVALID_CONFIGURATION", message=err, details=None) for err in config_errors
                         ],
                         context=req.context,
                     ),
@@ -2574,6 +2578,7 @@ async def _create_media_buy_impl(
                 response=CreateMediaBuySuccess(
                     media_buy_id=media_buy_id,
                     packages=response_packages,
+                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),
@@ -2862,7 +2867,7 @@ async def _create_media_buy_impl(
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
             return CreateMediaBuyResult(
                 response=CreateMediaBuyError(
-                    errors=[Error(code="invalid_datetime", message=error_msg, details=None)],
+                    errors=[Error(code="INVALID_DATETIME", message=error_msg, details=None)],
                     context=req.context,
                 ),
                 status=AdcpTaskStatus.failed.value,
@@ -2915,6 +2920,7 @@ async def _create_media_buy_impl(
             simulated_response = CreateMediaBuySuccess(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
                 packages=simulated_packages,
+                valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
@@ -3536,6 +3542,7 @@ async def _create_media_buy_impl(
         adcp_response = CreateMediaBuySuccess(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
+            valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
         )
@@ -3746,7 +3753,7 @@ async def _create_media_buy_impl(
 
 
 async def create_media_buy(
-    brand: Any | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
+    brand: BrandReference | str | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
     packages: list[PackageRequest] | None = None,  # REQUIRED per AdCP spec - Package objects with all fields
     start_time: str | None = None,  # datetime ISO 8601 or 'asap' - REQUIRED per AdCP spec
     end_time: str | None = None,  # datetime ISO 8601 - REQUIRED per AdCP spec
@@ -3766,7 +3773,7 @@ async def create_media_buy(
     strategy_id: str | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
-    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
+    ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     webhook_url: str | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -3803,6 +3810,10 @@ async def create_media_buy(
     Returns:
         ToolResult with CreateMediaBuyResponse data
     """
+    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
+    if isinstance(brand, str):
+        brand = BrandReference(domain=brand)
+
     # Construct spec-compliant request object at the boundary — validation happens here
     # FastMCP already coerced JSON inputs to typed Pydantic models
     try:
