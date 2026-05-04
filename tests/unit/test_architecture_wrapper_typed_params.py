@@ -16,9 +16,6 @@ import pytest
 # or are transport infrastructure (ctx, etc.)
 ALLOWED_ANY_PARAMS = {
     "ctx",  # FastMCP Context — transport infra
-    "budget",  # Deprecated, will be removed by salesagent-wbbq
-    "start_date",  # Deprecated, will be removed by salesagent-wbbq
-    "end_date",  # Deprecated, will be removed by salesagent-wbbq
 }
 
 # MCP wrapper functions to check (module_path, function_name)
