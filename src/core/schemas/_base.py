@@ -45,6 +45,7 @@ from adcp.types.aliases import (
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -2268,6 +2269,9 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     media_buy_id: str = Field(..., description="Publisher media buy identifier")
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
     status: MediaBuyStatus = Field(..., description="Current media buy status")
+    valid_actions: list[MediaBuyValidAction] | None = Field(
+        default=None, description="Actions available for this media buy given its current status"
+    )
     currency: str = Field(..., description="ISO 4217 currency code")
     total_budget: float = Field(..., description="Total budget across all packages")
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")

@@ -47,6 +47,7 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 def _handle_tool_error(e: ToolError) -> JSONResponse:
     """Convert MCP ToolError to HTTP error response using adcp_error()."""
     from adcp.server.helpers import adcp_error
+
     from src.core.tool_error_logging import extract_error_info
 
     error_code, error_message, recovery = extract_error_info(e)
