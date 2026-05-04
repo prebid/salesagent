@@ -17,7 +17,7 @@ import base64
 import logging
 import uuid
 from datetime import UTC
-from typing import Any
+from typing import Annotated, Any
 
 from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
@@ -33,6 +33,7 @@ from adcp.types.generated_poc.core.pagination_request import PaginationRequest
 from adcp.types.generated_poc.core.pagination_response import PaginationResponse
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
@@ -178,7 +179,7 @@ def _list_accounts_impl(
 async def list_accounts(
     status: AccountStatus | None = None,
     pagination: PaginationRequest | None = None,
-    sandbox: bool | None = None,
+    sandbox: Annotated[bool | None, Field(description="When true, return only sandbox/test accounts")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -666,8 +667,10 @@ async def _sync_accounts_impl(
 
 async def sync_accounts(
     accounts: list[SyncAccountInput] | None = None,
-    delete_missing: bool | None = None,
-    dry_run: bool | None = None,
+    delete_missing: Annotated[
+        bool | None, Field(description="Deactivate accounts not present in the sync list")
+    ] = None,
+    dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:

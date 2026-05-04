@@ -28,33 +28,33 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # Line numbers reflect FIXME comment restored in media_buy_update.py (PR04 review item 1).
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 22 violations (workflow step response_data)
-    # Line numbers updated after UPPERCASE error codes + valid_actions migration
-    ("media_buy_update.py", 215),
-    ("media_buy_update.py", 275),
+    # Line numbers updated after Annotated + Field import additions
+    ("media_buy_update.py", 216),
     ("media_buy_update.py", 276),
-    ("media_buy_update.py", 330),
-    ("media_buy_update.py", 387),
-    ("media_buy_update.py", 410),
-    ("media_buy_update.py", 443),
-    ("media_buy_update.py", 470),
-    ("media_buy_update.py", 487),
-    ("media_buy_update.py", 541),
-    ("media_buy_update.py", 571),
-    ("media_buy_update.py", 591),
-    ("media_buy_update.py", 617),
-    ("media_buy_update.py", 796),
-    ("media_buy_update.py", 827),
-    ("media_buy_update.py", 855),
-    ("media_buy_update.py", 1026),
-    ("media_buy_update.py", 1044),
-    ("media_buy_update.py", 1094),
-    ("media_buy_update.py", 1187),
-    ("media_buy_update.py", 1219),
-    ("media_buy_update.py", 1282),
+    ("media_buy_update.py", 277),
+    ("media_buy_update.py", 331),
+    ("media_buy_update.py", 388),
+    ("media_buy_update.py", 411),
+    ("media_buy_update.py", 444),
+    ("media_buy_update.py", 471),
+    ("media_buy_update.py", 488),
+    ("media_buy_update.py", 542),
+    ("media_buy_update.py", 572),
+    ("media_buy_update.py", 592),
+    ("media_buy_update.py", 618),
+    ("media_buy_update.py", 797),
+    ("media_buy_update.py", 828),
+    ("media_buy_update.py", 856),
+    ("media_buy_update.py", 1027),
+    ("media_buy_update.py", 1045),
+    ("media_buy_update.py", 1095),
+    ("media_buy_update.py", 1188),
+    ("media_buy_update.py", 1220),
+    ("media_buy_update.py", 1283),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 617),
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 143),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 144),  # filters.model_dump(exclude_none=True)
 }
 
 

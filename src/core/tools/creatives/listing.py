@@ -3,7 +3,7 @@
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from adcp import CreativeFilters
 from adcp.types.generated_poc.core.context import ContextObject
@@ -16,6 +16,7 @@ from adcp.types.generated_poc.creative.list_creatives_request import (
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field as PydanticField
 from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
@@ -374,26 +375,40 @@ def _list_creatives_impl(
 
 
 async def list_creatives(
-    media_buy_id: str = None,
+    media_buy_id: Annotated[str, PydanticField(description="Filter creatives by a single media buy ID")] = None,
     media_buy_ids: list[str] = None,
-    status: str = None,
-    format: str = None,
+    status: Annotated[
+        str, PydanticField(description="Filter by creative status (e.g. 'approved', 'pending', 'rejected')")
+    ] = None,
+    format: Annotated[str, PydanticField(description="Filter by creative format ID")] = None,
     tags: list[str] = None,
-    created_after: str = None,
-    created_before: str = None,
-    search: str = None,
+    created_after: Annotated[
+        str, PydanticField(description="Filter creatives created after this ISO 8601 datetime")
+    ] = None,
+    created_before: Annotated[
+        str, PydanticField(description="Filter creatives created before this ISO 8601 datetime")
+    ] = None,
+    search: Annotated[str, PydanticField(description="Free-text search across creative name and metadata")] = None,
     filters: CreativeFilters | None = None,
     sort: Sort | None = None,
     pagination: PaginationRequest | None = None,
     fields: list[FieldModel | str] | None = None,
-    include_performance: bool = False,
-    include_assignments: bool = False,
-    include_sub_assets: bool = False,
-    page: int = 1,
-    limit: int = 50,
-    sort_by: str = "created_date",
-    sort_order: str = "desc",
-    webhook_url: str | None = None,
+    include_performance: Annotated[
+        bool, PydanticField(description="Include performance metrics for each creative")
+    ] = False,
+    include_assignments: Annotated[
+        bool, PydanticField(description="Include package assignment details for each creative")
+    ] = False,
+    include_sub_assets: Annotated[
+        bool, PydanticField(description="Include sub-assets (e.g. individual sizes in a responsive creative)")
+    ] = False,
+    page: Annotated[int, PydanticField(description="Page number for pagination (1-based)")] = 1,
+    limit: Annotated[int, PydanticField(description="Maximum number of creatives per page")] = 50,
+    sort_by: Annotated[
+        str, PydanticField(description="Field to sort by (e.g. 'created_date', 'name')")
+    ] = "created_date",
+    sort_order: Annotated[str, PydanticField(description="Sort direction: 'asc' or 'desc'")] = "desc",
+    webhook_url: Annotated[str | None, PydanticField(description="Webhook URL for async result delivery")] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):

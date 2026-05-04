@@ -9,11 +9,12 @@ Handles property discovery including:
 
 import logging
 import time
-from typing import Any
+from typing import Annotated, Any
 
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import TenantConfigUoW
@@ -200,7 +201,7 @@ def _list_authorized_properties_impl(
 async def list_authorized_properties(
     publisher_domains: list[str] | None = None,
     property_tags: list[str] | None = None,
-    webhook_url: str | None = None,
+    webhook_url: Annotated[str | None, Field(description="Webhook URL for async result delivery")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):

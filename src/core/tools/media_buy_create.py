@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
 from sqlalchemy.exc import IntegrityError
@@ -33,7 +33,7 @@ from adcp.types.generated_poc.core.targeting import TargetingOverlay
 from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
 from src.core.exceptions import (
@@ -3753,11 +3753,16 @@ async def _create_media_buy_impl(
 
 
 async def create_media_buy(
-    brand: BrandReference | str | None = None,
+    brand: Annotated[
+        BrandReference | str | None,
+        Field(description="Brand reference with domain field, or domain string shorthand (e.g. 'acme.com')"),
+    ] = None,
     packages: list[PackageRequest] | None = None,
-    start_time: str | None = None,
-    end_time: str | None = None,
-    po_number: str | None = None,
+    start_time: Annotated[
+        str | None, Field(description="Campaign start time in ISO 8601 format, or 'asap' for immediate start")
+    ] = None,
+    end_time: Annotated[str | None, Field(description="Campaign end time in ISO 8601 format")] = None,
+    po_number: Annotated[str | None, Field(description="Purchase order number for billing reference")] = None,
     targeting_overlay: TargetingOverlay | None = None,
     creatives: list[CreativeAsset] | None = None,
     reporting_webhook: ReportingWebhook | None = None,

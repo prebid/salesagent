@@ -11,12 +11,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import RootModel, ValidationError
+from pydantic import Field, RootModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -219,7 +219,9 @@ def _get_media_buys_impl(
 async def get_media_buys(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    include_snapshot: bool = False,
+    include_snapshot: Annotated[
+        bool, Field(description="When true, include near-real-time delivery stats per package")
+    ] = False,
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,

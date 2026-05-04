@@ -11,11 +11,11 @@ Handles delivery metrics reporting including:
 import logging
 from datetime import UTC, date, datetime, timedelta
 from math import floor
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import RootModel, ValidationError
+from pydantic import Field, RootModel, ValidationError
 from rich.console import Console
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
@@ -578,11 +578,13 @@ def _get_media_buy_delivery_impl(
 async def get_media_buy_delivery(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
+    start_date: Annotated[str | None, Field(description="Start date for reporting period in YYYY-MM-DD format")] = None,
+    end_date: Annotated[str | None, Field(description="End date for reporting period in YYYY-MM-DD format")] = None,
     reporting_dimensions: ReportingDimensions | None = None,
     attribution_window: AttributionWindow | None = None,
-    include_package_daily_breakdown: bool | None = None,
+    include_package_daily_breakdown: Annotated[
+        bool | None, Field(description="When true, include daily breakdown metrics per package")
+    ] = None,
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,

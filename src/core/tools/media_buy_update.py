@@ -12,10 +12,11 @@ import logging
 import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
+from pydantic import Field
 
 # ---------------------------------------------------------------------------
 # Financial policy constants (F-05)
@@ -1372,17 +1373,17 @@ def _build_update_request(
 
 
 async def update_media_buy(
-    media_buy_id: str | None = None,
-    paused: bool = None,
-    flight_start_date: str = None,
-    flight_end_date: str = None,
-    budget: float = None,
-    currency: str = None,
+    media_buy_id: Annotated[str | None, Field(description="Publisher media buy ID to update")] = None,
+    paused: Annotated[bool, Field(description="True to pause campaign delivery, False to resume")] = None,
+    flight_start_date: Annotated[str, Field(description="New campaign start date in YYYY-MM-DD format")] = None,
+    flight_end_date: Annotated[str, Field(description="New campaign end date in YYYY-MM-DD format")] = None,
+    budget: Annotated[float, Field(description="New total campaign budget amount")] = None,
+    currency: Annotated[str, Field(description="ISO 4217 currency code (e.g. 'USD')")] = None,
     targeting_overlay: TargetingOverlay | None = None,
-    start_time: str = None,
-    end_time: str = None,
-    pacing: str = None,
-    daily_budget: float = None,
+    start_time: Annotated[str, Field(description="New campaign start time in ISO 8601 format")] = None,
+    end_time: Annotated[str, Field(description="New campaign end time in ISO 8601 format")] = None,
+    pacing: Annotated[str, Field(description="Budget pacing strategy: 'even' or 'asap'")] = None,
+    daily_budget: Annotated[float, Field(description="Maximum daily spend cap")] = None,
     packages: list[UpdatePackage] | None = None,
     creatives: list = None,
     push_notification_config: PushNotificationConfig | None = None,

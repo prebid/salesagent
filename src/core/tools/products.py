@@ -7,7 +7,7 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import os
 import time
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
@@ -17,7 +17,7 @@ from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
@@ -787,9 +787,14 @@ async def _get_products_impl(
 
 
 async def get_products(
-    brand: BrandReference | str | None = None,
-    brief: str = "",
-    adcp_version: str = "1.0.0",
+    brand: Annotated[
+        BrandReference | str | None,
+        Field(description="Brand reference with domain field, or domain string shorthand (e.g. 'acme.com')"),
+    ] = None,
+    brief: Annotated[str, Field(description="Natural language description of campaign goals and requirements")] = "",
+    adcp_version: Annotated[
+        str, Field(description="Client's AdCP protocol version (default: 1.0.0). V3+ clients get clean responses")
+    ] = "1.0.0",
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
     push_notification_config: PushNotificationConfig | None = None,
