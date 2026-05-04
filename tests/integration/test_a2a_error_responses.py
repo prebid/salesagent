@@ -259,7 +259,7 @@ class TestA2AErrorPropagation:
         # Verify error is about authentication
         error = artifact_data["errors"][0]
         assert "code" in error, "Error must include code"
-        assert error["code"] == "authentication_error"
+        assert error["code"] == "AUTH_REQUIRED"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""

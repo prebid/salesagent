@@ -273,7 +273,7 @@ Feature: BR-UC-001 Discover Available Inventory
     | field        | value        |
     | buying_mode  | brief        |
     | brief        | Display ads  |
-    Then the operation should fail with error code "authentication_error"
+    Then the operation should fail with error code "AUTH_REQUIRED"
     And the error message should contain "Authentication required"
     And the error should include "suggestion" field
     And the suggestion should contain "credentials" or "authenticate"
@@ -289,7 +289,7 @@ Feature: BR-UC-001 Discover Available Inventory
     | field        | value                               |
     | buying_mode  | brief                               |
     | brief        | Display ads for tech audience        |
-    Then the operation should fail with error code "validation_error"
+    Then the operation should fail with error code "VALIDATION_ERROR"
     And the error message should contain "Brand required"
     And the error should include "suggestion" field
     And the suggestion should contain "brand" or "domain"
@@ -301,7 +301,7 @@ Feature: BR-UC-001 Discover Available Inventory
   Scenario Outline: Extension *d - buying mode constraint violation - <violation>
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a get_products request with <invalid_fields>
-    Then the operation should fail with error code "validation_error"
+    Then the operation should fail with error code "VALIDATION_ERROR"
     And the error message should contain "<error_message>"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged

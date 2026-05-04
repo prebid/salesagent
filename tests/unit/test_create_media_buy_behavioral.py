@@ -268,7 +268,7 @@ class TestProductNotFound:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "validation_error"
+        assert errors[0].code == "VALIDATION_ERROR"
         assert "prod_missing" in errors[0].message
         assert "not found" in errors[0].message.lower()
 
@@ -307,7 +307,7 @@ class TestMaxDailySpendExceeded:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "validation_error"
+        assert errors[0].code == "VALIDATION_ERROR"
         assert "daily" in errors[0].message.lower()
 
     @pytest.mark.asyncio
@@ -1855,7 +1855,7 @@ class TestCrossCuttingObligations:
         # Error response has no media_buy_id
         from src.core.schemas import Error
 
-        error = CreateMediaBuyError(errors=[Error(code="validation_error", message="test error")])
+        error = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="test error")])
         error_result = CreateMediaBuyResult(response=error, status="failed")
 
         assert isinstance(error_result.response, CreateMediaBuyError)
@@ -2105,7 +2105,7 @@ class TestExtensionObligations:
                 # Adapter returns error
                 from src.core.schemas import Error
 
-                adapter_error = CreateMediaBuyError(errors=[Error(code="adapter_error", message="GAM API error")])
+                adapter_error = CreateMediaBuyError(errors=[Error(code="ADAPTER_ERROR", message="GAM API error")])
                 mock_exec.return_value = adapter_error
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)

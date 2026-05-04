@@ -115,7 +115,7 @@ def test_principal_not_found_returns_error(standard_mocks):
 
     assert isinstance(result, UpdateMediaBuyError)
     assert len(result.errors) == 1
-    assert result.errors[0].code == "principal_not_found"
+    assert result.errors[0].code == "PRINCIPAL_NOT_FOUND"
     assert "principal_test" in result.errors[0].message
 
     # Workflow step should be marked failed
@@ -338,10 +338,11 @@ class TestFlightDateValidationAndPersistence:
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
-        # Currency validation: media buy via repo (called twice: currency check + date path)
+        # Currency validation: media buy via repo (called 3x: currency check + date path + valid_actions)
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
             _make_mock_media_buy("mb_dates"),  # currency validation
             mock_existing_mb,  # date validation
+            _make_mock_media_buy("mb_dates"),  # valid_actions lookup
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
@@ -398,7 +399,7 @@ class TestFlightDateValidationAndPersistence:
 
         assert isinstance(result, UpdateMediaBuyError)
         assert len(result.errors) == 1
-        assert result.errors[0].code == "invalid_date_range"
+        assert result.errors[0].code == "INVALID_DATE_RANGE"
 
     def test_end_equals_start_returns_error(self, standard_mocks):
         """When end_time == start_time, returns code='invalid_date_range'."""
@@ -429,7 +430,7 @@ class TestFlightDateValidationAndPersistence:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "invalid_date_range"
+        assert result.errors[0].code == "INVALID_DATE_RANGE"
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +547,7 @@ def test_package_not_found_returns_error(standard_mocks):
 
     assert isinstance(result, UpdateMediaBuyError)
     assert len(result.errors) == 1
-    assert result.errors[0].code == "package_not_found"
+    assert result.errors[0].code == "PACKAGE_NOT_FOUND"
     assert "pkg_nonexistent" in result.errors[0].message
 
 
@@ -721,10 +722,11 @@ class TestTimezoneHandlingRegression:
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
-        # Media buy via repo (called twice: currency check + date path)
+        # Media buy via repo (called 3x: currency check + date path + valid_actions)
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
             _make_mock_media_buy("mb_tz_end"),
             mock_existing_mb,
+            _make_mock_media_buy("mb_tz_end"),
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
@@ -754,10 +756,11 @@ class TestTimezoneHandlingRegression:
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
-        # Media buy via repo (called twice: currency check + date path)
+        # Media buy via repo (called 3x: currency check + date path + valid_actions)
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
             _make_mock_media_buy("mb_tz_start"),
             mock_existing_mb,
+            _make_mock_media_buy("mb_tz_start"),
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
@@ -834,7 +837,7 @@ class TestUC003MainObligations:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "budget_limit_exceeded"
+        assert result.errors[0].code == "BUDGET_EXCEEDED"
 
     def test_currency_limit_passes_when_no_max(self, standard_mocks):
         """Daily spend check skipped when max_daily_package_spend not configured.
@@ -983,6 +986,7 @@ class TestUC003UpdateTiming:
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
             _make_mock_media_buy("mb_both_dates"),
             mock_existing,
+            _make_mock_media_buy("mb_both_dates"),  # valid_actions lookup
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.return_value = _make_mock_currency_limit()
@@ -1015,6 +1019,7 @@ class TestUC003UpdateTiming:
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
             _make_mock_media_buy("mb_no_adapter"),
             mock_existing,
+            _make_mock_media_buy("mb_no_adapter"),  # valid_actions lookup
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.return_value = _make_mock_currency_limit()
@@ -1081,7 +1086,7 @@ class TestUC003CampaignLevelBudget:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "budget_limit_exceeded"
+        assert result.errors[0].code == "BUDGET_EXCEEDED"
 
     def test_campaign_budget_no_adapter_call(self, standard_mocks):
         """Campaign budget update is database-only; no adapter call (gap G35).
@@ -1178,7 +1183,7 @@ class TestUC003UpdateCreativeIds:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "creatives_not_found"
+        assert result.errors[0].code == "CREATIVES_NOT_FOUND"
         assert "C999" in result.errors[0].message
 
     def test_creative_error_state_rejected(self, standard_mocks):
@@ -1503,7 +1508,7 @@ class TestUC003UploadInlineCreatives:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "creative_sync_failed"
+        assert result.errors[0].code == "CREATIVE_SYNC_FAILED"
 
 
 # ---------------------------------------------------------------------------
@@ -1605,7 +1610,7 @@ class TestUC003UpdateCreativeAssignments:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "placement_targeting_not_supported"
+        assert result.errors[0].code == "PLACEMENT_TARGETING_NOT_SUPPORTED"
 
     def test_creative_existence_validated_for_assignments(self, standard_mocks):
         """Creative not found when using creative_assignments path.
@@ -1831,7 +1836,7 @@ class TestUC003ExtA:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "principal_not_found"
+        assert result.errors[0].code == "PRINCIPAL_NOT_FOUND"
 
     def test_state_unchanged_on_auth_failure(self, standard_mocks):
         """No records modified when authentication fails.
@@ -1913,7 +1918,7 @@ class TestUC003ExtE:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "invalid_date_range"
+        assert result.errors[0].code == "INVALID_DATE_RANGE"
 
     def test_end_before_existing_start(self, standard_mocks):
         """end_time before existing start_time (only end_time updated).
@@ -1943,7 +1948,7 @@ class TestUC003ExtE:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "invalid_date_range"
+        assert result.errors[0].code == "INVALID_DATE_RANGE"
 
     def test_start_after_existing_end(self, standard_mocks):
         """start_time after existing end_time (only start_time updated).
@@ -1973,7 +1978,7 @@ class TestUC003ExtE:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "invalid_date_range"
+        assert result.errors[0].code == "INVALID_DATE_RANGE"
 
 
 # ---------------------------------------------------------------------------
@@ -2006,7 +2011,7 @@ class TestUC003ExtF:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "currency_not_supported"
+        assert result.errors[0].code == "CURRENCY_NOT_SUPPORTED"
 
 
 # ---------------------------------------------------------------------------
@@ -2041,7 +2046,7 @@ class TestUC003ExtG:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "budget_limit_exceeded"
+        assert result.errors[0].code == "BUDGET_EXCEEDED"
 
 
 # ---------------------------------------------------------------------------
@@ -2112,7 +2117,7 @@ class TestUC003ExtI:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "creatives_not_found"
+        assert result.errors[0].code == "CREATIVES_NOT_FOUND"
         assert "C999" in result.errors[0].message
         assert "C998" in result.errors[0].message
 
@@ -2272,7 +2277,7 @@ class TestUC003ExtK:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "creative_sync_failed"
+        assert result.errors[0].code == "CREATIVE_SYNC_FAILED"
 
     def test_media_buy_unmodified_on_sync_failure(self, standard_mocks):
         """Media buy unchanged when creative sync fails.
@@ -2345,7 +2350,7 @@ class TestUC003ExtL:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "package_not_found"
+        assert result.errors[0].code == "PACKAGE_NOT_FOUND"
 
     def test_package_id_does_not_exist(self, standard_mocks):
         """Non-existent package_id returns package_not_found.
@@ -2366,7 +2371,7 @@ class TestUC003ExtL:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "package_not_found"
+        assert result.errors[0].code == "PACKAGE_NOT_FOUND"
         assert "pkg_nonexistent" in result.errors[0].message
 
 
@@ -2418,7 +2423,7 @@ class TestUC003ExtM:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "invalid_placement_ids"
+        assert result.errors[0].code == "INVALID_PLACEMENT_IDS"
 
     def test_placement_targeting_on_unsupported_product(self, standard_mocks):
         """Placement targeting on product without placements rejected.
@@ -2458,7 +2463,7 @@ class TestUC003ExtM:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "placement_targeting_not_supported"
+        assert result.errors[0].code == "PLACEMENT_TARGETING_NOT_SUPPORTED"
 
 
 # ---------------------------------------------------------------------------
@@ -2485,7 +2490,7 @@ class TestUC003ExtN:
         from adcp.types import Error as AdCPErrorModel
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuyError(
-            errors=[AdCPErrorModel(code="insufficient_privileges", message="Admin required")]
+            errors=[AdCPErrorModel(code="INSUFFICIENT_PRIVILEGES", message="Admin required")]
         )
 
         identity = _make_identity()
@@ -2522,7 +2527,7 @@ class TestUC003ExtO:
         from adcp.types import Error as AdCPError
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuyError(
-            errors=[AdCPError(code="api_quota_exceeded", message="Quota exceeded")]
+            errors=[AdCPError(code="API_QUOTA_EXCEEDED", message="Quota exceeded")]
         )
 
         identity = _make_identity()

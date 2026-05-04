@@ -1474,7 +1474,7 @@ class AdCPRequestHandler(RequestHandler):
                     "received_parameters": list(parameters.keys()),
                     "errors": [
                         {
-                            "code": "validation_error",
+                            "code": "VALIDATION_ERROR",
                             "message": f"Missing required AdCP parameters: {missing_params}",
                         }
                     ],
@@ -1490,7 +1490,7 @@ class AdCPRequestHandler(RequestHandler):
                     "received_parameters": list(parameters.keys()),
                     "errors": [
                         {
-                            "code": "validation_error",
+                            "code": "VALIDATION_ERROR",
                             "message": str(e),
                         }
                     ],

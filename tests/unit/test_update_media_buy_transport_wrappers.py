@@ -96,7 +96,7 @@ def test_a2a_wrapper_rejects_oversized_campaign_budget():
 
     assert isinstance(result, UpdateMediaBuyError)
     assert result.errors
-    assert result.errors[0].code == "budget_ceiling_exceeded"
+    assert result.errors[0].code == "BUDGET_CEILING_EXCEEDED"
 
 
 def test_a2a_wrapper_rejects_package_budget_below_minimum():
@@ -118,7 +118,7 @@ def test_a2a_wrapper_rejects_package_budget_below_minimum():
 
     assert isinstance(result, UpdateMediaBuyError)
     assert result.errors
-    assert result.errors[0].code == "budget_below_minimum"
+    assert result.errors[0].code == "BUDGET_TOO_LOW"
 
 
 def test_mcp_wrapper_preserves_existing_currency_for_float_budget():

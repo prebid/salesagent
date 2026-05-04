@@ -3753,28 +3753,17 @@ async def _create_media_buy_impl(
 
 
 async def create_media_buy(
-    brand: BrandReference | str | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
-    packages: list[PackageRequest] | None = None,  # REQUIRED per AdCP spec - Package objects with all fields
-    start_time: str | None = None,  # datetime ISO 8601 or 'asap' - REQUIRED per AdCP spec
-    end_time: str | None = None,  # datetime ISO 8601 - REQUIRED per AdCP spec
-    budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
+    brand: BrandReference | str | None = None,
+    packages: list[PackageRequest] | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
     po_number: str | None = None,
-    product_ids: list[str] | None = None,  # Legacy format conversion
-    start_date: Any | None = None,  # Legacy format conversion
-    end_date: Any | None = None,  # Legacy format conversion
-    total_budget: float | None = None,  # Legacy format conversion
     targeting_overlay: TargetingOverlay | None = None,
-    pacing: str = "even",
-    daily_budget: float | None = None,
     creatives: list[CreativeAsset] | None = None,
     reporting_webhook: ReportingWebhook | None = None,
-    required_axe_signals: list[str] | None = None,
-    enable_creative_macro: bool = False,
-    strategy_id: str | None = None,
     push_notification_config: PushNotificationConfig | None = None,
-    context: ContextObject | None = None,  # payload-level context
-    ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
-    webhook_url: str | None = None,
+    context: ContextObject | None = None,
+    ext: dict[str, Any] | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Create a media buy with the specified parameters.
@@ -3783,29 +3772,19 @@ async def create_media_buy(
     FastMCP automatically validates and coerces JSON inputs to Pydantic models.
 
     Args:
-        brand: Brand reference with domain field - per AdCP v3.6.0 spec
-        packages: Array of packages with products and budgets (REQUIRED - budgets are at package level per AdCP v2.2.0)
+        brand: Brand reference with domain field per AdCP v3 spec.
+            String shorthand accepted: "acme.com" is coerced to BrandReference(domain="acme.com").
+        packages: Array of packages with products and budgets (REQUIRED per AdCP spec)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)
         end_time: Campaign end time ISO 8601 (REQUIRED)
-        budget: DEPRECATED - Budget is package-level only per AdCP v2.2.0 (ignored if provided)
         po_number: Purchase order number (optional)
-        product_ids: Legacy: Product IDs (converted to packages)
-        start_date: Legacy: Start date (converted to start_time)
-        end_date: Legacy: End date (converted to end_time)
-        total_budget: Legacy: Total budget (converted to package budgets)
         targeting_overlay: Targeting overlay configuration
-        pacing: Pacing strategy (even, asap, daily_budget)
-        daily_budget: Daily_budget limit
         creatives: Creative assets for the campaign
         reporting_webhook: Webhook configuration for automated reporting delivery
-        required_axe_signals: Required targeting signals
-        enable_creative_macro: Enable AXE to provide creative_macro signal
-        strategy_id: Optional strategy ID for linking operations
-        push_notification_config: Push notification config dict with url, authentication (AdCP spec)
-        context: Application level context per adcp spec
-        buyer_campaign_ref: Buyer's campaign reference identifier (optional, per AdCP spec)
+        push_notification_config: Push notification config for async notifications (AdCP spec)
+        context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
-        ctx:  FastMCP context (automatically provided) (automatically provided)
+        ctx: FastMCP context (automatically provided)
 
     Returns:
         ToolResult with CreateMediaBuyResponse data

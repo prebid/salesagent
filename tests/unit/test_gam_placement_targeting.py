@@ -207,7 +207,7 @@ class TestPlacementIdsValidation:
 
             assert isinstance(result, UpdateMediaBuyError)
             assert len(result.errors) == 1
-            assert result.errors[0].code == "invalid_placement_ids"
+            assert result.errors[0].code == "INVALID_PLACEMENT_IDS"
             assert "invalid_placement" in result.errors[0].message
 
     def test_placement_targeting_not_supported_returns_error(self):
@@ -303,7 +303,7 @@ class TestPlacementIdsValidation:
 
             assert isinstance(result, UpdateMediaBuyError)
             assert len(result.errors) == 1
-            assert result.errors[0].code == "placement_targeting_not_supported"
+            assert result.errors[0].code == "PLACEMENT_TARGETING_NOT_SUPPORTED"
             assert "prod_no_placements" in result.errors[0].message
 
     def test_adcp_package_update_accepts_placement_ids_in_creative_assignments(self):

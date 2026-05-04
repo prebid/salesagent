@@ -13,7 +13,7 @@ Usage::
             result = env.call_impl(packages=[{"package_id": "pkg-1", "budget": 50.0}])
             env.mock["uow"].return_value.currency_limits.get_for_currency.assert_called_with("EUR")
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "budget_below_minimum"
+        assert result.errors[0].code == "BUDGET_TOO_LOW"
 
 Available mocks via env.mock:
     "uow"       -- MediaBuyUoW class mock (env.mock["uow"].return_value is the UoW instance)

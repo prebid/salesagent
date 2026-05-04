@@ -333,7 +333,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return CreateMediaBuyError(
                     errors=[
                         Error(
-                            code="no_zones_configured",
+                            code="NO_ZONES_CONFIGURED",
                             message=f"Product {product_id} has no zones configured",
                             details={"product_id": product_id},
                         )
@@ -629,7 +629,7 @@ class BroadstreetAdapter(AdServerAdapter):
             return UpdateMediaBuyError(
                 errors=[
                     Error(
-                        code="unsupported_action",
+                        code="UNSUPPORTED_ACTION",
                         message=f"Action '{action}' not supported. Supported: {REQUIRED_UPDATE_ACTIONS}",
                         details=None,
                     )
@@ -653,7 +653,7 @@ class BroadstreetAdapter(AdServerAdapter):
                     return UpdateMediaBuyError(
                         errors=[
                             Error(
-                                code="no_packages_found",
+                                code="NO_PACKAGES_FOUND",
                                 message=f"No packages found for media buy {media_buy_id}",
                                 details=None,
                             )
@@ -679,7 +679,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             return UpdateMediaBuyError(
                                 errors=[
                                     Error(
-                                        code="partial_failure",
+                                        code="PARTIAL_FAILURE",
                                         message=f"Failed to update {len(failed)} advertisements",
                                         details={"failed_advertisement_ids": failed},
                                     )
@@ -705,7 +705,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="missing_package_id",
+                            code="MISSING_PACKAGE_ID",
                             message=f"package_id is required for {action} action",
                             details=None,
                         )
@@ -722,7 +722,7 @@ class BroadstreetAdapter(AdServerAdapter):
                     return UpdateMediaBuyError(
                         errors=[
                             Error(
-                                code="package_not_found",
+                                code="PACKAGE_NOT_FOUND",
                                 message=f"Package {package_id} not found in media buy {media_buy_id}",
                                 details=None,
                             )
@@ -741,7 +741,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             return UpdateMediaBuyError(
                                 errors=[
                                     Error(
-                                        code="api_update_failed",
+                                        code="API_UPDATE_FAILED",
                                         message=f"Failed to update {len(failed)} advertisements",
                                         details={"failed_advertisement_ids": failed},
                                     )
@@ -766,7 +766,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="missing_package_id",
+                            code="MISSING_PACKAGE_ID",
                             message="package_id is required for update_package_budget action",
                             details=None,
                         )
@@ -776,7 +776,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="missing_budget",
+                            code="MISSING_BUDGET",
                             message="budget is required for update_package_budget action",
                             details=None,
                         )
@@ -790,7 +790,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 if not db_package:
                     return UpdateMediaBuyError(
                         errors=[
-                            Error(code="package_not_found", message=f"Package {package_id} not found", details=None)
+                            Error(code="PACKAGE_NOT_FOUND", message=f"Package {package_id} not found", details=None)
                         ]
                     )
 
@@ -814,7 +814,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="missing_package_id",
+                            code="MISSING_PACKAGE_ID",
                             message="package_id is required for update_package_impressions action",
                             details=None,
                         )
@@ -824,7 +824,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 return UpdateMediaBuyError(
                     errors=[
                         Error(
-                            code="missing_impressions",
+                            code="MISSING_IMPRESSIONS",
                             message="budget (impressions) is required for update_package_impressions action",
                             details=None,
                         )
@@ -838,7 +838,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 if not db_package:
                     return UpdateMediaBuyError(
                         errors=[
-                            Error(code="package_not_found", message=f"Package {package_id} not found", details=None)
+                            Error(code="PACKAGE_NOT_FOUND", message=f"Package {package_id} not found", details=None)
                         ]
                     )
 

@@ -1364,7 +1364,7 @@ class TestCreateMediaBuyAdapterInteraction:
 
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
-        error_response = CreateMediaBuyError(errors=[Error(code="budget_exceeded", message="Budget too high")])
+        error_response = CreateMediaBuyError(errors=[Error(code="BUDGET_EXCEEDED", message="Budget too high")])
 
         mock_adapter = MagicMock()
         mock_adapter.create_media_buy.return_value = error_response
@@ -2909,7 +2909,7 @@ class TestUpdateMediaBuyAdapterFailure:
         identity = _make_identity()
 
         adapter_error = UpdateMediaBuyError(
-            errors=[Error(code="activation_workflow_failed", message="Network timeout")],
+            errors=[Error(code="ACTIVATION_WORKFLOW_FAILED", message="Network timeout")],
         )
 
         with (
@@ -2978,7 +2978,7 @@ class TestUpdateMediaBuyAdapterFailure:
         cl.min_package_budget = None
 
         adapter_error = UpdateMediaBuyError(
-            errors=[Error(code="adapter_failure", message="GAM API timeout")],
+            errors=[Error(code="ADAPTER_FAILURE", message="GAM API timeout")],
         )
 
         with (
@@ -3595,7 +3595,7 @@ class TestDeliveryImplDateRange:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "invalid_date_range" for e in resp.errors)
+            assert any(e.code == "INVALID_DATE_RANGE" for e in resp.errors)
 
 
 class TestDeliveryImplErrors:
@@ -3634,7 +3634,7 @@ class TestDeliveryImplErrors:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "principal_not_found" for e in resp.errors)
+            assert any(e.code == "PRINCIPAL_NOT_FOUND" for e in resp.errors)
 
     def test_adapter_error_returns_error_code(self):
         """UC-004-E03: adapter failure returns adapter_error.
@@ -3676,7 +3676,7 @@ class TestDeliveryImplErrors:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "adapter_error" for e in resp.errors)
+            assert any(e.code == "ADAPTER_ERROR" for e in resp.errors)
 
     def test_ownership_mismatch_returns_not_found(self):
         """UC-004-E04: non-owner sees not_found, not ownership_mismatch.

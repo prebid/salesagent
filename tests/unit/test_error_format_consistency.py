@@ -114,7 +114,7 @@ class TestMCPErrorShapes:
         assert hasattr(response, "errors")
         assert response.errors is not None
         assert len(response.errors) > 0
-        assert response.errors[0].code == "authentication_error"
+        assert response.errors[0].code == "AUTH_REQUIRED"
 
 
 class TestA2AErrorShapes:
@@ -193,7 +193,7 @@ class TestA2AErrorShapes:
         assert "Missing required AdCP parameters" in result["message"]
         assert "errors" in result
         assert len(result["errors"]) > 0
-        assert result["errors"][0]["code"] == "validation_error"
+        assert result["errors"][0]["code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_validation_error_returns_error_dict(self):
@@ -217,7 +217,7 @@ class TestA2AErrorShapes:
         assert isinstance(result, dict)
         assert result["success"] is False
         assert "errors" in result
-        assert result["errors"][0]["code"] == "validation_error"
+        assert result["errors"][0]["code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_discovery_skill_no_auth_does_not_raise_auth_error(self):
@@ -454,7 +454,7 @@ class TestCrossTransportErrorConsistency:
         assert len(response.errors) > 0
         error = response.errors[0]
 
-        assert error.code == "authentication_error"
+        assert error.code == "AUTH_REQUIRED"
         assert "not found" in error.message.lower()
 
         # When this flows through A2A's _serialize_for_a2a, it becomes:
@@ -462,7 +462,7 @@ class TestCrossTransportErrorConsistency:
         assert serialized["success"] is False, "Serialized response must have success=False"
         assert "errors" in serialized
         assert len(serialized["errors"]) > 0
-        assert serialized["errors"][0]["code"] == "authentication_error"
+        assert serialized["errors"][0]["code"] == "AUTH_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_unknown_skill_only_affects_a2a(self):
@@ -496,7 +496,7 @@ class TestCrossTransportErrorConsistency:
         # Create an error response like the impl would
         error_response = CreateMediaBuyError(
             errors=[
-                Error(code="validation_error", message="Missing required field: packages"),
+                Error(code="VALIDATION_ERROR", message="Missing required field: packages"),
             ],
             context=None,
         )
@@ -509,7 +509,7 @@ class TestCrossTransportErrorConsistency:
         assert serialized["success"] is False
         assert "errors" in serialized
         assert len(serialized["errors"]) > 0
-        assert serialized["errors"][0]["code"] == "validation_error"
+        assert serialized["errors"][0]["code"] == "VALIDATION_ERROR"
         assert "message" in serialized  # Protocol message field added by serializer
 
     @pytest.mark.asyncio
@@ -526,7 +526,7 @@ class TestCrossTransportErrorConsistency:
             "received_parameters": ["brand"],
             "errors": [
                 {
-                    "code": "validation_error",
+                    "code": "VALIDATION_ERROR",
                     "message": "Missing required AdCP parameters: ['packages', 'start_time', 'end_time']",
                 }
             ],
@@ -537,7 +537,7 @@ class TestCrossTransportErrorConsistency:
         # Dict should pass through unchanged
         assert serialized == error_dict
         assert serialized["success"] is False
-        assert serialized["errors"][0]["code"] == "validation_error"
+        assert serialized["errors"][0]["code"] == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +663,7 @@ class TestRecoveryOverrideInSerialization:
         # Create error response with explicit recovery field
         error_response = CreateMediaBuyError(
             errors=[
-                Error(code="not_found", message="temporarily missing"),
+                Error(code="NOT_FOUND", message="temporarily missing"),
             ],
             context=None,
         )
@@ -671,7 +671,7 @@ class TestRecoveryOverrideInSerialization:
         serialized = AdCPRequestHandler._serialize_for_a2a(error_response)
 
         assert serialized["success"] is False
-        assert serialized["errors"][0]["code"] == "not_found"
+        assert serialized["errors"][0]["code"] == "NOT_FOUND"
 
     def test_custom_recovery_override_in_to_dict(self):
         """to_dict() reflects custom recovery, not class default."""

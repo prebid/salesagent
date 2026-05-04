@@ -146,7 +146,7 @@ class TestCreateMediaBuyErrorPaths:
     async def test_missing_principal_returns_authentication_error(self, test_tenant_minimal):
         """Test that missing principal returns Error response with authentication_error code.
 
-        This tests line 3159 in main.py where Error(code="authentication_error") is used.
+        This tests line 3159 in main.py where Error(code="AUTH_REQUIRED") is used.
         Previously this would cause NameError because Error wasn't imported.
         """
         identity = PrincipalFactory.make_identity(
@@ -187,7 +187,7 @@ class TestCreateMediaBuyErrorPaths:
         # Verify error details
         error = response.errors[0]
         assert isinstance(error, Error)
-        assert error.code == "authentication_error"
+        assert error.code == "AUTH_REQUIRED"
         assert "principal" in error.message.lower() or "not found" in error.message.lower()
         # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
         assert response.context.trace_id == "auth-missing-principal"
@@ -195,7 +195,7 @@ class TestCreateMediaBuyErrorPaths:
     async def test_start_time_in_past_returns_validation_error(self, test_tenant_with_principal):
         """Test that start_time in past returns Error response with validation_error code.
 
-        This tests line 3147 in main.py where Error(code="validation_error") is used
+        This tests line 3147 in main.py where Error(code="VALIDATION_ERROR") is used
         in the ValueError exception handler.
         """
         identity = PrincipalFactory.make_identity(
@@ -236,7 +236,7 @@ class TestCreateMediaBuyErrorPaths:
         # Verify error details
         error = response.errors[0]
         assert isinstance(error, Error)
-        assert error.code == "validation_error"
+        assert error.code == "VALIDATION_ERROR"
         # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
         assert response.context.trace_id == "past-start"
         assert "past" in error.message.lower() or "start" in error.message.lower()
@@ -278,7 +278,7 @@ class TestCreateMediaBuyErrorPaths:
 
         error = response.errors[0]
         assert isinstance(error, Error)
-        assert error.code == "validation_error"
+        assert error.code == "VALIDATION_ERROR"
         assert "end" in error.message.lower() or "after" in error.message.lower()
 
     async def test_negative_budget_raises_tool_error(self, test_tenant_with_principal):
@@ -351,7 +351,7 @@ class TestCreateMediaBuyErrorPaths:
         error = response.errors[0]
         assert isinstance(error, Error)
         # Should be validation error or similar
-        assert error.code in ["validation_error", "invalid_request"]
+        assert error.code in ["VALIDATION_ERROR", "invalid_request"]
 
 
 @pytest.mark.integration

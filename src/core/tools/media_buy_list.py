@@ -53,6 +53,7 @@ class _PackageData:
     bid_price: Decimal | None
 
 
+from adcp.server.helpers import valid_actions_for_status
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
@@ -101,14 +102,14 @@ def _get_media_buys_impl(
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "principal_id_missing", "message": "Principal ID not found in context"}],
+            errors=[{"code": "PRINCIPAL_ID_MISSING", "message": "Principal ID not found in context"}],
         )
 
     principal = get_principal_object(principal_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "principal_not_found", "message": f"Principal {principal_id} not found"}],
+            errors=[{"code": "PRINCIPAL_NOT_FOUND", "message": f"Principal {principal_id} not found"}],
         )
 
     tenant = identity.tenant
@@ -199,6 +200,7 @@ def _get_media_buys_impl(
                 media_buy_id=buy.media_buy_id,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
+                valid_actions=valid_actions_for_status(status.value),
                 currency=buy.currency or "USD",
                 total_budget=total_budget,
                 packages=response_packages,
