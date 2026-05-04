@@ -17,7 +17,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Execution,
     GeoMetros,
     GeoPostalAreas,
-    Idempotency1,
+    Idempotency,
     MajorVersion,
     MediaBuy,
     Portfolio,
@@ -85,7 +85,10 @@ def _get_adcp_capabilities_impl(
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
-            adcp=Adcp(major_versions=[MajorVersion(root=3)], idempotency=Idempotency1(supported=False)),
+            adcp=Adcp(
+                major_versions=[MajorVersion(root=3)],
+                idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+            ),
             supported_protocols=[SupportedProtocol.media_buy],
         )
 
@@ -232,7 +235,10 @@ def _get_adcp_capabilities_impl(
 
     # Build response
     response = GetAdcpCapabilitiesResponse(
-        adcp=Adcp(major_versions=[MajorVersion(root=3)], idempotency=Idempotency1(supported=False)),
+        adcp=Adcp(
+            major_versions=[MajorVersion(root=3)],
+            idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+        ),
         supported_protocols=[SupportedProtocol.media_buy],
         media_buy=media_buy,
         last_updated=datetime.now(UTC),

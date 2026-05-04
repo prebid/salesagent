@@ -32,14 +32,17 @@ class TestGetAdcpCapabilitiesSchema:
         """Test that response requires supported_protocols field."""
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
-            Idempotency1,
+            Idempotency,
             MajorVersion,
         )
 
         # Must have supported_protocols (non-empty list)
         with pytest.raises(ValueError):
             GetAdcpCapabilitiesResponse(
-                adcp=Adcp(major_versions=[MajorVersion(root=3)], idempotency=Idempotency1(supported=False)),
+                adcp=Adcp(
+                    major_versions=[MajorVersion(root=3)],
+                    idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+                ),
                 supported_protocols=[],  # Empty not allowed
             )
 
@@ -47,12 +50,15 @@ class TestGetAdcpCapabilitiesSchema:
         """Test creating a valid minimal response."""
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
-            Idempotency1,
+            Idempotency,
             MajorVersion,
         )
 
         response = GetAdcpCapabilitiesResponse(
-            adcp=Adcp(major_versions=[MajorVersion(root=3)], idempotency=Idempotency1(supported=False)),
+            adcp=Adcp(
+                major_versions=[MajorVersion(root=3)],
+                idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+            ),
             supported_protocols=[SupportedProtocol.media_buy],
         )
 
@@ -67,7 +73,7 @@ class TestGetAdcpCapabilitiesSchema:
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
             Execution,
-            Idempotency1,
+            Idempotency,
             MajorVersion,
             MediaBuy,
             Portfolio,
@@ -76,7 +82,10 @@ class TestGetAdcpCapabilitiesSchema:
         )
 
         response = GetAdcpCapabilitiesResponse(
-            adcp=Adcp(major_versions=[MajorVersion(root=3)], idempotency=Idempotency1(supported=False)),
+            adcp=Adcp(
+                major_versions=[MajorVersion(root=3)],
+                idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+            ),
             supported_protocols=[SupportedProtocol.media_buy],
             media_buy=MediaBuy(
                 portfolio=Portfolio(
@@ -156,6 +165,10 @@ class TestGetAdcpCapabilitiesImpl:
         assert response.adcp is not None
         assert response.adcp.major_versions[0].root == 3
         assert SupportedProtocol.media_buy in response.supported_protocols
+        # Idempotency must declare supported=True since MediaBuyRepository.find_by_idempotency_key
+        # actually dedupes against idx_media_buys_idempotency_key.
+        assert response.adcp.idempotency.supported is True
+        assert response.adcp.idempotency.replay_ttl_seconds == 86400
 
     def test_impl_returns_valid_adcp_response(self):
         """Test that impl response can be serialized to valid JSON."""
@@ -217,6 +230,9 @@ class TestGetAdcpCapabilitiesWithTenant:
                 assert response.adcp is not None
                 assert response.adcp.major_versions[0].root == 3
                 assert SupportedProtocol.media_buy in response.supported_protocols
+                # Full response must also declare idempotency support consistently.
+                assert response.adcp.idempotency.supported is True
+                assert response.adcp.idempotency.replay_ttl_seconds == 86400
 
                 # Should have media_buy capabilities with portfolio
                 assert response.media_buy is not None
