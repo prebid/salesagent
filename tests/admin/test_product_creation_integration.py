@@ -62,10 +62,22 @@ def test_tenant(integration_db):
 
         yield tenant
 
-        # Cleanup
-        session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_product_tenant"))
-        session.execute(delete(Product).where(Product.tenant_id == "test_product_tenant"))
-        session.execute(delete(Tenant).where(Tenant.tenant_id == "test_product_tenant"))
+        # Cleanup — delete products first (DB CASCADE deletes pricing_options),
+        # then remaining dependent tables, then tenant last.
+        from sqlalchemy import text
+
+        tid = "test_product_tenant"
+        session.execute(text("DELETE FROM products WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM audit_logs WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM users WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM gam_inventory WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM authorized_properties WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM publisher_partners WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM property_tags WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM currency_limits WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM tenant_auth_configs WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM principals WHERE tenant_id = :tid"), {"tid": tid})
+        session.execute(text("DELETE FROM tenants WHERE tenant_id = :tid"), {"tid": tid})
         session.commit()
 
 
@@ -322,7 +334,7 @@ def test_list_products_json_parsing(client, test_tenant, integration_db):
                 {"id": "video_16x9", "agent_url": "https://test.example.com"},
             ],
             countries=["US", "CA"],
-            price_guidance={"min": 10.0, "max": 20.0},
+            price_guidance={"floor": 10.0, "min": 10.0, "max": 20.0},
             delivery_type="guaranteed",
             targeting_template={"geo_countries": ["US", "CA"]},
         )
