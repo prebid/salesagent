@@ -6,8 +6,12 @@ and/or identity signals against their synced package set and returns scored
 offers. The TMP Router calls all active providers in parallel within the
 configured latency budget, then merges results for the publisher-side join.
 
-The Sales Agent exposes active registrations via ``GET /tmp/providers``
-so the router can poll for discovery — it never reads the DB directly.
+The Sales Agent exposes active registrations via the FastAPI discovery
+endpoint (``GET /tenant/{tenant_id}/tmp-providers/discovery``) so the
+router can poll for discovery — it never reads the DB directly.
+
+The Flask blueprint here handles the **admin CRUD UI** only.  The
+machine-to-machine discovery endpoint lives in ``src/routes/tmp_providers.py``.
 """
 
 from __future__ import annotations
@@ -33,6 +37,9 @@ VALID_UID_TYPES = frozenset([
     "maid", "hashed_email", "publisher_first_party", "other",
 ])
 
+# Valid status values for TMP providers.
+VALID_STATUSES = frozenset(["active", "inactive", "draining"])
+
 # Create Blueprint
 tmp_providers_bp = Blueprint("tmp_providers", __name__)
 
@@ -56,9 +63,26 @@ def _validate_provider_form(form: dict) -> tuple[dict, str | None]:
     countries_raw = form.get("countries", "").strip()
     uid_types_raw = form.get("uid_types", "").strip()
     properties_raw = form.get("properties", "").strip()
-    timeout_ms = int(form.get("timeout_ms", "50"))
-    priority = int(form.get("priority", "0"))
     status = form.get("status", "active").strip()
+
+    # Validate timeout_ms is numeric
+    try:
+        timeout_ms = int(form.get("timeout_ms", "50"))
+    except (ValueError, TypeError):
+        return {}, "Timeout (ms) must be a numeric value"
+
+    # Validate priority is numeric
+    try:
+        priority = int(form.get("priority", "0"))
+    except (ValueError, TypeError):
+        return {}, "Priority must be a numeric value"
+
+    # Validate status against allowed values
+    if status not in VALID_STATUSES:
+        return {}, (
+            f"Invalid status '{status}'. "
+            f"Valid values: {', '.join(sorted(VALID_STATUSES))}"
+        )
 
     # Parse comma-separated lists
     countries = [c.strip().upper() for c in countries_raw.split(",") if c.strip()] or None
@@ -125,22 +149,12 @@ def list_tmp_providers(tenant_id):
 
             providers_list = []
             for p in providers:
-                providers_list.append(
-                    {
-                        "provider_id": p.provider_id,
-                        "name": p.name,
-                        "endpoint": p.endpoint,
-                        "context_match": p.context_match,
-                        "identity_match": p.identity_match,
-                        "countries": p.countries or [],
-                        "uid_types": p.uid_types or [],
-                        "properties": p.properties or [],
-                        "timeout_ms": p.timeout_ms,
-                        "priority": p.priority,
-                        "status": p.status,
-                        "created_at": p.created_at,
-                    }
-                )
+                entry = p.to_dict()
+                entry["countries"] = p.countries or []
+                entry["uid_types"] = p.uid_types or []
+                entry["properties"] = p.properties or []
+                entry["created_at"] = p.created_at
+                providers_list.append(entry)
 
             return render_template(
                 "tmp_providers.html",
@@ -152,7 +166,7 @@ def list_tmp_providers(tenant_id):
             )
 
     except Exception as e:
-        logger.error(f"Error loading TMP providers: {e}", exc_info=True)
+        logger.error("Error loading TMP providers: %s", e, exc_info=True)
         flash("Error loading TMP providers", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
@@ -202,6 +216,7 @@ def add_tmp_provider(tenant_id):
                 properties=data["properties"],
                 timeout_ms=data["timeout_ms"],
                 priority=data["priority"],
+                status=data["status"],
             )
             repo = TMPProviderRepository(session, tenant_id)
             repo.create(provider)
@@ -211,7 +226,7 @@ def add_tmp_provider(tenant_id):
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
     except Exception as e:
-        logger.error(f"Error adding TMP provider: {e}", exc_info=True)
+        logger.error("Error adding TMP provider: %s", e, exc_info=True)
         flash("Error adding TMP provider", "error")
         return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
 
@@ -292,7 +307,7 @@ def edit_tmp_provider(tenant_id, provider_id):
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
     except Exception as e:
-        logger.error(f"Error updating TMP provider: {e}", exc_info=True)
+        logger.error("Error updating TMP provider: %s", e, exc_info=True)
         flash("Error updating TMP provider", "error")
         return redirect(
             url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
@@ -300,6 +315,7 @@ def edit_tmp_provider(tenant_id, provider_id):
 
 
 @tmp_providers_bp.route("/<provider_id>/deactivate", methods=["POST"])
+@log_admin_action("deactivate_tmp_provider")
 @require_tenant_access()
 def deactivate_tmp_provider(tenant_id, provider_id):
     """Soft-deactivate a TMP provider (set status='inactive')."""
@@ -315,11 +331,12 @@ def deactivate_tmp_provider(tenant_id, provider_id):
             return jsonify({"success": True, "message": f"TMP provider '{provider.name}' deactivated"})
 
     except Exception as e:
-        logger.error(f"Error deactivating TMP provider: {e}", exc_info=True)
+        logger.error("Error deactivating TMP provider: %s", e, exc_info=True)
         return jsonify({"error": "Error deactivating TMP provider"}), 500
 
 
 @tmp_providers_bp.route("/<provider_id>/delete", methods=["DELETE"])
+@log_admin_action("delete_tmp_provider")
 @require_tenant_access()
 def delete_tmp_provider(tenant_id, provider_id):
     """Hard-delete a TMP provider."""
@@ -338,11 +355,12 @@ def delete_tmp_provider(tenant_id, provider_id):
             return jsonify({"success": True, "message": f"TMP provider '{provider_name}' deleted successfully"})
 
     except Exception as e:
-        logger.error(f"Error deleting TMP provider: {e}", exc_info=True)
+        logger.error("Error deleting TMP provider: %s", e, exc_info=True)
         return jsonify({"error": "Error deleting TMP provider"}), 500
 
 
 @tmp_providers_bp.route("/<provider_id>/health", methods=["GET"])
+@log_admin_action("health_check_tmp_provider")
 @require_tenant_access()
 def health_check_tmp_provider(tenant_id, provider_id):
     """HTTP GET to provider.endpoint/health — returns JSON status.
@@ -378,60 +396,5 @@ def health_check_tmp_provider(tenant_id, provider_id):
                 return jsonify({"success": False, "error": str(req_err), "provider": provider.name})
 
     except Exception as e:
-        logger.error(f"Error checking TMP provider health: {e}", exc_info=True)
+        logger.error("Error checking TMP provider health: %s", e, exc_info=True)
         return jsonify({"error": "Error checking provider health"}), 500
-
-
-# ------------------------------------------------------------------
-# Discovery endpoint — unauthenticated, polled by the Go TMP Router
-# ------------------------------------------------------------------
-# This endpoint is intentionally unauthenticated because the TMP Router
-# polls it on the internal Docker/VPC network every 30 s.  The tenant_id
-# comes from the URL path (set by the blueprint prefix) — NOT from a
-# query parameter — so one tenant cannot enumerate another tenant's
-# providers.  Do NOT add a query-param override for tenant_id here.
-# ------------------------------------------------------------------
-
-
-@tmp_providers_bp.route("/discovery", methods=["GET"])
-def discover_tmp_providers(tenant_id):
-    """Return active TMP providers for a tenant as JSON.
-
-    The Go TMP Router polls this endpoint to discover which buyer-side
-    agents to fan out to.  **Intentionally unauthenticated** — scoped
-    by the ``tenant_id`` in the URL path (blueprint prefix).
-
-    Returns:
-        JSON array of active provider objects.
-    """
-    try:
-        with get_db_session() as session:
-            repo = TMPProviderRepository(session, tenant_id)
-            providers = repo.list_active()
-
-            result = []
-            for p in providers:
-                entry: dict = {
-                    "provider_id": p.provider_id,
-                    "name": p.name,
-                    "endpoint": p.endpoint,
-                    "context_match": p.context_match,
-                    "identity_match": p.identity_match,
-                    "timeout_ms": p.timeout_ms,
-                    "priority": p.priority,
-                    "status": p.status,
-                }
-                # Conditional fields per provider-registration.json schema
-                if p.countries:
-                    entry["countries"] = p.countries
-                if p.uid_types:
-                    entry["uid_types"] = p.uid_types
-                if p.properties:
-                    entry["properties"] = p.properties
-                result.append(entry)
-
-            return jsonify(result)
-
-    except Exception as e:
-        logger.error(f"Error in TMP provider discovery: {e}", exc_info=True)
-        return jsonify({"error": "Error fetching TMP providers"}), 500

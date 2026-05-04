@@ -1342,6 +1342,36 @@ class TMPProvider(Base):
         Index("idx_tmp_providers_status", "status"),
     )
 
+    def to_dict(self, *, include_conditional: bool = True) -> dict:
+        """Serialize provider to a dict matching the TMP Router contract.
+
+        Args:
+            include_conditional: When True (default), include countries/uid_types/
+                properties only if they are non-None.  When False, always include
+                them (as None for legacy rows).
+        """
+        result: dict = {
+            "provider_id": self.provider_id,
+            "name": self.name,
+            "endpoint": self.endpoint,
+            "context_match": self.context_match,
+            "identity_match": self.identity_match,
+            "timeout_ms": self.timeout_ms,
+            "priority": self.priority,
+            "status": self.status,
+        }
+        if include_conditional:
+            if self.countries:
+                result["countries"] = self.countries
+            if self.uid_types:
+                result["uid_types"] = self.uid_types
+            if self.properties:
+                result["properties"] = self.properties
+        else:
+            result["countries"] = self.countries
+            result["uid_types"] = self.uid_types
+        return result
+
 
 class GAMInventory(Base):
     __tablename__ = "gam_inventory"

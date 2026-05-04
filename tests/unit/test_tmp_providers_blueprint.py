@@ -2,13 +2,17 @@
 
 Covers:
 - SSRF validation on add/edit endpoints (check_url_ssrf wiring)
-- Input validation (missing name, missing endpoint)
+- Input validation (missing name, missing endpoint, invalid timeout_ms, invalid status)
 - CRUD route responses (list, add GET, deactivate, delete, health check)
-- Discovery endpoint (GET /tmp-providers/discovery)
 - Repository pattern (TMPProviderRepository used instead of raw DB calls)
+- @log_admin_action on destructive routes
+
+Note: Discovery endpoint tests are in test_tmp_providers_discovery_route.py
+(the canonical discovery endpoint is the FastAPI route, not Flask).
 """
 
 import os
+import unittest.mock
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -112,8 +116,8 @@ class TestTMPProviderAddSSRF:
         # Must redirect to list (success) — not back to add form
         assert response.status_code == 302
         assert "add" not in response.headers.get("Location", "")
-        mock_repo.create.assert_called_once()
-        mock_session.commit.assert_called_once()
+        mock_repo.create.assert_called_once_with(unittest.mock.ANY)
+        mock_session.commit.assert_called_once_with()
 
 
 class TestTMPProviderEditSSRF:
@@ -203,6 +207,93 @@ class TestTMPProviderInputValidation:
         assert response.status_code == 302
         assert "add" in response.headers.get("Location", "")
 
+    def test_add_rejects_non_numeric_timeout_ms(self):
+        """POST /tmp-providers/add with non-numeric timeout_ms must redirect with error."""
+        client = _make_tmp_provider_client()
+
+        with patch("src.admin.blueprints.tmp_providers_bp.get_db_session") as mock_db:
+            _mock_db_with_tenant(mock_db)
+            with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository"):
+                with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                    response = client.post(
+                        "/tenant/default/tmp-providers/add",
+                        data={
+                            "name": "Test Provider",
+                            "endpoint": "https://provider.example.com/tmp",
+                            "context_match": "on",
+                            "timeout_ms": "not-a-number",
+                        },
+                        follow_redirects=False,
+                    )
+
+        assert response.status_code == 302
+        assert "add" in response.headers.get("Location", "")
+
+    def test_add_rejects_invalid_status(self):
+        """POST /tmp-providers/add with invalid status must redirect with error."""
+        client = _make_tmp_provider_client()
+
+        with patch("src.admin.blueprints.tmp_providers_bp.get_db_session") as mock_db:
+            _mock_db_with_tenant(mock_db)
+            with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository"):
+                with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+                    with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                        response = client.post(
+                            "/tenant/default/tmp-providers/add",
+                            data={
+                                "name": "Test Provider",
+                                "endpoint": "https://provider.example.com/tmp",
+                                "context_match": "on",
+                                "timeout_ms": "50",
+                                "status": "bogus_status",
+                            },
+                            follow_redirects=False,
+                        )
+
+        assert response.status_code == 302
+        assert "add" in response.headers.get("Location", "")
+
+    def test_add_passes_status_to_constructor(self):
+        """POST /tmp-providers/add with explicit status passes it to TMPProvider constructor."""
+        client = _make_tmp_provider_client()
+
+        with patch("src.admin.blueprints.tmp_providers_bp.get_db_session") as mock_db:
+            mock_session = _mock_db_with_tenant(mock_db)
+            mock_repo = MagicMock()
+            with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository", return_value=mock_repo):
+                with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+                    with patch("src.admin.blueprints.tmp_providers_bp.TMPProvider") as mock_cls:
+                        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                            response = client.post(
+                                "/tenant/default/tmp-providers/add",
+                                data={
+                                    "name": "Draining Provider",
+                                    "endpoint": "https://provider.example.com/tmp",
+                                    "context_match": "on",
+                                    "identity_match": "on",
+                                    "countries": "US",
+                                    "uid_types": "uid2",
+                                    "timeout_ms": "50",
+                                    "status": "draining",
+                                },
+                                follow_redirects=False,
+                            )
+
+        assert response.status_code == 302
+        mock_cls.assert_called_once_with(
+            tenant_id="default",
+            name="Draining Provider",
+            endpoint="https://provider.example.com/tmp",
+            context_match=True,
+            identity_match=True,
+            countries=["US"],
+            uid_types=["uid2"],
+            properties=None,
+            timeout_ms=50,
+            priority=0,
+            status="draining",
+        )
+
 
 class TestTMPProviderDeactivate:
     """Deactivate endpoint sets status='inactive' via repository."""
@@ -230,7 +321,7 @@ class TestTMPProviderDeactivate:
         data = response.get_json()
         assert data["success"] is True
         mock_repo.deactivate.assert_called_once_with("test-uuid-1234")
-        mock_session.commit.assert_called_once()
+        mock_session.commit.assert_called_once_with()
 
     def test_deactivate_returns_404_for_missing_provider(self):
         """POST /tmp-providers/<id>/deactivate returns 404 when provider not found."""
@@ -281,7 +372,7 @@ class TestTMPProviderDelete:
         data = response.get_json()
         assert data["success"] is True
         mock_repo.delete.assert_called_once_with("test-uuid-1234")
-        mock_session.commit.assert_called_once()
+        mock_session.commit.assert_called_once_with()
 
     def test_delete_returns_404_for_missing_provider(self):
         """DELETE /tmp-providers/<id>/delete returns 404 when provider not found."""
@@ -394,88 +485,3 @@ class TestTMPProviderHealthCheck:
         data = response.get_json()
         assert data["success"] is False
         assert "error" in data
-
-
-class TestTMPProviderDiscovery:
-    """Discovery endpoint returns active providers as JSON for the Go TMP Router.
-
-    The discovery endpoint uses the tenant_id from the URL path (blueprint
-    prefix), NOT from a query parameter.  This prevents cross-tenant
-    enumeration.
-    """
-
-    def test_discovery_returns_active_providers(self):
-        """GET /tmp-providers/discovery returns active providers (tenant from URL path)."""
-        client = _make_tmp_provider_client()
-
-        provider1 = _make_mock_provider(provider_id="uuid-1", name="Provider A")
-        provider2 = _make_mock_provider(provider_id="uuid-2", name="Provider B")
-
-        mock_session = MagicMock()
-        mock_repo = MagicMock()
-        mock_repo.list_active.return_value = [provider1, provider2]
-
-        with patch("src.admin.blueprints.tmp_providers_bp.get_db_session") as mock_db:
-            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository", return_value=mock_repo):
-                response = client.get("/tenant/default/tmp-providers/discovery")
-
-        assert response.status_code == 200
-        data = response.get_json()
-        assert isinstance(data, list)
-        assert len(data) == 2
-        assert data[0]["provider_id"] == "uuid-1"
-        assert data[0]["name"] == "Provider A"
-        assert data[0]["status"] == "active"
-        assert data[1]["provider_id"] == "uuid-2"
-        mock_repo.list_active.assert_called_once()
-
-    def test_discovery_returns_empty_list_when_no_active_providers(self):
-        """GET /tmp-providers/discovery returns [] when no active providers."""
-        client = _make_tmp_provider_client()
-
-        mock_session = MagicMock()
-        mock_repo = MagicMock()
-        mock_repo.list_active.return_value = []
-
-        with patch("src.admin.blueprints.tmp_providers_bp.get_db_session") as mock_db:
-            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository", return_value=mock_repo):
-                response = client.get("/tenant/default/tmp-providers/discovery")
-
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data == []
-
-    def test_discovery_includes_expected_fields(self):
-        """Discovery response includes all fields needed by the Go TMP Router."""
-        client = _make_tmp_provider_client()
-
-        provider = _make_mock_provider()
-
-        mock_session = MagicMock()
-        mock_repo = MagicMock()
-        mock_repo.list_active.return_value = [provider]
-
-        with patch("src.admin.blueprints.tmp_providers_bp.get_db_session") as mock_db:
-            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository", return_value=mock_repo):
-                response = client.get("/tenant/default/tmp-providers/discovery")
-
-        assert response.status_code == 200
-        data = response.get_json()
-        entry = data[0]
-        # Core fields always present per provider-registration.json schema
-        required_fields = {"provider_id", "name", "endpoint", "context_match",
-                           "identity_match", "timeout_ms", "priority", "status"}
-        assert required_fields.issubset(set(entry.keys()))
-        # Conditional fields present because mock has countries/uid_types set
-        assert "countries" in entry
-        assert "uid_types" in entry
-        assert entry["countries"] == ["US", "GB"]
-        assert entry["uid_types"] == ["uid2", "id5"]
-        # properties is None on mock, so should NOT be in response
-        assert "properties" not in entry

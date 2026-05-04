@@ -39,10 +39,10 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import TMPProvider, Tenant
+from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.tmp_provider import TMPProviderRepository
 
 logger = logging.getLogger(__name__)
 
@@ -63,40 +63,16 @@ async def tmp_providers_discovery(tenant_id: str) -> JSONResponse:
     with get_db_session() as session:
         # Verify tenant exists — return 404 for unknown tenants so the router
         # can distinguish "no providers" from "wrong tenant_id".
-        tenant_row = session.scalar(select(Tenant).where(Tenant.tenant_id == tenant_id))
-        if tenant_row is None:
+        tenant_config = TenantConfigRepository(session, tenant_id)
+        if tenant_config.get_tenant() is None:
             raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
 
-        stmt = (
-            select(TMPProvider)
-            .where(
-                TMPProvider.tenant_id == tenant_id,
-                # Exclude inactive providers; active + draining are forwarded.
-                TMPProvider.status.in_(["active", "draining"]),
-            )
-            .order_by(TMPProvider.priority.asc(), TMPProvider.name.asc())
-        )
-        providers = session.scalars(stmt).all()
+        repo = TMPProviderRepository(session, tenant_id)
+        providers = repo.list_syncable()
 
-    provider_list = []
-    for p in providers:
-        provider_list.append(
-            {
-                "provider_id": p.provider_id,
-                "name": p.name,
-                "endpoint": p.endpoint,
-                "context_match": p.context_match,
-                "identity_match": p.identity_match,
-                # countries / uid_types may be None for legacy rows that pre-date
-                # the 20260421000000 migration.  The router treats None as
-                # "accepts all" for backward compatibility.
-                "countries": p.countries,
-                "uid_types": p.uid_types,
-                "timeout_ms": p.timeout_ms,
-                "priority": p.priority,
-                "status": p.status,
-            }
-        )
+    # include_conditional=False: the TMP Router expects countries/uid_types
+    # to always be present (None means "accepts all" for legacy rows).
+    provider_list = [p.to_dict(include_conditional=False) for p in providers]
 
     logger.debug(
         "[TMP discovery] tenant=%s returned %d provider(s)",

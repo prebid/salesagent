@@ -3,12 +3,11 @@
 Tests the endpoint:
     GET /tenant/{tenant_id}/tmp-providers/discovery
 
-This is the FastAPI route in src/routes/tmp_providers.py, NOT the Flask admin
-blueprint tested in test_tmp_providers_blueprint.py.  The FastAPI route is
-polled by the TMP Router every 30 s on the internal network.
+This is the FastAPI route in src/routes/tmp_providers.py — the canonical
+machine-to-machine discovery endpoint polled by the TMP Router every 30 s.
 
 Covers:
-- Returns active + draining providers, excludes inactive
+- Returns active + draining providers via repository.list_syncable()
 - Returns 404 for unknown tenant
 - Returns empty list when tenant has no active providers
 - Response shape matches TMP Router contract
@@ -34,7 +33,7 @@ def _make_provider(
     priority=0,
     status="active",
 ):
-    """Create a mock TMPProvider ORM object."""
+    """Create a mock TMPProvider ORM object with to_dict() support."""
     p = MagicMock()
     p.provider_id = provider_id
     p.name = name
@@ -46,6 +45,29 @@ def _make_provider(
     p.timeout_ms = timeout_ms
     p.priority = priority
     p.status = status
+
+    def _to_dict(*, include_conditional=True):
+        result = {
+            "provider_id": provider_id,
+            "name": name,
+            "endpoint": endpoint,
+            "context_match": context_match,
+            "identity_match": identity_match,
+            "timeout_ms": timeout_ms,
+            "priority": priority,
+            "status": status,
+        }
+        if include_conditional:
+            if countries:
+                result["countries"] = countries
+            if uid_types:
+                result["uid_types"] = uid_types
+        else:
+            result["countries"] = countries
+            result["uid_types"] = uid_types
+        return result
+
+    p.to_dict = _to_dict
     return p
 
 
@@ -72,7 +94,7 @@ class TestDiscoveryReturnsActiveProviders:
     """GET /tenant/{tenant_id}/tmp-providers/discovery returns active + draining providers."""
 
     def test_returns_two_active_providers(self, client):
-        """Two active providers are returned in the response."""
+        """Two active providers are returned in the response via repository.list_syncable()."""
         tenant = _make_tenant()
         providers = [
             _make_provider(provider_id="uuid-1", name="Provider A", priority=0, countries=["US"]),
@@ -80,14 +102,17 @@ class TestDiscoveryReturnsActiveProviders:
         ]
 
         mock_session = MagicMock()
-        mock_session.scalar.return_value = tenant
-        mock_session.scalars.return_value.all.return_value = providers
+        mock_tenant_repo = MagicMock()
+        mock_tenant_repo.get_tenant.return_value = tenant
+        mock_tmp_repo = MagicMock()
+        mock_tmp_repo.list_syncable.return_value = providers
 
         with patch("src.routes.tmp_providers.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-            response = client.get("/tenant/si-host/tmp-providers/discovery")
+            with patch("src.routes.tmp_providers.TenantConfigRepository", return_value=mock_tenant_repo):
+                with patch("src.routes.tmp_providers.TMPProviderRepository", return_value=mock_tmp_repo):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.json()
@@ -97,6 +122,7 @@ class TestDiscoveryReturnsActiveProviders:
         assert data["providers"][0]["countries"] == ["US"]
         assert data["providers"][1]["provider_id"] == "uuid-2"
         assert data["providers"][1]["uid_types"] == ["uid2"]
+        mock_tmp_repo.list_syncable.assert_called_once_with()
 
     def test_includes_draining_providers(self, client):
         """Draining providers are included (router stops new requests but in-flight complete)."""
@@ -107,14 +133,17 @@ class TestDiscoveryReturnsActiveProviders:
         ]
 
         mock_session = MagicMock()
-        mock_session.scalar.return_value = tenant
-        mock_session.scalars.return_value.all.return_value = providers
+        mock_tenant_repo = MagicMock()
+        mock_tenant_repo.get_tenant.return_value = tenant
+        mock_tmp_repo = MagicMock()
+        mock_tmp_repo.list_syncable.return_value = providers
 
         with patch("src.routes.tmp_providers.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-            response = client.get("/tenant/si-host/tmp-providers/discovery")
+            with patch("src.routes.tmp_providers.TenantConfigRepository", return_value=mock_tenant_repo):
+                with patch("src.routes.tmp_providers.TMPProviderRepository", return_value=mock_tmp_repo):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.json()
@@ -129,13 +158,14 @@ class TestDiscoveryTenantNotFound:
     def test_returns_404_for_unknown_tenant(self, client):
         """Unknown tenant_id returns 404 so the router can distinguish from 'no providers'."""
         mock_session = MagicMock()
-        mock_session.scalar.return_value = None  # No tenant found
+        mock_tenant_repo = MagicMock()
+        mock_tenant_repo.get_tenant.return_value = None
 
         with patch("src.routes.tmp_providers.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-            response = client.get("/tenant/nonexistent/tmp-providers/discovery")
+            with patch("src.routes.tmp_providers.TenantConfigRepository", return_value=mock_tenant_repo):
+                response = client.get("/tenant/nonexistent/tmp-providers/discovery")
 
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
@@ -149,14 +179,17 @@ class TestDiscoveryEmptyProviders:
         tenant = _make_tenant()
 
         mock_session = MagicMock()
-        mock_session.scalar.return_value = tenant
-        mock_session.scalars.return_value.all.return_value = []
+        mock_tenant_repo = MagicMock()
+        mock_tenant_repo.get_tenant.return_value = tenant
+        mock_tmp_repo = MagicMock()
+        mock_tmp_repo.list_syncable.return_value = []
 
         with patch("src.routes.tmp_providers.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-            response = client.get("/tenant/si-host/tmp-providers/discovery")
+            with patch("src.routes.tmp_providers.TenantConfigRepository", return_value=mock_tenant_repo):
+                with patch("src.routes.tmp_providers.TMPProviderRepository", return_value=mock_tmp_repo):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.json()
@@ -178,14 +211,17 @@ class TestDiscoveryResponseShape:
         ]
 
         mock_session = MagicMock()
-        mock_session.scalar.return_value = tenant
-        mock_session.scalars.return_value.all.return_value = providers
+        mock_tenant_repo = MagicMock()
+        mock_tenant_repo.get_tenant.return_value = tenant
+        mock_tmp_repo = MagicMock()
+        mock_tmp_repo.list_syncable.return_value = providers
 
         with patch("src.routes.tmp_providers.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-            response = client.get("/tenant/si-host/tmp-providers/discovery")
+            with patch("src.routes.tmp_providers.TenantConfigRepository", return_value=mock_tenant_repo):
+                with patch("src.routes.tmp_providers.TMPProviderRepository", return_value=mock_tmp_repo):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         entry = response.json()["providers"][0]
@@ -205,14 +241,17 @@ class TestDiscoveryResponseShape:
         ]
 
         mock_session = MagicMock()
-        mock_session.scalar.return_value = tenant
-        mock_session.scalars.return_value.all.return_value = providers
+        mock_tenant_repo = MagicMock()
+        mock_tenant_repo.get_tenant.return_value = tenant
+        mock_tmp_repo = MagicMock()
+        mock_tmp_repo.list_syncable.return_value = providers
 
         with patch("src.routes.tmp_providers.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-            response = client.get("/tenant/si-host/tmp-providers/discovery")
+            with patch("src.routes.tmp_providers.TenantConfigRepository", return_value=mock_tenant_repo):
+                with patch("src.routes.tmp_providers.TMPProviderRepository", return_value=mock_tmp_repo):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         entry = response.json()["providers"][0]
@@ -224,7 +263,7 @@ class TestDiscoveryOrdering:
     """Providers are ordered by priority ASC, name ASC."""
 
     def test_providers_ordered_by_priority_then_name(self, client):
-        """The SQL query orders by priority ASC, name ASC — verify mock returns in that order."""
+        """The repository returns providers in priority ASC, name ASC order."""
         tenant = _make_tenant()
         # Simulate DB returning in correct order (priority 0 before 1, alpha within same priority)
         providers = [
@@ -234,14 +273,17 @@ class TestDiscoveryOrdering:
         ]
 
         mock_session = MagicMock()
-        mock_session.scalar.return_value = tenant
-        mock_session.scalars.return_value.all.return_value = providers
+        mock_tenant_repo = MagicMock()
+        mock_tenant_repo.get_tenant.return_value = tenant
+        mock_tmp_repo = MagicMock()
+        mock_tmp_repo.list_syncable.return_value = providers
 
         with patch("src.routes.tmp_providers.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-
-            response = client.get("/tenant/si-host/tmp-providers/discovery")
+            with patch("src.routes.tmp_providers.TenantConfigRepository", return_value=mock_tenant_repo):
+                with patch("src.routes.tmp_providers.TMPProviderRepository", return_value=mock_tmp_repo):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         names = [p["name"] for p in response.json()["providers"]]
