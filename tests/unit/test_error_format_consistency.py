@@ -557,14 +557,14 @@ class TestMCPRecoveryInErrorResponses:
         [
             ("AdCPError", "internal error", "INTERNAL_ERROR", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPAuthenticationError", "bad token", "AUTH_TOKEN_INVALID", "terminal"),
-            ("AdCPAuthorizationError", "no access", "AUTHORIZATION_ERROR", "terminal"),
+            ("AdCPAuthenticationError", "bad token", "AUTH_REQUIRED", "terminal"),
+            ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
             ("AdCPNotFoundError", "gone", "NOT_FOUND", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
-            ("AdCPGoneError", "expired", "GONE", "terminal"),
+            ("AdCPGoneError", "expired", "INVALID_STATE", "terminal"),
             ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),
-            ("AdCPRateLimitError", "slow down", "RATE_LIMIT_EXCEEDED", "transient"),
-            ("AdCPAdapterError", "GAM down", "ADAPTER_ERROR", "transient"),
+            ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
+            ("AdCPAdapterError", "GAM down", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPServiceUnavailableError", "offline", "SERVICE_UNAVAILABLE", "transient"),
         ],
         ids=lambda x: x if isinstance(x, str) and x.startswith("AdCP") else "",
@@ -716,29 +716,30 @@ class TestErrorCodeVocabularyConsistency:
     /docs/requirements/ERROR_CODE_VOCABULARY.md (adcp-req repo)
 
     Our exception hierarchy must use canonical codes where the spec defines them.
-    Salesagent-specific codes (INTERNAL_ERROR, AUTH_TOKEN_INVALID, etc.) are
-    allowed as vocabulary extensions but must be explicitly declared.
+    After error-code compliance (#1248), all exception class codes must be
+    in SDK STANDARD_ERROR_CODES or in the justified INTERNAL_CODES set.
     """
 
-    # Canonical codes from adcp-req spec + salesagent extensions
+    # Canonical codes: SDK STANDARD_ERROR_CODES + justified internal codes.
+    # After error-code compliance (#1248), all class-level codes are either
+    # SDK-standard or explicitly internal (see INTERNAL_CODES in exceptions.py).
     CANONICAL_ERROR_CODES = {
-        "INTERNAL_ERROR",  # HTTP 500 catch-all (salesagent extension)
+        # SDK standard codes used by our exception classes
+        "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
-        "AUTH_TOKEN_INVALID",  # HTTP 401 (salesagent extension)
-        "AUTHORIZATION_ERROR",  # HTTP 403 (salesagent extension)
-        "NOT_FOUND",  # Generic form of {ENTITY}_NOT_FOUND
+        "AUTH_REQUIRED",  # SDK standard: authentication + authorisation
+        "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
         "ACCOUNT_AMBIGUOUS",  # adcp-req: Natural key matches multiple accounts (BR-RULE-080)
         "ACCOUNT_SETUP_REQUIRED",  # adcp-req: Account requires setup (BR-RULE-080)
         "ACCOUNT_SUSPENDED",  # adcp-req: Account is suspended (BR-RULE-080)
         "ACCOUNT_PAYMENT_REQUIRED",  # adcp-req: Account has outstanding payment (BR-RULE-080)
         "CONFLICT",  # Generic form of {ENTITY}_EXISTS
-        "GONE",  # HTTP 410 (salesagent extension)
-        "BUDGET_EXHAUSTED",  # HTTP 422 (salesagent extension)
-        "RATE_LIMIT_EXCEEDED",  # adcp-req: Rate Limiting / Quota Errors
-        "ADAPTER_ERROR",  # HTTP 502 (salesagent extension)
-        "CONFIGURATION_ERROR",  # HTTP 500 — decryption/config broken (salesagent extension)
-        "SERVICE_UNAVAILABLE",  # adcp-req: Service/Infrastructure Errors
+        "INVALID_STATE",  # SDK standard: gone/expired resources
+        "BUDGET_EXHAUSTED",  # SDK standard: budget limit reached
+        "RATE_LIMITED",  # SDK standard: rate limiting
+        "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
+        "CONFIGURATION_ERROR",  # Internal only: server config broken
     }
 
     def test_all_exception_error_codes_are_canonical(self):
@@ -780,16 +781,15 @@ class TestErrorCodeVocabularyConsistency:
             )
 
     def test_rate_limit_uses_canonical_code(self):
-        """AdCPRateLimitError must use RATE_LIMIT_EXCEEDED (not RATE_LIMITED).
+        """AdCPRateLimitError must use RATE_LIMITED (SDK STANDARD_ERROR_CODES).
 
-        adcp-req ERROR_CODE_VOCABULARY.md defines RATE_LIMIT_EXCEEDED as canonical.
-        RATE_LIMITED and THROTTLED are anti-patterns.
+        The SDK defines RATE_LIMITED as the standard code.
         """
         from src.core.exceptions import AdCPRateLimitError
 
-        assert AdCPRateLimitError.error_code == "RATE_LIMIT_EXCEEDED", (
+        assert AdCPRateLimitError.error_code == "RATE_LIMITED", (
             f"AdCPRateLimitError.error_code = {AdCPRateLimitError.error_code!r}, "
-            f"expected 'RATE_LIMIT_EXCEEDED' per adcp-req vocabulary"
+            f"expected 'RATE_LIMITED' per SDK STANDARD_ERROR_CODES"
         )
 
     def test_canonical_vocabulary_covers_all_subclasses(self):

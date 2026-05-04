@@ -12,9 +12,68 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from adcp.server.helpers import adcp_error
+from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 
 RecoveryHint = Literal["transient", "correctable", "terminal"]
+
+# ---------------------------------------------------------------------------
+# Error-code compliance: mapping non-standard codes to SDK equivalents
+# ---------------------------------------------------------------------------
+# Every code that reaches the wire (buyer agent) MUST be in
+# STANDARD_ERROR_CODES.  Codes in ERROR_CODE_MAPPING are translated at the
+# transport boundary; codes in INTERNAL_CODES never leave the server.
+
+ERROR_CODE_MAPPING: dict[str, str] = {
+    # Authentication / authorisation
+    "AUTH_TOKEN_INVALID": "AUTH_REQUIRED",
+    "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
+    "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
+    "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
+    "INSUFFICIENT_PRIVILEGES": "AUTH_REQUIRED",
+    # Validation (field-level)
+    "INVALID_DATE_RANGE": "VALIDATION_ERROR",
+    "INVALID_DATETIME": "VALIDATION_ERROR",
+    "INVALID_CONFIGURATION": "VALIDATION_ERROR",
+    "INVALID_BUDGET": "VALIDATION_ERROR",
+    "INVALID_PLACEMENT_IDS": "VALIDATION_ERROR",
+    "MISSING_PACKAGE_ID": "VALIDATION_ERROR",
+    # Budget
+    "BUDGET_CEILING_EXCEEDED": "BUDGET_EXCEEDED",
+    # Feature support
+    "CURRENCY_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
+    "UNSUPPORTED_PRICING_MODEL": "UNSUPPORTED_FEATURE",
+    "UNSUPPORTED_TARGETING": "UNSUPPORTED_FEATURE",
+    "PLACEMENT_TARGETING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
+    # Resource state
+    "GONE": "INVALID_STATE",
+    # Availability / adapter
+    "RATE_LIMIT_EXCEEDED": "RATE_LIMITED",
+    "ADAPTER_ERROR": "SERVICE_UNAVAILABLE",
+    "ACTIVATION_ERROR": "SERVICE_UNAVAILABLE",
+    "ACTIVATION_FAILED": "SERVICE_UNAVAILABLE",
+    "CREATIVE_SYNC_FAILED": "SERVICE_UNAVAILABLE",
+    "PRODUCT_NOT_CONFIGURED": "PRODUCT_UNAVAILABLE",
+    "CREATIVES_NOT_FOUND": "CREATIVE_REJECTED",
+}
+
+# Internal-only codes: never reach the buyer agent.  Each entry has a
+# justification for why it is internal.
+INTERNAL_CODES: frozenset[str] = frozenset(
+    {
+        "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
+        "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
+        "CONFIGURATION_ERROR",  # Server-side config; needs admin, not buyer
+        "API_ERROR",  # Raw adapter API failure detail
+        "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
+        "LINE_ITEM_CREATION_FAILED",  # GAM line-item creation detail
+        "FLIGHT_NOT_FOUND",  # Kevel/Triton internal flight lookup
+    }
+)
+
+# Sanity check: every mapping target must be a standard code.
+assert all(v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()), (
+    "ERROR_CODE_MAPPING contains non-standard target codes"
+)
 
 
 class AdCPError(Exception):
@@ -97,14 +156,14 @@ class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401)."""
 
     status_code = 401
-    error_code = "AUTH_TOKEN_INVALID"
+    error_code = "AUTH_REQUIRED"
 
 
 class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403)."""
 
     status_code = 403
-    error_code = "AUTHORIZATION_ERROR"
+    error_code = "AUTH_REQUIRED"
 
 
 class AdCPNotFoundError(AdCPError):
@@ -160,7 +219,7 @@ class AdCPGoneError(AdCPError):
     """Resource previously existed but is no longer available (410)."""
 
     status_code = 410
-    error_code = "GONE"
+    error_code = "INVALID_STATE"
 
 
 class AdCPBudgetExhaustedError(AdCPError):
@@ -175,7 +234,7 @@ class AdCPRateLimitError(AdCPError):
     """Too many requests (429)."""
 
     status_code = 429
-    error_code = "RATE_LIMIT_EXCEEDED"
+    error_code = "RATE_LIMITED"
     recovery: RecoveryHint = "transient"
 
 
@@ -183,7 +242,7 @@ class AdCPAdapterError(AdCPError):
     """External adapter (GAM, etc.) failure (502)."""
 
     status_code = 502
-    error_code = "ADAPTER_ERROR"
+    error_code = "SERVICE_UNAVAILABLE"
     recovery: RecoveryHint = "transient"
 
 

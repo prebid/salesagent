@@ -43,7 +43,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthenticationError("bad token")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 401
-        assert exc.error_code == "AUTH_TOKEN_INVALID"
+        assert exc.error_code == "AUTH_REQUIRED"
 
     def test_authorization_error(self):
         """AdCPAuthorizationError must have status_code=403."""
@@ -52,7 +52,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthorizationError("forbidden")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 403
-        assert exc.error_code == "AUTHORIZATION_ERROR"
+        assert exc.error_code == "AUTH_REQUIRED"
 
     def test_not_found_error(self):
         """AdCPNotFoundError must have status_code=404."""
@@ -70,7 +70,7 @@ class TestExceptionHierarchy:
         exc = AdCPRateLimitError("too many requests")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 429
-        assert exc.error_code == "RATE_LIMIT_EXCEEDED"
+        assert exc.error_code == "RATE_LIMITED"
 
     def test_adapter_error(self):
         """AdCPAdapterError must have status_code=502."""
@@ -79,7 +79,7 @@ class TestExceptionHierarchy:
         exc = AdCPAdapterError("GAM unavailable")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 502
-        assert exc.error_code == "ADAPTER_ERROR"
+        assert exc.error_code == "SERVICE_UNAVAILABLE"
 
     def test_conflict_error(self):
         """AdCPConflictError must have status_code=409."""
@@ -97,7 +97,7 @@ class TestExceptionHierarchy:
         exc = AdCPGoneError("proposal expired")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 410
-        assert exc.error_code == "GONE"
+        assert exc.error_code == "INVALID_STATE"
 
     def test_budget_exhausted_error(self):
         """AdCPBudgetExhaustedError must have status_code=422."""
@@ -288,7 +288,7 @@ class TestFastAPIExceptionHandlers:
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
         body = response.json()
-        assert body["error_code"] == "AUTH_TOKEN_INVALID"
+        assert body["error_code"] == "AUTH_REQUIRED"
 
     def test_not_found_error_returns_404(self):
         """AdCPNotFoundError raised in a route must return 404."""
@@ -318,7 +318,7 @@ class TestFastAPIExceptionHandlers:
         response = client.get("/test-exc/adapter")
         assert response.status_code == 502
         body = response.json()
-        assert body["error_code"] == "ADAPTER_ERROR"
+        assert body["error_code"] == "SERVICE_UNAVAILABLE"
 
     def test_conflict_error_returns_409(self):
         """AdCPConflictError raised in a route must return 409."""
@@ -348,7 +348,7 @@ class TestFastAPIExceptionHandlers:
         response = client.get("/test-exc/gone")
         assert response.status_code == 410
         body = response.json()
-        assert body["error_code"] == "GONE"
+        assert body["error_code"] == "INVALID_STATE"
 
     def test_budget_exhausted_error_returns_422(self):
         """AdCPBudgetExhaustedError raised in a route must return 422."""

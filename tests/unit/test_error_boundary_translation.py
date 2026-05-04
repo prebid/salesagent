@@ -41,12 +41,12 @@ class TestExtractErrorInfoAdCPError:
         assert recovery == "correctable"
 
     def test_adcp_auth_error_extracts_code_and_message(self):
-        """AdCPAuthenticationError → ('AUTH_TOKEN_INVALID', 'bad token', 'terminal')."""
+        """AdCPAuthenticationError → ('AUTH_REQUIRED', 'bad token', 'terminal')."""
         from src.core.tool_error_logging import extract_error_info
 
         exc = AdCPAuthenticationError("bad token")
         code, message, recovery = extract_error_info(exc)
-        assert code == "AUTH_TOKEN_INVALID"
+        assert code == "AUTH_REQUIRED"
         assert message == "bad token"
         assert recovery == "terminal"
 
@@ -61,12 +61,12 @@ class TestExtractErrorInfoAdCPError:
         assert recovery == "terminal"
 
     def test_adcp_adapter_error_extracts_code_and_message(self):
-        """AdCPAdapterError → ('ADAPTER_ERROR', 'GAM down', 'transient')."""
+        """AdCPAdapterError → ('SERVICE_UNAVAILABLE', 'GAM down', 'transient')."""
         from src.core.tool_error_logging import extract_error_info
 
         exc = AdCPAdapterError("GAM down")
         code, message, recovery = extract_error_info(exc)
-        assert code == "ADAPTER_ERROR"
+        assert code == "SERVICE_UNAVAILABLE"
         assert message == "GAM down"
         assert recovery == "transient"
 
@@ -82,13 +82,13 @@ class TestExtractErrorInfoAdCPError:
         assert recovery == "correctable"
 
     def test_adcp_gone_error_extracts_code_and_message(self):
-        """AdCPGoneError → ('GONE', 'proposal expired', 'terminal')."""
+        """AdCPGoneError → ('INVALID_STATE', 'proposal expired', 'terminal')."""
         from src.core.exceptions import AdCPGoneError
         from src.core.tool_error_logging import extract_error_info
 
         exc = AdCPGoneError("proposal expired")
         code, message, recovery = extract_error_info(exc)
-        assert code == "GONE"
+        assert code == "INVALID_STATE"
         assert message == "proposal expired"
         assert recovery == "terminal"
 
@@ -131,7 +131,7 @@ class TestExtractErrorInfoAdCPError:
 
         exc = AdCPRateLimitError("too fast")
         code, message, recovery = extract_error_info(exc)
-        assert code == "RATE_LIMIT_EXCEEDED"
+        assert code == "RATE_LIMITED"
         assert message == "too fast"
         assert recovery == "transient"
 
@@ -151,9 +151,9 @@ class TestExtractErrorInfoAdCPError:
 
         from src.core.tool_error_logging import extract_error_info
 
-        exc = ToolError("ADAPTER_ERROR", "GAM down", "transient")
+        exc = ToolError("SERVICE_UNAVAILABLE", "GAM down", "transient")
         code, message, recovery = extract_error_info(exc)
-        assert code == "ADAPTER_ERROR"
+        assert code == "SERVICE_UNAVAILABLE"
         assert message == "GAM down"
         assert recovery == "transient"
 
@@ -228,12 +228,12 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert exc_info.value.args[0] == "ADAPTER_ERROR"
+        assert exc_info.value.args[0] == "SERVICE_UNAVAILABLE"
         assert exc_info.value.args[1] == "GAM down"
         assert exc_info.value.args[2] == "transient"
 
     def test_adcp_auth_becomes_tool_error(self):
-        """AdCPAuthenticationError from tool → ToolError with AUTH_TOKEN_INVALID code."""
+        """AdCPAuthenticationError from tool → ToolError with AUTH_REQUIRED code."""
         from fastmcp.exceptions import ToolError
 
         from src.core.tool_error_logging import with_error_logging
@@ -246,8 +246,8 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert "AUTH_TOKEN_INVALID" in str(exc_info.value) or (
-            exc_info.value.args and exc_info.value.args[0] == "AUTH_TOKEN_INVALID"
+        assert "AUTH_REQUIRED" in str(exc_info.value) or (
+            exc_info.value.args and exc_info.value.args[0] == "AUTH_REQUIRED"
         )
         assert exc_info.value.args[2] == "terminal"
 
@@ -307,7 +307,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         )
 
     def test_permission_error_becomes_tool_error(self):
-        """PermissionError from tool → ToolError with AUTHORIZATION_ERROR code."""
+        """PermissionError from tool → ToolError with AUTH_REQUIRED code."""
         from fastmcp.exceptions import ToolError
 
         from src.core.tool_error_logging import with_error_logging
@@ -320,8 +320,8 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert "AUTHORIZATION_ERROR" in str(exc_info.value) or (
-            exc_info.value.args and exc_info.value.args[0] == "AUTHORIZATION_ERROR"
+        assert "AUTH_REQUIRED" in str(exc_info.value) or (
+            exc_info.value.args and exc_info.value.args[0] == "AUTH_REQUIRED"
         )
 
 
@@ -372,7 +372,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
 
             # a2a-sdk 1.0: error attributes are directly on the exception
             assert "bad token" in exc_info.value.message
-            assert exc_info.value.data == {"recovery": "terminal", "error_code": "AUTH_TOKEN_INVALID"}
+            assert exc_info.value.data == {"recovery": "terminal", "error_code": "AUTH_REQUIRED"}
 
     @pytest.mark.asyncio
     async def test_adcp_adapter_becomes_internal_error(self):
@@ -392,7 +392,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
 
             # a2a-sdk 1.0: error attributes are directly on the exception
             assert "GAM down" in exc_info.value.message
-            assert exc_info.value.data == {"recovery": "transient", "error_code": "ADAPTER_ERROR"}
+            assert exc_info.value.data == {"recovery": "transient", "error_code": "SERVICE_UNAVAILABLE"}
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
@@ -454,7 +454,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 401
             body = response.json()
-            assert body["error_code"] == "AUTH_TOKEN_INVALID"
+            assert body["error_code"] == "AUTH_REQUIRED"
             assert body["recovery"] == "terminal"
 
     def test_adcp_not_found_from_impl_returns_404(self):
@@ -488,7 +488,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
             body = response.json()
-            assert body["error_code"] == "ADAPTER_ERROR"
+            assert body["error_code"] == "SERVICE_UNAVAILABLE"
             assert body["recovery"] == "transient"
 
     def test_adcp_conflict_from_impl_returns_409(self):
@@ -594,7 +594,7 @@ class TestToDictRecoveryField:
 
         # Verify all fields present
         assert d == {
-            "error_code": "ADAPTER_ERROR",
+            "error_code": "SERVICE_UNAVAILABLE",
             "message": "GAM timeout",
             "recovery": "transient",
             "details": {"retry_after": 30},
@@ -682,7 +682,7 @@ class TestCustomRecoveryOverrideRESTBoundary:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
             body = response.json()
-            assert body["error_code"] == "ADAPTER_ERROR"
+            assert body["error_code"] == "SERVICE_UNAVAILABLE"
             assert body["recovery"] == "terminal"  # Custom, not default "transient"
 
 
@@ -714,14 +714,14 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", "INTERNAL_ERROR", "terminal"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
-            (AdCPAuthenticationError, "unauth", "AUTH_TOKEN_INVALID", "terminal"),
-            (AdCPAuthorizationError, "forbidden", "AUTHORIZATION_ERROR", "terminal"),
+            (AdCPAuthenticationError, "unauth", "AUTH_REQUIRED", "terminal"),
+            (AdCPAuthorizationError, "forbidden", "AUTH_REQUIRED", "terminal"),
             (AdCPNotFoundError, "missing", "NOT_FOUND", "terminal"),
             (AdCPConflictError, "dup", "CONFLICT", "correctable"),
-            (AdCPGoneError, "expired", "GONE", "terminal"),
+            (AdCPGoneError, "expired", "INVALID_STATE", "terminal"),
             (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "correctable"),
-            (AdCPRateLimitError, "slow", "RATE_LIMIT_EXCEEDED", "transient"),
-            (AdCPAdapterError, "down", "ADAPTER_ERROR", "transient"),
+            (AdCPRateLimitError, "slow", "RATE_LIMITED", "transient"),
+            (AdCPAdapterError, "down", "SERVICE_UNAVAILABLE", "transient"),
             (AdCPServiceUnavailableError, "offline", "SERVICE_UNAVAILABLE", "transient"),
         ]
 
@@ -835,14 +835,14 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", 500, "INTERNAL_ERROR", "terminal"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
-            (AdCPAuthenticationError, "unauth", 401, "AUTH_TOKEN_INVALID", "terminal"),
-            (AdCPAuthorizationError, "forbidden", 403, "AUTHORIZATION_ERROR", "terminal"),
+            (AdCPAuthenticationError, "unauth", 401, "AUTH_REQUIRED", "terminal"),
+            (AdCPAuthorizationError, "forbidden", 403, "AUTH_REQUIRED", "terminal"),
             (AdCPNotFoundError, "missing", 404, "NOT_FOUND", "terminal"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),
-            (AdCPGoneError, "expired", 410, "GONE", "terminal"),
+            (AdCPGoneError, "expired", 410, "INVALID_STATE", "terminal"),
             (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "correctable"),
-            (AdCPRateLimitError, "slow", 429, "RATE_LIMIT_EXCEEDED", "transient"),
-            (AdCPAdapterError, "down", 502, "ADAPTER_ERROR", "transient"),
+            (AdCPRateLimitError, "slow", 429, "RATE_LIMITED", "transient"),
+            (AdCPAdapterError, "down", 502, "SERVICE_UNAVAILABLE", "transient"),
             (AdCPServiceUnavailableError, "offline", 503, "SERVICE_UNAVAILABLE", "transient"),
         ]
 

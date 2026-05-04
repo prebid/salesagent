@@ -180,7 +180,7 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
     elif isinstance(error, ValueError):
         raise ToolError("VALIDATION_ERROR", str(error)) from error
     elif isinstance(error, PermissionError):
-        raise ToolError("AUTHORIZATION_ERROR", str(error)) from error
+        raise ToolError("AUTH_REQUIRED", str(error)) from error
     else:
         raise
 
