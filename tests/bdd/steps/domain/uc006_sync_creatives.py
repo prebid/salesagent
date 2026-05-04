@@ -209,15 +209,28 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))
 def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
-    """Assert error has the expected error_code and includes a suggestion."""
+    """Assert error has the expected error_code and includes a suggestion.
+
+    Production code stores the suggestion in ``error.details["suggestion"]``.
+    The MCP boundary serializes ``{"details": error.details, ...}`` into a JSON
+    metadata bundle, so after the round-trip ``error.details`` becomes
+    ``{"details": {"suggestion": ...}, "suggestion": ...}``. Accept both shapes
+    so the assertion is transport-agnostic.
+    """
     from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
-    if isinstance(error, AdCPError):
-        assert error.error_code == error_code, f"Expected error code '{error_code}', got '{error.error_code}'"
-        assert error.details, f"Expected details with suggestion on {error_code} error"
-        assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-    else:
+    if not isinstance(error, AdCPError):
         raise AssertionError(f"Expected AdCPError with code {error_code}, got {type(error).__name__}: {error}")
+
+    assert error.error_code == error_code, f"Expected error code '{error_code}', got '{error.error_code}'"
+    assert error.details, f"Expected details with suggestion on {error_code} error"
+
+    suggestion = error.details.get("suggestion")
+    if suggestion is None:
+        nested = error.details.get("details")
+        if isinstance(nested, dict):
+            suggestion = nested.get("suggestion")
+    assert suggestion, f"Expected 'suggestion' in error details: {error.details}"
