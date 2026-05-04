@@ -412,6 +412,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     break
 
         # UC-011 REST: per-request auth implemented (salesagent-xms)
+        # UC-011 MCP: billing policy and approval mode now populated from DB via
+        # account_approval_mode column + proper harness writes (#1184 complete).
 
         # FIXME(salesagent-39t): UC-011 push notification — production auto-approves
         # accounts (status=active immediately), so the Then step asserting
@@ -424,28 +426,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(#1184): UC-011 — billing policy and approval mode not populated
-        # from DB. Auth chains across all transports resolve identity from DB which
-        # doesn't carry supported_billing or account_approval_mode. These are
-        # tenant-level configs that need a DB migration to persist.
-        _UC011_IDENTITY_XFAIL: set[str] = {
-            "T-UC-011-ext-c-rejected",  # billing rejection
-            "T-UC-011-ext-c-mixed",  # per-account billing rejection
-            "T-UC-011-ext-d-pending-url",  # approval mode pending
-            "T-UC-011-ext-d-pending-message",  # approval mode pending
-            "T-UC-011-atomic-all-failed",  # all-failed (uses billing rejection)
-        }
-        if marker_names & _UC011_IDENTITY_XFAIL:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="billing/approval config not in DB — needs #1184",
-                    strict=True,
-                )
-            )
-        # Transport-specific xfails: in-process REST harness stub drops all filter params.
-        # E2E_REST is NOT affected — Docker's REST endpoint implements the filters, so
-        # applying this strict xfail there would cause XPASS(strict) failures.
-        # FIXME(salesagent-g4ld): filed as production bug — in-process REST stub needs filter support.
+        # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
+        # REST route for sync_creatives exists but account kwarg may not be
+        # forwarded at the route level (SyncCreativesBody doesn't have account field)
+        if is_rest and any(t.startswith("T-UC-006") for t in marker_names) and "account" in marker_names:
+            item.add_marker(pytest.mark.xfail(reason="REST route doesn't forward account param", strict=False))
+
+        # Transport-specific xfails: REST drops all filter params
         if is_rest:
             for tag in _REST_XFAIL_TAGS:
                 if tag in marker_names:

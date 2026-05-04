@@ -53,10 +53,69 @@ class AccountSyncEnv(IntegrationEnv):
         "audit_logger": "src.core.tools.accounts.get_audit_logger",
     }
 
+    def __init__(
+        self,
+        supported_billing: list[str] | None = None,
+        account_approval_mode: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._supported_billing = supported_billing
+        self._account_approval_mode = account_approval_mode
+
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for audit logger."""
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
+
+    def set_billing_policy(self, supported: list[str]) -> None:
+        """Configure which billing models this seller accepts (BR-RULE-059).
+
+        Updates both the in-memory tenant overrides (for mock identity path)
+        and the DB tenant record (for real MCP/A2A auth chain).
+        """
+        self._supported_billing = supported
+        self._tenant_overrides["supported_billing"] = supported
+        self._identity_cache.clear()
+
+        if self._session:
+            from src.core.database.models import Tenant
+
+            tenant = self._session.get(Tenant, self._tenant_id)
+            if tenant:
+                tenant.supported_billing = supported
+                self._session.commit()
+
+    def set_approval_mode(self, mode: str) -> None:
+        """Configure account approval mode (BR-RULE-060).
+
+        Updates both the in-memory tenant overrides (for mock identity path)
+        and the DB tenant record (for real MCP/A2A auth chain).
+        """
+        self._account_approval_mode = mode
+        self._tenant_overrides["account_approval_mode"] = mode
+        self._identity_cache.clear()
+
+        if self._session:
+            from src.core.database.models import Tenant
+
+            tenant = self._session.get(Tenant, self._tenant_id)
+            if tenant:
+                # BR-RULE-060: account approval mode is a distinct field from creative
+                # approval_mode (BR-RULE-037). Write to the correct column so the MCP
+                # real-auth chain (which reads DB via config_loader.get_tenant_by_id)
+                # sees the test-configured value.
+                tenant.account_approval_mode = mode
+                self._session.commit()
+
+    def identity_for(self, transport: Any) -> Any:
+        """Build identity with billing policy and approval mode on the tenant dict."""
+        if self._supported_billing is not None:
+            self._tenant_overrides["supported_billing"] = self._supported_billing
+        if self._account_approval_mode is not None:
+            self._tenant_overrides["account_approval_mode"] = self._account_approval_mode
+        self._identity_cache.clear()
+        return super().identity_for(transport)
 
     async def call_impl_async(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call _sync_accounts_impl with real DB (async version).

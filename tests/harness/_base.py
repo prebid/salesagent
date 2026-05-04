@@ -355,11 +355,14 @@ class BaseTestEnv:
 
         tenant_ctx = TenantContext.from_orm_model(tenant_orm)
 
-        # Extract identity-level overrides from tenant_overrides
-        identity_kwargs: dict[str, Any] = {}
+        # Apply tenant-level overrides to the TenantContext so
+        # _impl functions see them via identity.tenant.get("supported_billing")
+        tenant_updates = {}
         for key in ("supported_billing", "account_approval_mode"):
             if key in self._tenant_overrides:
-                identity_kwargs[key] = self._tenant_overrides[key]
+                tenant_updates[key] = self._tenant_overrides[key]
+        if tenant_updates:
+            tenant_ctx = tenant_ctx.model_copy(update=tenant_updates)
 
         return ResolvedIdentity(
             principal_id=self._principal_id,
@@ -373,7 +376,6 @@ class BaseTestEnv:
                 jump_to_event=None,
                 test_session_id=None,
             ),
-            **identity_kwargs,
         )
 
     def _ensure_default_data_for_auth(self) -> None:

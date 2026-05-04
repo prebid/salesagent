@@ -470,6 +470,8 @@ class TestIntegrationModeIdentityContract:
         mock_tenant.brand_manifest_policy = "require_auth"
         mock_tenant.advertising_policy = None
         mock_tenant.product_ranking_prompt = None
+        mock_tenant.supported_billing = None
+        mock_tenant.account_approval_mode = None
 
         # First scalars call: _ensure_default_data_for_auth checks Principal exists
         # Second scalars call: _resolve_auth_token gets the token
