@@ -851,12 +851,12 @@ async def get_products(
 
 async def get_products_raw(
     brief: str,
-    brand: dict[str, Any] | BrandReference | None = None,
+    brand: BrandReference | str | None = None,
     min_exposures: int | None = None,
-    filters: dict | None = None,
-    property_list: dict | None = None,
+    filters: ProductFilters | None = None,
+    property_list: PropertyListReference | None = None,
     strategy_id: str | None = None,
-    context: dict | None = None,  # Application level context per adcp spec
+    context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetProductsResponse:
@@ -868,8 +868,7 @@ async def get_products_raw(
 
     Args:
         brief: Brief description of the advertising campaign or requirements
-        brand: Brand reference per adcp 3.6.0 (BrandReference or dict with domain).
-               Dict is accepted since A2A passes JSON-deserialized dicts.
+        brand: Brand reference per adcp 3.6.0 (BrandReference or string domain shorthand)
         min_exposures: Minimum impressions needed for measurement validity (optional)
         filters: Structured filters for product discovery (optional)
         property_list: Property list reference for filtering by buyer's property list (optional)

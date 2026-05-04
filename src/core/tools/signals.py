@@ -16,6 +16,7 @@ from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
+from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.signal_id import SignalId, SignalId18
 from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
 
@@ -206,7 +207,7 @@ async def _activate_signal_impl(
     signal_agent_segment_id: str,
     campaign_id: str = None,
     media_buy_id: str = None,
-    context: dict | None = None,  # payload-level context
+    context: ContextObject | dict | None = None,  # payload-level context
     identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:
     """Shared implementation for activate_signal (used by both MCP and A2A).
@@ -360,7 +361,7 @@ async def activate_signal_raw(
     signal_agent_segment_id: str,
     campaign_id: str = None,
     media_buy_id: str = None,
-    context: dict | None = None,  # payload-level context
+    context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:

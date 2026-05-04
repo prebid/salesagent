@@ -1452,17 +1452,17 @@ def update_media_buy_raw(
     flight_end_date: str = None,
     budget: float = None,
     currency: str = None,
-    targeting_overlay: dict = None,
+    targeting_overlay: TargetingOverlay | None = None,
     start_time: str = None,
     end_time: str = None,
     pacing: str = None,
     daily_budget: float = None,
-    packages: list = None,
+    packages: list[UpdatePackage] | None = None,
     creatives: list = None,
-    push_notification_config: dict = None,
-    context: dict | None = None,  # payload-level context
-    reporting_webhook: dict | None = None,  # AdCP ReportingWebhook
-    ext: dict | None = None,  # AdCP ExtensionObject for custom fields
+    push_notification_config: PushNotificationConfig | None = None,
+    context: ContextObject | None = None,  # payload-level context
+    reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
+    ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):

@@ -54,6 +54,7 @@ class _PackageData:
 
 
 from adcp.server.helpers import valid_actions_for_status
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
@@ -219,7 +220,7 @@ async def get_media_buys(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
-    account: dict | None = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -257,7 +258,7 @@ def get_media_buys_raw(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
-    account: dict | None = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,

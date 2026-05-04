@@ -458,7 +458,7 @@ def list_creatives_raw(
     limit: int = 50,
     sort_by: str = "created_date",
     sort_order: str = "desc",
-    context: dict | None = None,  # Application level context per adcp spec
+    context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):

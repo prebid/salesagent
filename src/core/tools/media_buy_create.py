@@ -3827,26 +3827,26 @@ async def create_media_buy(
 
 
 async def create_media_buy_raw(
-    brand: Any | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
-    packages: list[Any] | None = None,  # REQUIRED per AdCP spec
-    start_time: Any | None = None,  # datetime | Literal["asap"] | str - REQUIRED per AdCP spec
-    end_time: Any | None = None,  # datetime | str - REQUIRED per AdCP spec
-    budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
+    brand: BrandReference | str | None = None,
+    packages: list[AdcpPackageRequest] | None = None,  # REQUIRED per AdCP spec
+    start_time: str | None = None,  # ISO 8601 or 'asap' - REQUIRED per AdCP spec
+    end_time: str | None = None,  # ISO 8601 - REQUIRED per AdCP spec
+    budget: float | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
     po_number: str | None = None,
     product_ids: list[str] | None = None,  # Legacy format conversion
     total_budget: float | None = None,  # Legacy format conversion
-    start_date: Any | None = None,  # Legacy format conversion
-    end_date: Any | None = None,  # Legacy format conversion
-    targeting_overlay: dict[str, Any] | None = None,
+    start_date: str | None = None,  # Legacy format conversion
+    end_date: str | None = None,  # Legacy format conversion
+    targeting_overlay: TargetingOverlay | None = None,
     pacing: str = "even",
     daily_budget: float | None = None,
-    creatives: list[Any] | None = None,
-    reporting_webhook: dict[str, Any] | None = None,
+    creatives: list[CreativeAsset] | None = None,
+    reporting_webhook: ReportingWebhook | None = None,
     required_axe_signals: list[str] | None = None,
     enable_creative_macro: bool = False,
     strategy_id: str | None = None,
-    push_notification_config: dict[str, Any] | None = None,
-    context: dict[str, Any] | None = None,  # Application level context per adcp spec
+    push_notification_config: PushNotificationConfig | None = None,
+    context: ContextObject | None = None,  # Application level context per adcp spec
     buyer_campaign_ref: str | None = None,
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
@@ -3910,10 +3910,17 @@ async def create_media_buy_raw(
 
     identity = enrich_identity_with_account(identity, req.account)
 
+    # Serialize SDK model to dict for _impl (which uses dict-based config access)
+    pnc_dict = (
+        push_notification_config.model_dump()
+        if isinstance(push_notification_config, PushNotificationConfig)
+        else push_notification_config
+    )
+
     # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(
         req=req,
-        push_notification_config=push_notification_config,
+        push_notification_config=pnc_dict,
         identity=identity,
     )
 

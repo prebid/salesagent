@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
 from adcp.types.generated_poc.core.attribution_window import AttributionWindow
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import ReportingDimensions
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -70,11 +71,11 @@ class GetProductsBody(BaseModel):
 
 
 class CreateMediaBuyBody(BaseModel):
-    brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
-    packages: list[dict[str, Any]] = []
+    brand: BrandReference | str | None = None  # adcp 3.6.0: BrandReference with domain field
+    packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
     start_time: str | None = None
     end_time: str | None = None
-    budget: Any | None = None
+    budget: float | None = None
     po_number: str | None = None
     product_ids: list[str] | None = None
     total_budget: float | None = None
@@ -225,7 +226,7 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     try:
         response = await media_buy_create_module.create_media_buy_raw(
             brand=body.brand,
-            packages=body.packages,
+            packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
             start_time=body.start_time,
             end_time=body.end_time,
             budget=body.budget,
