@@ -135,6 +135,31 @@ class AdCPGoneError(AdCPError):
     error_code = "GONE"
 
 
+class AdCPInvalidStateError(AdCPError):
+    """Operation invalid for the resource's current state (409, INVALID_STATE).
+
+    Raised when a buyer attempts an operation that is not permitted for the
+    media buy's current status — e.g., pausing a canceled buy, canceling a
+    completed or rejected buy. Distinct from CONFLICT (which signals a data
+    conflict like a duplicate key).
+    """
+
+    status_code = 409
+    error_code = "INVALID_STATE"
+    recovery: RecoveryHint = "terminal"
+
+
+class AdCPNotCancellableError(AdCPInvalidStateError):
+    """Media buy cannot be canceled in its current state (409, NOT_CANCELLABLE).
+
+    Raised on re-cancel of an already-canceled buy (idempotent acceptance is
+    not conformant per AdCP) or when the seller cannot fulfill cancellation
+    (e.g., contractual obligations, ad-server rejection).
+    """
+
+    error_code = "NOT_CANCELLABLE"
+
+
 class AdCPBudgetExhaustedError(AdCPError):
     """Budget or spend limit has been reached (422)."""
 

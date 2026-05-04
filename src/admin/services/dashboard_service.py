@@ -191,10 +191,10 @@ class DashboardService:
 
             daily_buys = repo.list_in_flight_on_date(date, statuses=["active", "completed"])
 
-            daily_revenue = 0
+            daily_revenue = 0.0
             for buy in daily_buys:
                 if buy.start_date and buy.end_date:
-                    days_in_flight = (buy.end_date - buy.start_date).days + 1  # type: ignore[operator]
+                    days_in_flight = (buy.end_date - buy.start_date).days + 1
                     if days_in_flight > 0:
                         daily_revenue += float(buy.budget or 0) / days_in_flight
 

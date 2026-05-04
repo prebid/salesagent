@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import NamedTuple, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import InstrumentedAttribute, Session, attributes
 
 from src.core.database.models import (
@@ -422,6 +422,26 @@ class CreativeAssignmentRepository:
             return False
         self._session.delete(assignment)
         return True
+
+    def release_all_for_media_buy(self, media_buy_id: str, *, when: datetime) -> int:
+        """Soft-release every active assignment under a media buy.
+
+        Sets `released_at = when` for every assignment whose `released_at` is
+        currently null. Returns the number of rows updated. Used by the cancel
+        path so the creative library entries (Creative rows) stay intact while
+        the buy's package-creative bindings are no longer active.
+        """
+        stmt = (
+            update(CreativeAssignment)
+            .where(
+                CreativeAssignment.tenant_id == self._tenant_id,
+                CreativeAssignment.media_buy_id == media_buy_id,
+                CreativeAssignment.released_at.is_(None),
+            )
+            .values(released_at=when)
+        )
+        result = self._session.execute(stmt)
+        return int(getattr(result, "rowcount", 0) or 0)
 
     # ------------------------------------------------------------------
     # Cross-model lookups (for assignment workflow)

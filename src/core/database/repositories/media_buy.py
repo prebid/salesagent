@@ -60,6 +60,23 @@ class MediaBuyRepository:
             )
         ).first()
 
+    def get_by_id_for_update(self, media_buy_id: str) -> MediaBuy | None:
+        """Get a media buy with a row-level lock for the rest of the transaction.
+
+        Use this when the caller will mutate the returned row and needs concurrent
+        writers (e.g., a competing cancel, the status scheduler) to block until
+        commit. Required for the cancel flow to serialize concurrent cancels under
+        PostgreSQL READ COMMITTED.
+        """
+        return self._session.scalars(
+            select(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+            .with_for_update()
+        ).first()
+
     def find_by_idempotency_key(self, idempotency_key: str, principal_id: str) -> MediaBuy | None:
         """Find an existing media buy by idempotency_key within (tenant, principal).
 
@@ -384,6 +401,59 @@ class MediaBuyRepository:
             media_buy.approved_by = approved_by
         self._session.flush()
         return media_buy
+
+    def cancel(
+        self,
+        media_buy_id: str,
+        *,
+        when: datetime.datetime,
+        canceled_by: str,
+        reason: str | None,
+    ) -> MediaBuy | None:
+        """Atomically cancel a media buy under a row-level lock.
+
+        Sets status to "canceled" and populates the three cancellation columns
+        in one call via MediaBuy.mark_canceled. Caller must have already
+        guarded against re-cancel — raises ValueError if the buy is already
+        canceled (defensive invariant; the impl-layer terminal-status guard is
+        the gatekeeper).
+
+        Returns the updated MediaBuy, or None if not found in this tenant.
+        """
+        media_buy = self.get_by_id_for_update(media_buy_id)
+        if media_buy is None:
+            return None
+        if media_buy.canceled_at is not None:
+            raise ValueError(f"MediaBuy {media_buy_id!r} is already canceled at {media_buy.canceled_at!r}")
+        media_buy.mark_canceled(when=when, canceled_by=canceled_by, reason=reason)
+        self._session.flush()
+        return media_buy
+
+    def has_pending_creatives(self, media_buy_id: str) -> bool:
+        """Check whether the buy has creative assignments whose creatives are not yet approved.
+
+        Used by `compute_valid_actions` to decide whether `sync_creatives` should
+        appear in the response's valid_actions list. Tenant-scoped via the join
+        from the assignment row to its parent media buy.
+        """
+        from src.core.database.models import Creative, CreativeAssignment
+
+        stmt = (
+            select(Creative.creative_id)
+            .join(
+                CreativeAssignment,
+                (CreativeAssignment.creative_id == Creative.creative_id)
+                & (CreativeAssignment.tenant_id == Creative.tenant_id),
+            )
+            .where(
+                Creative.tenant_id == self._tenant_id,
+                CreativeAssignment.media_buy_id == media_buy_id,
+                CreativeAssignment.released_at.is_(None),
+                Creative.status != "approved",
+            )
+            .limit(1)
+        )
+        return self._session.scalars(stmt).first() is not None
 
     def update_fields(self, media_buy_id: str, **kwargs: Any) -> MediaBuy | None:
         """Update arbitrary fields on a media buy within this tenant.

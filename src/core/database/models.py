@@ -1,10 +1,11 @@
 """SQLAlchemy models for database schema."""
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
+from adcp.types import MediaBuyStatus
 from adcp.types.generated_poc.core.account import CreditLimit, GovernanceAgent, Setup
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from sqlalchemy import (
@@ -778,9 +779,14 @@ class CreativeAssignment(Base):
     # adcp#208: placement-specific targeting within package
     placement_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant")
+
+    def mark_released(self, when: datetime) -> None:
+        """Soft-release the assignment. Set on parent media buy cancel."""
+        self.released_at = when
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -907,8 +913,8 @@ class MediaBuy(Base):
     kpi_goal: Mapped[str | None] = mapped_column(String(255), nullable=True)
     budget: Mapped[Decimal | None] = mapped_column(DECIMAL(15, 2))
     currency: Mapped[str] = mapped_column(String(3), nullable=True, default="USD")
-    start_date: Mapped[Date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[Date] = mapped_column(Date, nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
@@ -923,6 +929,9 @@ class MediaBuy(Base):
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    canceled_by: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
@@ -963,6 +972,7 @@ class MediaBuy(Base):
         Index("idx_media_buys_status", "status"),
         Index("idx_media_buys_strategy", "strategy_id"),
         Index("idx_media_buys_account", "account_id"),
+        Index("idx_media_buys_canceled_at", "tenant_id", "canceled_at"),
         Index(
             "idx_media_buys_idempotency_key",
             "tenant_id",
@@ -972,6 +982,42 @@ class MediaBuy(Base):
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
     )
+
+    def mark_canceled(self, when: datetime, canceled_by: str, reason: str | None) -> None:
+        """Atomically transition this media buy to the terminal `canceled` state.
+
+        Sets status, canceled_at, canceled_by, cancellation_reason in one call so
+        callers can't accidentally split the writes. The terminal-status guard in
+        `_update_media_buy_impl` prevents this from being reached on an already-
+        canceled buy.
+        """
+        self.status = "canceled"
+        self.canceled_at = when
+        self.canceled_by = canceled_by
+        self.cancellation_reason = reason
+
+    def derived_status(self, today: date) -> MediaBuyStatus:
+        """Resolve the spec-shaped MediaBuyStatus for this buy.
+
+        Order of precedence: terminal DB status (`canceled`, `rejected`,
+        `completed`) > `paused` (via `is_paused`) > date-derived. Used by
+        delivery and list endpoints so canceled buys never appear `active`
+        because their `end_time` hasn't elapsed.
+        """
+        db_status = self.status or ""
+        if db_status == "canceled":
+            return MediaBuyStatus.canceled
+        if db_status == "rejected":
+            return MediaBuyStatus.rejected
+        if db_status == "completed":
+            return MediaBuyStatus.completed
+        if self.is_paused:
+            return MediaBuyStatus.paused
+        if self.end_date is not None and today > self.end_date:
+            return MediaBuyStatus.completed
+        if self.start_date is not None and today < self.start_date:
+            return MediaBuyStatus.pending_activation
+        return MediaBuyStatus.active
 
 
 class MediaPackage(Base):
@@ -1008,6 +1054,7 @@ class MediaPackage(Base):
         nullable=True,
         comment="Pacing strategy: even, asap, front_loaded (AdCP enum)",
     )
+    is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     # Full package configuration (includes all AdCP fields + internal fields)
     package_config: Mapped[dict] = mapped_column(JSONType, nullable=False)

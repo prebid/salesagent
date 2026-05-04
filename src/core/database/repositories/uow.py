@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections.abc import Callable
 from types import TracebackType
 from typing import Any, Self
 
@@ -64,6 +65,21 @@ class BaseUoW:
         self._tenant_id = tenant_id
         self._session_cm: Any = None
         self._session: Session | None = None
+        # Webhooks deferred until after a successful commit. Callbacks are
+        # dropped on rollback so a buyer never receives a notification for
+        # state that didn't durably land in the DB.
+        self._pending_webhooks: list[Callable[[], None]] = []
+
+    def enqueue_webhook(self, callback: Callable[[], None]) -> None:
+        """Defer a webhook callback until the UoW's transaction commits.
+
+        Use for any push notification that announces a state change written
+        in this UoW. If the UoW rolls back, the queue is dropped and no
+        notification fires. Callback exceptions are logged and swallowed —
+        webhook delivery is best-effort, not load-bearing for transaction
+        success.
+        """
+        self._pending_webhooks.append(callback)
 
     @property
     def session(self) -> Session | None:
@@ -98,16 +114,27 @@ class BaseUoW:
     ) -> None:
         assert self._session is not None
         assert self._session_cm is not None
+        commit_succeeded = False
         try:
             if exc_type is None:
                 self._session.commit()
+                commit_succeeded = True
         finally:
             # Always close the session CM and clear references, even if
             # commit() raises.  Without this, the get_db_session() generator
             # is left suspended, leaking the session and DB connection.
             self._session_cm.__exit__(exc_type, exc_val, exc_tb)
             self._session = None
+            pending = self._pending_webhooks
+            self._pending_webhooks = []
             self._clear_repos()
+
+        if commit_succeeded:
+            for callback in pending:
+                try:
+                    callback()
+                except Exception:
+                    logger.exception("Deferred webhook callback raised; continuing")
 
     def _init_repos(self) -> None:
         raise NotImplementedError
@@ -120,7 +147,11 @@ class MediaBuyUoW(BaseUoW):
     """Unit of Work for MediaBuy operations.
 
     Wraps a database session and provides tenant-scoped repositories for
-    media buys and related data (currency limits).
+    media buys, currency limits, creative assignments, and workflows. The
+    creative-assignment and workflow repositories are present so the cancel
+    path can soft-release assignments and write workflow-step status updates
+    inside the same transaction as the media-buy state change — preventing
+    the webhook from firing before the cancel is durable.
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -129,15 +160,21 @@ class MediaBuyUoW(BaseUoW):
 
     media_buys: MediaBuyRepository | None
     currency_limits: CurrencyLimitRepository | None
+    assignments: CreativeAssignmentRepository | None
+    workflows: WorkflowRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
+        self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
+        self.workflows = WorkflowRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
         self.currency_limits = None
+        self.assignments = None
+        self.workflows = None
 
 
 class ProductUoW(BaseUoW):
