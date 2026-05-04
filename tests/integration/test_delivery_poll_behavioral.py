@@ -291,7 +291,7 @@ class TestEqualDateRangeReturnsInvalidDateRangeError:
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "INVALID_DATE_RANGE"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +326,7 @@ class TestStartDateAfterEndDateReturnsInvalidDateRangeError:
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "INVALID_DATE_RANGE"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +361,7 @@ class TestInvalidDateRangeDoesNotFetchDeliveryData:
 
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "INVALID_DATE_RANGE"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
             # Verify adapter's delivery method was never called (no data fetched)
             env.mock["adapter"].return_value.get_media_buy_delivery.assert_not_called()
@@ -403,8 +403,8 @@ class TestAdapterUnavailableReturnsAdapterError:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             error_codes = [e.code for e in response.errors]
-            assert "ADAPTER_ERROR" in error_codes
-            adapter_error = next(e for e in response.errors if e.code == "ADAPTER_ERROR")
+            assert "SERVICE_UNAVAILABLE" in error_codes
+            adapter_error = next(e for e in response.errors if e.code == "SERVICE_UNAVAILABLE")
             assert "mb_001" in adapter_error.message
 
 
@@ -444,8 +444,8 @@ class TestAdapterInternalServerErrorReturnsAdapterError:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             error_codes = [e.code for e in response.errors]
-            assert "ADAPTER_ERROR" in error_codes
-            adapter_error = next(e for e in response.errors if e.code == "ADAPTER_ERROR")
+            assert "SERVICE_UNAVAILABLE" in error_codes
+            adapter_error = next(e for e in response.errors if e.code == "SERVICE_UNAVAILABLE")
             assert "mb_001" in adapter_error.message
 
 
@@ -490,7 +490,7 @@ class TestAdapterFailureAuditTrail:
 
             assert response is not None
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            assert any(e.code == "ADAPTER_ERROR" for e in response.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in response.errors)
 
             # Check real audit log table for records
             from sqlalchemy import select
@@ -542,7 +542,7 @@ class TestAdapterErrorNoStateMutation:
             assert isinstance(result, GetMediaBuyDeliveryResponse)
             assert result.errors is not None
             assert len(result.errors) == 1
-            assert result.errors[0].code == "ADAPTER_ERROR"
+            assert result.errors[0].code == "SERVICE_UNAVAILABLE"
             assert "mb_err" in result.errors[0].message
             assert result.media_buy_deliveries == []
             assert result.aggregated_totals.impressions == 0.0
@@ -2423,7 +2423,7 @@ class TestPrincipalNotFoundReturnsError:
 
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "PRINCIPAL_NOT_FOUND"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert response.media_buy_deliveries == []
 
 

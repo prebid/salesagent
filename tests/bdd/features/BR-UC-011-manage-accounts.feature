@@ -347,7 +347,7 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com | operator |
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "BILLING_NOT_SUPPORTED"
+    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
     And the error message explains the billing model is not available
     And the error should include "suggestion" field with remediation guidance
     # @bva billing: billing = unsupported value for seller
@@ -365,7 +365,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the response is a success variant with accounts array
     And the account for brand domain "good-brand.com" has action "created"
     And the account for brand domain "bad-brand.com" has action "failed"
-    And the failed account has status "rejected" with BILLING_NOT_SUPPORTED error
+    And the failed account has status "rejected" with UNSUPPORTED_FEATURE error
     And the error should include "suggestion" field with remediation guidance
     # BR-RULE-059 INV-2 + BR-RULE-057 INV-1: rejected billing produces per-account failure within success variant
 

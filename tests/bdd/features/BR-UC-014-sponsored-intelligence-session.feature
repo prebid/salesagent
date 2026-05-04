@@ -24,8 +24,8 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   # Extensions: A (initiate session), B (send message), C (terminate session),
   #   D (SESSION_NOT_FOUND), E (OFFER_UNAVAILABLE), F (CAPABILITY_UNSUPPORTED),
   #   G (RATE_LIMITED), H (SESSION_ALREADY_TERMINATED)
-  # Error codes: session_not_found, offer_unavailable, capability_unsupported, rate_limited,
-  #   session_already_terminated, CONTEXT_PII_DETECTED, CONSENT_GRANTED_REQUIRED,
+  # Error codes: SESSION_NOT_FOUND, PRODUCT_UNAVAILABLE, UNSUPPORTED_FEATURE, rate_limited,
+  #   SESSION_TERMINATED, CONTEXT_PII_DETECTED, CONSENT_GRANTED_REQUIRED,
   #   CONSENT_SCOPE_REQUIRED, IDENTITY_CONSENT_CONFLICT, CAPABILITY_UNSUPPORTED,
   #   SESSION_STATUS_INVALID, HANDOFF_REQUIRED, SESSION_ALREADY_TERMINATED,
   #   MESSAGE_CONTENT_REQUIRED, SESSION_ID_REQUIRED, TERMINATION_REASON_INVALID,
@@ -233,13 +233,13 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given no session exists with session_id "nonexistent-sess"
     When the Buyer Agent sends si_send_message with session_id "nonexistent-sess" and message "hello"
     Then the operation should fail
-    And the error code should be "session_not_found"
+    And the error code should be "SESSION_NOT_FOUND"
     And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id"
     And the error references session_id "nonexistent-sess"
     # POST-F1: System state unchanged
-    # POST-F2: Error code session_not_found
+    # POST-F2: Error code SESSION_NOT_FOUND
     # POST-F3: Error references the provided session_id
 
   @T-UC-014-022 @extension @ext-d @error @post-f1 @post-f2 @post-f3
@@ -247,13 +247,13 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given no session exists with session_id "ghost-session"
     When the Buyer Agent sends si_terminate_session with session_id "ghost-session" and reason "user_exit"
     Then the operation should fail
-    And the error code should be "session_not_found"
+    And the error code should be "SESSION_NOT_FOUND"
     And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id"
     And the error references session_id "ghost-session"
     # POST-F1: System state unchanged
-    # POST-F2: Error code session_not_found
+    # POST-F2: Error code SESSION_NOT_FOUND
     # POST-F3: Error references the provided session_id
     # --- Extension E: OFFER_UNAVAILABLE ---
 
@@ -262,13 +262,13 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given no offering exists with offering_id "nonexistent-offer"
     When the Buyer Agent sends si_get_offering with offering_id "nonexistent-offer"
     Then the operation should fail
-    And the error code should be "offer_unavailable"
+    And the error code should be "PRODUCT_UNAVAILABLE"
     And the error message should contain "offering"
     And the error should include "suggestion" field
     And the suggestion should contain "offering"
     And the response may contain alternative_offering_ids
     # POST-F1: System state unchanged
-    # POST-F2: Error code offer_unavailable
+    # POST-F2: Error code PRODUCT_UNAVAILABLE
     # POST-F4: Error includes reason and may suggest alternatives
 
   @T-UC-014-024 @get-offering @post-f2 @post-f4
@@ -287,7 +287,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given the brand agent does not support video modality
     When the Buyer Agent sends si_initiate_session requiring video modality as essential
     Then the operation should fail
-    And the error code should be "capability_unsupported"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error message should contain "capability"
     And the error should include "suggestion" field
     And the suggestion should contain "conversational"
@@ -300,7 +300,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given the Buyer Agent has exceeded the rate limit for si_get_offering
     When the Buyer Agent sends si_get_offering with offering_id "any-offer"
     Then the operation should fail
-    And the error code should be "rate_limited"
+    And the error code should be "RATE_LIMITED"
     And the error message should contain "rate"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
@@ -314,7 +314,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the Buyer Agent has exceeded the rate limit for si_send_message
     When the Buyer Agent sends si_send_message with session_id "sess-abc123" and message "hello"
     Then the operation should fail
-    And the error code should be "rate_limited"
+    And the error code should be "RATE_LIMITED"
     And the error message should contain "rate"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
@@ -327,13 +327,13 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given a session exists with session_id "sess-done" in terminated state
     When the Buyer Agent sends si_send_message with session_id "sess-done" and message "hello again"
     Then the operation should fail
-    And the error code should be "session_already_terminated"
+    And the error code should be "SESSION_TERMINATED"
     And the error message should contain "terminated"
     And the error should include "suggestion" field
     And the suggestion should contain "new session"
     And the response contains session_status "complete"
     # POST-F1: System state unchanged
-    # POST-F2: Error code session_already_terminated
+    # POST-F2: Error code SESSION_TERMINATED
     # BR-RULE-098 INV-4: Message to terminal session rejected
 
   @T-UC-014-029 @extension @ext-h @error @post-f1 @post-f2
@@ -341,7 +341,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given a session exists with session_id "sess-complete" in complete state
     When the Buyer Agent sends si_send_message with session_id "sess-complete" and message "one more question"
     Then the operation should fail
-    And the error code should be "session_already_terminated"
+    And the error code should be "SESSION_TERMINATED"
     And the error message should contain "ended"
     And the error should include "suggestion" field
     And the suggestion should contain "si_initiate_session"
