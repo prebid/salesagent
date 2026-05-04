@@ -426,11 +426,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
-        # REST route for sync_creatives exists but account kwarg may not be
-        # forwarded at the route level (SyncCreativesBody doesn't have account field)
-        if is_rest and any(t.startswith("T-UC-006") for t in marker_names) and "account" in marker_names:
-            item.add_marker(pytest.mark.xfail(reason="REST route doesn't forward account param", strict=False))
+        # Graduated (salesagent-9d5): UC-006 REST account resolution — REST route
+        # now forwards account param correctly (our branch fixed this).
 
         # Transport-specific xfails: REST drops all filter params
         if is_rest:
