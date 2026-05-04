@@ -143,7 +143,7 @@ def _list_creative_formats_impl(
             formats=[],
             errors=[
                 AdCPResponseError(
-                    code="REGISTRY_ERROR",
+                    code="SERVICE_UNAVAILABLE",
                     message=f"Creative agent registry initialization failed: {e}",
                 )
             ],

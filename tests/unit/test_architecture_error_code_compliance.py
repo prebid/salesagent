@@ -29,8 +29,37 @@ _SCAN_DIRS = [
 ]
 
 
+def _collect_error_aliases(tree: ast.AST) -> set[str]:
+    """Collect names that alias the adcp Error type.
+
+    Tracks both module-level and function-level imports of the form:
+
+        from adcp...error import Error
+        from adcp...error import Error as <alias>
+
+    Returns the set of local names that refer to the adcp Error class
+    (always includes "Error" itself, plus any aliases).
+    """
+    aliases: set[str] = {"Error"}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        # Only track imports whose module path mentions "error"
+        module = node.module or ""
+        if "error" not in module.split("."):
+            continue
+        for alias in node.names:
+            if alias.name == "Error":
+                aliases.add(alias.asname or alias.name)
+    return aliases
+
+
 def _collect_error_code_literals() -> list[tuple[str, int, str]]:
-    """AST-scan for Error(code="...") and return (file, line, code) triples."""
+    """AST-scan for Error(code="...") and return (file, line, code) triples.
+
+    Tracks `from ... import Error as <alias>` so call sites that use the
+    aliased name (e.g. ``AdCPErrorDetail(code=...)``) are also validated.
+    """
     violations: list[tuple[str, int, str]] = []
 
     for scan_dir in _SCAN_DIRS:
@@ -43,17 +72,19 @@ def _collect_error_code_literals() -> list[tuple[str, int, str]]:
             except SyntaxError:
                 continue
 
+            error_aliases = _collect_error_aliases(tree)
+
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
-                # Match calls to Error(...) or adcp.types.Error(...)
+                # Match calls to Error(...) / <alias>(...) / adcp.types.Error(...)
                 func = node.func
-                name = None
-                if isinstance(func, ast.Name) and func.id == "Error":
-                    name = "Error"
+                matched = False
+                if isinstance(func, ast.Name) and func.id in error_aliases:
+                    matched = True
                 elif isinstance(func, ast.Attribute) and func.attr == "Error":
-                    name = "Error"
-                if name is None:
+                    matched = True
+                if not matched:
                     continue
 
                 # Extract the code= keyword argument

@@ -31,7 +31,7 @@ def _failed_sync_result(creative_id: str, error_msg: str) -> SyncCreativeResult:
         action="failed",
         status=None,
         platform_id=None,
-        errors=[AdCPErrorDetail(code="sync_error", message=error_msg)],
+        errors=[AdCPErrorDetail(code="SERVICE_UNAVAILABLE", message=error_msg)],
         review_feedback=None,
         assigned_to=None,
         assignment_errors=None,
