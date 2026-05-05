@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from adcp import PushNotificationConfig
-from adcp.server.helpers import valid_actions_for_status
+from adcp.server.helpers import is_terminal_status, valid_actions_for_status
 from pydantic import Field
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPGoneError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,26 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.validation_helpers import format_validation_error
+
+
+def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
+    """Derive the AdCP buyer-action names implied by an update request.
+
+    Returned names align with ``MEDIA_BUY_STATE_MACHINE`` keys so they can
+    be intersected against ``valid_actions_for_status(current_status)``.
+    """
+    actions: list[str] = []
+    if req.paused is True:
+        actions.append("pause")
+    if req.paused is False:
+        actions.append("resume")
+    if req.budget is not None:
+        actions.append("update_budget")
+    if req.start_time is not None or req.end_time is not None:
+        actions.append("update_dates")
+    if req.packages:
+        actions.append("update_packages")
+    return actions
 
 
 def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: MediaBuyRepository) -> None:
@@ -168,6 +188,33 @@ def _update_media_buy_impl(
 
         # Verify principal owns this media buy
         _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
+
+        # State-machine precondition: terminal states reject all mutations,
+        # and non-terminal states only accept actions in their valid set.
+        # ``AdCPGoneError`` carries the spec-mandated ``INVALID_STATE`` code
+        # for both terminal states and disallowed actions — see
+        # ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` for the source of truth.
+        _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use)
+        _current_status = _current_mb.status if _current_mb else ""
+        if is_terminal_status(_current_status):
+            raise AdCPGoneError(
+                f"Cannot update media buy in terminal state: {_current_status}",
+                field="media_buy_id",
+                suggestion=(
+                    f"Media buy is {_current_status} and cannot be modified. "
+                    f"Create a new media buy to run a new campaign."
+                ),
+            )
+
+        _requested = _requested_actions(req)
+        _allowed = set(valid_actions_for_status(_current_status))
+        _disallowed = [a for a in _requested if a not in _allowed]
+        if _requested and _disallowed:
+            raise AdCPGoneError(
+                f"Action(s) {_disallowed} not allowed in status '{_current_status}'",
+                field="media_buy_id",
+                suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
+            )
 
         # Extract testing context early (needed for dry_run check)
         testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
@@ -418,7 +465,16 @@ def _update_media_buy_impl(
                 media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
                 affected_pkgs = getattr(result, "affected_packages", [])
 
-                _post_action_status = "paused" if req.paused else "active"
+                # Derive post-action status from the DB rather than hardcoding,
+                # so valid_actions reflects what the buyer can actually do next.
+                # Fall back to the current state-machine target only if the DB
+                # row is missing (e.g., adapter deleted it under us).
+                _post_action_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                _post_action_status = (
+                    _post_action_mb.status
+                    if _post_action_mb and _post_action_mb.status
+                    else ("paused" if req.paused else "active")
+                )
                 success_response = UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
                     affected_packages=affected_pkgs,

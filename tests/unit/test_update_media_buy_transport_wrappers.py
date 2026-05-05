@@ -25,9 +25,10 @@ def _make_identity(tenant_id: str = "tenant_test"):
     return identity
 
 
-def _mock_media_buy(currency: str = "USD"):
+def _mock_media_buy(currency: str = "USD", status: str = "active"):
     media_buy = MagicMock()
     media_buy.currency = currency
+    media_buy.status = status
     media_buy.start_time = datetime(2025, 1, 1, tzinfo=UTC)
     media_buy.end_time = datetime(2025, 1, 31, tzinfo=UTC)
     return media_buy

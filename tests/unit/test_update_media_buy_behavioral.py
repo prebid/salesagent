@@ -65,11 +65,16 @@ def _make_mock_db_session():
     return mock_session, mock_cm
 
 
-def _make_mock_media_buy(media_buy_id="mb_test", currency="USD"):
-    """Create a mock MediaBuy database object."""
+def _make_mock_media_buy(media_buy_id="mb_test", currency="USD", status="active"):
+    """Create a mock MediaBuy database object.
+
+    Default status is "active" so the state-machine precondition guard
+    (added in salesagent-ljz0) lets all buyer actions through.
+    """
     mb = MagicMock()
     mb.media_buy_id = media_buy_id
     mb.currency = currency
+    mb.status = status
     mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
     mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
     return mb
@@ -338,8 +343,12 @@ class TestFlightDateValidationAndPersistence:
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
-        # Currency validation: media buy via repo (called 3x: currency check + date path + valid_actions)
+        # Media buy via repo (precondition + currency check + date path + valid_actions)
+        # Date-update path: precondition needs status, mock_existing_mb has no status set,
+        # so we substitute a properly-configured mock for those slots too.
+        mock_existing_mb.status = "active"
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_dates"),  # state-machine precondition
             _make_mock_media_buy("mb_dates"),  # currency validation
             mock_existing_mb,  # date validation
             _make_mock_media_buy("mb_dates"),  # valid_actions lookup
@@ -372,11 +381,13 @@ class TestFlightDateValidationAndPersistence:
 
         # Mock existing media buy
         mock_existing_mb = MagicMock()
+        mock_existing_mb.status = "active"
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
-        # Media buy via repo (called twice: currency check + date path)
+        # Media buy via repo (precondition + currency check + date path)
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_dates_bad"),
             _make_mock_media_buy("mb_dates_bad"),
             mock_existing_mb,
         ]
@@ -408,11 +419,13 @@ class TestFlightDateValidationAndPersistence:
         same_time = datetime(2025, 6, 1, tzinfo=UTC)
 
         mock_existing_mb = MagicMock()
+        mock_existing_mb.status = "active"
         mock_existing_mb.start_time = same_time
         mock_existing_mb.end_time = same_time
 
-        # Media buy via repo (called twice: currency check + date path)
+        # Media buy via repo (precondition + currency check + date path)
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_dates_equal"),
             _make_mock_media_buy("mb_dates_equal"),
             mock_existing_mb,
         ]
@@ -533,6 +546,8 @@ def test_package_not_found_returns_error(standard_mocks):
     update path, returns code='package_not_found'."""
     _setup_db_session(standard_mocks)
 
+    # State-machine precondition needs a non-terminal status
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = _make_mock_media_buy("mb_pkg_nf")
     # Package lookup via repo returns None
     standard_mocks["uow_instance"].media_buys.get_package.return_value = None
 
@@ -719,11 +734,13 @@ class TestTimezoneHandlingRegression:
         mock_session = _setup_db_session(standard_mocks)
 
         mock_existing_mb = MagicMock()
+        mock_existing_mb.status = "active"
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
-        # Media buy via repo (called 3x: currency check + date path + valid_actions)
+        # Media buy via repo (precondition + currency check + date path + valid_actions)
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_tz_end"),
             _make_mock_media_buy("mb_tz_end"),
             mock_existing_mb,
             _make_mock_media_buy("mb_tz_end"),
@@ -753,11 +770,13 @@ class TestTimezoneHandlingRegression:
         mock_session = _setup_db_session(standard_mocks)
 
         mock_existing_mb = MagicMock()
+        mock_existing_mb.status = "active"
         mock_existing_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing_mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
-        # Media buy via repo (called 3x: currency check + date path + valid_actions)
+        # Media buy via repo (precondition + currency check + date path + valid_actions)
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_tz_start"),
             _make_mock_media_buy("mb_tz_start"),
             mock_existing_mb,
             _make_mock_media_buy("mb_tz_start"),
@@ -980,10 +999,12 @@ class TestUC003UpdateTiming:
         mock_session = _setup_db_session(standard_mocks)
 
         mock_existing = MagicMock()
+        mock_existing.status = "active"
         mock_existing.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_both_dates"),  # state-machine precondition
             _make_mock_media_buy("mb_both_dates"),
             mock_existing,
             _make_mock_media_buy("mb_both_dates"),  # valid_actions lookup
@@ -1013,10 +1034,12 @@ class TestUC003UpdateTiming:
         """
         mock_session = _setup_db_session(standard_mocks)
         mock_existing = MagicMock()
+        mock_existing.status = "active"
         mock_existing.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_no_adapter"),  # state-machine precondition
             _make_mock_media_buy("mb_no_adapter"),
             mock_existing,
             _make_mock_media_buy("mb_no_adapter"),  # valid_actions lookup
@@ -1902,10 +1925,12 @@ class TestUC003ExtE:
         same_time = datetime(2025, 3, 1, tzinfo=UTC)
 
         mock_existing = MagicMock()
+        mock_existing.status = "active"
         mock_existing.start_time = same_time
         mock_existing.end_time = same_time
 
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_eq"),  # state-machine precondition
             _make_mock_media_buy("mb_eq"),
             mock_existing,
         ]
@@ -1928,10 +1953,12 @@ class TestUC003ExtE:
         mock_session = _setup_db_session(standard_mocks)
 
         mock_existing = MagicMock()
+        mock_existing.status = "active"
         mock_existing.start_time = datetime(2025, 3, 15, tzinfo=UTC)
         mock_existing.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_end_before"),  # state-machine precondition
             _make_mock_media_buy("mb_end_before"),
             mock_existing,
         ]
@@ -1958,10 +1985,12 @@ class TestUC003ExtE:
         mock_session = _setup_db_session(standard_mocks)
 
         mock_existing = MagicMock()
+        mock_existing.status = "active"
         mock_existing.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing.end_time = datetime(2025, 3, 31, tzinfo=UTC)
 
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            _make_mock_media_buy("mb_start_after"),  # state-machine precondition
             _make_mock_media_buy("mb_start_after"),
             mock_existing,
         ]
@@ -2557,3 +2586,146 @@ class TestUC003ExtO:
 
         with pytest.raises(Exception, match="workflow step creation failed"):
             _update_media_buy_impl(req=req, identity=identity)
+
+
+# ---------------------------------------------------------------------------
+# State-machine precondition (salesagent-ljz0)
+# ---------------------------------------------------------------------------
+
+
+class TestUC003StateMachine:
+    """Terminal-state rejection and per-status action validation.
+
+    BR-UC-003: update_media_buy MUST refuse mutations on terminal states
+    (rejected, canceled, completed) and MUST refuse actions outside
+    valid_actions_for_status(current_status).
+    """
+
+    @pytest.mark.parametrize("terminal_status", ["rejected", "canceled", "completed"])
+    def test_terminal_status_rejects_pause(self, standard_mocks, terminal_status):
+        """Pausing a buy in any terminal status raises INVALID_STATE."""
+        from src.core.exceptions import AdCPGoneError
+
+        terminal_mb = _make_mock_media_buy("mb_terminal", status=terminal_status)
+        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = terminal_mb
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(media_buy_id="mb_terminal", paused=True)
+
+        with pytest.raises(AdCPGoneError) as exc_info:
+            _update_media_buy_impl(req=req, identity=identity)
+
+        assert exc_info.value.error_code == "INVALID_STATE"
+        assert terminal_status in exc_info.value.message
+        # No adapter call when precondition rejects
+        standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
+
+    @pytest.mark.parametrize("terminal_status", ["rejected", "canceled", "completed"])
+    def test_terminal_status_rejects_budget_update(self, standard_mocks, terminal_status):
+        """Updating package budget in any terminal status raises INVALID_STATE."""
+        from src.core.exceptions import AdCPGoneError
+
+        terminal_mb = _make_mock_media_buy("mb_terminal_budget", status=terminal_status)
+        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = terminal_mb
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_terminal_budget",
+            packages=[{"package_id": "pkg_001", "budget": 5000.0}],
+        )
+
+        with pytest.raises(AdCPGoneError) as exc_info:
+            _update_media_buy_impl(req=req, identity=identity)
+
+        assert exc_info.value.error_code == "INVALID_STATE"
+        # No adapter call when precondition rejects
+        standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
+        # No DB writes when precondition rejects
+        standard_mocks["uow_instance"].media_buys.update_fields.assert_not_called()
+
+    def test_active_status_accepts_pause(self, standard_mocks):
+        """A non-terminal status (active) accepts pause (state machine allows it)."""
+        active_mb = _make_mock_media_buy("mb_active", status="active")
+        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = active_mb
+
+        standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+            media_buy_id="mb_active",
+            affected_packages=[],
+        )
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(media_buy_id="mb_active", paused=True)
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+
+    def test_paused_status_rejects_pause(self, standard_mocks):
+        """A paused buy rejects another pause — 'pause' is not in valid_actions for 'paused'."""
+        from src.core.exceptions import AdCPGoneError
+
+        paused_mb = _make_mock_media_buy("mb_paused", status="paused")
+        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = paused_mb
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(media_buy_id="mb_paused", paused=True)
+
+        with pytest.raises(AdCPGoneError) as exc_info:
+            _update_media_buy_impl(req=req, identity=identity)
+
+        # Action validation, not terminal-state: still INVALID_STATE
+        assert exc_info.value.error_code == "INVALID_STATE"
+        assert "pause" in exc_info.value.message
+        assert "paused" in exc_info.value.message
+
+    def test_paused_status_accepts_resume(self, standard_mocks):
+        """A paused buy accepts resume — 'resume' is in valid_actions for 'paused'."""
+        paused_mb = _make_mock_media_buy("mb_paused_resume", status="paused")
+        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = paused_mb
+
+        standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+            media_buy_id="mb_paused_resume",
+            affected_packages=[],
+        )
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(media_buy_id="mb_paused_resume", paused=False)
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+
+    def test_post_action_status_derived_from_db(self, standard_mocks):
+        """After a successful pause, valid_actions reflects the DB status, not a hardcode.
+
+        Pre-fix: ``_post_action_status = "paused" if req.paused else "active"`` always
+        used the requested action regardless of what actually happened. Post-fix: the
+        DB status is re-read and used for valid_actions.
+        """
+        # Initial DB state: active (passes precondition).
+        active_mb = _make_mock_media_buy("mb_post_action", status="active")
+        # Post-pause DB state: a publisher-specific status the hardcode would never produce.
+        # ``valid_actions_for_status('pending_creatives')`` returns
+        # ``['cancel', 'update_budget', 'update_dates', 'update_packages',
+        #    'add_packages', 'sync_creatives']`` (no 'pause' or 'resume') — the
+        # hardcode would return ``valid_actions_for_status('paused')`` and miss
+        # 'sync_creatives' and 'add_packages'.
+        post_action_mb = _make_mock_media_buy("mb_post_action", status="pending_creatives")
+        standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
+            active_mb,  # state-machine precondition
+            post_action_mb,  # post-action status lookup (the line-421 fix)
+        ]
+
+        standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+            media_buy_id="mb_post_action",
+            affected_packages=[],
+        )
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(media_buy_id="mb_post_action", paused=True)
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+        action_values = {getattr(a, "value", a) for a in (result.valid_actions or [])}
+        assert "sync_creatives" in action_values, (
+            "valid_actions must reflect the DB-derived post-action status "
+            f"('pending_creatives'), not the hardcoded ('paused'). Got: {action_values}"
+        )

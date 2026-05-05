@@ -1844,6 +1844,10 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -1901,6 +1905,10 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition: 'resume' is only valid from 'paused'
+            _stub_mb = MagicMock()
+            _stub_mb.status = "paused"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -1957,6 +1965,10 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2050,7 +2062,8 @@ class TestUpdateMediaBuyTiming:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy]
+            # Precondition + currency check + date check
+            mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy, mock_buy]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2271,6 +2284,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2346,6 +2363,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2428,6 +2449,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2511,6 +2536,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2610,6 +2639,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2820,6 +2853,10 @@ class TestUpdateMediaBuyManualApproval:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2877,6 +2914,10 @@ class TestUpdateMediaBuyManualApproval:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2937,6 +2978,10 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow

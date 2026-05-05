@@ -135,6 +135,10 @@ class TestPlacementIdsValidation:
         mock_uow = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
+        # State-machine precondition guard needs a non-terminal status
+        _stub_mb = MagicMock()
+        _stub_mb.status = "active"
+        mock_uow.media_buys.get_by_id.return_value = _stub_mb
         mock_uow.__enter__ = Mock(return_value=mock_uow)
         mock_uow.__exit__ = Mock(return_value=False)
 
@@ -239,6 +243,10 @@ class TestPlacementIdsValidation:
         mock_uow = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
+        # State-machine precondition guard needs a non-terminal status
+        _stub_mb = MagicMock()
+        _stub_mb.status = "active"
+        mock_uow.media_buys.get_by_id.return_value = _stub_mb
         mock_uow.__enter__ = Mock(return_value=mock_uow)
         mock_uow.__exit__ = Mock(return_value=False)
 
