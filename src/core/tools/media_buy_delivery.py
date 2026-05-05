@@ -26,9 +26,11 @@ console = Console()
 
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import Error, MediaBuyStatus
-from adcp.types.generated_poc.core.attribution_window import AttributionWindow
 from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import ReportingDimensions
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
+    AttributionWindow,
+    ReportingDimensions,
+)
 
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
