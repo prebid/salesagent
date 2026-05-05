@@ -1414,8 +1414,6 @@ class AdCPRequestHandler(RequestHandler):
                 brand=brand,
                 filters=filters,
                 property_list=parameters.get("property_list"),
-                min_exposures=parameters.get("min_exposures"),
-                strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
                 identity=identity,
             )
