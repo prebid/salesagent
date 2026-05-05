@@ -19,7 +19,11 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    PrincipalFactory,
+    TenantFactory,
+    create_buying_mode_test_products,
+)
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -88,23 +92,10 @@ def _parse_invalid_fields(spec: str) -> dict[str, Any]:
 
 
 def _call_get_products(ctx: dict, **kwargs: Any) -> None:
-    """Dispatch get_products through ctx['transport'] via call_via."""
-    transport = ctx.get("transport")
-    env = ctx["env"]
-    if transport is not None:
-        try:
-            result = env.call_via(transport, **kwargs)
-            if result.is_error:
-                ctx["error"] = result.error
-            else:
-                ctx["response"] = result.payload
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        try:
-            ctx["response"] = env.call_impl(**kwargs)
-        except Exception as exc:
-            ctx["error"] = exc
+    """Dispatch get_products through ctx['transport'] via the shared helper."""
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    dispatch_request(ctx, **kwargs)
 
 
 # ── Given steps ─────────────────────────────────────────────────────
@@ -122,30 +113,10 @@ def given_seller_operational(ctx: dict) -> None:
 
 @given("a tenant exists with at least one product in the catalog")
 def given_tenant_with_products(ctx: dict) -> None:
-    """Create a tenant with two products so cross-mode behavior is observable."""
+    """Create a tenant with the standard buying-mode test product set."""
     tenant = TenantFactory(tenant_id="bm-bdd", subdomain="bm-bdd")
     PrincipalFactory(tenant=tenant, principal_id="bm-bdd-principal")
-
-    p1 = ProductFactory(
-        tenant=tenant,
-        product_id="display_premium",
-        name="Display Premium",
-        description="Premium display inventory",
-        format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
-        delivery_type="guaranteed",
-    )
-    PricingOptionFactory(product=p1, pricing_model="cpm", rate="12.0", is_fixed=True)
-
-    p2 = ProductFactory(
-        tenant=tenant,
-        product_id="video_premium",
-        name="Video Premium",
-        description="Premium video inventory",
-        format_ids=[{"agent_url": "https://test.com", "id": "video_15s"}],
-        delivery_type="guaranteed",
-    )
-    PricingOptionFactory(product=p2, pricing_model="cpm", rate="18.0", is_fixed=True)
-
+    create_buying_mode_test_products(tenant)
     ctx["tenant"] = tenant
 
 

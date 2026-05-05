@@ -14,11 +14,13 @@ Covers: UC-001-MODE-REFINE-01
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 import pytest
 
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    PrincipalFactory,
+    TenantFactory,
+    create_buying_mode_test_products,
+)
 from tests.harness.product import ProductEnv
 from tests.harness.transport import Transport
 
@@ -32,32 +34,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 @pytest.fixture
 def env(integration_db):
-    """ProductEnv with two products for cross-transport mode testing."""
+    """ProductEnv with the standard buying-mode test product set."""
     with ProductEnv(tenant_id="bm-test", principal_id="bm-principal") as e:
         tenant = TenantFactory(tenant_id="bm-test", subdomain="bm-test")
         PrincipalFactory(tenant=tenant, principal_id="bm-principal")
-
-        p1 = ProductFactory(
-            tenant=tenant,
-            product_id="display_premium",
-            name="Display Premium",
-            description="Premium display inventory",
-            format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
-            delivery_type="guaranteed",
-            countries=["US"],
-        )
-        PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
-
-        p2 = ProductFactory(
-            tenant=tenant,
-            product_id="video_premium",
-            name="Video Premium",
-            description="Premium video inventory",
-            format_ids=[{"agent_url": "https://test.com", "id": "video_15s"}],
-            delivery_type="guaranteed",
-            countries=["US"],
-        )
-        PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("18.0"), is_fixed=True)
+        create_buying_mode_test_products(tenant)
 
         yield e
 

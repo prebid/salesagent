@@ -28,7 +28,11 @@ from tests.factories.inventory_profile import InventoryProfileFactory
 from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
-from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.product import (
+    PricingOptionFactory,
+    ProductFactory,
+    create_buying_mode_test_products,
+)
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory
 
@@ -74,6 +78,7 @@ __all__ = [
     "PricingOptionFactory",
     "PrincipalFactory",
     "ProductFactory",
+    "create_buying_mode_test_products",
     "PropertyTagFactory",
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
