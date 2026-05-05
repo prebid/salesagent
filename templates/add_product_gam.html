@@ -3,19 +3,6 @@
 {% block title %}{{ 'Edit' if product else 'Create' }} Product - Google Ad Manager{% endblock %}
 
 {% block content %}
-<style>
-    .breadcrumb {
-        margin-bottom: 1rem;
-    }
-    .breadcrumb a {
-        color: #6b7280;
-        text-decoration: none;
-    }
-    .breadcrumb a:hover {
-        color: #111827;
-    }
-</style>
-
 {% set crumbs = [
     {"label": tenant.name, "url": url_for('tenants.dashboard', tenant_id=tenant.tenant_id)},
     {"label": "Products", "url": url_for('products.list_products', tenant_id=tenant.tenant_id)},
@@ -24,8 +11,10 @@
 {% set crumbs = crumbs | with_embed_root %}
 {% include "_breadcrumb.html" %}
 
-<div class="card">
-    <h2>{{ 'Edit' if product else 'Create' }} Product (Google Ad Manager)</h2>
+<div class="sa-card">
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <h2 class="sa-page-header__title">{{ 'Edit' if product else 'Create' }} Product (Google Ad Manager)</h2>
+    </header>
 
     {% if not inventory_synced %}
     <div class="alert alert-warning" style="margin-bottom: 2rem; padding: 1rem; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">
@@ -39,13 +28,13 @@
 
     <form id="product-form" method="POST" onsubmit="prepareFormSubmission(event)">
         <!-- Section 1: Product Basics -->
-        <h3 style="margin-top: 0; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Product Information</h3>
-        <p style="color: #666; margin-bottom: 1.5rem;">Basic product details that buyers will see</p>
+        <h3 style="margin-top: 0; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Product Information</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1.5rem;">Basic product details that buyers will see</p>
 
         <div class="form-group">
             <label for="name">Product Name *</label>
             <input type="text" id="name" name="name" required placeholder="e.g., Premium Homepage Package" value="{{ form_data.name if form_data else (product.name if product else '') }}">
-            <small style="color: #666;" id="name-product-note" style="display: none;">
+            <small style="color: var(--sa-text-muted);" id="name-product-note" style="display: none;">
                 For dynamic products, this is the base product name. Variants will use your name template pattern.
             </small>
         </div>
@@ -53,13 +42,13 @@
         <div class="form-group">
             <label for="description">Description</label>
             <textarea id="description" name="description" rows="3" placeholder="Describe this product for potential buyers">{{ form_data.description if form_data else (product.description if product else '') }}</textarea>
-            <small style="color: #666;" id="description-product-note" style="display: none;">
+            <small style="color: var(--sa-text-muted);" id="description-product-note" style="display: none;">
                 For dynamic products, this is the base product description. Variants will use your description template pattern.
             </small>
         </div>
 
         <!-- Section 2: Dynamic Products Configuration -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">
             <i class="fas fa-lightning-bolt"></i> Dynamic Products (Signals-Based)
         </h3>
         <div class="alert" style="background: #d1ecf1; border-left: 4px solid #17a2b8; padding: 1rem; margin-bottom: 1rem;">
@@ -75,16 +64,16 @@
                 <span style="vertical-align: middle;">This is a dynamic product</span>
             </label>
             {% if not signals_agents or signals_agents|length == 0 %}
-            <div style="color: #dc3545; font-size: 0.9rem; margin-left: 1.75rem; margin-top: 0.25rem;">
+            <div style="color: var(--sa-danger); font-size: 0.9rem; margin-left: 1.75rem; margin-top: 0.25rem;">
                 (Disabled - <a href="{{ url_for('signals_agents.list_signals_agents', tenant_id=tenant_id) }}">Add a signals agent first</a>)
             </div>
             {% endif %}
-            <small style="color: #666; display: block; margin-top: 0.5rem;">
+            <small style="color: var(--sa-text-muted); display: block; margin-top: 0.5rem;">
                 When enabled, this product acts as a base. The system will query signals agents and create product variants with targeting based on active signals.
             </small>
         </div>
 
-        <div id="dynamic-product-config" style="display: {% if product and product.is_dynamic %}block{% else %}none{% endif %}; margin-left: 1.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px; margin-top: 1rem; margin-bottom: 2rem;">
+        <div id="dynamic-product-config" style="display: {% if product and product.is_dynamic %}block{% else %}none{% endif %}; margin-left: 1.5rem; padding: 1rem; background: var(--sa-gray-50); border-radius: 4px; margin-top: 1rem; margin-bottom: 2rem;">
             <h4 style="margin-top: 0;">Dynamic Product Settings</h4>
 
             <!-- Signals Agent Selection -->
@@ -100,7 +89,7 @@
                                {% if use_all_agents %}checked{% endif %}
                                style="margin-right: 0.5rem;">
                         <strong>All Agents</strong> <span style="color: #28a745;">(Recommended)</span>
-                        <div style="margin-left: 1.75rem; color: #666; font-size: 0.9rem; margin-top: 0.25rem;">
+                        <div style="margin-left: 1.75rem; color: var(--sa-text-muted); font-size: 0.9rem; margin-top: 0.25rem;">
                             Automatically query all configured signals agents. When you add or change agents, products will automatically use them without modification.
                         </div>
                     </label>
@@ -109,7 +98,7 @@
                         <input type="radio" name="signals_agent_selection" value="specific"
                                {% if not use_all_agents %}checked{% endif %}
                                style="margin-right: 0.5rem;">
-                        <strong>Specific Agents</strong> <span style="color: #666;">(Advanced)</span>
+                        <strong>Specific Agents</strong> <span style="color: var(--sa-text-muted);">(Advanced)</span>
                     </label>
 
                     <div id="specific-agents-selection" style="display: {% if not use_all_agents %}block{% else %}none{% endif %}; margin-left: 1.75rem; margin-top: 0.5rem;">
@@ -125,7 +114,7 @@
                                 <option disabled>No signals agents configured</option>
                             {% endif %}
                         </select>
-                        <small style="color: #666; display: block; margin-top: 0.25rem;">
+                        <small style="color: var(--sa-text-muted); display: block; margin-top: 0.25rem;">
                             Select one or more signals agents to query. System will create product variants based on signals returned for buyer's brief.
                             {% if not signals_agents %}
                             <br><a href="{{ url_for('signals_agents.list_signals_agents', tenant_id=tenant_id) }}">Configure signals agents first</a>
@@ -145,7 +134,7 @@
                                {% if not product or not product.variant_name_template %}checked{% endif %}
                                style="margin-right: 0.5rem;">
                         <strong>Product Name - Signal Name</strong> <span style="color: #28a745;">(Recommended)</span>
-                        <div style="margin-left: 1.75rem; color: #666; font-size: 0.9rem; margin-top: 0.25rem;">
+                        <div style="margin-left: 1.75rem; color: var(--sa-text-muted); font-size: 0.9rem; margin-top: 0.25rem;">
                             Example: "Run of Site - Weather Targeting"
                         </div>
                     </label>
@@ -155,7 +144,7 @@
                                {% if product and product.variant_name_template == "{{ '{{signal.name}}' }}" %}checked{% endif %}
                                style="margin-right: 0.5rem;">
                         <strong>Signal Name Only</strong>
-                        <div style="margin-left: 1.75rem; color: #666; font-size: 0.9rem; margin-top: 0.25rem;">
+                        <div style="margin-left: 1.75rem; color: var(--sa-text-muted); font-size: 0.9rem; margin-top: 0.25rem;">
                             Example: "Weather Targeting"
                         </div>
                     </label>
@@ -164,14 +153,14 @@
                         <input type="radio" name="variant_name_pattern" value="custom"
                                {% if product and product.variant_name_template and product.variant_name_template != "{{ '{{signal.name}}' }}" %}checked{% endif %}
                                style="margin-right: 0.5rem;">
-                        <strong>Custom Pattern</strong> <span style="color: #666;">(Advanced)</span>
+                        <strong>Custom Pattern</strong> <span style="color: var(--sa-text-muted);">(Advanced)</span>
                     </label>
 
                     <div id="custom-name-pattern" style="display: {% if product and product.variant_name_template and product.variant_name_template != '{{signal.name}}' %}block{% else %}none{% endif %}; margin-left: 1.75rem; margin-top: 0.5rem; margin-bottom: 0.5rem;">
                         <input type="text" id="variant_name_template" name="variant_name_template"
                                value="{{ form_data.variant_name_template if form_data else (product.variant_name_template if product and product.variant_name_template else '') }}"
                                placeholder="{{ '{{name}}' }} - {{ '{{signal.name}}' }}" style="width: 100%;">
-                        <small style="color: #666; display: block; margin-top: 0.25rem;">
+                        <small style="color: var(--sa-text-muted); display: block; margin-top: 0.25rem;">
                             Available: <code>{{ '{{name}}' }}</code>, <code>{{ '{{signal.name}}' }}</code>,
                             <code>{{ '{{activation_key.key}}' }}</code>, <code>{{ '{{activation_key.value}}' }}</code>
                         </small>
@@ -187,13 +176,13 @@
                            style="margin-right: 0.5rem;">
                     <strong>Append signal targeting description</strong>
                 </label>
-                <small style="display: block; margin-left: 1.75rem; color: #666; margin-top: 0.25rem;">
+                <small style="display: block; margin-left: 1.75rem; color: var(--sa-text-muted); margin-top: 0.25rem;">
                     Adds the targeting details to help buyers understand what makes this variant unique
                 </small>
 
-                <div id="signal-description-preview" style="{% if not product or product.variant_description_template is none or product.variant_description_template == '' %}display: block;{% else %}display: none;{% endif %} margin-left: 1.75rem; margin-top: 0.75rem; padding: 0.75rem; background: #f8f9fa; border-radius: 4px; border-left: 3px solid #007bff;">
-                    <strong style="font-size: 0.9rem; color: #495057;">Preview:</strong>
-                    <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem; white-space: pre-line;">Run of Site inventory with premium placement.
+                <div id="signal-description-preview" style="{% if not product or product.variant_description_template is none or product.variant_description_template == '' %}display: block;{% else %}display: none;{% endif %} margin-left: 1.75rem; margin-top: 0.75rem; padding: 0.75rem; background: var(--sa-gray-50); border-radius: 4px; border-left: 3px solid #007bff;">
+                    <strong style="font-size: 0.9rem; color: var(--sa-text-default);">Preview:</strong>
+                    <div style="margin-top: 0.5rem; color: var(--sa-text-muted); font-size: 0.9rem; white-space: pre-line;">Run of Site inventory with premium placement.
 
 Target users based on local weather conditions for maximum relevance.</div>
                 </div>
@@ -205,7 +194,7 @@ Target users based on local weather conditions for maximum relevance.</div>
                 <input type="number" id="max_signals" name="max_signals"
                        value="{{ form_data.max_signals if form_data else (product.max_signals if product and product.max_signals else 5) }}"
                        min="1" max="20" style="width: 150px;">
-                <small style="color: #666;">Maximum number of product variants to create from signals (default: 5)</small>
+                <small style="color: var(--sa-text-muted);">Maximum number of product variants to create from signals (default: 5)</small>
             </div>
 
             <!-- Variant TTL -->
@@ -214,10 +203,10 @@ Target users based on local weather conditions for maximum relevance.</div>
                 <input type="number" id="variant_ttl_days" name="variant_ttl_days"
                        value="{{ form_data.variant_ttl_days if form_data else (product.variant_ttl_days if product and product.variant_ttl_days else '') }}"
                        min="1" max="365" placeholder="30" style="width: 150px;">
-                <small style="color: #666;">How many days until unused variants expire (leave blank for tenant default of 30 days)</small>
+                <small style="color: var(--sa-text-muted);">How many days until unused variants expire (leave blank for tenant default of 30 days)</small>
             </div>
 
-            <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-top: 1rem;">
+            <div class="alert alert-info" style="margin-top: var(--sa-space-4);">
                 <strong>How Dynamic Products Work:</strong>
                 <ul style="margin: 0.5rem 0 0 0; padding-left: 1.5rem;">
                     <li>This product serves as a base with all settings (formats, pricing, targeting)</li>
@@ -232,7 +221,7 @@ Target users based on local weather conditions for maximum relevance.</div>
         </div>
 
         <!-- Channel & Geographic Targeting -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Channel & Geographic Targeting</h3>
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Channel & Geographic Targeting</h3>
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
             <div class="form-group">
@@ -249,16 +238,16 @@ Target users based on local weather conditions for maximum relevance.</div>
         </div>
 
         <!-- Publisher Properties -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Publisher Properties (AdCP)</h3>
-        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Publisher Properties (AdCP)</h3>
+        <div class="alert alert-info">
             <strong>Required:</strong> Specify which properties this product covers so buyers can validate against their authorized properties.
         </div>
 
         {% include 'components/publisher_properties_selector.html' %}
 
         <!-- Principal Access Control -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Principal Access Control</h3>
-        <p style="color: #666; margin-bottom: 1rem;">
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Principal Access Control</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">
             Restrict which advertisers/principals can see this product. Leave empty to show to all principals.
         </p>
 
@@ -277,14 +266,14 @@ Target users based on local weather conditions for maximum relevance.</div>
                     <option disabled>No principals configured</option>
                 {% endif %}
             </select>
-            <small style="color: #666;">
+            <small style="color: var(--sa-text-muted);">
                 Hold Ctrl/Cmd to select multiple. If none selected, product is visible to all principals.
             </small>
         </div>
 
         <!-- Section 2: Inventory Configuration -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Inventory Configuration *</h3>
-        <p style="color: #666; margin-bottom: 1rem;">
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Inventory Configuration *</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">
             <strong>Choose one:</strong> Use an inventory profile (recommended) or configure inventory manually below
         </p>
 
@@ -308,13 +297,13 @@ Target users based on local weather conditions for maximum relevance.</div>
         </div>
 
         <!-- Profile preview (shown when profile selected) -->
-        <div id="inventory-profile-preview" style="display: {% if (form_data and form_data.inventory_profile_id) or (product and product.inventory_profile_id) %}block{% else %}none{% endif %}; padding: 1rem; background: #f0f7ff; border: 2px solid #d0e7ff; border-radius: 6px; margin-bottom: 1rem;">
+        <div id="inventory-profile-preview" style="display: {% if (form_data and form_data.inventory_profile_id) or (product and product.inventory_profile_id) %}block{% else %}none{% endif %}; padding: 1rem; background: var(--sa-info-tint); border: 2px solid #d0e7ff; border-radius: 6px; margin-bottom: 1rem;">
             <div style="display: flex; justify-content: space-between; align-items: start;">
                 <div style="flex: 1;">
                     <strong style="color: #1976d2; display: block; margin-bottom: 0.5rem;">Selected Profile:</strong>
                     <div id="profile-preview-name" style="font-weight: 600; font-size: 1.1rem; margin-bottom: 0.5rem;"></div>
-                    <div id="profile-preview-description" style="color: #666; font-size: 0.9rem; margin-bottom: 0.75rem;"></div>
-                    <div id="profile-preview-details" style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.85rem; color: #555;">
+                    <div id="profile-preview-description" style="color: var(--sa-text-muted); font-size: 0.9rem; margin-bottom: 0.75rem;"></div>
+                    <div id="profile-preview-details" style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.85rem; color: var(--sa-text-default);">
                         <!-- Populated by JS -->
                     </div>
                 </div>
@@ -326,8 +315,8 @@ Target users based on local weather conditions for maximum relevance.</div>
 
         <div id="manual-inventory-section" style="display: {% if (form_data and form_data.inventory_profile_id) or (product and product.inventory_profile_id) %}none{% else %}block{% endif %};">
             <!-- Manual Inventory Selection -->
-            <h4 style="margin-top: 1.5rem; color: #666;">GAM Inventory</h4>
-            <p style="color: #666; margin-bottom: 1rem;">Select ad units and placements from your GAM inventory</p>
+            <h4 style="margin-top: 1.5rem; color: var(--sa-text-muted);">GAM Inventory</h4>
+            <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">Select ad units and placements from your GAM inventory</p>
 
             <div class="form-group">
                 <label for="ad-unit-search">Ad Units</label>
@@ -337,8 +326,8 @@ Target users based on local weather conditions for maximum relevance.</div>
                     Browse Ad Units
                 </button>
             </div>
-            <div id="selected-ad-units" style="min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #f9f9f9;">
-                <span style="color: #999;">No ad units selected</span>
+            <div id="selected-ad-units" style="min-height: 60px; border: 1px solid var(--sa-border); border-radius: 4px; padding: 0.5rem; background: var(--sa-gray-50);">
+                <span style="color: var(--sa-text-faint);">No ad units selected</span>
             </div>
             <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;"></textarea>
         </div>
@@ -351,8 +340,8 @@ Target users based on local weather conditions for maximum relevance.</div>
                     Browse Placements
                 </button>
             </div>
-            <div id="selected-placements" style="min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #f9f9f9;">
-                <span style="color: #999;">No placements selected</span>
+            <div id="selected-placements" style="min-height: 60px; border: 1px solid var(--sa-border); border-radius: 4px; padding: 0.5rem; background: var(--sa-gray-50);">
+                <span style="color: var(--sa-text-faint);">No placements selected</span>
             </div>
             <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;"></textarea>
         </div>
@@ -367,15 +356,15 @@ Target users based on local weather conditions for maximum relevance.</div>
 
         <!-- Section 3: Creative Formats (only shown in custom mode) -->
         <div id="creative-formats-section" style="display: {% if (form_data and form_data.inventory_profile_id) or (product and product.inventory_profile_id) %}none{% else %}block{% endif %};">
-            <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Creative Formats</h3>
-            <p style="color: #666; margin-bottom: 1rem;">
+            <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Creative Formats</h3>
+            <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">
                 Select format templates and configure sizes. Creative type (image, JS, HTML5) is auto-detected when advertisers upload creatives.
                 <br><small>Note: Audio formats are not supported by Google Ad Manager.</small>
             </p>
 
             <!-- Format Template Picker Container -->
             <div id="format-template-picker-container">
-                <div style="text-align: center; padding: 2rem; color: #666;">
+                <div style="text-align: center; padding: 2rem; color: var(--sa-text-muted);">
                     Loading format templates...
                 </div>
             </div>
@@ -388,10 +377,10 @@ Target users based on local weather conditions for maximum relevance.</div>
         <script src="{{ request.script_root }}/static/js/format-template-picker.js"></script>
 
         <!-- Section 4: Pricing Options (AdCP PR #88) -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Pricing Options</h3>
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Pricing Options</h3>
 
-        <div style="margin-top: 1.5rem; padding: 1rem; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
-            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">Add one or more pricing models for this product. Buyers can choose which model to use.</p>
+        <div style="margin-top: 1.5rem; padding: 1rem; background: var(--sa-gray-50); border: 1px solid var(--sa-border); border-radius: 4px;">
+            <p style="color: var(--sa-text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Add one or more pricing models for this product. Buyers can choose which model to use.</p>
 
             <div id="pricing-options-container">
                 <!-- Pricing options will be added here by JavaScript -->
@@ -403,14 +392,14 @@ Target users based on local weather conditions for maximum relevance.</div>
         </div>
 
         <!-- Section 5: GAM Line Item Configuration -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">GAM Line Item Configuration</h3>
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">GAM Line Item Configuration</h3>
 
         <div style="padding: 1rem; background: #e7f3ff; border-left: 4px solid #007bff; border-radius: 4px;">
             <strong>ℹ️ Automatic Configuration</strong>
-            <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
+            <p style="margin: 0.5rem 0 0 0; color: var(--sa-text-muted); font-size: 0.9rem;">
                 Line item type and priority are automatically determined based on your selected pricing model:
             </p>
-            <ul style="margin: 0.5rem 0 0 1.5rem; color: #666; font-size: 0.9rem;">
+            <ul style="margin: 0.5rem 0 0 1.5rem; color: var(--sa-text-muted); font-size: 0.9rem;">
                 <li><strong>CPM Fixed</strong> → Standard line item (priority 8, guaranteed delivery)</li>
                 <li><strong>Flat Rate</strong> → Sponsorship line item (priority 4, guaranteed delivery)</li>
                 <li><strong>CPM/VCPM/CPC Auction</strong> → Price Priority line item (priority 12, non-guaranteed)</li>
@@ -431,7 +420,7 @@ Target users based on local weather conditions for maximum relevance.</div>
         <h3 style="margin-top: 2rem;">🎯 Custom Targeting (Optional)</h3>
         <div class="alert" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; margin-bottom: 1rem;">
             <strong>💡 Who Sees This:</strong> Configure custom targeting (key-value pairs) to define which audience segments will see ads for this product.
-            <br><small style="color: #666;">Example: sport=basketball, genre=action, age=18-34</small>
+            <br><small style="color: var(--sa-text-muted);">Example: sport=basketball, genre=action, age=18-34</small>
         </div>
 
         {# Enhanced targeting selector with OR/AND operators and include/exclude #}
@@ -442,7 +431,7 @@ Target users based on local weather conditions for maximum relevance.</div>
         <h3 style="margin-top: 2rem;">
             <i class="fas fa-info-circle"></i> Product Details
         </h3>
-        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+        <div class="alert alert-info">
             <strong>Required:</strong> Delivery measurement is required per AdCP spec. Other details enhance product visibility for buyers.
         </div>
 
@@ -469,7 +458,7 @@ Target users based on local weather conditions for maximum relevance.</div>
                         <option value="Google Ad Manager with MOAT">
                     {% endif %}
                 </datalist>
-                <small style="color: #666;">Select from configured providers or enter custom (autocomplete enabled)</small>
+                <small style="color: var(--sa-text-muted);">Select from configured providers or enter custom (autocomplete enabled)</small>
             </div>
 
             <div class="form-group">
@@ -477,7 +466,7 @@ Target users based on local weather conditions for maximum relevance.</div>
                 <input type="text" id="delivery_measurement_notes" name="delivery_measurement_notes"
                        value="{{ form_data.delivery_measurement_notes if form_data else (product.delivery_measurement.notes if product and product.delivery_measurement else '') }}"
                        placeholder="e.g., MRC-accredited viewability. 50% in-view for 1s">
-                <small style="color: #666;">Additional methodology details (optional)</small>
+                <small style="color: var(--sa-text-muted);">Additional methodology details (optional)</small>
             </div>
         </div>
 
@@ -486,12 +475,12 @@ Target users based on local weather conditions for maximum relevance.</div>
             <input type="url" id="product_image_url" name="product_image_url"
                    placeholder="https://example.com/product-image.jpg"
                    value="{{ product.product_card.manifest.product_image if product and product.product_card and product.product_card.manifest else '' }}">
-            <small style="color: #666;">
+            <small style="color: var(--sa-text-muted);">
                 Product image for visual cards (300x400px recommended). Leave blank to auto-generate from product data.
             </small>
             {% if product and product.product_card and product.product_card.manifest and product.product_card.manifest.product_image %}
             <div style="margin-top: 0.5rem;">
-                <img src="{{ product.product_card.manifest.product_image }}" alt="Current product image" style="max-width: 200px; border: 1px solid #ddd; border-radius: 4px;">
+                <img src="{{ product.product_card.manifest.product_image }}" alt="Current product image" style="max-width: 200px; border: 1px solid var(--sa-border); border-radius: 4px;">
             </div>
             {% endif %}
         </div>
@@ -576,7 +565,7 @@ if (appendCheckbox) {
 
 .format-card:hover {
     border-color: #007bff;
-    background-color: #f8f9fa;
+    background-color: var(--sa-gray-50);
 }
 
 /* Product-specific inventory container styling */
@@ -851,7 +840,7 @@ function updateSelectedDisplay(containerId, names, ids) {
     const isAdUnit = containerId === 'selected-ad-units';
 
     if (names.length === 0) {
-        container.innerHTML = '<span style="color: #999;">No items selected</span>';
+        container.innerHTML = '<span style="color: var(--sa-text-faint);">No items selected</span>';
     } else {
         container.innerHTML = names.map((name, idx) => {
             const id = ids[idx];
@@ -875,14 +864,14 @@ function updateSelectedDisplay(containerId, names, ids) {
                 const item = inventoryCache.placements.get(id);
                 if (item && item.metadata && item.metadata.ad_unit_ids) {
                     const count = item.metadata.ad_unit_ids.length;
-                    sizesText = ` <small style="color: #666;">(${count} ad ${count === 1 ? 'unit' : 'units'})</small>`;
+                    sizesText = ` <small style="color: var(--sa-text-muted);">(${count} ad ${count === 1 ? 'unit' : 'units'})</small>`;
                 }
             }
 
             return `
                 <span class="selected-item" style="display: inline-block; background: #e7f3ff; color: #000; padding: 0.25rem 0.5rem; margin: 0.25rem; border-radius: 4px;">
-                    ${name} <small style="color: #666;">(${id})</small>${sizesText}
-                    <button type="button" onclick="removeSelectedItem('${containerId}', '${id}')" style="border: none; background: none; color: #666; cursor: pointer; margin-left: 0.25rem;">×</button>
+                    ${name} <small style="color: var(--sa-text-muted);">(${id})</small>${sizesText}
+                    <button type="button" onclick="removeSelectedItem('${containerId}', '${id}')" style="border: none; background: none; color: var(--sa-text-muted); cursor: pointer; margin-left: 0.25rem;">×</button>
                 </span>
             `;
         }).join('');
@@ -1314,7 +1303,7 @@ function addPricingOption(existingData = null) {
     const index = pricingOptionIndex++;
 
     const optionHtml = `
-        <div class="pricing-option" id="pricing-option-${index}" style="border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem; margin-bottom: 1rem; background: white;">
+        <div class="pricing-option" id="pricing-option-${index}" style="border: 1px solid var(--sa-border); border-radius: 4px; padding: 1rem; margin-bottom: 1rem; background: white;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <h5 style="margin: 0;">Pricing Option #${index + 1}</h5>
                 <button type="button" class="btn btn-secondary" onclick="removePricingOption(${index})" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">Remove</button>
@@ -1335,7 +1324,7 @@ function addPricingOption(existingData = null) {
                             <option value="cpc" ${existingData && existingData.pricing_model?.toLowerCase() === 'cpc' ? 'selected' : ''}>CPC - Auction (Cost per click)</option>
                         </optgroup>
                     </select>
-                    <small style="color: #666;">All pricing models shown are supported by Google Ad Manager.</small>
+                    <small style="color: var(--sa-text-muted);">All pricing models shown are supported by Google Ad Manager.</small>
                 </div>
 
                 <div class="form-group">
@@ -1352,19 +1341,19 @@ function addPricingOption(existingData = null) {
                 <div class="form-group" id="rate-group-${index}">
                     <label>Rate *</label>
                     <input type="number" name="rate_${index}" step="0.01" min="0" placeholder="e.g., 12.50" value="${existingData && existingData.rate ? existingData.rate : ''}">
-                    <small style="color: #666;">Price per unit: CPM=$12.50 per 1K imps, CPC=$2.50 per click, FLAT_RATE=$5000 total campaign</small>
+                    <small style="color: var(--sa-text-muted);">Price per unit: CPM=$12.50 per 1K imps, CPC=$2.50 per click, FLAT_RATE=$5000 total campaign</small>
                 </div>
 
                 <div class="form-group" id="floor-group-${index}" style="display: none;">
                     <label>Floor Price *</label>
                     <input type="number" name="floor_${index}" step="0.01" min="0" placeholder="Minimum bid" value="${existingData && existingData.price_guidance ? existingData.price_guidance.floor : ''}">
-                    <small style="color: #666;">Minimum acceptable price</small>
+                    <small style="color: var(--sa-text-muted);">Minimum acceptable price</small>
                 </div>
 
                 <div class="form-group">
                     <label>Min Spend Per Package</label>
                     <input type="number" name="min_spend_${index}" step="0.01" min="0" placeholder="Optional" value="${existingData && existingData.min_spend_per_package ? existingData.min_spend_per_package : ''}">
-                    <small style="color: #666;">Minimum spend required for this pricing option</small>
+                    <small style="color: var(--sa-text-muted);">Minimum spend required for this pricing option</small>
                 </div>
             </div>
         </div>
@@ -2034,14 +2023,14 @@ function showToast(message, type = 'info') {
 <div id="format-info-modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4);">
     <div style="background-color: #fefefe; margin: 5% auto; padding: 2rem; border: 1px solid #888; border-radius: 8px; width: 90%; max-width: 500px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h2 style="margin: 0; color: #333; font-size: 1.5rem;" id="format-info-name"></h2>
+            <h2 style="margin: 0; color: var(--sa-text-strong); font-size: 1.5rem;" id="format-info-name"></h2>
             <span onclick="closeFormatInfo()" style="color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; line-height: 1;">&times;</span>
         </div>
 
         <!-- Preview Image -->
-        <div id="format-preview-container" style="margin-bottom: 1.5rem; text-align: center; background: #f8f9fa; border-radius: 4px; padding: 1rem; min-height: 200px; display: flex; align-items: center; justify-content: center;">
+        <div id="format-preview-container" style="margin-bottom: 1.5rem; text-align: center; background: var(--sa-gray-50); border-radius: 4px; padding: 1rem; min-height: 200px; display: flex; align-items: center; justify-content: center;">
             <img id="format-preview-img" src="" alt="Format preview" style="max-width: 100%; max-height: 300px; border-radius: 4px; display: none;">
-            <div id="format-no-preview" style="color: #999; display: none;">
+            <div id="format-no-preview" style="color: var(--sa-text-faint); display: none;">
                 <div style="font-size: 3rem; margin-bottom: 0.5rem;">🖼️</div>
                 <div>No preview available</div>
             </div>
@@ -2049,7 +2038,7 @@ function showToast(message, type = 'info') {
 
         <!-- Description -->
         <div style="margin-bottom: 1.5rem;">
-            <p id="format-info-description" style="color: #666; line-height: 1.6; margin: 0;"></p>
+            <p id="format-info-description" style="color: var(--sa-text-muted); line-height: 1.6; margin: 0;"></p>
         </div>
 
         <!-- Actions -->
@@ -2089,7 +2078,7 @@ function showToast(message, type = 'info') {
 }
 
 .size-chip .unit-count {
-    color: #666;
+    color: var(--sa-text-muted);
     font-size: 0.85rem;
 }
 

@@ -6,7 +6,7 @@
 
 <style>
 .targeting-selector {
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
     padding: 1.5rem;
     background: white;
@@ -16,7 +16,7 @@
 .targeting-selector h4 {
     margin-top: 0;
     margin-bottom: 1rem;
-    color: #333;
+    color: var(--sa-text-strong);
     font-size: 1.1rem;
 }
 
@@ -28,13 +28,13 @@
     display: block;
     font-weight: 500;
     margin-bottom: 0.5rem;
-    color: #555;
+    color: var(--sa-text-default);
 }
 
 .targeting-section select {
     width: 100%;
     padding: 0.5rem;
-    border: 1px solid #ced4da;
+    border: 1px solid var(--sa-border-strong);
     border-radius: 4px;
     font-size: 0.95rem;
 }
@@ -46,7 +46,7 @@
 .selected-items {
     margin-top: 0.5rem;
     padding: 0.5rem;
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
     border-radius: 4px;
     min-height: 40px;
 }
@@ -71,14 +71,14 @@
 }
 
 .loading {
-    color: #666;
+    color: var(--sa-text-muted);
     font-style: italic;
 }
 
 .error {
-    color: #dc3545;
+    color: var(--sa-danger);
     padding: 0.5rem;
-    background: #f8d7da;
+    background: var(--sa-danger-tint);
     border-radius: 4px;
 }
 </style>
@@ -98,7 +98,7 @@
             <select id="targeting-values-select" multiple onchange="addSelectedValues()">
                 <!-- Populated dynamically -->
             </select>
-            <small style="color: #666; display: block; margin-top: 0.25rem;">
+            <small style="color: var(--sa-text-muted); display: block; margin-top: 0.25rem;">
                 Hold Ctrl/Cmd to select multiple values
             </small>
         </div>
@@ -108,7 +108,7 @@
     <div class="targeting-section">
         <label>Selected Targeting</label>
         <div id="selected-targeting-display" class="selected-items">
-            <span style="color: #999;">No targeting selected</span>
+            <span style="color: var(--sa-text-faint);">No targeting selected</span>
         </div>
     </div>
 </div>
@@ -383,7 +383,7 @@ function updateDisplay() {
     const display = document.getElementById('selected-targeting-display');
 
     if (Object.keys(selectedTargeting).length === 0) {
-        display.innerHTML = '<span style="color: #999;">No targeting selected</span>';
+        display.innerHTML = '<span style="color: var(--sa-text-faint);">No targeting selected</span>';
         return;
     }
 

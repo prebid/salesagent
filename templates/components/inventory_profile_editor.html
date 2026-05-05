@@ -488,7 +488,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
         resultsDiv.style.display = 'block';
 
         if (formats.length === 0) {
-            resultsDiv.innerHTML = '<div style="text-align: center; padding: 2rem; color: #666;">No formats found</div>';
+            resultsDiv.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--sa-text-muted);">No formats found</div>';
             return;
         }
 
@@ -506,7 +506,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
         for (const [type, typeFormats] of Object.entries(grouped)) {
             html += `
                 <div style="margin-bottom: 2rem;">
-                    <h6 style="margin-bottom: 1rem; text-transform: capitalize; color: #2c3e50; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem;">${type}</h6>
+                    <h6 style="margin-bottom: 1rem; text-transform: capitalize; color: #2c3e50; border-bottom: 1px solid var(--sa-border); padding-bottom: 0.5rem;">${type}</h6>
                     <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem;">
             `;
 
@@ -528,9 +528,9 @@ Then call: window.inventoryProfileEditor.open(profileData)
                     <div class="format-card ${isSelected ? 'selected' : ''} format-item"
                          onclick="window.inventoryProfileEditor.toggleFormat('${formatIdValue}', '${format.name}', '${format.agent_url || ''}')"
                          style="border: 2px solid ${isSelected ? '#0066cc' : '#e0e0e0'}; border-radius: 4px; padding: 0.75rem; background: ${isSelected ? '#f0f7ff' : '#f9f9f9'}; cursor: pointer; transition: all 0.2s;">
-                        <div style="font-weight: 600; color: #333;">${checkIcon}${format.name}</div>
-                        ${format.description ? `<div style="color: #777; font-size: 0.85rem; margin-top: 0.25rem;">${format.description}</div>` : ''}
-                        ${dimensionsDisplay ? `<div style="color: #666; font-size: 0.85rem; margin-top: 0.25rem;">${dimensionsDisplay}</div>` : ''}
+                        <div style="font-weight: 600; color: var(--sa-text-strong);">${checkIcon}${format.name}</div>
+                        ${format.description ? `<div style="color: var(--sa-text-muted); font-size: 0.85rem; margin-top: 0.25rem;">${format.description}</div>` : ''}
+                        ${dimensionsDisplay ? `<div style="color: var(--sa-text-muted); font-size: 0.85rem; margin-top: 0.25rem;">${dimensionsDisplay}</div>` : ''}
                     </div>
                 `;
             });

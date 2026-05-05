@@ -10,17 +10,17 @@
 <style>
 /* Targeting Widget Styles */
 .targeting-widget {
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 8px;
     padding: 1.5rem;
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
     margin: 1rem 0;
 }
 
 .targeting-widget h4 {
     margin-top: 0;
     margin-bottom: 0.5rem;
-    color: #333;
+    color: var(--sa-text-strong);
 }
 
 /* Groups Container */
@@ -31,7 +31,7 @@
 /* Group Card */
 .group-card {
     background: white;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 6px;
     margin-bottom: 0.5rem;
 }
@@ -41,15 +41,15 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.75rem 1rem;
-    background: #f8f9fa;
-    border-bottom: 1px solid #dee2e6;
+    background: var(--sa-gray-50);
+    border-bottom: 1px solid var(--sa-border);
     border-radius: 6px 6px 0 0;
 }
 
 .group-label {
     font-weight: 600;
     font-size: 0.9rem;
-    color: #495057;
+    color: var(--sa-text-default);
 }
 
 .remove-group-btn {
@@ -61,14 +61,14 @@
     border: none;
     background: transparent;
     cursor: pointer;
-    color: #6c757d;
+    color: var(--sa-text-muted);
     border-radius: 4px;
     transition: all 0.2s;
 }
 
 .remove-group-btn:hover {
-    background: #f8d7da;
-    color: #dc3545;
+    background: var(--sa-danger-tint);
+    color: var(--sa-danger);
 }
 
 /* Criteria List */
@@ -95,7 +95,7 @@
 }
 
 .or-divider span {
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
     padding: 0.25rem 0.75rem;
     font-weight: 600;
     color: #007bff;
@@ -115,7 +115,7 @@
 
 .and-connector span {
     font-weight: 500;
-    color: #6c757d;
+    color: var(--sa-text-muted);
     font-size: 0.85rem;
     text-transform: lowercase;
 }
@@ -126,9 +126,9 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.75rem;
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
     border-radius: 6px;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     flex-wrap: wrap;
 }
 
@@ -144,7 +144,7 @@
 
 .criterion-key {
     font-weight: 600;
-    color: #333;
+    color: var(--sa-text-strong);
     min-width: 120px;
     max-width: 180px;
     overflow: hidden;
@@ -152,18 +152,18 @@
     white-space: nowrap;
     padding: 0.4rem 0.75rem;
     background: white;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
 }
 
 /* Operator Dropdown */
 .criterion-operator-select {
     padding: 0.4rem 0.6rem;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
     background: white;
     font-size: 0.9rem;
-    color: #495057;
+    color: var(--sa-text-default);
     cursor: pointer;
     min-width: 110px;
 }
@@ -177,7 +177,7 @@
 .criterion-row.excluded .criterion-operator-select {
     border-color: #f8d7da;
     background: #fff5f5;
-    color: #dc3545;
+    color: var(--sa-danger);
 }
 
 .criterion-values {
@@ -246,7 +246,7 @@
     background: white;
     cursor: pointer;
     font-size: 1rem;
-    color: #6c757d;
+    color: var(--sa-text-muted);
     border-radius: 50%;
     transition: all 0.2s;
 }
@@ -254,7 +254,7 @@
 .add-value-btn:hover {
     border-color: #007bff;
     color: #007bff;
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
 }
 
 /* Criterion Actions */
@@ -270,18 +270,18 @@
     justify-content: center;
     width: 28px;
     height: 28px;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
     background: white;
     cursor: pointer;
-    color: #6c757d;
+    color: var(--sa-text-muted);
     transition: all 0.2s;
 }
 
 .remove-criterion-btn:hover {
-    border-color: #dc3545;
-    background: #f8d7da;
-    color: #dc3545;
+    border-color: var(--sa-danger);
+    background: var(--sa-danger-tint);
+    color: var(--sa-danger);
 }
 
 /* Add Criterion Row */
@@ -298,7 +298,7 @@
     border-radius: 4px;
     background: transparent;
     cursor: pointer;
-    color: #6c757d;
+    color: var(--sa-text-muted);
     font-size: 0.9rem;
     transition: all 0.2s;
 }
@@ -359,13 +359,13 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 1.5rem;
-    border-bottom: 1px solid #dee2e6;
+    border-bottom: 1px solid var(--sa-border);
 }
 
 .value-selector-header h5 {
     margin: 0;
     font-size: 1.1rem;
-    color: #333;
+    color: var(--sa-text-strong);
 }
 
 .close-selector-btn {
@@ -378,13 +378,13 @@
     background: transparent;
     cursor: pointer;
     font-size: 1.5rem;
-    color: #6c757d;
+    color: var(--sa-text-muted);
     border-radius: 4px;
 }
 
 .close-selector-btn:hover {
-    background: #f8f9fa;
-    color: #333;
+    background: var(--sa-gray-50);
+    color: var(--sa-text-strong);
 }
 
 .value-selector-body {
@@ -402,13 +402,13 @@
     display: block;
     font-weight: 500;
     margin-bottom: 0.5rem;
-    color: #333;
+    color: var(--sa-text-strong);
 }
 
 .key-dropdown {
     width: 100%;
     padding: 0.6rem;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
     font-size: 0.95rem;
     background: white;
@@ -425,7 +425,7 @@
     width: 100%;
     padding: 0.6rem;
     margin-bottom: 0.5rem;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
     font-size: 0.95rem;
 }
@@ -439,7 +439,7 @@
 .key-list {
     max-height: 200px;
     overflow-y: auto;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
     background: white;
 }
@@ -450,7 +450,7 @@
     border-bottom: 1px solid #f1f3f4;
     transition: background 0.15s;
     font-size: 0.95rem;
-    color: #333;
+    color: var(--sa-text-strong);
 }
 
 .key-option:last-child {
@@ -487,7 +487,7 @@
 }
 
 .change-key-btn:hover {
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
     border-color: #1971c2;
 }
 
@@ -499,7 +499,7 @@
     width: 100%;
     padding: 0.6rem;
     margin-bottom: 1rem;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
     font-size: 0.95rem;
 }
@@ -513,7 +513,7 @@
 .values-list {
     max-height: 250px;
     overflow-y: auto;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
 }
 
@@ -532,7 +532,7 @@
 }
 
 .value-option:hover {
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
 }
 
 .value-checkbox {
@@ -544,7 +544,7 @@
 .value-label {
     flex: 1;
     font-size: 0.95rem;
-    color: #333;
+    color: var(--sa-text-strong);
 }
 
 .value-selector-footer {
@@ -553,23 +553,23 @@
     gap: 0.75rem;
     padding: 1rem 1.5rem;
     border-top: 1px solid #dee2e6;
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
     border-radius: 0 0 8px 8px;
 }
 
 .cancel-btn {
     padding: 0.6rem 1.25rem;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
     background: white;
     cursor: pointer;
     font-size: 0.95rem;
-    color: #333;
+    color: var(--sa-text-strong);
     transition: all 0.2s;
 }
 
 .cancel-btn:hover {
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
     border-color: #adb5bd;
 }
 
@@ -598,11 +598,11 @@
 .empty-state, .error-state, .loading {
     padding: 2rem;
     text-align: center;
-    color: #6c757d;
+    color: var(--sa-text-muted);
 }
 
 .error-state {
-    color: #dc3545;
+    color: var(--sa-danger);
 }
 
 .loading {
@@ -638,7 +638,7 @@
 <!-- Widget Container -->
 <div class="targeting-widget" id="targeting-widget">
     <h4>Custom Targeting</h4>
-    <p style="margin: 0 0 1rem 0; color: #666; font-size: 0.9rem;">
+    <p style="margin: 0 0 1rem 0; color: var(--sa-text-muted); font-size: 0.9rem;">
         Build targeting rules. Use "And" to add criteria within a group, "Or" to add alternate groups.
     </p>
     <!-- Content will be populated by JavaScript -->

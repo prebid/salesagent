@@ -3,14 +3,16 @@
 {% block title %}{{ 'Edit' if edit_mode else 'Add' }} Advertiser - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card" style="max-width: 600px; margin: 0 auto;">
+<div class="sa-card" style="max-width: 600px; margin: 0 auto;">
     <div class="back-button-container">
         <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
             ← Back to Dashboard
         </a>
     </div>
 
-    <h2>{{ 'Edit Advertiser' if edit_mode else 'Add New Advertiser' }}</h2>
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <h2 class="sa-page-header__title">{{ 'Edit Advertiser' if edit_mode else 'Add New Advertiser' }}</h2>
+    </header>
 
     {% if error %}
     <div class="alert alert-error">{{ error }}</div>
@@ -63,9 +65,9 @@
         <input type="hidden" name="enable_mock" value="1">
         {% endif %}
 
-        <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; margin: 2rem 0;">
+        <div style="background: var(--sa-gray-50); padding: var(--sa-space-4); border-radius: var(--sa-radius-lg); margin: var(--sa-space-6) 0;">
             <h4 style="margin-top: 0;">What happens next?</h4>
-            <ol style="margin: 0.5rem 0; padding-left: 1.5rem;">
+            <ol style="margin: var(--sa-space-2) 0; padding-left: var(--sa-space-5);">
                 <li>A secure API token will be generated for this advertiser</li>
                 <li>Share the API token with the advertiser to enable programmatic campaign access</li>
                 {% if has_gam %}
@@ -76,17 +78,16 @@
             </ol>
         </div>
 
-        <div style="display: flex; gap: 1rem;">
-            <button type="submit" class="btn">{{ 'Update Advertiser' if edit_mode else 'Add Advertiser' }}</button>
-            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>
+        <div style="display: flex; gap: var(--sa-space-4);">
+            <button type="submit" class="btn btn-primary">{{ 'Update Advertiser' if edit_mode else 'Add Advertiser' }}</button>
+            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-ghost">Cancel</a>
         </div>
     </form>
 </div>
 
 <style>
-input:invalid {
-    border-color: #dc3545;
-}
+/* Page-specific: invalid input shows danger border. */
+input:invalid { border-color: var(--sa-danger); }
 </style>
 
 {% if has_gam %}

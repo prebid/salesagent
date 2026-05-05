@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OAuth Test Successful - {{ tenant.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
     <style>
         * {
             box-sizing: border-box;
@@ -32,7 +33,7 @@
             width: 80px;
             height: 80px;
             margin: 0 auto 24px;
-            background: #10b981;
+            background: var(--sa-success);
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -49,7 +50,7 @@
             margin-bottom: 8px;
         }
         .subtitle {
-            color: #666;
+            color: var(--sa-text-muted);
             margin-bottom: 32px;
         }
         .user-info {
@@ -77,7 +78,7 @@
             border-bottom: none;
         }
         .user-detail .label {
-            color: #666;
+            color: var(--sa-text-muted);
             font-size: 14px;
         }
         .user-detail .value {
@@ -86,20 +87,20 @@
             font-size: 14px;
         }
         .next-steps {
-            background: #d1fae5;
-            border: 1px solid #10b981;
-            border-radius: 8px;
+            background: var(--sa-success-tint);
+            border: 1px solid var(--sa-success);
+            border-radius: var(--sa-radius-lg);
             padding: 16px;
             margin-bottom: 24px;
             text-align: left;
         }
         .next-steps h3 {
             font-size: 14px;
-            color: #065f46;
+            color: var(--sa-success-text);
             margin-bottom: 8px;
         }
         .next-steps p {
-            color: #065f46;
+            color: var(--sa-success-text);
             font-size: 13px;
             line-height: 1.5;
         }

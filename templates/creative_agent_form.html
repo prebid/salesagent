@@ -3,11 +3,13 @@
 {% block title %}{% if agent %}Edit{% else %}Add{% endif %} Creative Agent - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>{% if agent %}Edit{% else %}Add{% endif %} Creative Agent</h2>
-        <a href="{{ url_for('creative_agents.list_creative_agents', tenant_id=tenant_id) }}" class="btn btn-secondary">← Back to Creative Agents</a>
-    </div>
+<div class="sa-card">
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <h2 class="sa-page-header__title">{% if agent %}Edit{% else %}Add{% endif %} Creative Agent</h2>
+        <div class="sa-page-header__actions">
+            <a href="{{ url_for('creative_agents.list_creative_agents', tenant_id=tenant_id) }}" class="btn btn-ghost">← Back to Creative Agents</a>
+        </div>
+    </header>
 
     <form method="POST" action="{% if agent %}{{ url_for('creative_agents.edit_creative_agent', tenant_id=tenant_id, agent_id=agent.id) }}{% else %}{{ url_for('creative_agents.add_creative_agent', tenant_id=tenant_id) }}{% endif %}">
         <div class="form-section">
@@ -82,9 +84,9 @@
             </div>
         </div>
 
-        <div class="form-section" style="background: #f9fafb; padding: 1.5rem; border-radius: 6px;">
+        <div class="form-section" style="background: var(--sa-gray-50); padding: var(--sa-space-5); border-radius: var(--sa-radius-md);">
             <h3 style="margin-top: 0;">📖 How Creative Agents Work</h3>
-            <ul style="margin: 0.5rem 0; padding-left: 1.5rem; line-height: 1.8; color: #374151;">
+            <ul style="margin: 0.5rem 0; padding-left: 1.5rem; line-height: 1.8; color: var(--sa-gray-700);">
                 <li><strong>Format Discovery:</strong> The sales agent will call your creative agent's <code>list_creative_formats</code> MCP tool to discover available formats</li>
                 <li><strong>Format Details:</strong> Each format includes specifications like dimensions, duration, file requirements, etc.</li>
                 <li><strong>Priority System:</strong> If multiple agents provide the same format_id, the agent with lower priority number wins</li>
@@ -95,123 +97,46 @@
 
         <div class="button-group">
             <button type="submit" class="btn btn-primary">{% if agent %}Update{% else %}Add{% endif %} Creative Agent</button>
-            <a href="{{ url_for('creative_agents.list_creative_agents', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>
+            <a href="{{ url_for('creative_agents.list_creative_agents', tenant_id=tenant_id) }}" class="btn btn-ghost">Cancel</a>
         </div>
     </form>
 </div>
 
 <style>
-.form-section {
-    margin-bottom: 2rem;
-    padding-bottom: 2rem;
-    border-bottom: 1px solid #e5e7eb;
-}
+/* Page-specific: form sections and custom-styled checkbox controls. */
+.form-section { margin-bottom: var(--sa-space-6); padding-bottom: var(--sa-space-6); border-bottom: 1px solid var(--sa-border); }
+.form-section:last-of-type { border-bottom: none; }
+.form-section h3 { margin: 0 0 var(--sa-space-4) 0; color: var(--sa-gray-700); }
+.form-section-description { margin: 0 0 var(--sa-space-5) 0; color: var(--sa-text-muted); }
 
-.form-section:last-of-type {
-    border-bottom: none;
-}
-
-.form-section h3 {
-    margin: 0 0 1rem 0;
-    color: #374151;
-}
-
-.form-section-description {
-    margin: 0 0 1.5rem 0;
-    color: #6b7280;
-}
-
-.form-group {
-    margin-bottom: 1.5rem;
-}
-
-.form-group label {
-    display: block;
-    margin-bottom: 0.5rem;
-    font-weight: 500;
-    color: #374151;
-}
-
-.form-group input,
-.form-group select,
-.form-group textarea {
-    width: 100%;
-    padding: 0.75rem;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    font-size: 1rem;
-}
-
-.form-group input:focus,
-.form-group select:focus,
-.form-group textarea:focus {
-    outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.form-group small {
-    display: block;
-    margin-top: 0.25rem;
-    color: #6b7280;
-    font-size: 0.875rem;
-}
-
-.checkbox-group {
-    margin-bottom: 1.5rem;
-}
-
-.checkbox-label {
-    display: flex;
-    align-items: start;
-    gap: 0.75rem;
-    cursor: pointer;
-}
-
-.checkbox-label input[type="checkbox"] {
-    width: auto;
-    margin: 0;
-}
+.checkbox-group { margin-bottom: var(--sa-space-5); }
+.checkbox-label { display: flex; align-items: start; gap: var(--sa-space-3); cursor: pointer; }
+.checkbox-label input[type="checkbox"] { width: auto; margin: 0; position: absolute; opacity: 0; }
 
 .checkbox-custom {
     width: 20px;
     height: 20px;
-    border: 2px solid #d1d5db;
-    border-radius: 4px;
+    border: 2px solid var(--sa-border-strong);
+    border-radius: var(--sa-radius-sm);
     display: inline-block;
     flex-shrink: 0;
     position: relative;
 }
-
 .checkbox-label input[type="checkbox"]:checked + .checkbox-custom {
-    background: #3b82f6;
-    border-color: #3b82f6;
+    background: var(--sa-primary);
+    border-color: var(--sa-primary);
 }
-
 .checkbox-label input[type="checkbox"]:checked + .checkbox-custom::after {
     content: '✓';
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    color: white;
+    color: #fff;
     font-weight: bold;
 }
+.checkbox-text { font-weight: 500; color: var(--sa-gray-700); }
 
-.checkbox-label input[type="checkbox"] {
-    position: absolute;
-    opacity: 0;
-}
-
-.checkbox-text {
-    font-weight: 500;
-    color: #374151;
-}
-
-.button-group {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 2rem;
-}
+.button-group { display: flex; gap: var(--sa-space-2); margin-top: var(--sa-space-6); }
 </style>
 {% endblock %}

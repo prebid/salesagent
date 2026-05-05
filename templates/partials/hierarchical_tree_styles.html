@@ -36,7 +36,7 @@
     padding-bottom: 8px;
     /* padding-left set by data-depth selector */
     margin: 0;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--sa-gray-100);
     cursor: pointer;
     user-select: none;
     transition: background-color 0.15s ease, border-color 0.15s ease;
@@ -44,8 +44,8 @@
 }
 
 .tree-node-header:hover {
-    background-color: #f8f9fa;
-    border-bottom-color: #e0e0e0;
+    background-color: var(--sa-gray-50);
+    border-bottom-color: var(--sa-border);
 }
 
 /* Expand/collapse toggle icon */
@@ -70,7 +70,7 @@
 
 .tree-toggle .toggle-icon {
     font-size: 10px;
-    color: #666;
+    color: var(--sa-text-muted);
     transition: transform 0.2s ease;
     display: inline-block;
 }
@@ -157,12 +157,12 @@
 
 .tree-node-name {
     font-weight: 500;
-    color: #333;
+    color: var(--sa-text-strong);
     transition: color 0.15s ease;
 }
 
 .tree-node-code {
-    color: #999;
+    color: var(--sa-text-faint);
     margin-left: 8px;
     font-size: 12px;
 }
@@ -192,7 +192,7 @@
 .tree-empty {
     padding: 3rem 2rem;
     text-align: center;
-    color: #999;
+    color: var(--sa-text-faint);
     font-size: 14px;
 }
 
@@ -200,7 +200,7 @@
 .tree-loading {
     padding: 3rem 2rem;
     text-align: center;
-    color: #666;
+    color: var(--sa-text-muted);
 }
 
 /* Truncation warning */
@@ -212,7 +212,7 @@
 .inventory-tree-stats {
     font-size: 13px;
     padding: 4px 0;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--sa-border);
 }
 
 /* Search input */

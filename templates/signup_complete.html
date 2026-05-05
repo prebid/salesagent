@@ -4,7 +4,7 @@
 
 {% block content %}
 <div style="max-width: 800px; margin: 3rem auto; padding: 0 1rem;">
-    <div class="card" style="text-align: center;">
+    <div class="sa-card" style="text-align: center;">
         <!-- Success Icon -->
         <div style="margin-bottom: 2rem;">
             <div style="width: 100px; height: 100px; background: linear-gradient(135deg, #34A853 0%, #4CAF50 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto; box-shadow: 0 4px 12px rgba(52, 168, 83, 0.3);">
@@ -14,30 +14,30 @@
             </div>
         </div>
 
-        <h1 style="margin-bottom: 1rem; color: #1a1a1a;">🎉 Welcome to AdCP Sales Agent!</h1>
-        <p style="font-size: 1.2rem; color: #666; margin-bottom: 2rem;">
+        <h1 style="margin-bottom: 1rem; color: var(--sa-text-strong);">🎉 Welcome to AdCP Sales Agent!</h1>
+        <p style="font-size: 1.2rem; color: var(--sa-text-muted); margin-bottom: 2rem;">
             Your account has been created successfully, <strong>{{ tenant.name }}</strong>!
         </p>
 
         <!-- Tenant Information -->
-        <div style="background: #f8f9fa; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; text-align: left;">
-            <h3 style="margin-bottom: 1rem; color: #1a1a1a;">📋 Your Account Details</h3>
+        <div style="background: var(--sa-gray-50); border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; text-align: left;">
+            <h3 style="margin-bottom: 1rem; color: var(--sa-text-strong);">📋 Your Account Details</h3>
 
             <div style="display: grid; gap: 1rem;">
                 <div>
-                    <strong style="color: #666;">Publisher Name:</strong><br>
+                    <strong style="color: var(--sa-text-muted);">Publisher Name:</strong><br>
                     <span style="font-size: 1.1rem;">{{ tenant.name }}</span>
                 </div>
 
                 <div>
-                    <strong style="color: #666;">Subdomain (auto-generated):</strong><br>
+                    <strong style="color: var(--sa-text-muted);">Subdomain (auto-generated):</strong><br>
                     <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9rem;">{{ tenant.subdomain }}.{{ sales_agent_domain }}</code>
                     <br>
-                    <small style="color: #888; font-size: 0.8rem;">You can configure a custom domain in settings</small>
+                    <small style="color: var(--sa-text-faint); font-size: var(--sa-text-xs);">You can configure a custom domain in settings</small>
                 </div>
 
                 <div>
-                    <strong style="color: #666;">Your Dashboard URL:</strong><br>
+                    <strong style="color: var(--sa-text-muted);">Your Dashboard URL:</strong><br>
                     {% if tenant.subdomain and tenant.subdomain != 'localhost' %}
                         <a href="https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/admin/" target="_blank" style="color: #4285F4; text-decoration: none; font-weight: 500;">
                             https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/admin/
@@ -50,7 +50,7 @@
                 </div>
 
                 <div>
-                    <strong style="color: #666;">Ad Server:</strong><br>
+                    <strong style="color: var(--sa-text-muted);">Ad Server:</strong><br>
                     <span style="text-transform: capitalize;">{{ tenant.ad_server.replace('_', ' ') }}</span>
                 </div>
             </div>
@@ -60,7 +60,7 @@
         <div style="background: #e3f2fd; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; text-align: left;">
             <h3 style="margin-bottom: 1rem; color: #1565c0;">🚀 Next Steps</h3>
 
-            <ol style="margin: 0; padding-left: 1.5rem; color: #666;">
+            <ol style="margin: 0; padding-left: 1.5rem; color: var(--sa-text-muted);">
                 <li style="margin-bottom: 0.75rem;">
                     <strong>Complete Ad Server Setup</strong><br>
                     <small>Configure your {{ tenant.ad_server.replace('_', ' ') }} integration in Settings</small>
@@ -102,9 +102,9 @@
         </div>
 
         <!-- Help Resources -->
-        <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid #eee;">
-            <h3 style="margin-bottom: 1rem; color: #1a1a1a; font-size: 1rem;">📚 Need Help?</h3>
-            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
+        <div style="margin-top: var(--sa-space-7); padding-top: var(--sa-space-6); border-top: 1px solid var(--sa-border);">
+            <h3 style="margin-bottom: 1rem; color: var(--sa-text-strong); font-size: 1rem;">📚 Need Help?</h3>
+            <p style="color: var(--sa-text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
                 Check out these resources to get the most out of your Sales Agent:
             </p>
 
@@ -121,40 +121,14 @@
 </div>
 
 <style>
-.btn {
-    transition: transform 0.2s, box-shadow 0.2s;
-    text-decoration: none;
-    display: inline-block;
-    text-align: center;
-}
-
-.btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 12px rgba(0,0,0,0.15);
-}
-
-.btn-secondary {
-    background: #6c757d;
-    color: white;
-}
-
-.btn-secondary:hover {
-    background: #5a6268;
-}
+/* Page-specific: success-page card animation + lifted button hover. */
+.btn { transition: transform 0.2s, box-shadow 0.2s; text-decoration: none; display: inline-block; text-align: center; }
+.btn:hover { transform: translateY(-2px); box-shadow: var(--sa-shadow-md); }
 
 @keyframes slideInUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
-
-.card {
-    animation: slideInUp 0.5s ease-out;
-}
+.sa-card { animation: slideInUp 0.5s ease-out; }
 </style>
 {% endblock %}

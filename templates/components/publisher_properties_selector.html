@@ -11,17 +11,17 @@
 
 <style>
 .publisher-props-widget {
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--sa-border);
     border-radius: 8px;
     padding: 1.5rem;
-    background: #f8f9fa;
+    background: var(--sa-gray-50);
     margin: 1rem 0;
 }
 
 .publisher-props-widget h4 {
     margin-top: 0;
     margin-bottom: 0.5rem;
-    color: #333;
+    color: var(--sa-text-strong);
 }
 
 .property-mode-selector {
@@ -39,7 +39,7 @@
 }
 
 .publisher-group {
-    border-bottom: 2px solid #ddd;
+    border-bottom: 2px solid var(--sa-border);
 }
 
 .publisher-group:last-child {
@@ -55,25 +55,25 @@
 }
 
 .publisher-header.tags-mode {
-    background: #e8f5e9;
-    color: #2e7d32;
+    background: var(--sa-success-tint);
+    color: var(--sa-success-text);
 }
 
 .publisher-header.ids-mode {
-    background: #e8f4fd;
-    color: #1565c0;
+    background: var(--sa-info-tint);
+    color: var(--sa-info-text);
 }
 
 .publisher-header.full-mode {
-    background: #fff3e0;
-    color: #e65100;
+    background: var(--sa-warning-tint);
+    color: var(--sa-warning-text);
 }
 
 .property-item {
     display: flex;
     align-items: center;
     padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--sa-border);
     cursor: pointer;
     transition: background 0.2s;
 }
@@ -94,7 +94,7 @@
 
 .property-id-badge {
     background: #e0e0e0;
-    color: #333;
+    color: var(--sa-text-strong);
     padding: 0.2rem 0.5rem;
     border-radius: 3px;
     font-family: monospace;
@@ -110,30 +110,30 @@
 }
 
 .property-name {
-    color: #555;
+    color: var(--sa-text-default);
     font-size: 0.85em;
     margin-left: 0.75rem;
 }
 
 .no-properties-warning {
-    background: #fff3cd;
-    border: 1px solid #ffc107;
-    padding: 1rem;
-    border-radius: 4px;
+    background: var(--sa-warning-tint);
+    border: 1px solid var(--sa-warning-border);
+    padding: var(--sa-space-4);
+    border-radius: var(--sa-radius-md);
 }
 
 .properties-list-container {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ddd;
+    border: 1px solid var(--sa-border);
     border-radius: 4px;
-    background: #fafafa;
+    background: var(--sa-gray-50);
 }
 </style>
 
 <div class="publisher-props-widget">
     <h4><i class="fas fa-building"></i> Publisher Properties</h4>
-    <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
+    <p style="color: var(--sa-text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
         Select which publisher properties this product can serve on.
     </p>
 
@@ -143,28 +143,28 @@
             <input type="radio" name="property_mode" value="tags" onchange="togglePropertyMode()"
                    {% if not selected_publisher_properties or (selected_publisher_properties and selected_publisher_properties[0].selection_type == 'by_tag') %}checked{% endif %}>
             Select by Tags
-            <small style="display: block; color: #666; margin-left: 1.5rem;">Choose tags from specific publishers</small>
+            <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Choose tags from specific publishers</small>
         </label>
 
         <label>
             <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()"
                    {% if selected_publisher_properties and selected_publisher_properties[0].selection_type == 'by_id' %}checked{% endif %}>
             Select by Property IDs
-            <small style="display: block; color: #666; margin-left: 1.5rem;">Choose specific properties from publishers</small>
+            <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Choose specific properties from publishers</small>
         </label>
 
         <label>
             <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()"
                    {% if selected_publisher_properties and selected_publisher_properties[0].selection_type not in ['by_id', 'by_tag'] %}checked{% endif %}>
             Specify Full Properties (Legacy)
-            <small style="display: block; color: #666; margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
+            <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
         </label>
     </div>
 
     <!-- Tags Section -->
     <div id="property-tags-section" style="margin-top: 1rem;">
         <label style="font-weight: 600;">Select Property Tags *</label>
-        <small style="color: #666; display: block; margin-bottom: 0.5rem;">Select tags from specific publishers. Each selection targets that tag on that publisher only.</small>
+        <small style="color: var(--sa-text-muted); display: block; margin-bottom: 0.5rem;">Select tags from specific publishers. Each selection targets that tag on that publisher only.</small>
 
         {# Build tags grouped by publisher_domain #}
         {% set tags_by_publisher = {} %}
@@ -190,7 +190,7 @@
             <div class="publisher-group">
                 <div class="publisher-header tags-mode">
                     <i class="fas fa-globe" style="margin-right: 0.5rem;"></i>{{ domain }}
-                    <span style="font-weight: normal; color: #666; font-size: 0.85em; margin-left: 0.5rem;">({{ tags|length }} tag{{ 's' if tags|length != 1 else '' }})</span>
+                    <span style="font-weight: normal; color: var(--sa-text-muted); font-size: 0.85em; margin-left: 0.5rem;">({{ tags|length }} tag{{ 's' if tags|length != 1 else '' }})</span>
                 </div>
                 {% for tag in tags|sort %}
                 {% set is_selected = false %}
@@ -224,7 +224,7 @@
     <!-- Property IDs Section -->
     <div id="property-ids-section" style="margin-top: 1rem; display: none;">
         <label style="font-weight: 600;">Select Property IDs *</label>
-        <small style="color: #666; display: block; margin-bottom: 0.5rem;">Select property IDs from your authorized inventory, grouped by publisher.</small>
+        <small style="color: var(--sa-text-muted); display: block; margin-bottom: 0.5rem;">Select property IDs from your authorized inventory, grouped by publisher.</small>
 
         {% if authorized_properties and authorized_properties|length > 0 %}
         {# Group properties by publisher_domain #}
@@ -242,7 +242,7 @@
             <div class="publisher-group">
                 <div class="publisher-header ids-mode">
                     <i class="fas fa-globe" style="margin-right: 0.5rem;"></i>{{ domain }}
-                    <span style="font-weight: normal; color: #666; font-size: 0.85em; margin-left: 0.5rem;">({{ props|length }} properties)</span>
+                    <span style="font-weight: normal; color: var(--sa-text-muted); font-size: 0.85em; margin-left: 0.5rem;">({{ props|length }} properties)</span>
                 </div>
                 {% for prop in props %}
                 {% set is_selected = false %}

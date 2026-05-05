@@ -15,11 +15,13 @@ function validateAccessControl() {
     return true;
 }
 </script>
-<div class="card" style="max-width: 600px; margin: 0 auto;">
-    <h2>Create New Account</h2>
-    <p style="color: #666; margin-bottom: 2rem;">
-        Create a new publisher account. The publisher will complete their setup after logging in.
-    </p>
+<div class="sa-card" style="max-width: 600px; margin: 0 auto;">
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <div>
+            <h2 class="sa-page-header__title">Create New Account</h2>
+            <p class="sa-page-header__subtitle">Create a new publisher account. The publisher will complete their setup after logging in.</p>
+        </div>
+    </header>
 
     {% if error %}
     <div class="alert alert-error">{{ error }}</div>
@@ -47,7 +49,7 @@ function validateAccessControl() {
             <small>Access via subdomain (nytimes.localhost:8080) or path (localhost:8080 with x-adcp-tenant header). Leave blank to use tenant ID.</small>
         </div>
 
-        <h3 style="margin-top: 2rem;">Access Control</h3>
+        <h3 style="margin-top: var(--sa-space-6);">Access Control</h3>
 
         <div class="form-group">
             <label for="authorized_emails">Authorized Email Addresses *</label>
@@ -63,14 +65,14 @@ function validateAccessControl() {
             <small>Comma-separated list of email domains (anyone @domain can access)</small>
         </div>
 
-        <div class="alert" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; margin-bottom: 1rem;">
+        <div class="alert alert-warning">
             <strong>⚠️ Access Control Required:</strong> You must specify at least one authorized email or domain.
             Without this, nobody will be able to access the tenant.
         </div>
 
-        <div style="margin-top: 2rem; display: flex; gap: 1rem;">
-            <button type="submit" class="btn">Create Account</button>
-            <a href="/" class="btn btn-secondary">Cancel</a>
+        <div style="margin-top: var(--sa-space-5); display: flex; gap: var(--sa-space-4);">
+            <button type="submit" class="btn btn-primary">Create Account</button>
+            <a href="/" class="btn btn-ghost">Cancel</a>
         </div>
     </form>
 </div>

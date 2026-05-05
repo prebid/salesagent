@@ -3,31 +3,35 @@
 {% block title %}Create Inventory Profile - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card">
+<div class="sa-card">
     <div class="back-button-container">
         <a href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
             ← Back to Inventory Profiles
         </a>
     </div>
 
-    <h2>Create Inventory Profile</h2>
-    <p class="text-muted">Create a reusable inventory configuration that can be used across multiple products</p>
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <div>
+            <h2 class="sa-page-header__title">Create Inventory Profile</h2>
+            <p class="sa-page-header__subtitle">Create a reusable inventory configuration that can be used across multiple products</p>
+        </div>
+    </header>
 
     <form id="profile-form" method="POST">
         <!-- Section 1: Basic Information -->
-        <h3 style="margin-top: 0; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Profile Information</h3>
-        <p style="color: #666; margin-bottom: 1.5rem;">Basic details about this inventory profile</p>
+        <h3 style="margin-top: 0; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Profile Information</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1.5rem;">Basic details about this inventory profile</p>
 
         <div class="form-group">
             <label for="name">Profile Name *</label>
             <input type="text" id="name" name="name" required placeholder="e.g., Homepage Premium Display">
-            <small style="color: #666;">A descriptive name for this inventory configuration</small>
+            <small style="color: var(--sa-text-muted);">A descriptive name for this inventory configuration</small>
         </div>
 
         <div class="form-group">
             <label for="profile_id">Profile ID</label>
             <input type="text" id="profile_id" name="profile_id" placeholder="Auto-generated from name">
-            <small style="color: #666;">Leave blank to auto-generate. Used in URLs and APIs.</small>
+            <small style="color: var(--sa-text-muted);">Leave blank to auto-generate. Used in URLs and APIs.</small>
         </div>
 
         <div class="form-group">
@@ -36,8 +40,8 @@
         </div>
 
         <!-- Section 2: Inventory Selection -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Inventory (Ad Units & Placements)</h3>
-        <p style="color: #666; margin-bottom: 1.5rem;">Select ad units and placements from your ad server inventory</p>
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Inventory (Ad Units & Placements)</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1.5rem;">Select ad units and placements from your ad server inventory</p>
 
         <div class="form-group">
             <label for="ad-unit-search">Ad Units</label>
@@ -47,8 +51,8 @@
                     Browse Ad Units
                 </button>
             </div>
-            <div id="selected-ad-units" style="min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #f9f9f9;">
-                <span style="color: #999;">No ad units selected</span>
+            <div id="selected-ad-units" style="min-height: 60px; border: 1px solid var(--sa-border); border-radius: 4px; padding: 0.5rem; background: var(--sa-gray-50);">
+                <span style="color: var(--sa-text-faint);">No ad units selected</span>
             </div>
             <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;"></textarea>
         </div>
@@ -61,8 +65,8 @@
                     Browse Placements
                 </button>
             </div>
-            <div id="selected-placements" style="min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #f9f9f9;">
-                <span style="color: #999;">No placements selected</span>
+            <div id="selected-placements" style="min-height: 60px; border: 1px solid var(--sa-border); border-radius: 4px; padding: 0.5rem; background: var(--sa-gray-50);">
+                <span style="color: var(--sa-text-faint);">No placements selected</span>
             </div>
             <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;"></textarea>
         </div>
@@ -75,24 +79,24 @@
         </div>
 
         <!-- Section 3: Creative Formats -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Creative Formats *</h3>
-        <p style="color: #666; margin-bottom: 1rem;">Select which creative formats are supported by this inventory</p>
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Creative Formats *</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">Select which creative formats are supported by this inventory</p>
 
         <!-- Search box for formats -->
         <div id="format-search-box" style="margin-bottom: 1rem;">
             <input type="text" id="format-search-input" placeholder="Search formats by name, type, or size..."
-                   style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                   style="width: 100%; padding: 0.5rem; border: 1px solid var(--sa-border); border-radius: 4px;">
         </div>
 
         <!-- Selected formats (tags) -->
-        <div id="selected-formats" style="margin-bottom: 1rem; padding: 1rem; background: #f0f7ff; border: 1px solid #d0e7ff; border-radius: 4px; min-height: 50px; display: none;">
-            <div style="font-weight: 600; margin-bottom: 0.5rem; color: #0066cc;">Selected Formats:</div>
+        <div id="selected-formats" style="margin-bottom: 1rem; padding: 1rem; background: var(--sa-info-tint); border: 1px solid var(--sa-info-border); border-radius: 4px; min-height: 50px; display: none;">
+            <div style="font-weight: 600; margin-bottom: 0.5rem; color: var(--sa-info-text);">Selected Formats:</div>
             <div id="selected-formats-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
         </div>
 
         <!-- Format list -->
         <div id="format-list" style="margin-top: 1rem;">
-            <div id="format-loading" style="text-align: center; padding: 2rem; color: #666;">
+            <div id="format-loading" style="text-align: center; padding: 2rem; color: var(--sa-text-muted);">
                 Loading formats from creative agents...
             </div>
             <div id="format-results" style="display: none;"></div>
@@ -102,10 +106,10 @@
         <input type="hidden" id="formats-data" name="formats" value="[]">
 
         <!-- Section 4: Publisher Properties -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Publisher Properties *</h3>
-        <p style="color: #666; margin-bottom: 1rem;">Specify which publisher properties (websites, apps, etc.) this inventory represents</p>
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Publisher Properties *</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">Specify which publisher properties (websites, apps, etc.) this inventory represents</p>
 
-        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+        <div class="alert alert-info">
             <strong>Required:</strong> Inventory profiles must specify which properties they cover for AdCP compliance.
         </div>
 
@@ -117,7 +121,7 @@
                     <input type="radio" name="property_mode" value="tags" checked onchange="togglePropertyMode()">
                     Use Property Tags (Recommended)
                 </label>
-                <small style="display: block; color: #666; margin-left: 1.5rem;">Assign tags that group related properties. Simple and flexible - buyers fetch property details via list_authorized_properties.</small>
+                <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Assign tags that group related properties. Simple and flexible - buyers fetch property details via list_authorized_properties.</small>
             </div>
 
             <div class="form-group" style="margin-top: 0.5rem;">
@@ -125,7 +129,7 @@
                     <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()">
                     Select Specific Properties (by ID)
                 </label>
-                <small style="display: block; color: #666; margin-left: 1.5rem;">Choose exact properties from your authorized inventory. Provides precise property-level control.</small>
+                <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Choose exact properties from your authorized inventory. Provides precise property-level control.</small>
             </div>
 
             <div class="form-group" style="margin-top: 0.5rem;">
@@ -133,7 +137,7 @@
                     <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()">
                     Specify Full Properties (Legacy)
                 </label>
-                <small style="display: block; color: #666; margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
+                <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
             </div>
         </div>
 
@@ -142,7 +146,7 @@
             <div class="form-group">
                 <label for="property_tags">Property Tags *</label>
                 <input type="text" id="property_tags" name="property_tags" placeholder="e.g., all_inventory, premium, sports">
-                <small style="color: #666;">Comma-separated list of tags. Example: all_inventory, premium, homepage</small>
+                <small style="color: var(--sa-text-muted);">Comma-separated list of tags. Example: all_inventory, premium, homepage</small>
             </div>
         </div>
 
@@ -150,16 +154,16 @@
         <div id="property-ids-section" style="margin-top: 1rem; display: none;">
             <div class="form-group">
                 <label>Select Specific Properties *</label>
-                <small style="color: #666; display: block; margin-bottom: 0.5rem;">Select one or more properties from your authorized inventory.</small>
+                <small style="color: var(--sa-text-muted); display: block; margin-bottom: 0.5rem;">Select one or more properties from your authorized inventory.</small>
                 {% if authorized_properties and authorized_properties|length > 0 %}
-                <div style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #fafafa;">
+                <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--sa-border); border-radius: 4px; padding: 0.5rem; background: #fafafa;">
                     {% for prop in authorized_properties %}
                     <label style="display: block; padding: 0.5rem; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s;"
                            onmouseover="this.style.background='#f0f7ff'"
                            onmouseout="this.style.background='transparent'">
                         <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}" style="margin-right: 0.5rem;">
                         <strong>{{ prop.name or prop.property_id }}</strong>
-                        <span style="color: #666; font-size: 0.9em;">({{ prop.property_type }})</span>
+                        <span style="color: var(--sa-text-muted); font-size: 0.9em;">({{ prop.property_type }})</span>
                         {% if prop.tags %}
                         <div style="margin-left: 1.5rem; margin-top: 0.25rem;">
                             {% for tag in prop.tags %}
@@ -192,7 +196,7 @@
                 <textarea id="publisher_properties" name="publisher_properties" rows="8"
                           placeholder='[{"publisher_domain": "example.com", "property_tags": ["all_inventory"]}]'
                           style="font-family: monospace; font-size: 0.9rem;"></textarea>
-                <small style="color: #666;">
+                <small style="color: var(--sa-text-muted);">
                     AdCP-compliant publisher properties structure. Each entry must include:
                     <ul style="margin-top: 0.5rem; margin-bottom: 0;">
                         <li><code>publisher_domain</code> (required): Domain where adagents.json is hosted</li>
@@ -209,15 +213,15 @@
         </div>
 
         <!-- Section 5: Optional Targeting Template -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid #007bff; padding-bottom: 0.5rem;">Default Targeting (Optional)</h3>
-        <p style="color: #666; margin-bottom: 1rem;">Optional default targeting rules that products can inherit</p>
+        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Default Targeting (Optional)</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">Optional default targeting rules that products can inherit</p>
 
         <div class="form-group">
             <label for="targeting_template">Targeting Template (JSON)</label>
             <textarea id="targeting_template" name="targeting_template" rows="6"
                       placeholder='{"geo_countries": ["US"], "device_type_any_of": ["desktop", "mobile"]}'
                       style="font-family: monospace; font-size: 0.9rem;"></textarea>
-            <small style="color: #666;">Optional. Products using this profile can inherit or override these targeting rules.</small>
+            <small style="color: var(--sa-text-muted);">Optional. Products using this profile can inherit or override these targeting rules.</small>
         </div>
 
         <!-- Submit Buttons -->
@@ -304,7 +308,7 @@ function displayFormats(formats) {
     const container = document.getElementById('format-results');
 
     if (formats.length === 0) {
-        container.innerHTML = '<div style="text-align: center; padding: 2rem; color: #666;">No formats found</div>';
+        container.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--sa-text-muted);">No formats found</div>';
         container.style.display = 'block';
         return;
     }
@@ -507,69 +511,4 @@ document.getElementById('profile-form').addEventListener('submit', function(e) {
 });
 </script>
 
-<style>
-.form-group {
-    margin-bottom: 1.5rem;
-}
-
-.form-group label {
-    display: block;
-    font-weight: 600;
-    margin-bottom: 0.5rem;
-    color: #333;
-}
-
-.form-group input[type="text"],
-.form-group textarea {
-    width: 100%;
-    padding: 0.5rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 1rem;
-}
-
-.form-group small {
-    display: block;
-    margin-top: 0.25rem;
-    font-size: 0.875rem;
-}
-
-.btn {
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    border: none;
-    cursor: pointer;
-    font-size: 1rem;
-}
-
-.btn-primary {
-    background: #007bff;
-    color: white;
-}
-
-.btn-primary:hover {
-    background: #0056b3;
-}
-
-.btn-secondary {
-    background: #6c757d;
-    color: white;
-}
-
-.btn-secondary:hover {
-    background: #545b62;
-}
-
-.btn-sm {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.875rem;
-}
-
-code {
-    background: #f4f4f4;
-    padding: 0.2rem 0.4rem;
-    border-radius: 3px;
-    font-family: monospace;
-}
-</style>
 {% endblock %}

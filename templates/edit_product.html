@@ -3,21 +3,23 @@
 {% block title %}Edit Product - {{ product.name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card">
+<div class="sa-card">
     <div class="back-button-container">
         <a href="{{ url_for('products.list_products', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
             ← Back to Products
         </a>
     </div>
 
-    <h2>Edit Product</h2>
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <h2 class="sa-page-header__title">Edit Product</h2>
+    </header>
 
     {% if error %}
     <div class="alert alert-error">{{ error }}</div>
     {% endif %}
 
     <form method="POST" onsubmit="prepareFormSubmission(event)">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sa-space-4);">
             <div class="form-group">
                 <label for="name">Product Name *</label>
                 <input type="text" id="name" name="name" value="{{ product.name }}" required>
@@ -25,7 +27,7 @@
 
             <div class="form-group">
                 <label>Product ID</label>
-                <input type="text" value="{{ product.product_id }}" disabled style="background: #f5f5f5;">
+                <input type="text" value="{{ product.product_id }}" disabled style="background: var(--sa-gray-100);">
             </div>
         </div>
 
@@ -37,9 +39,9 @@
         <h3 style="margin-top: 2rem;">Pricing & Delivery</h3>
 
         <!-- Pricing Options (AdCP PR #88) -->
-        <div style="margin-top: 1.5rem; padding: 1rem; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+        <div style="margin-top: 1.5rem; padding: 1rem; background: var(--sa-gray-50); border: 1px solid var(--sa-border); border-radius: 4px;">
             <h4 style="margin-top: 0; margin-bottom: 0.5rem;">Pricing Options (Recommended)</h4>
-            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">Add one or more pricing models for this product. Buyers can choose which model to use.</p>
+            <p style="color: var(--sa-text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Add one or more pricing models for this product. Buyers can choose which model to use.</p>
 
             <div id="pricing-options-container">
                 <!-- Pricing options will be added here by JavaScript -->
@@ -52,10 +54,10 @@
 
         <!-- Legacy Pricing (Backward Compatibility) -->
         <details style="margin-top: 1.5rem;">
-            <summary style="cursor: pointer; padding: 0.5rem; background: #f8f9fa; border-radius: 4px;">
+            <summary style="cursor: pointer; padding: 0.5rem; background: var(--sa-gray-50); border-radius: 4px;">
                 <strong>Legacy Pricing (Deprecated)</strong> - Use Pricing Options above instead
             </summary>
-            <div style="margin-top: 1rem; padding: 1rem; border: 1px solid #dee2e6; border-radius: 4px;">
+            <div style="margin-top: 1rem; padding: 1rem; border: 1px solid var(--sa-border); border-radius: 4px;">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                     <div class="form-group">
                         <label for="delivery_type">Delivery Type</label>
@@ -81,7 +83,7 @@
                                    value="{{ product.price_guidance.max if product.price_guidance else '' }}"
                                    placeholder="Max" step="0.01" style="flex: 1;">
                         </div>
-                        <small style="color: #666;">Suggested CPM range for non-guaranteed inventory</small>
+                        <small style="color: var(--sa-text-muted);">Suggested CPM range for non-guaranteed inventory</small>
                     </div>
 
                     <div class="form-group">
@@ -90,7 +92,7 @@
                                value="{{ product.min_spend if product.min_spend else '' }}"
                                placeholder="Use tenant default{% if tenant_min_spend %} ({{ tenant_min_spend }} {{ tenant_currency or 'USD' }}){% endif %}"
                                step="0.01" min="0">
-                        <small style="color: #666;">
+                        <small style="color: var(--sa-text-muted);">
                             {% if tenant_min_spend %}
                             Override the tenant's global minimum spend ({{ tenant_min_spend }} {{ tenant_currency or 'USD' }}). Leave empty to use global setting.
                             {% else %}
@@ -106,14 +108,14 @@
 
         <div class="form-group">
             <label>Select format templates and configure sizes:</label>
-            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
+            <p style="color: var(--sa-text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
                 Choose format templates and specify which sizes this product supports. Creative type (image, JS, HTML5)
                 is auto-detected when advertisers upload creatives.
             </p>
 
             <!-- Format Template Picker Container -->
             <div id="format-template-picker-container">
-                <div style="text-align: center; padding: 2rem; color: #666;">
+                <div style="text-align: center; padding: 2rem; color: var(--sa-text-muted);">
                     Loading format templates...
                 </div>
             </div>
@@ -129,7 +131,7 @@
         <h3 style="margin-top: 2rem;">
             <i class="fas fa-building"></i> Publisher Properties (AdCP)
         </h3>
-        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+        <div class="alert alert-info">
             <strong>Required:</strong> Specify which properties this product covers so buyers can validate against their authorized properties.
         </div>
 
@@ -139,9 +141,9 @@
         <h3 style="margin-top: 2rem;">
             <i class="fas fa-bullseye"></i> Custom Targeting (Optional)
         </h3>
-        <div class="alert alert-info" style="background: #fff9e6; border-left: 4px solid #ffc107; padding: 1rem; margin-bottom: 1rem;">
+        <div class="alert alert-warning">
             <strong>Who Sees This:</strong> Configure custom targeting (key-value pairs) to define which audience segments will see ads for this product.
-            <br><small style="color: #666;">Example: sport=basketball, genre=action, age=18-34</small>
+            <br><small style="color: var(--sa-text-muted);">Example: sport=basketball, genre=action, age=18-34</small>
         </div>
 
         {# Enhanced targeting selector with OR/AND operators and include/exclude #}
@@ -162,7 +164,7 @@
         <h3 style="margin-top: 2rem;">
             <i class="fas fa-lock"></i> Principal Access Control
         </h3>
-        <p style="color: #666; margin-bottom: 1rem;">
+        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">
             Restrict which advertisers/principals can see this product. Leave empty to show to all principals.
         </p>
 
@@ -181,7 +183,7 @@
                     <option disabled>No principals configured</option>
                 {% endif %}
             </select>
-            <small style="color: #666;">
+            <small style="color: var(--sa-text-muted);">
                 Hold Ctrl/Cmd to select multiple. If none selected, product is visible to all principals.
             </small>
         </div>
@@ -197,7 +199,7 @@
         <h3 style="margin-top: 2rem;">
             <i class="fas fa-info-circle"></i> Product Details
         </h3>
-        <div class="alert" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 1rem; margin-bottom: 1rem;">
+        <div class="alert alert-info">
             <strong>Required:</strong> Delivery measurement is required per AdCP spec. Other details enhance product visibility for buyers.
         </div>
 
@@ -224,7 +226,7 @@
                         <option value="IAS">
                     {% endif %}
                 </datalist>
-                <small style="color: #666;">Select from configured providers or enter custom (autocomplete enabled)</small>
+                <small style="color: var(--sa-text-muted);">Select from configured providers or enter custom (autocomplete enabled)</small>
             </div>
 
             <div class="form-group">
@@ -232,7 +234,7 @@
                 <input type="text" id="delivery_measurement_notes" name="delivery_measurement_notes"
                        placeholder="e.g., MRC-accredited viewability. 50% in-view for 1s"
                        value="{{ product.delivery_measurement.notes if product.delivery_measurement and product.delivery_measurement.notes else '' }}">
-                <small style="color: #666;">Additional methodology details (optional)</small>
+                <small style="color: var(--sa-text-muted);">Additional methodology details (optional)</small>
             </div>
         </div>
 
@@ -241,12 +243,12 @@
             <input type="url" id="product_image_url" name="product_image_url"
                    placeholder="https://example.com/product-image.jpg"
                    value="{{ product.product_card.manifest.product_image if product.product_card and product.product_card.manifest else '' }}">
-            <small style="color: #666;">
+            <small style="color: var(--sa-text-muted);">
                 Product image for visual cards (300x400px recommended). Leave blank to keep existing or auto-generate.
             </small>
             {% if product.product_card and product.product_card.manifest and product.product_card.manifest.product_image %}
             <div style="margin-top: 0.5rem;">
-                <img src="{{ product.product_card.manifest.product_image }}" alt="Current product image" style="max-width: 200px; border: 1px solid #ddd; border-radius: 4px;">
+                <img src="{{ product.product_card.manifest.product_image }}" alt="Current product image" style="max-width: 200px; border: 1px solid var(--sa-border); border-radius: 4px;">
             </div>
             {% endif %}
         </div>
@@ -256,7 +258,7 @@
                 <input type="checkbox" id="enable_markdown" name="enable_markdown" value="1">
                 Description supports markdown formatting
             </label>
-            <small style="display: block; color: #666; margin-left: 1.5rem;">
+            <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">
                 Enable to use **bold**, *italic*, and other markdown formatting in description
             </small>
         </div>
@@ -329,7 +331,7 @@ function addPricingOption(existingData = null) {
     const index = pricingOptionIndex++;
 
     const optionHtml = `
-        <div class="pricing-option" id="pricing-option-${index}" style="border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem; margin-bottom: 1rem; background: white;">
+        <div class="pricing-option" id="pricing-option-${index}" style="border: 1px solid var(--sa-border); border-radius: 4px; padding: 1rem; margin-bottom: 1rem; background: white;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <h5 style="margin: 0;">Pricing Option #${index + 1}</h5>
                 <button type="button" class="btn btn-secondary" onclick="removePricingOption(${index})" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">Remove</button>
@@ -349,7 +351,7 @@ function addPricingOption(existingData = null) {
                         <option value="cpv" ${existingData && existingData.pricing_model === 'cpv' ? 'selected' : ''}>CPV (Cost per view)</option>
                         <option value="flat_rate" ${existingData && existingData.pricing_model === 'flat_rate' ? 'selected' : ''}>Flat Rate</option>
                     </select>
-                    <small style="color: #666;">Guaranteed: CPM Fixed, Flat Rate | Non-guaranteed: CPM/VCPM/CPC Auction</small>
+                    <small style="color: var(--sa-text-muted);">Guaranteed: CPM Fixed, Flat Rate | Non-guaranteed: CPM/VCPM/CPC Auction</small>
                 </div>
 
                 <div class="form-group">
@@ -366,23 +368,23 @@ function addPricingOption(existingData = null) {
                 <div class="form-group" id="rate-group-${index}">
                     <label>Rate *</label>
                     <input type="number" name="rate_${index}" step="0.01" min="0" placeholder="e.g., 12.50" value="${existingData && existingData.rate ? existingData.rate : ''}">
-                    <small style="color: #666;">Price per unit (CPM, CPCV, etc.)</small>
+                    <small style="color: var(--sa-text-muted);">Price per unit (CPM, CPCV, etc.)</small>
                 </div>
 
                 <div class="form-group" id="floor-group-${index}" style="display: none;">
                     <label>Floor Price *</label>
                     <input type="number" name="floor_${index}" step="0.01" min="0" placeholder="Minimum bid" value="${existingData && existingData.price_guidance ? existingData.price_guidance.floor : ''}">
-                    <small style="color: #666;">Minimum acceptable price</small>
+                    <small style="color: var(--sa-text-muted);">Minimum acceptable price</small>
                 </div>
 
                 <div class="form-group">
                     <label>Min Spend Per Package</label>
                     <input type="number" name="min_spend_${index}" step="0.01" min="0" placeholder="Optional" value="${existingData && existingData.min_spend_per_package ? existingData.min_spend_per_package : ''}">
-                    <small style="color: #666;">Minimum budget requirement</small>
+                    <small style="color: var(--sa-text-muted);">Minimum budget requirement</small>
                 </div>
             </div>
 
-            <div id="price-guidance-${index}" style="display: none; margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+            <div id="price-guidance-${index}" style="display: none; margin-top: 1rem; padding: 1rem; background: var(--sa-gray-50); border-radius: 4px;">
                 <strong>Price Guidance (Optional)</strong>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin-top: 0.5rem;">
                     <input type="number" name="p25_${index}" step="0.01" placeholder="P25" value="${existingData && existingData.price_guidance && existingData.price_guidance.p25 ? existingData.price_guidance.p25 : ''}">
@@ -390,10 +392,10 @@ function addPricingOption(existingData = null) {
                     <input type="number" name="p75_${index}" step="0.01" placeholder="P75" value="${existingData && existingData.price_guidance && existingData.price_guidance.p75 ? existingData.price_guidance.p75 : ''}">
                     <input type="number" name="p90_${index}" step="0.01" placeholder="P90" value="${existingData && existingData.price_guidance && existingData.price_guidance.p90 ? existingData.price_guidance.p90 : ''}">
                 </div>
-                <small style="color: #666;">Historical price percentiles for auction guidance</small>
+                <small style="color: var(--sa-text-muted);">Historical price percentiles for auction guidance</small>
             </div>
 
-            <div id="parameters-${index}" style="margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 4px; display: none;">
+            <div id="parameters-${index}" style="margin-top: 1rem; padding: 1rem; background: var(--sa-gray-50); border-radius: 4px; display: none;">
                 <strong>Model-Specific Parameters</strong>
                 <div id="params-content-${index}" style="margin-top: 0.5rem;"></div>
             </div>
@@ -459,7 +461,7 @@ function addPricingOption(existingData = null) {
                 <div>
                     <label>View Threshold</label>
                     <input type="number" name="view_threshold_${index}" step="0.01" min="0" max="1" placeholder="0.5 = 50% viewed" value="${viewThresholdValue}">
-                    <small style="color: #666;">Percentage of video that must be viewed (0.0 to 1.0)</small>
+                    <small style="color: var(--sa-text-muted);">Percentage of video that must be viewed (0.0 to 1.0)</small>
                 </div>
             `;
         } else {

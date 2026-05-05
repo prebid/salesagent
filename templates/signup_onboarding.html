@@ -3,12 +3,16 @@
 {% block title %}Create Your Account - AdCP Sales Agent{% endblock %}
 
 {% block content %}
-<div style="max-width: 700px; margin: 2rem auto; padding: 0 1rem;">
-    <div class="card">
-        <h1 style="margin-bottom: 0.5rem;">Create Your Sales Agent Account</h1>
-        <p style="color: #666; margin-bottom: 2rem;">
-            Welcome, <strong>{{ user_name or user_email }}</strong>! Let's set up your publisher account.
-        </p>
+<div style="max-width: 700px; margin: var(--sa-space-6) auto; padding: 0 var(--sa-space-4);">
+    <div class="sa-card">
+        <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+            <div>
+                <h1 class="sa-page-header__title">Create Your Sales Agent Account</h1>
+                <p class="sa-page-header__subtitle">
+                    Welcome, <strong>{{ user_name or user_email }}</strong>! Let's set up your publisher account.
+                </p>
+            </div>
+        </header>
 
         {% if error %}
         <div class="alert alert-error">{{ error }}</div>
@@ -25,7 +29,7 @@
         <form method="POST" action="{{ url_for('public.provision_tenant') }}" id="onboarding-form">
             <!-- Step 1: Publisher Information -->
             <div class="form-section">
-                <h2 style="font-size: 1.25rem; margin-bottom: 1rem; color: #1a1a1a;">📝 Publisher Information</h2>
+                <h2 style="font-size: 1.25rem; margin-bottom: var(--sa-space-4); color: var(--sa-text-strong);">📝 Publisher Information</h2>
 
                 <div class="form-group">
                     <label for="publisher_name">Publisher Name <span style="color: red;">*</span></label>
@@ -40,8 +44,8 @@
                     <small>Your company or publication name</small>
                 </div>
 
-                <div style="padding: 1rem; background: #f8f9fa; border-radius: 4px; margin-top: 1rem;">
-                    <p style="margin: 0; color: #666; font-size: 0.9rem;">
+                <div style="padding: 1rem; background: var(--sa-gray-50); border-radius: 4px; margin-top: 1rem;">
+                    <p style="margin: 0; color: var(--sa-text-muted); font-size: 0.9rem;">
                         <strong>Note:</strong> A unique subdomain will be automatically generated for your account.
                         You can later configure a custom domain (e.g., <code>sales.yourpublisher.com</code>) in settings.
                     </p>
@@ -49,29 +53,29 @@
             </div>
 
             <!-- Step 2: Ad Server Selection -->
-            <div class="form-section" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #eee;">
-                <h2 style="font-size: 1.25rem; margin-bottom: 1rem; color: #1a1a1a;">🔌 Ad Server Integration</h2>
+            <div class="form-section" style="margin-top: var(--sa-space-6); padding-top: var(--sa-space-6); border-top: 1px solid var(--sa-border);">
+                <h2 style="font-size: 1.25rem; margin-bottom: var(--sa-space-4); color: var(--sa-text-strong);">🔌 Ad Server Integration</h2>
 
                 <div class="form-group">
                     <label for="adapter">Ad Server</label>
                     <input type="hidden" id="adapter" name="adapter" value="google_ad_manager">
-                    <div style="padding: 1rem; background: #e3f2fd; border-radius: 4px; border-left: 3px solid #4285F4;">
-                        <strong>Google Ad Manager</strong>
-                        <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
-                            You'll connect your GAM account in the next step after account creation.
-                        </p>
+                    <div class="sa-banner sa-banner--info">
+                        <div>
+                            <div class="sa-banner__title">Google Ad Manager</div>
+                            <div>You'll connect your GAM account in the next step after account creation.</div>
+                        </div>
                     </div>
-                    <small style="display: block; margin-top: 0.5rem;">Need a different ad server? <a href="mailto:{{ support_email }}">Contact us</a> for enterprise setup.</small>
+                    <small style="display: block; margin-top: var(--sa-space-2);">Need a different ad server? <a href="mailto:{{ support_email }}">Contact us</a> for enterprise setup.</small>
                 </div>
             </div>
 
 
             <!-- Submit Button -->
-            <div style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #eee;">
-                <button type="submit" class="btn" style="width: 100%; font-size: 1.1rem; padding: 1rem;">
+            <div style="margin-top: var(--sa-space-6); padding-top: var(--sa-space-6); border-top: 1px solid var(--sa-border);">
+                <button type="submit" class="btn btn-primary btn-large" style="width: 100%; font-size: var(--sa-text-lg); padding: var(--sa-space-4);">
                     Create My Account →
                 </button>
-                <p style="text-align: center; margin-top: 1rem; font-size: 0.875rem; color: #666;">
+                <p style="text-align: center; margin-top: var(--sa-space-4); font-size: var(--sa-text-sm); color: var(--sa-text-muted);">
                     By creating an account, you agree to our Terms of Service
                 </p>
             </div>
@@ -93,29 +97,11 @@ document.getElementById('onboarding-form').addEventListener('submit', function(e
 </script>
 
 <style>
-.form-section {
-    margin-bottom: 1.5rem;
-}
-
-.adapter-config {
-    transition: all 0.3s ease;
-}
-
-.btn {
-    transition: transform 0.2s, box-shadow 0.2s;
-}
-
-.btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 12px rgba(0,0,0,0.15);
-}
-
-input:invalid {
-    border-color: #dc3545;
-}
-
-input:valid {
-    border-color: #28a745;
-}
+/* Page-specific: form sections + lift-on-hover button + valid/invalid input states. */
+.form-section { margin-bottom: var(--sa-space-5); }
+.adapter-config { transition: all 0.3s ease; }
+.btn:hover { transform: translateY(-2px); box-shadow: var(--sa-shadow-md); }
+input:invalid { border-color: var(--sa-danger); }
+input:valid { border-color: var(--sa-success); }
 </style>
 {% endblock %}

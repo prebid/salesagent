@@ -2,27 +2,24 @@
 {% block title %}{{ 'Edit' if edit_mode else 'Create' }} Account{% endblock %}
 {% block content %}
 <style>
-    .form-card { background: #fff; border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 600px; margin: 0 auto; }
-    .form-group { margin-bottom: 1.25rem; }
-    .form-group label { display: block; font-weight: 500; color: #374151; margin-bottom: 0.4rem; }
-    .form-group input, .form-group select { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; }
-    .form-group input:focus, .form-group select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.2); }
-    .form-group small { color: #9ca3af; font-size: 0.8rem; }
-    .form-group input[readonly] { background: #f3f4f6; cursor: not-allowed; }
-    .checkbox-group { display: flex; align-items: center; gap: 0.5rem; }
+    /* Page-specific: input[readonly] muted background; checkbox row layout */
+    .form-group input[readonly] { background: var(--sa-gray-100); cursor: not-allowed; }
+    .checkbox-group { display: flex; align-items: center; gap: var(--sa-space-2); }
     .checkbox-group input[type="checkbox"] { width: auto; }
 </style>
 
-<div style="margin-bottom: 1rem;">
-    <a href="{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}" class="btn btn-secondary">
+<div style="margin-bottom: var(--sa-space-4);">
+    <a href="{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}" class="btn btn-ghost">
         &larr; Back to Accounts
     </a>
 </div>
 
-<div class="form-card">
-    <h2>{{ 'Edit' if edit_mode else 'Create New' }} Account</h2>
+<div class="sa-card" style="max-width: 600px; margin: 0 auto;">
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <h2 class="sa-page-header__title">{{ 'Edit' if edit_mode else 'Create New' }} Account</h2>
+    </header>
 
-    <form method="POST" style="margin-top: 1.5rem;">
+    <form method="POST" style="margin-top: var(--sa-space-5);">
         {% if edit_mode %}
         <div class="form-group">
             <label>Account ID</label>
@@ -99,9 +96,9 @@
             <small>Sandbox accounts are for testing — no real ad platform resources are created.</small>
         </div>
 
-        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+        <div style="display: flex; gap: var(--sa-space-4); margin-top: var(--sa-space-5);">
             <button type="submit" class="btn btn-primary">{{ 'Update' if edit_mode else 'Create Account' }}</button>
-            <a href="{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>
+            <a href="{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}" class="btn btn-ghost">Cancel</a>
         </div>
     </form>
 </div>
