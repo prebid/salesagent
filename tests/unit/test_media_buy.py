@@ -1018,10 +1018,10 @@ class TestCreateMediaBuyStatusDetermination:
         assert _determine_media_buy_status(True, True, True, start, end, now) == "pending_start"
 
     def test_pending_when_missing_creatives(self):
-        """UC-002-ST04: no creatives -> pending_start.
+        """UC-002-ST04: no creatives -> pending_creatives.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_start = "Media buy created but not yet activated"
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
+        Spec: CONFIRMED -- media-buy-status.json: pending_creatives = "Media buy awaiting creative assets"
+        https://github.com/adcontextprotocol/adcp/blob/main/schemas/enums/media-buy-status.json
         Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
@@ -1029,7 +1029,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_start"
+        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_creatives"
 
     def test_pending_when_before_start(self):
         """UC-002-ST05: before start_time -> pending_start.

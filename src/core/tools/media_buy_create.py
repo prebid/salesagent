@@ -168,14 +168,15 @@ def _determine_media_buy_status(
     This ensures consistent status across all adapters (GAM, Mock, Kevel, etc.).
 
     Status Priority (highest to lowest) - ALL SPEC-COMPLIANT:
-    1. pending_start: Manual approval required OR needs creatives OR scheduled for future
-    2. active: Currently delivering (has creatives, approved, within flight dates)
-    3. completed: Past end date
-    4. paused: (Reserved for future use - not currently returned)
+    1. completed: Past end date
+    2. pending_creatives: Missing creatives or unapproved creatives
+    3. pending_start: Manual approval required OR scheduled for future start
+    4. active: Currently delivering (has creatives, approved, within flight dates)
+    5. paused: (Reserved for future use - not currently returned)
 
     Internal states mapped to spec statuses:
+    - "needs_creatives" → pending_creatives (missing or unapproved creatives)
     - "pending_approval" → pending_start (awaiting manual approval)
-    - "needs_creatives" → pending_start (missing or unapproved creatives)
     - "ready" → pending_start (scheduled for future start)
 
     Args:
@@ -187,23 +188,27 @@ def _determine_media_buy_status(
         now: Current time (defaults to datetime.now(UTC))
 
     Returns:
-        Status string matching AdCP MediaBuyStatus enum (pending_start, active, paused, completed)
+        Status string matching AdCP MediaBuyStatus enum
+        (pending_creatives, pending_start, active, paused, completed)
     """
     if now is None:
         now = datetime.now(UTC)
 
-    # Priority 1: Completed (past end date - check first to avoid false pending_start)
+    # Priority 1: Completed (past end date - check first to avoid false pending states)
     if now > end_time:
         return MediaBuyStatus.completed.value
 
-    # Priority 2: Pending activation (any blocking condition or scheduled for future)
-    # - Manual approval required
-    # - Missing creatives or unapproved creatives
-    # - Scheduled for future start
-    if manual_approval_required or not has_creatives or not creatives_approved or now < start_time:
+    # Priority 2: Pending creatives (missing or unapproved creatives block delivery)
+    # This is distinct from pending_start: the buy is otherwise ready, but creatives
+    # need to be assigned/approved before it can go active.
+    if not has_creatives or not creatives_approved:
+        return MediaBuyStatus.pending_creatives.value
+
+    # Priority 3: Pending start (manual approval required or scheduled for future)
+    if manual_approval_required or now < start_time:
         return MediaBuyStatus.pending_start.value
 
-    # Priority 3: Active (currently delivering - all conditions met)
+    # Priority 4: Active (currently delivering - all conditions met)
     return MediaBuyStatus.active.value
 
 
@@ -3887,6 +3892,10 @@ async def create_media_buy_raw(
     Returns:
         Dict with status and CreateMediaBuyResponse data
     """
+    # Coerce string brand shorthand to BrandReference (A2A may send raw "acme.com")
+    if isinstance(brand, str):
+        brand = BrandReference(domain=brand)
+
     # Construct spec-compliant request object at the boundary — validation happens here
     # A2A server sends dict inputs which Pydantic coerces to typed models
     try:

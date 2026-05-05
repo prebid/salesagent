@@ -1991,8 +1991,17 @@ class TestAdCPContract:
 
         if adcp_request.get("status_filter") is not None:
             # Can be string or array according to AdCP spec
-            # AdCP MediaBuyStatus enum: pending_start, active, paused, completed
-            valid_statuses = ["pending_start", "active", "paused", "completed"]
+            # AdCP MediaBuyStatus enum: pending_creatives, pending_start, active,
+            # paused, completed, rejected, canceled
+            valid_statuses = [
+                "pending_creatives",
+                "pending_start",
+                "active",
+                "paused",
+                "completed",
+                "rejected",
+                "canceled",
+            ]
             if isinstance(adcp_request["status_filter"], str):
                 assert adcp_request["status_filter"] in valid_statuses, (
                     f"Invalid status: {adcp_request['status_filter']}"

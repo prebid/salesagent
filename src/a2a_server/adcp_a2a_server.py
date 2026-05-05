@@ -129,9 +129,10 @@ def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestErr
 
     The recovery classification, error_code, and details are forwarded in the
     ``data`` field so that buyer agents (and test harness unwrapping) can
-    reconstruct the original AdCPError.
+    reconstruct the original AdCPError. Non-standard codes are translated
+    to STANDARD_ERROR_CODES at this transport boundary.
     """
-    data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.error_code}
+    data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.wire_error_code}
     if exc.details:
         data["details"] = exc.details
     if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
@@ -1317,6 +1318,13 @@ class AdCPRequestHandler(RequestHandler):
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict
         if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
             pnc_dict = json_format.MessageToDict(push_notification_config)
+            # Translate A2A protobuf authentication.scheme (singular) → AdCP schemes (plural list).
+            # A2A's protobuf AuthenticationInfo uses a single `scheme` field; AdCP's
+            # PushNotificationConfig schema uses a `schemes` array.
+            auth = pnc_dict.get("authentication") if isinstance(pnc_dict, dict) else None
+            if isinstance(auth, dict) and "scheme" in auth and "schemes" not in auth:
+                scheme_value = auth.pop("scheme")
+                auth["schemes"] = [scheme_value] if scheme_value else []
             parameters = {**parameters, "push_notification_config": pnc_dict}
         # Normalize deprecated fields before any handler sees the parameters
         from src.core.request_compat import normalize_request_params
@@ -1462,6 +1470,10 @@ class AdCPRequestHandler(RequestHandler):
             # Set A2A defaults for optional fields
             params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
             # buyer_ref removed in adcp 3.12
+
+            # Coerce string brand shorthand to BrandReference dict (A2A may send "acme.com")
+            if isinstance(params.get("brand"), str):
+                params["brand"] = {"domain": params["brand"]}
 
             # Validate required AdCP parameters (packages is optional in model but required by spec)
             required_params = ["brand", "packages", "start_time", "end_time"]

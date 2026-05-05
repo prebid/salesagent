@@ -91,6 +91,17 @@ assert all(v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()), (
 )
 
 
+def translate_error_code(code: str) -> str:
+    """Translate a server-side error code to its wire-compliant equivalent.
+
+    Codes listed in ERROR_CODE_MAPPING are translated to their standard SDK
+    counterpart. All other codes pass through unchanged — codes are only
+    rewritten when there is an explicit mapping entry. Compliance is
+    enforced separately by the architecture guard.
+    """
+    return ERROR_CODE_MAPPING.get(code, code)
+
+
 class AdCPError(Exception):
     """Base exception for all AdCP errors.
 
@@ -125,11 +136,25 @@ class AdCPError(Exception):
         if recovery is not None:
             self.recovery = recovery
 
+    @property
+    def wire_error_code(self) -> str:
+        """Wire-safe error code (translated through ERROR_CODE_MAPPING).
+
+        Used by transport-layer code that serializes errors to the wire.
+        Model methods (``to_dict``, ``to_adcp_error``) preserve the original
+        ``error_code`` so internal callers see the raw source code; transport
+        boundaries are responsible for calling this property when emitting
+        a response.
+        """
+        return translate_error_code(self.error_code)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to flat response body dict (legacy format).
 
-        Used by FastAPI exception handlers. Returns a flat dict with
-        ``error_code`` as the key name for backwards compatibility.
+        Returns a flat dict with the raw ``error_code``. Transport boundary
+        handlers (FastAPI exception handler, MCP wrapper, A2A wrapper) are
+        responsible for translating to wire-compliant codes via
+        ``translate_error_code()`` or ``wire_error_code``.
         """
         result: dict[str, Any] = {
             "error_code": self.error_code,
@@ -146,8 +171,10 @@ class AdCPError(Exception):
     def to_adcp_error(self) -> dict[str, Any]:
         """Serialize to AdCP spec-compliant ``{"errors": [...]}`` format.
 
-        Uses ``adcp_error()`` from the SDK to produce the canonical
-        error envelope with auto-recovery classification.
+        Uses ``adcp_error()`` from the SDK to produce the canonical error
+        envelope. Translation to ``STANDARD_ERROR_CODES`` happens at transport
+        boundaries via ``translate_error_code()`` — this method preserves the
+        raw ``error_code`` so internal callers retain the source classification.
         """
         return adcp_error(
             self.error_code,

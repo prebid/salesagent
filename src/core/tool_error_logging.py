@@ -176,7 +176,8 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
             extra_json = json.dumps(extra) if extra else None
         except (TypeError, ValueError):
             extra_json = None
-        raise ToolError(error.error_code, error.message, error.recovery, extra_json) from error
+        # Translate non-standard codes to STANDARD_ERROR_CODES at the MCP boundary.
+        raise ToolError(error.wire_error_code, error.message, error.recovery, extra_json) from error
     elif isinstance(error, ValueError):
         raise ToolError("VALIDATION_ERROR", str(error)) from error
     elif isinstance(error, PermissionError):

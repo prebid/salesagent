@@ -381,9 +381,13 @@ class TestCreateMediaBuyAdapterAtomicity:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
             assert mb is not None, "Media buy should be persisted in DB"
             assert mb.media_buy_id is not None
-            # Mock adapter flow results in pending_start (creatives not yet approved)
-            # The important assertion is that a record EXISTS (atomicity: success -> persisted)
-            assert mb.status in ("active", "pending_start"), f"Expected active or pending_start, got {mb.status}"
+            # Mock adapter flow results in pending_creatives (creatives not yet assigned/approved).
+            # The important assertion is that a record EXISTS (atomicity: success -> persisted).
+            # AdCP MediaBuyStatus distinguishes pending_creatives (missing/unapproved creatives)
+            # from pending_start (manual approval / scheduled future start).
+            assert mb.status in ("active", "pending_creatives", "pending_start"), (
+                f"Expected active/pending_creatives/pending_start, got {mb.status}"
+            )
 
             packages = session.scalars(
                 select(DBMediaPackage).where(DBMediaPackage.media_buy_id == mb.media_buy_id)
@@ -556,9 +560,10 @@ class TestGetMediaBuysResponseFields:
         media_buy_id = create_result.response.media_buy_id
 
         # Use explicit status_filter to include all statuses — newly created media buys
-        # may be pending_start (start_date in the future), not active
+        # may be pending_creatives (no creatives) or pending_start (future start), not active
         all_statuses = [
             MediaBuyStatus.active,
+            MediaBuyStatus.pending_creatives,
             MediaBuyStatus.pending_start,
             MediaBuyStatus.completed,
             MediaBuyStatus.paused,
@@ -645,9 +650,10 @@ class TestGetMediaBuysResponseFields:
             )
 
         # Use explicit status_filter to include all statuses — newly created media buys
-        # may be pending_start (start_date in the future), not active
+        # may be pending_creatives (no creatives) or pending_start (future start), not active
         all_statuses = [
             MediaBuyStatus.active,
+            MediaBuyStatus.pending_creatives,
             MediaBuyStatus.pending_start,
             MediaBuyStatus.completed,
             MediaBuyStatus.paused,

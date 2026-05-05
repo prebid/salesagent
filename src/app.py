@@ -81,10 +81,17 @@ from src.core.exceptions import AdCPError  # noqa: E402
 
 @app.exception_handler(AdCPError)
 async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
-    """Convert AdCP exceptions to structured JSON error responses."""
+    """Convert AdCP exceptions to structured JSON error responses.
+
+    Translates non-standard error codes to STANDARD_ERROR_CODES via
+    ERROR_CODE_MAPPING at this REST transport boundary so wire output
+    is always spec-compliant.
+    """
+    body = exc.to_dict()
+    body["error_code"] = exc.wire_error_code
     return JSONResponse(
         status_code=exc.status_code,
-        content=exc.to_dict(),
+        content=body,
     )
 
 
