@@ -658,16 +658,8 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
     )
 )
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
-    """Request with attribution window.
-
-    adcp 4.3 made attribution_window.model required at the REST request schema
-    boundary (core.attribution_window.AttributionWindow). Inject "last_touch"
-    when omitted so transport-layer validation does not reject what the buyer
-    semantically allows (model omitted -> seller fills default).
-    """
+    """Request with attribution window."""
     aw = json.loads(aw_json)
-    if isinstance(aw, dict) and "model" not in aw:
-        aw["model"] = "last_touch"
     dispatch_request(ctx, media_buy_ids=[mb_id], attribution_window=aw)
 
 

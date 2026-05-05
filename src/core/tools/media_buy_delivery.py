@@ -626,7 +626,7 @@ async def get_media_buy_delivery(
             start_date=start_date,
             end_date=end_date,
             reporting_dimensions=reporting_dimensions,
-            attribution_window=attribution_window.model_dump(exclude_none=True) if attribution_window else None,
+            attribution_window=attribution_window,
             include_package_daily_breakdown=include_package_daily_breakdown,
             context=cast(ContextObject | None, context),
         )
@@ -687,7 +687,7 @@ def get_media_buy_delivery_raw(
         start_date=start_date,
         end_date=end_date,
         reporting_dimensions=reporting_dimensions,
-        attribution_window=attribution_window.model_dump(exclude_none=True) if attribution_window else None,
+        attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
         context=cast(ContextObject | None, context),
     )
