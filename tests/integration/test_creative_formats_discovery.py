@@ -149,10 +149,8 @@ class TestAuthOptionalForDiscovery:
 
         Authentication is optional for discovery, but tenant context is still
         required to resolve which format catalog to return. When tenant=None,
-        AdCPAuthenticationError is raised.
+        the AUTH_REQUIRED error code is returned.
         """
-        from src.core.exceptions import AdCPAuthenticationError
-
         formats = [_make_format("no_tenant_fmt", "Should Not Reach")]
 
         with CreativeFormatsEnv() as env:
@@ -222,9 +220,7 @@ class TestTenantResolutionFailure:
     """
 
     def test_no_tenant_no_auth_raises_auth_error(self, integration_db):
-        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AdCPAuthenticationError."""
-        from src.core.exceptions import AdCPAuthenticationError
-
+        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AUTH_REQUIRED error code."""
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([_make_format("unreachable", "Should Not Reach")])
@@ -243,8 +239,6 @@ class TestTenantResolutionFailure:
 
     def test_error_message_mentions_tenant(self, integration_db):
         """UC-005-EXT-A-01: error message indicates tenant context could not be determined."""
-        from src.core.exceptions import AdCPAuthenticationError
-
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([])

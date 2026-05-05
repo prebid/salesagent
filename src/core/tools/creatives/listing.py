@@ -408,7 +408,6 @@ async def list_creatives(
         str, PydanticField(description="Field to sort by (e.g. 'created_date', 'name')")
     ] = "created_date",
     sort_order: Annotated[str, PydanticField(description="Sort direction: 'asc' or 'desc'")] = "desc",
-    webhook_url: Annotated[str | None, PydanticField(description="Webhook URL for async result delivery")] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):
@@ -430,6 +429,17 @@ async def list_creatives(
 
     # Pass typed Pydantic models directly (no model_dump conversion needed)
     fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None
+
+    # Structured sort and pagination are AdCP spec params; _impl is built around flat
+    # equivalents (sort_by/sort_order, page/limit). Coerce structured forms to flat
+    # at the boundary so spec-compliant payloads are honored instead of silently dropped.
+    if sort is not None:
+        if sort.field is not None:
+            sort_by = sort.field.value if hasattr(sort.field, "value") else str(sort.field)
+        if sort.direction is not None:
+            sort_order = sort.direction.value if hasattr(sort.direction, "value") else str(sort.direction)
+    if pagination is not None and pagination.max_results is not None:
+        limit = pagination.max_results
 
     response = _list_creatives_impl(
         media_buy_id=media_buy_id,

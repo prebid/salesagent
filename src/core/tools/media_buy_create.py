@@ -20,6 +20,8 @@ from sqlalchemy.exc import IntegrityError
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from src.core.schemas import Creative
+
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
@@ -1323,6 +1325,8 @@ async def _create_media_buy_impl(
     push_notification_config: dict[str, Any] | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
+    targeting_overlay: TargetingOverlay | None = None,
+    creatives: list[CreativeAsset] | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -1330,6 +1334,11 @@ async def _create_media_buy_impl(
         req: Validated CreateMediaBuyRequest with all protocol fields
         push_notification_config: Push notification config dict (transport wrapper serializes models)
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
+        targeting_overlay: Top-level targeting overlay forwarded by wrappers. Per AdCP spec
+            targeting belongs on PackageRequest; this wrapper-level alias is accepted for
+            buyer convenience and currently passed through without merging into packages.
+        creatives: Top-level creative assets forwarded by wrappers. Per AdCP spec creatives
+            belong on PackageRequest; this top-level alias is accepted for buyer convenience.
 
     Returns:
         CreateMediaBuyResult wrapping response and status
@@ -3439,10 +3448,11 @@ async def _create_media_buy_impl(
                             )
 
         # Handle creatives if provided
-        # Note: creatives field no longer exists on CreateMediaBuyRequest per AdCP spec
-        # Creative IDs are now at package level (package.creative_ids). Check with getattr for backward compat.
+        # Per AdCP spec creatives belong on PackageRequest. The wrapper-level top-level
+        # `creatives` alias is forwarded explicitly via the kwarg; getattr fallback covers
+        # any legacy in-flight construction paths that set it on req directly.
         creative_statuses: dict[str, CreativeApprovalStatus] = {}
-        legacy_creatives = getattr(req, "creatives", None)
+        legacy_creatives = creatives if creatives is not None else getattr(req, "creatives", None)
         if legacy_creatives:
             # Convert Creative objects to format expected by adapter
             assets = []
@@ -3451,7 +3461,9 @@ async def _create_media_buy_impl(
                     # Ensure product_ids is a list, not None
                     # Note: product_ids no longer exists on CreateMediaBuyRequest - use get_product_ids() method
                     product_ids_list = req.get_product_ids()
-                    asset = _convert_creative_to_adapter_asset(creative, product_ids_list)
+                    # Wrapper type is library CreativeAsset; helper expects internal Creative
+                    # which extends CreativeAsset. Runtime fields align; cast satisfies mypy.
+                    asset = _convert_creative_to_adapter_asset(cast("Creative", creative), product_ids_list)
                     assets.append(asset)
                 except Exception as e:
                     logger.error(f"Error converting creative {creative.creative_id}: {e}")
@@ -3626,8 +3638,9 @@ async def _create_media_buy_impl(
             slack_notifier = get_slack_notifier(notifier_config)
 
             # Create success notification details
-            # Note: creatives field no longer exists on CreateMediaBuyRequest per AdCP spec
-            notification_creatives = getattr(req, "creatives", None)
+            # creatives is forwarded as a top-level wrapper alias (see kwarg); getattr
+            # fallback covers any legacy paths that set it on req directly.
+            notification_creatives = creatives if creatives is not None else getattr(req, "creatives", None)
             success_details = {
                 "total_budget": total_budget,
                 "po_number": req.po_number,
@@ -3829,7 +3842,12 @@ async def create_media_buy(
     # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None)
     pnc_dict = push_notification_config.model_dump() if push_notification_config else None
     result = await _create_media_buy_impl(
-        req=req, push_notification_config=pnc_dict, identity=identity, context_id=_ctx_id
+        req=req,
+        push_notification_config=pnc_dict,
+        identity=identity,
+        context_id=_ctx_id,
+        targeting_overlay=targeting_overlay,
+        creatives=creatives,
     )
     return ToolResult(content=str(result), structured_content=result)
 
@@ -3930,10 +3948,18 @@ async def create_media_buy_raw(
     )
 
     # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
+    # FIXME(salesagent-k5cn): legacy A2A params (budget, total_budget, product_ids,
+    # start_date, end_date, pacing, daily_budget, required_axe_signals,
+    # enable_creative_macro, strategy_id, buyer_campaign_ref) are accepted by the
+    # signature but silently dropped. They are not CreateMediaBuyRequest spec fields
+    # at request level per AdCP 4.3. Removing them requires coordinated updates in
+    # src/a2a_server/adcp_a2a_server.py and src/routes/api_v1.py.
     return await _create_media_buy_impl(
         req=req,
         push_notification_config=pnc_dict,
         identity=identity,
+        targeting_overlay=targeting_overlay,
+        creatives=creatives,
     )
 
 
