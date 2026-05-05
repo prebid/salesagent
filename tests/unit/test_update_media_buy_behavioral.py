@@ -538,9 +538,7 @@ def test_package_not_found_returns_error(standard_mocks):
     identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_pkg_nf",
-        packages=[
-            {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "seg_1"}]}}
-        ],
+        packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
     )
     result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1670,7 +1668,7 @@ class TestUC003UpdateTargetingOverlay:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_targeting",
-            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1679,30 +1677,29 @@ class TestUC003UpdateTargetingOverlay:
         stored = mock_pkg.package_config["targeting_overlay"]
         assert stored is not None
 
-    def test_targeting_overlay_not_validated(self, standard_mocks):
-        """Targeting overlay persisted without validation (gap G36).
+    def test_targeting_overlay_validated_at_boundary(self, standard_mocks):
+        """Targeting overlay rejects unknown fields at the request boundary now that
+        AdCPPackageUpdate.targeting_overlay uses local Targeting (extra="forbid")
+        instead of library TargetingOverlay (extra="allow"). Closes gap G36.
 
         Covers: UC-003-ALT-UPDATE-TARGETING-OVERLAY-02
         """
+        from pydantic import ValidationError
+
         _setup_db_session(standard_mocks)
 
-        mock_pkg = MagicMock()
-        mock_pkg.package_config = {}
-        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
-
-        identity = _make_identity()
-        # Invalid targeting data - should still be persisted
-        req = UpdateMediaBuyRequest(
-            media_buy_id="mb_no_validate",
-            packages=[
-                {"package_id": "pkg_1", "targeting_overlay": {"unknown_field": "value", "conflicting_geo": True}}
-            ],
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuySuccess)
-        # Even invalid targeting is persisted directly
-        assert mock_pkg.package_config["targeting_overlay"] is not None
+        # Bogus field names should now be caught at the boundary in dev/CI.
+        with pytest.raises(ValidationError) as exc:
+            UpdateMediaBuyRequest(
+                media_buy_id="mb_validate",
+                packages=[
+                    {
+                        "package_id": "pkg_1",
+                        "targeting_overlay": {"unknown_field": "value"},
+                    }
+                ],
+            )
+        assert "unknown_field" in str(exc.value)
 
     def test_targeting_update_no_adapter_call(self, standard_mocks):
         """Targeting changes are database-only; no adapter call.
@@ -1718,7 +1715,7 @@ class TestUC003UpdateTargetingOverlay:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_target_no_adapter",
-            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1739,8 +1736,11 @@ class TestUC003UpdateTargetingOverlay:
         mock_pkg.package_config = {"product_id": "prod_strict"}
         standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
 
-        # Product load returns a product that disallows property targeting
+        # Product load returns a product that disallows property targeting.
+        # Set product_id explicitly so the violation message contains the literal
+        # ID rather than a MagicMock repr (the shared helper formats it into the message).
         mock_product = MagicMock()
+        mock_product.product_id = "prod_strict"
         mock_product.property_targeting_allowed = False
         mock_session.scalars.return_value.first.return_value = mock_product
 
@@ -2411,7 +2411,7 @@ class TestUC003ExtL:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_wrong_pkg",
-            packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2430,9 +2430,7 @@ class TestUC003ExtL:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_no_pkg_exist",
-            packages=[
-                {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "s1"}]}}
-            ],
+            packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 

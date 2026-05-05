@@ -4,6 +4,7 @@ Provides consistent patterns for creating test database objects with proper
 timestamp handling and field validation to prevent common test issues.
 """
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -12,14 +13,31 @@ from sqlalchemy import delete
 
 from src.core.database.models import (
     CurrencyLimit,
-    MediaBuy,
-    MediaPackage,
-    PricingOption,
     Principal,
     Product,
-    PropertyTag,
     Tenant,
 )
+
+
+@contextmanager
+def _bind_factories_to_session(session):
+    """Temporarily bind factory_boy factories to the given session.
+
+    Lets module-level helpers below use factories outside the IntegrationEnv
+    harness without touching global state permanently. Factories are unbound
+    on exit so subsequent harness contexts (which assert sqlalchemy_session is
+    None) don't see leaked bindings.
+    """
+    from tests.factories import ALL_FACTORIES
+
+    previous = [f._meta.sqlalchemy_session for f in ALL_FACTORIES]
+    for f in ALL_FACTORIES:
+        f._meta.sqlalchemy_session = session
+    try:
+        yield
+    finally:
+        for f, prev in zip(ALL_FACTORIES, previous, strict=True):
+            f._meta.sqlalchemy_session = prev
 
 
 def get_utc_now():
@@ -165,44 +183,58 @@ def seed_targeting_test_tenant(
 ) -> None:
     """Seed the canonical targeting-test tenant: Tenant + PropertyTag + CurrencyLimit + Principal.
 
-    Used by integration tests in tests/integration/test_targeting_*.py and
-    tests/integration/test_property_targeting_allowed_enforcement.py — extracted
-    here to satisfy the DRY invariant. Caller is responsible for adding products,
-    pricing options, and committing the session.
+    Uses factory-boy factories per tests/CLAUDE.md (Pattern #8). Binds the passed
+    session to factories for the duration of the call so callers outside the
+    IntegrationEnv harness (e.g., bare get_db_session() blocks) can use it.
+    Caller is responsible for adding products, pricing options, and committing.
     """
-    tenant = create_tenant_with_timestamps(
-        tenant_id=tenant_id,
-        name=tenant_name,
-        subdomain=subdomain,
-        ad_server="mock",
+    from tests.factories import (
+        CurrencyLimitFactory,
+        PrincipalFactory,
+        PropertyTagFactory,
+        TenantFactory,
     )
-    session.add(tenant)
-    session.flush()
 
-    session.add(
-        PropertyTag(
+    with _bind_factories_to_session(session):
+        # TenantFactory's RelatedFactory creates a default USD CurrencyLimit, but we
+        # need a different max_daily_package_spend, so build the tenant without the
+        # auto-related currency and add our own.
+        tenant = TenantFactory(
+            tenant_id=tenant_id,
+            name=tenant_name,
+            subdomain=subdomain,
+            ad_server="mock",
+        )
+        session.flush()
+
+        # Replace the auto-created CurrencyLimit with one that has the configured cap.
+        session.execute(
+            delete(CurrencyLimit).where(
+                CurrencyLimit.tenant_id == tenant_id,
+                CurrencyLimit.currency_code == currency_code,
+            )
+        )
+        CurrencyLimitFactory(
+            tenant=tenant,
+            tenant_id=tenant_id,
+            currency_code=currency_code,
+            max_daily_package_spend=max_daily_package_spend,
+        )
+        PropertyTagFactory(
+            tenant=tenant,
             tenant_id=tenant_id,
             tag_id="all_inventory",
             name="All Inventory",
             description="All inventory",
         )
-    )
-    session.add(
-        CurrencyLimit(
-            tenant_id=tenant_id,
-            currency_code=currency_code,
-            max_daily_package_spend=max_daily_package_spend,
-        )
-    )
-    session.add(
-        Principal(
+        PrincipalFactory(
+            tenant=tenant,
             tenant_id=tenant_id,
             principal_id=principal_id,
             name=principal_name,
             access_token=access_token,
             platform_mappings={"mock": {"advertiser_id": "mock_adv_1"}},
         )
-    )
 
 
 def add_targeting_test_product(
@@ -218,27 +250,32 @@ def add_targeting_test_product(
 ) -> Product:
     """Add a Product + PricingOption pair sized for targeting integration tests.
 
-    Caller must commit. Used by tests/integration/test_targeting_*.py and
-    test_property_targeting_allowed_enforcement.py to keep session.add() out
-    of test bodies (architecture guard).
+    Uses factory-boy factories per tests/CLAUDE.md (Pattern #8). Caller must commit.
     """
-    product = Product(
-        tenant_id=tenant_id,
-        product_id=product_id,
-        name=name or f"Product {product_id}",
-        description=description or f"Test product {product_id}",
-        format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-        delivery_type="guaranteed",
-        targeting_template={},
-        implementation_config={},
-        property_tags=["all_inventory"],
-        property_targeting_allowed=property_targeting_allowed,
-    )
-    session.add(product)
-    session.flush()
+    from sqlalchemy import select
 
-    session.add(
-        PricingOption(
+    from tests.factories import PricingOptionFactory, ProductFactory
+
+    with _bind_factories_to_session(session):
+        # Look up existing tenant so SubFactory doesn't try to create a new one.
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        product = ProductFactory(
+            tenant=tenant,
+            tenant_id=tenant_id,
+            product_id=product_id,
+            name=name or f"Product {product_id}",
+            description=description or f"Test product {product_id}",
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+            delivery_type="guaranteed",
+            targeting_template={},
+            implementation_config={},
+            property_tags=["all_inventory"],
+            property_targeting_allowed=property_targeting_allowed,
+        )
+        session.flush()
+
+        PricingOptionFactory(
+            product=product,
             tenant_id=tenant_id,
             product_id=product_id,
             pricing_model="cpm",
@@ -246,8 +283,7 @@ def add_targeting_test_product(
             currency=currency,
             is_fixed=True,
         )
-    )
-    return product
+        return product
 
 
 def seed_media_buy_with_package(
@@ -262,30 +298,40 @@ def seed_media_buy_with_package(
 ) -> str:
     """Insert a MediaBuy + MediaPackage pair sized for update_media_buy tests.
 
-    Caller must commit. Returns the media_buy_id for chaining.
+    Uses factory-boy factories per tests/CLAUDE.md (Pattern #8). Caller must commit.
+    Returns the media_buy_id for chaining.
     """
-    buy = MediaBuy(
-        media_buy_id=media_buy_id,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        order_name=f"Order {media_buy_id}",
-        advertiser_name="Test Advertiser",
-        start_date=(datetime.now(UTC) + timedelta(days=1)).date(),
-        end_date=(datetime.now(UTC) + timedelta(days=30)).date(),
-        budget=budget,
-        currency="USD",
-        status="pending_creatives",
-        raw_request={"test": True},
-    )
-    session.add(buy)
+    from sqlalchemy import select
 
-    pkg = MediaPackage(
-        media_buy_id=media_buy_id,
-        package_id=package_id,
-        budget=budget,
-        package_config={"product_id": product_id},
-    )
-    session.add(pkg)
+    from tests.factories import MediaBuyFactory, MediaPackageFactory
+
+    with _bind_factories_to_session(session):
+        # Look up existing tenant + principal so SubFactory doesn't try to create them.
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        principal = session.scalars(select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)).first()
+
+        media_buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            order_name=f"Order {media_buy_id}",
+            advertiser_name="Test Advertiser",
+            start_date=(datetime.now(UTC) + timedelta(days=1)).date(),
+            end_date=(datetime.now(UTC) + timedelta(days=30)).date(),
+            budget=budget,
+            currency="USD",
+            status="pending_creatives",
+            raw_request={"test": True},
+        )
+        MediaPackageFactory(
+            media_buy=media_buy,
+            media_buy_id=media_buy_id,
+            package_id=package_id,
+            budget=budget,
+            package_config={"product_id": product_id},
+        )
     return media_buy_id
 
 

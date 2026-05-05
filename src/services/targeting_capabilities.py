@@ -190,6 +190,26 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
     return [f"{key} is not a recognized targeting field" for key in model_extra]
 
 
+def validate_property_targeting_allowed(product: Any, targeting_overlay: Targeting | None) -> str | None:
+    """Reject property_list targeting against products that disallow it.
+
+    AdCP 3.0.1 (core/targeting.json:191): "Sellers SHOULD return a validation
+    error if the product has property_targeting_allowed: false."
+
+    Used at both create_media_buy and update_media_buy validation sites; pulled
+    here so the rule lives in one place.
+
+    Returns a violation message string, or None when targeting is allowed.
+    """
+    if (
+        targeting_overlay is not None
+        and getattr(targeting_overlay, "property_list", None) is not None
+        and not getattr(product, "property_targeting_allowed", False)
+    ):
+        return f"Product {product.product_id} does not allow property_list targeting (property_targeting_allowed=false)"
+    return None
+
+
 def validate_overlay_targeting(targeting: Targeting) -> list[str]:
     """Validate that targeting only uses allowed overlay dimensions.
 

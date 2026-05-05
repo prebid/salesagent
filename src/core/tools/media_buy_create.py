@@ -1624,18 +1624,18 @@ async def _create_media_buy_impl(
             # Lives here because product_map is in scope; the rest of targeting
             # validation runs further down outside this UoW block.
             if req.packages:
-                property_targeting_violations = []
-                for package in req.packages:
-                    if (
-                        package.targeting_overlay is not None
-                        and package.targeting_overlay.property_list is not None
-                        and package.product_id in product_map
-                        and not product_map[package.product_id].property_targeting_allowed
-                    ):
-                        property_targeting_violations.append(
-                            f"Product {package.product_id} does not allow property_list targeting "
-                            f"(property_targeting_allowed=false)"
+                from src.services.targeting_capabilities import validate_property_targeting_allowed
+
+                property_targeting_violations = [
+                    v
+                    for package in req.packages
+                    if package.product_id in product_map
+                    and (
+                        v := validate_property_targeting_allowed(
+                            product_map[package.product_id], package.targeting_overlay
                         )
+                    )
+                ]
                 if property_targeting_violations:
                     raise ValueError(f"Targeting validation failed: {'; '.join(property_targeting_violations)}")
 

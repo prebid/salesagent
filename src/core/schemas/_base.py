@@ -1576,11 +1576,19 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
 
     Adds creative_ids — spec-mandated field missing from library codegen.
     TODO(adcp-library): Remove creative_ids once upstream codegen adds it.
+
+    Overrides targeting_overlay to use the local Targeting subclass so
+    extensions (collection_list / collection_list_exclude) are typed at the
+    request boundary instead of dropping through library extra="allow" as
+    raw dicts. Mirrors the PackageRequest.targeting_overlay override pattern.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
     # Spec field missing from library codegen (adcp#208)
     creative_ids: list[str] | None = None
+    # Override library targeting_overlay so local extensions (collection_list)
+    # are coerced to typed CollectionListReference at the boundary, not dicts.
+    targeting_overlay: Targeting | None = None
 
 
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):

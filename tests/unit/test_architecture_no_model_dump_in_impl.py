@@ -47,12 +47,12 @@ KNOWN_VIOLATIONS = {
     ("media_buy_update.py", 840),
     ("media_buy_update.py", 1011),
     ("media_buy_update.py", 1029),
-    # Lines below shifted by +34 when property_targeting_allowed validation was
+    # Lines below shifted by ~+34 when property_targeting_allowed validation was
     # added at media_buy_update.py:1034. Same pre-existing violations, new positions.
-    ("media_buy_update.py", 1113),
-    ("media_buy_update.py", 1206),
-    ("media_buy_update.py", 1238),
-    ("media_buy_update.py", 1298),
+    ("media_buy_update.py", 1112),
+    ("media_buy_update.py", 1205),
+    ("media_buy_update.py", 1237),
+    ("media_buy_update.py", 1297),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 617),
     # _list_creatives_impl: 1 violation (filter dict conversion)

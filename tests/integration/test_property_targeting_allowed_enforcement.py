@@ -200,7 +200,7 @@ def _seed_media_buy(tenant_id: str, product_id: str, media_buy_id: str = "mb_tes
 
 
 @pytest.mark.requires_db
-async def test_update_rejects_property_list_when_product_disallows(property_targeting_tenant):
+def test_update_rejects_property_list_when_product_disallows(property_targeting_tenant):
     """Update path: same rule as create — reject property_list against disallowing product."""
     media_buy_id = _seed_media_buy(TENANT_ID, "prod_no_property_targeting")
 
@@ -219,7 +219,7 @@ async def test_update_rejects_property_list_when_product_disallows(property_targ
         ],
     )
 
-    response = await _update_media_buy_impl(req=request, identity=_make_identity())
+    response = _update_media_buy_impl(req=request, identity=_make_identity())
 
     # Response shape varies by error path; check the error is about property_targeting_allowed
     response_dict = response.model_dump() if hasattr(response, "model_dump") else response
@@ -228,7 +228,7 @@ async def test_update_rejects_property_list_when_product_disallows(property_targ
 
 
 @pytest.mark.requires_db
-async def test_update_accepts_collection_list_only(property_targeting_tenant):
+def test_update_accepts_collection_list_only(property_targeting_tenant):
     """collection_list-only update never triggers property_list rejection."""
     media_buy_id = _seed_media_buy(TENANT_ID, "prod_no_property_targeting", media_buy_id="mb_collection_only")
 
@@ -247,10 +247,14 @@ async def test_update_accepts_collection_list_only(property_targeting_tenant):
         ],
     )
 
-    # Sanity: the schema accepts CollectionListReference at the boundary
-    assert request.packages[0].targeting_overlay.collection_list is not None
-    assert isinstance(request.packages[0].targeting_overlay.collection_list, CollectionListReference)
+    # Sanity: the schema accepts CollectionListReference at the boundary —
+    # this is the C1 fix: AdCPPackageUpdate now overrides targeting_overlay
+    # to use the local Targeting subclass instead of library TargetingOverlay.
+    assert request.packages is not None
+    overlay = request.packages[0].targeting_overlay
+    assert overlay is not None
+    assert isinstance(overlay.collection_list, CollectionListReference)
 
-    response = await _update_media_buy_impl(req=request, identity=_make_identity())
+    response = _update_media_buy_impl(req=request, identity=_make_identity())
     response_dict = response.model_dump() if hasattr(response, "model_dump") else response
     assert "property_targeting_allowed" not in str(response_dict)
