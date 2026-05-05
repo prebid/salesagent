@@ -122,6 +122,7 @@ class TestBrandManifestPolicyRequireBrand:
             # Call _get_products_impl directly to send brand=None
             # (env.call_impl defaults brand to {"domain": "test.com"})
             req = GetProductsRequestGenerated(
+                buying_mode="brief",
                 brief="campaign",
                 brand=None,
                 filters={"delivery_type": "guaranteed"},
