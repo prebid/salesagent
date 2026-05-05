@@ -183,7 +183,7 @@ def _build_refinement_applied_unable(
 async def _get_products_impl(
     req: GetProductsRequestGenerated,
     identity: ResolvedIdentity | None,
-    defaulted_to_brief: bool = False,
+    pre_v3_defaulted: bool = False,
 ) -> GetProductsResponse:
     """Shared implementation for get_products.
 
@@ -193,9 +193,11 @@ async def _get_products_impl(
     Args:
         req: GetProductsRequest from generated schemas
         identity: Resolved identity from transport boundary
-        defaulted_to_brief: True if the wrapper layer applied the pre-v3 default-to-brief
-            shim because the client omitted buying_mode and declared a pre-v3 adcp_version.
-            Recorded in the audit log so operations can detect silent client defaults.
+        pre_v3_defaulted: True if the wrapper layer applied the pre-v3 default shim
+            because the client omitted buying_mode and declared a pre-v3 adcp_version.
+            The flag is True for both the brief and wholesale default paths so audit
+            consumers can distinguish a defaulted v2 client from an explicit v3 request
+            in either mode. Recorded in the audit log.
 
     Returns:
         GetProductsResponse containing matching products
@@ -853,7 +855,7 @@ async def _get_products_impl(
             "has_brand": req.brand is not None,
             "buying_mode": mode,
             "refine_count": len(req.refine) if req.refine else 0,
-            "defaulted_to_brief": defaulted_to_brief,
+            "pre_v3_defaulted": pre_v3_defaulted,
             "elapsed_ms": elapsed_ms,
         },
     )
@@ -898,21 +900,10 @@ async def get_products(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    from src.core.product_conversion import is_pre_v3
+    from src.core.product_conversion import resolve_pre_v3_buying_mode
 
-    # Pre-v3 default shim: AdCP spec says sellers SHOULD default pre-v3 clients without
-    # buying_mode. We pick the mode from what they sent: a non-empty brief implies brief
-    # mode; absence of a brief implies wholesale (raw inventory). This matches existing
-    # v2 client behavior — they could send either {brief: "..."} or {brand: ...} alone
-    # and get a sensible response. The audit log records that the wrapper applied a
-    # default so operations can detect mode mix in the field.
-    defaulted_to_brief = False
-    if buying_mode is None and is_pre_v3(adcp_version):
-        if brief and brief.strip():
-            buying_mode = "brief"
-            defaulted_to_brief = True
-        else:
-            buying_mode = "wholesale"
+    # Apply pre-v3 default shim if the client omitted buying_mode (see helper docstring).
+    buying_mode, pre_v3_defaulted = resolve_pre_v3_buying_mode(buying_mode, adcp_version, brief)
 
     # Build request object for shared implementation
     try:
@@ -937,7 +928,7 @@ async def get_products(
 
     # Call shared implementation
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly
-    response = await _get_products_impl(req, identity, defaulted_to_brief=defaulted_to_brief)
+    response = await _get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
 
     # Return ToolResult with human-readable text and structured data
     response_dict = response.model_dump(mode="json")
@@ -987,7 +978,7 @@ async def get_products_raw(
     Returns:
         GetProductsResponse containing matching products
     """
-    from src.core.product_conversion import is_pre_v3
+    from src.core.product_conversion import resolve_pre_v3_buying_mode
 
     # Resolve identity from transport context if not provided
     if identity is None:
@@ -995,15 +986,8 @@ async def get_products_raw(
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
 
-    # Pre-v3 default shim (mirrors MCP wrapper): pre-v3 clients without buying_mode
-    # are defaulted based on whether they sent a brief.
-    defaulted_to_brief = False
-    if buying_mode is None and is_pre_v3(adcp_version):
-        if brief and brief.strip():
-            buying_mode = "brief"
-            defaulted_to_brief = True
-        else:
-            buying_mode = "wholesale"
+    # Apply pre-v3 default shim (mirrors MCP wrapper).
+    buying_mode, pre_v3_defaulted = resolve_pre_v3_buying_mode(buying_mode, adcp_version, brief)
 
     # Create request object - adcp library validates schema
     req = create_get_products_request(
@@ -1017,7 +1001,7 @@ async def get_products_raw(
     )
 
     # Call shared implementation
-    return await _get_products_impl(req, identity, defaulted_to_brief=defaulted_to_brief)
+    return await _get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
 
 
 def get_product_catalog(tenant_id: str | None = None) -> list[Product]:

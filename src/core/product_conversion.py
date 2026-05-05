@@ -75,6 +75,36 @@ def is_pre_v3(adcp_version: str | None) -> bool:
     return needs_v2_compat(adcp_version)
 
 
+def resolve_pre_v3_buying_mode(
+    buying_mode: str | None,
+    adcp_version: str | None,
+    brief: str | None,
+) -> tuple[str | None, bool]:
+    """Resolve buying_mode for pre-v3 clients that omitted the field.
+
+    AdCP 3.0 spec: sellers SHOULD default pre-v3 clients without buying_mode to a sensible
+    mode. We pick from what they sent: a non-empty brief implies brief mode (curated
+    discovery); absence implies wholesale (raw inventory). This matches existing v2 client
+    behavior — they could send either {brief: "..."} or {brand: ...} alone and get a
+    sensible response.
+
+    Args:
+        buying_mode: Client-supplied mode (None means it was omitted).
+        adcp_version: Client-declared AdCP version string.
+        brief: Client-supplied brief text (may be None or empty).
+
+    Returns:
+        (resolved_buying_mode, pre_v3_defaulted) — the mode to use and a flag indicating
+        whether this wrapper applied the pre-v3 default. The flag is recorded in the
+        audit log so operations can detect silent v2 client defaults to either mode.
+    """
+    if buying_mode is not None or not is_pre_v3(adcp_version):
+        return buying_mode, False
+    if brief and brief.strip():
+        return "brief", True
+    return "wholesale", True
+
+
 def convert_pricing_option_to_adcp(
     pricing_option,
 ) -> (

@@ -166,19 +166,10 @@ class SyncAccountsBody(BaseModel):
 @router.post("/products")
 async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
     """Get available products matching the brief (auth-optional discovery skill)."""
-    from src.core.product_conversion import is_pre_v3
+    from src.core.product_conversion import resolve_pre_v3_buying_mode
 
-    # Pre-v3 default shim (mirrors MCP/A2A wrappers): pre-v3 clients without buying_mode
-    # are defaulted based on whether they sent a brief — non-empty brief -> brief mode,
-    # otherwise wholesale.
-    buying_mode = body.buying_mode
-    defaulted_to_brief = False
-    if buying_mode is None and is_pre_v3(body.adcp_version):
-        if body.brief and body.brief.strip():
-            buying_mode = "brief"
-            defaulted_to_brief = True
-        else:
-            buying_mode = "wholesale"
+    # Apply pre-v3 default shim (mirrors MCP/A2A wrappers; see helper docstring).
+    buying_mode, pre_v3_defaulted = resolve_pre_v3_buying_mode(body.buying_mode, body.adcp_version, body.brief)
 
     try:
         req = products_module.create_get_products_request(
@@ -204,7 +195,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
         )
 
     try:
-        response = await products_module._get_products_impl(req, identity, defaulted_to_brief=defaulted_to_brief)
+        response = await products_module._get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
     except ToolError as e:
         return _handle_tool_error(e)
 

@@ -462,7 +462,7 @@ class ProductMixin:
         context: dict[str, Any] | None = None,
         buying_mode: str | None = None,
         refine: list[dict[str, Any]] | None = None,
-        defaulted_to_brief: bool = False,
+        pre_v3_defaulted: bool = False,
         **extra: Any,
     ) -> GetProductsResponse:
         """Call _get_products_impl with the given parameters.
@@ -504,13 +504,11 @@ class ProductMixin:
             else:
                 buying_mode = "brief" if (brief and brief.strip()) else "wholesale"
 
-        # Brief is forbidden in wholesale/refine; clear it if the mode says so.
-        effective_brief: str | None = brief
-        if buying_mode in {"wholesale", "refine"}:
-            effective_brief = None
-
+        # Pass brief through unchanged so the cross-mode validator can reject invalid
+        # combinations (e.g., wholesale + brief). Tests probing rejection rely on the
+        # validator firing on the construction; pre-cleaning here would mask it.
         req = GetProductsRequestGenerated(
-            brief=effective_brief,
+            brief=brief if (brief and brief.strip()) else None,
             brand=brand,
             filters=filters,
             property_list=property_list,
@@ -519,4 +517,4 @@ class ProductMixin:
             refine=refine,
             **extra,
         )
-        return await _get_products_impl(req, identity, defaulted_to_brief=defaulted_to_brief)
+        return await _get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)

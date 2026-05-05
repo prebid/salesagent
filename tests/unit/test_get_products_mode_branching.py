@@ -4,7 +4,7 @@ Covers Layer 6 of the buying_mode/refine wireup:
 - Mode branching (brief / wholesale / refine)
 - brief_relevance plumbing from ranker output (brief mode only)
 - refinement_applied builder (refine mode)
-- Audit log extension (buying_mode, refine_count, defaulted_to_brief)
+- Audit log extension (buying_mode, refine_count, pre_v3_defaulted)
 - Outbound 3.0.6 wire compat in GetProductsResponse.model_dump (Layer 7)
 
 Covers: UC-001-MODE-BRIEF-01
@@ -201,7 +201,7 @@ class TestModeBranching:
 
 
 class TestAuditLogExtension:
-    """Audit log details include buying_mode, refine_count, defaulted_to_brief."""
+    """Audit log details include buying_mode, refine_count, pre_v3_defaulted."""
 
     async def test_brief_mode_audit_includes_new_fields(self):
         with ProductEnv() as env, patch("src.core.tools.products.get_audit_logger") as mock_get_audit:
@@ -217,7 +217,7 @@ class TestAuditLogExtension:
 
             assert details["buying_mode"] == "brief"
             assert details["refine_count"] == 0
-            assert details["defaulted_to_brief"] is False
+            assert details["pre_v3_defaulted"] is False
 
     async def test_refine_mode_audit_records_refine_count(self):
         with ProductEnv() as env, patch("src.core.tools.products.get_audit_logger") as mock_get_audit:
@@ -239,16 +239,16 @@ class TestAuditLogExtension:
             assert details["buying_mode"] == "refine"
             assert details["refine_count"] == 2
 
-    async def test_defaulted_to_brief_flag_propagates(self):
+    async def test_pre_v3_defaulted_flag_propagates(self):
         with ProductEnv() as env, patch("src.core.tools.products.get_audit_logger") as mock_get_audit:
             mock_audit = MagicMock()
             mock_get_audit.return_value = mock_audit
 
-            await env.call_impl(buying_mode="brief", brief="display ads", defaulted_to_brief=True)
+            await env.call_impl(buying_mode="brief", brief="display ads", pre_v3_defaulted=True)
 
             calls = [c for c in mock_audit.log_operation.call_args_list if c.kwargs.get("operation") == "get_products"]
             assert calls
-            assert calls[0].kwargs["details"]["defaulted_to_brief"] is True
+            assert calls[0].kwargs["details"]["pre_v3_defaulted"] is True
 
 
 # ---------------------------------------------------------------------------
