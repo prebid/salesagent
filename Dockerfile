@@ -107,9 +107,14 @@ ENV PYTHONUNBUFFERED=1
 ENV ADCP_PORT=8080
 ENV ADCP_HOST=0.0.0.0
 
-# Expose port 8000 (nginx proxy - the only external-facing port)
-# Internal services (MCP:8080, Admin:8001, A2A:8091) are accessed via nginx
-EXPOSE 8000
+# core/main.py serves MCP, A2A, and the Flask admin from one Starlette
+# binary on $ADCP_PORT. The bundled nginx thread in run_all_services.py
+# is unused on this fork — kept off via SKIP_NGINX=true.
+ENV SKIP_NGINX=true
+
+# Expose the unified python port directly. Fly.io / upstream proxy
+# talks to this port; no in-image reverse proxy.
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

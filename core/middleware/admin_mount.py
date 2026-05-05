@@ -4,8 +4,12 @@ Mounts the existing :func:`src.admin.app.create_app` Flask application
 on the same Starlette binary that ``serve(transport="both")`` produces.
 No nginx in the loop.
 
-Routing decision:
+Routing decision (in order):
 
+* ``Host`` (or ``Apx-Incoming-Host``) matches ``ADMIN_DOMAIN`` /
+  ``admin.${SALES_AGENT_DOMAIN}`` → entire request goes to Flask with
+  ``root_path=/admin`` (replaces the nginx ``server_name admin.*``
+  block that injected ``X-Forwarded-Prefix: /admin``)
 * ``/mcp/*`` → MCP (claimed by ``serve(transport="both")``'s inner
   dispatcher before this middleware decides anything)
 * ``/admin/*``, ``/static/*``, ``/auth/*``, ``/login``, ``/logout``,
@@ -23,6 +27,8 @@ working unchanged.
 from __future__ import annotations
 
 from typing import Any
+
+from src.core.domain_config import is_admin_domain
 
 # Path prefixes the Flask admin claims. Anything under one of these
 # segments dispatches to Flask; everything else falls through to A2A
@@ -91,6 +97,17 @@ class AdminWSGIMount:
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] == "http":
+            # Host-based admin dispatch first: admin.<domain>/* serves
+            # the entire admin app at root with SCRIPT_NAME=/admin so
+            # url_for() still emits /admin/... URLs. Replaces the nginx
+            # ``server_name admin.*`` block that proxied to upstream
+            # with ``X-Forwarded-Prefix: /admin``.
+            if self._is_admin_host(scope):
+                new_scope = dict(scope)
+                new_scope["root_path"] = scope.get("root_path", "") + "/admin"
+                await self.wsgi_app(new_scope, receive, send)
+                return
+
             path = scope.get("path", "")
             for prefix in self.prefixes:
                 if path == prefix or path.startswith(prefix + "/"):
@@ -100,7 +117,7 @@ class AdminWSGIMount:
                         # root_path so url_for() / request.script_root
                         # generate links with the prefix re-attached.
                         new_scope = dict(scope)
-                        stripped = path[len(prefix):] or "/"
+                        stripped = path[len(prefix) :] or "/"
                         new_scope["path"] = stripped
                         # raw_path is bytes; preserve the same stripping.
                         # Some ASGI servers omit raw_path — fall back to
@@ -110,10 +127,35 @@ class AdminWSGIMount:
                         # prefix's byte-length, fall back to "/" if empty.
                         # Use the encoded prefix length, which equals the
                         # str length for ASCII prefixes.
-                        new_scope["raw_path"] = raw[len(prefix):] or b"/"
+                        new_scope["raw_path"] = raw[len(prefix) :] or b"/"
                         new_scope["root_path"] = scope.get("root_path", "") + prefix
                         await self.wsgi_app(new_scope, receive, send)
                         return
                     await self.wsgi_app(scope, receive, send)
                     return
         await self.app(scope, receive, send)
+
+    @staticmethod
+    def _resolve_host(scope: dict) -> str | None:
+        """Pick the externally-visible host from ASGI scope headers.
+
+        Matches :func:`src.core.domain_routing.route_landing_page`'s
+        precedence: Approximated's ``Apx-Incoming-Host`` wins over the
+        raw ``Host`` header so Approximated-fronted deploys see the
+        client-facing hostname instead of the Fly internal address.
+        """
+        apx = None
+        host = None
+        for raw_name, raw_value in scope.get("headers", ()):
+            name = raw_name.decode("latin-1").lower()
+            if name == "apx-incoming-host":
+                apx = raw_value.decode("latin-1")
+            elif name == "host":
+                host = raw_value.decode("latin-1")
+        return apx or host
+
+    def _is_admin_host(self, scope: dict) -> bool:
+        host = self._resolve_host(scope)
+        if not host:
+            return False
+        return is_admin_domain(host)

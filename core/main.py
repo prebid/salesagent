@@ -109,8 +109,14 @@ async def _resolve_tenant(host: str) -> Tenant | None:
     # localtest.me / lvh.me are public-DNS aliases for 127.0.0.1 we use
     # in dev because Google OAuth rejects *.localhost ("not a public
     # top-level domain"). example.com is the prod placeholder.
+    # SALES_AGENT_DOMAIN is the configured prod base domain
+    # (e.g. ``sales-agent.scope3.com``) — added so production tenant
+    # subdomains resolve via the same strategy as dev.
     subdomain = host
-    for suffix in (".localhost", ".localtest.me", ".lvh.me", ".example.com"):
+    suffixes = [".localhost", ".localtest.me", ".lvh.me", ".example.com"]
+    if sales_domain := os.environ.get("SALES_AGENT_DOMAIN"):
+        suffixes.append(f".{sales_domain.lower()}")
+    for suffix in suffixes:
         if subdomain.endswith(suffix):
             subdomain = subdomain[: -len(suffix)]
             break
