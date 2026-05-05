@@ -222,23 +222,40 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
+    """Extends library GetProductsWholesaleRequest into a single class spanning all three modes.
 
     Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
-    We widen buying_mode to str|None so callers aren't forced into a single mode.
+    We widen buying_mode to str|None so a single class covers brief/wholesale/refine modes
+    without forcing callers through the library's discriminated union.
 
-    Library provides: account, brand, brief, buyer_campaign_ref, catalog,
-    context, ext, fields, filters, pagination, property_list, refine.
+    Library provides: account, brand, brief, catalog, context, ext, fields, filters,
+    pagination, property_list, refine.
 
     Internal-only: product_selectors (excluded from external serialization).
+
+    Validators:
+    - _normalize_refine_entry_id_field (mode='before'): bridges the rc.3 -> 3.0.6 wire
+      rename of refine entry id fields (product_id / proposal_id <-> id). Removable when
+      the installed adcp library targets spec 3.0.6+; detected by
+      tests/unit/test_architecture_adcp_library_field_skew.py.
+    - _validate_buying_mode_invariants (mode='after'): enforces AdCP cross-mode rules
+      (brief required for brief mode, refine forbidden in brief/wholesale, etc.). Mirrors
+      the seven rule rows at tests/bdd/features/BR-UC-001-discover-available-inventory.feature:313-319.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Widen buying_mode from Literal['wholesale'] to str|None (we accept any mode or none)
+    # Widen buying_mode from Literal['wholesale'] to str|None to span all three modes.
+    # The cross-mode invariants below enforce which combinations are valid.
     buying_mode: str | None = Field(  # type: ignore[assignment]
         None,
-        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
+        description=(
+            "Buyer intent: 'brief' (publisher curates from the natural-language brief), "
+            "'wholesale' (buyer requests raw inventory and applies their own audiences; "
+            "brief and refine forbidden), or 'refine' (iterate on a previous response via "
+            "the refine array; brief forbidden). v3 clients MUST include buying_mode; "
+            "pre-v3 clients are defaulted to 'brief' at the transport boundary."
+        ),
     )
 
     # Internal-only fields (not in AdCP spec)
@@ -247,6 +264,101 @@ class GetProductsRequest(LibraryGetProductsRequest):
         description="Selectors to filter the brand manifest product catalog for product discovery",
         exclude=True,
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_refine_entry_id_field(cls, values: Any) -> Any:
+        """Bridge rc.3 <-> 3.0.6 wire shape on refine entries.
+
+        The installed adcp Python library targets spec rc.3; the released spec 3.0.6 (and
+        the @adcp/sdk storyboard runner) ship two changes for product- and proposal-scope
+        refine entries that the library variants reject under extra='forbid':
+
+        1. Id field renamed: rc.3 uses `id`; 3.0.6 uses `product_id` / `proposal_id`.
+        2. `action` is required in rc.3 but defaulted to 'include' in 3.0.6.
+
+        This pre-validator normalizes inbound dicts to rc.3 shape before discriminated
+        union routing, so storyboard payloads parse against the installed library.
+
+        Rules:
+        - scope='product' with product_id -> rewrite to id
+        - scope='proposal' with proposal_id -> rewrite to id
+        - both id and product_id/proposal_id present and equal -> drop the wire-name form
+        - both present and different -> raise (the wire payload is internally inconsistent)
+        - product/proposal scope without action -> default to 'include' (3.0.6 default)
+        - scope='request' or unknown scope -> pass through untouched
+        """
+        if not isinstance(values, dict):
+            return values
+        refine = values.get("refine")
+        if not isinstance(refine, list):
+            return values
+
+        normalized: list[Any] = []
+        for entry in refine:
+            if not isinstance(entry, dict):
+                normalized.append(entry)
+                continue
+            scope = entry.get("scope")
+            wire_key = "product_id" if scope == "product" else "proposal_id" if scope == "proposal" else None
+
+            new_entry: dict = dict(entry)
+            if wire_key is not None and wire_key in new_entry:
+                wire_val = new_entry[wire_key]
+                if "id" in new_entry and new_entry["id"] != wire_val:
+                    raise ValueError(
+                        f"refine entry has both 'id' ({new_entry['id']!r}) and {wire_key!r} "
+                        f"({wire_val!r}) with different values; provide only one"
+                    )
+                del new_entry[wire_key]
+                new_entry["id"] = wire_val
+
+            # 3.0.6 defaults action to 'include' on product/proposal scope; rc.3 lib requires it.
+            if scope in {"product", "proposal"} and "action" not in new_entry:
+                new_entry["action"] = "include"
+
+            normalized.append(new_entry)
+
+        return {**values, "refine": normalized}
+
+    @model_validator(mode="after")
+    def _validate_buying_mode_invariants(self) -> "GetProductsRequest":
+        """Enforce AdCP cross-mode rules.
+
+        Rule sources: AdCP 3.0 spec (description on each variant's buying_mode Literal) and
+        tests/bdd/features/BR-UC-001-discover-available-inventory.feature:313-319.
+
+        The transport wrapper is responsible for defaulting pre-v3 clients to 'brief' before
+        the request reaches this validator. If buying_mode is None at this point, the client
+        is a v3 client that omitted the required field.
+        """
+        mode = self.buying_mode
+
+        if mode is None:
+            raise ValueError("buying_mode is required (must be one of 'brief', 'wholesale', 'refine')")
+        if mode not in {"brief", "wholesale", "refine"}:
+            raise ValueError(f"buying_mode must be one of 'brief', 'wholesale', 'refine'; got {mode!r}")
+
+        has_brief = bool(self.brief and self.brief.strip())
+        refine_present = self.refine is not None
+
+        if mode == "brief":
+            if not has_brief:
+                raise ValueError("brief is required when buying_mode is 'brief'")
+            if refine_present:
+                raise ValueError("refine must not be provided when buying_mode is 'brief'")
+        elif mode == "wholesale":
+            if has_brief:
+                raise ValueError("brief must not be provided when buying_mode is 'wholesale'")
+            if refine_present:
+                raise ValueError("refine must not be provided when buying_mode is 'wholesale'")
+        else:  # mode == "refine"
+            if has_brief:
+                raise ValueError("brief must not be provided when buying_mode is 'refine'")
+            if not refine_present:
+                raise ValueError("refine array is required when buying_mode is 'refine'")
+
+        return self
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):

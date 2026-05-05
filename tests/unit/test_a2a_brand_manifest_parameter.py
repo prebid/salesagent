@@ -79,7 +79,9 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         assert call_kwargs["filters"] == {"delivery_type": "guaranteed"}
         assert call_kwargs["min_exposures"] == 10000
         assert call_kwargs["strategy_id"] == "test_strategy_123"
-        assert "adcp_version" not in call_kwargs
+        # adcp_version IS forwarded to the raw function so it can apply pre-v3
+        # default-to-brief; the helper does not receive it.
+        assert call_kwargs["adcp_version"] == "3.6.0"
         assert "brand_manifest" not in call_kwargs
 
 

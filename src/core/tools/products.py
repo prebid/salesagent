@@ -143,7 +143,9 @@ def filter_products_by_property_list(
 
 
 async def _get_products_impl(
-    req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
+    req: GetProductsRequestGenerated,
+    identity: ResolvedIdentity | None,
+    defaulted_to_brief: bool = False,
 ) -> GetProductsResponse:
     """Shared implementation for get_products.
 
@@ -153,6 +155,9 @@ async def _get_products_impl(
     Args:
         req: GetProductsRequest from generated schemas
         identity: Resolved identity from transport boundary
+        defaulted_to_brief: True if the wrapper layer applied the pre-v3 default-to-brief
+            shim because the client omitted buying_mode and declared a pre-v3 adcp_version.
+            Recorded in the audit log so operations can detect silent client defaults.
 
     Returns:
         GetProductsResponse containing matching products
@@ -794,25 +799,44 @@ async def get_products(
     property_list: dict | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
+    buying_mode: str | None = None,
+    refine: list[dict[str, Any]] | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Get available products matching the brief.
 
-    MCP tool wrapper aligned with adcp v3.6.0 spec.
+    MCP tool wrapper aligned with the AdCP 3.0 three-mode contract.
 
     Args:
         brand: Brand reference per adcp 3.6.0. Example: BrandReference(domain="acme.com")
-        brief: Brief description of the advertising campaign or requirements (optional)
-        adcp_version: Client's AdCP version (default: 1.0.0). V3+ clients get clean responses.
+        brief: Brief description of the campaign (required when buying_mode='brief';
+            forbidden when buying_mode='wholesale' or 'refine')
+        adcp_version: Client's AdCP version (default: 1.0.0). V3+ clients get clean
+            responses; pre-v3 clients without buying_mode are defaulted to 'brief'.
         filters: Structured filters for product discovery (optional)
         property_list: Property list reference for filtering by buyer's property list (optional)
         context: Application level context per adcp spec
+        buying_mode: Buyer intent — 'brief' (publisher curates), 'wholesale' (raw inventory),
+            or 'refine' (iterate on a previous response). v3 clients MUST include buying_mode;
+            pre-v3 clients are defaulted to 'brief'.
+        refine: Array of change requests for iterating on a previous get_products response;
+            only valid when buying_mode='refine'. List-of-dicts at the MCP boundary; the
+            request schema validates each entry's typed shape.
         ctx: FastMCP context (automatically provided)
         push_notification_config: Optional webhook configuration (accepted, ignored by this operation)
 
     Returns:
         ToolResult with human-readable text and structured data
     """
+    from src.core.product_conversion import is_pre_v3
+
+    # Pre-v3 default-to-brief shim: AdCP spec says sellers SHOULD default pre-v3 clients
+    # without buying_mode to 'brief'. Track the decision for the audit log.
+    defaulted_to_brief = False
+    if buying_mode is None and is_pre_v3(adcp_version):
+        buying_mode = "brief"
+        defaulted_to_brief = True
+
     # Build request object for shared implementation
     try:
         req = create_get_products_request(
@@ -821,6 +845,8 @@ async def get_products(
             filters=filters,
             property_list=property_list,
             context=context,
+            buying_mode=buying_mode,
+            refine=refine,
         )
 
     except ValidationError as e:
@@ -834,7 +860,7 @@ async def get_products(
 
     # Call shared implementation
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly
-    response = await _get_products_impl(req, identity)
+    response = await _get_products_impl(req, identity, defaulted_to_brief=defaulted_to_brief)
 
     # Return ToolResult with human-readable text and structured data
     response_dict = response.model_dump(mode="json")
@@ -853,6 +879,9 @@ async def get_products_raw(
     property_list: dict | None = None,
     strategy_id: str | None = None,
     context: dict | None = None,  # Application level context per adcp spec
+    buying_mode: str | None = None,
+    refine: list[dict[str, Any]] | None = None,
+    adcp_version: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetProductsResponse:
@@ -871,17 +900,29 @@ async def get_products_raw(
         property_list: Property list reference for filtering by buyer's property list (optional)
         strategy_id: Optional strategy ID for linking operations (optional)
         context: Application level context per adcp spec
+        buying_mode: Buyer intent — 'brief' / 'wholesale' / 'refine'. v3 clients MUST
+            include this; pre-v3 clients are defaulted to 'brief' here.
+        refine: Array of change requests for buying_mode='refine'.
+        adcp_version: Client's AdCP version (used to decide pre-v3 default-to-brief).
         ctx: FastMCP context (automatically provided)
         identity: Resolved identity from transport boundary (preferred over ctx)
 
     Returns:
         GetProductsResponse containing matching products
     """
+    from src.core.product_conversion import is_pre_v3
+
     # Resolve identity from transport context if not provided
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
+
+    # Pre-v3 default-to-brief shim (mirrors MCP wrapper)
+    defaulted_to_brief = False
+    if buying_mode is None and is_pre_v3(adcp_version):
+        buying_mode = "brief"
+        defaulted_to_brief = True
 
     # Create request object - adcp library validates schema
     req = create_get_products_request(
@@ -890,10 +931,12 @@ async def get_products_raw(
         filters=filters,
         property_list=property_list,
         context=context,
+        buying_mode=buying_mode,
+        refine=refine,
     )
 
     # Call shared implementation
-    return await _get_products_impl(req, identity)
+    return await _get_products_impl(req, identity, defaulted_to_brief=defaulted_to_brief)
 
 
 def get_product_catalog(tenant_id: str | None = None) -> list[Product]:

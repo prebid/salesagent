@@ -155,7 +155,7 @@ class TestMcpGetProductsWrapper:
             mock_compat.side_effect = lambda tool, resp, ver: resp
             from src.core.tools.products import get_products
 
-            result = asyncio.run(get_products(brief="ads", adcp_version="3.0.0", ctx=mock_ctx))
+            result = asyncio.run(get_products(buying_mode="brief", brief="ads", adcp_version="3.0.0", ctx=mock_ctx))
 
         mock_compat.assert_called_once_with("get_products", result.structured_content, "3.0.0")
 
@@ -263,7 +263,11 @@ class TestA2AGetProductsRawWrapper:
         mock_compat.assert_not_called()
 
     def test_a2a_wrapper_empty_brief_uses_empty_string(self):
-        """A2A wrapper passes empty string when brief is empty."""
+        """A2A wrapper passes empty string when brief is empty.
+
+        With no brief provided, the request must be in wholesale mode (brief mode
+        requires a non-empty brief; refine forbids brief).
+        """
         identity = PrincipalFactory.make_identity(protocol="a2a")
 
         with patch(
@@ -273,7 +277,7 @@ class TestA2AGetProductsRawWrapper:
         ) as mock_impl:
             from src.core.tools.products import get_products_raw
 
-            asyncio.run(get_products_raw(brief="", identity=identity))
+            asyncio.run(get_products_raw(brief="", buying_mode="wholesale", identity=identity))
 
         req = mock_impl.call_args.args[0]
         # brief="" → create_get_products_request normalizes to None

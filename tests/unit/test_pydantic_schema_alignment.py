@@ -611,6 +611,7 @@ class TestSpecificFieldValidation:
     def test_get_products_accepts_filters(self):
         """REGRESSION TEST: filters must be accepted (PR #195 issue)."""
         request = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "testproduct.com"},
             filters={
                 "delivery_type": "guaranteed",
@@ -621,20 +622,21 @@ class TestSpecificFieldValidation:
         assert request.filters.delivery_type.value == "guaranteed"
 
     def test_get_products_all_fields_optional(self):
-        """Test that GetProductsRequest accepts all optional fields per spec.
+        """Test that within a buying_mode, GetProductsRequest fields are optional per spec.
 
-        Note: adcp_version is NOT a field on GetProductsRequest per AdCP spec.
-        All fields are optional, including brand.
+        AdCP 3.0 makes buying_mode required for v3 clients (cross-mode contract).
+        Within a mode, the remaining fields keep their per-spec optionality.
         adcp 3.6.0: brand replaced brand_manifest.
         """
-        # Empty request is valid
-        empty_request = GetProductsRequest()
-        assert empty_request.brand is None
-        assert empty_request.brief is None
-        assert empty_request.filters is None
+        # Wholesale mode minimal
+        wholesale_minimal = GetProductsRequest(buying_mode="wholesale")
+        assert wholesale_minimal.brand is None
+        assert wholesale_minimal.brief is None
+        assert wholesale_minimal.filters is None
 
-        # With brand only
+        # With brand only (wholesale mode)
         request = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "testproduct.com"},
         )
         assert request.brand is not None

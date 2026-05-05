@@ -52,7 +52,7 @@ KNOWN_VIOLATIONS = {
     ("media_buy_update.py", 1204),
     ("media_buy_update.py", 1264),
     # _get_products_impl: 1 violation (logging)
-    ("products.py", 617),
+    ("products.py", 622),
     # _list_creatives_impl: 1 violation (filter dict conversion)
     ("creatives/listing.py", 143),  # filters.model_dump(exclude_none=True)
 }

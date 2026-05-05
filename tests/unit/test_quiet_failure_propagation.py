@@ -34,7 +34,12 @@ def _make_identity(tenant_id="test-tenant"):
 def _make_request(brief="test brief"):
     from src.core.schema_helpers import create_get_products_request
 
-    return create_get_products_request(brief=brief)
+    # Default to brief mode so the AdCP 3.0 cross-mode invariants are satisfied
+    # (brief mode requires non-empty brief; brief is provided by default here).
+    buying_mode = "brief" if (brief and brief.strip()) else "wholesale"
+    if buying_mode == "wholesale":
+        brief = ""
+    return create_get_products_request(brief=brief, buying_mode=buying_mode)
 
 
 def _mock_uow_with_products(products):

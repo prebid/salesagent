@@ -55,6 +55,26 @@ def needs_v2_compat(adcp_version: str | None) -> bool:
         return True
 
 
+def is_pre_v3(adcp_version: str | None) -> bool:
+    """Check if a client is pre-v3 for purposes of buying_mode default-to-brief.
+
+    AdCP 3.0 spec: pre-v3 clients without buying_mode SHOULD be defaulted to 'brief'
+    by the seller. This helper shares parsing logic with needs_v2_compat so version
+    detection has one definition.
+
+    PEP 440 note: Version("3.0.0-rc.3") < Version("3.0.0") is True. A client declaring
+    a 3.0 pre-release version is treated as pre-v3 here. This is the safer behavior
+    (forgive an rc client that omits buying_mode) and matches existing v2-compat semantics.
+
+    Args:
+        adcp_version: Client-declared AdCP version string, or None if unknown.
+
+    Returns:
+        True if the client should be treated as pre-v3 (None, < 3.0, or unparseable).
+    """
+    return needs_v2_compat(adcp_version)
+
+
 def convert_pricing_option_to_adcp(
     pricing_option,
 ) -> (

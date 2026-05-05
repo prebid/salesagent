@@ -43,6 +43,7 @@ class TestRawFunctionParameterValidation:
         valid_non_helper_params = {
             "min_exposures",  # Optional, not in helper
             "strategy_id",  # Optional, not in helper
+            "adcp_version",  # Used for pre-v3 default-to-brief decision in raw, not in helper
         }
 
         # Parameters that SHOULD be in helper
@@ -51,9 +52,9 @@ class TestRawFunctionParameterValidation:
         # Verify all should-be-in-helper params are actually in helper
         missing_in_helper = should_be_in_helper - helper_params
 
-        assert not missing_in_helper, (
-            f"get_products_raw has parameters not in helper and not documented as valid: {missing_in_helper}"
-        )
+        assert (
+            not missing_in_helper
+        ), f"get_products_raw has parameters not in helper and not documented as valid: {missing_in_helper}"
 
     def test_all_raw_functions_have_context_parameter(self):
         """All _raw functions should accept a ctx parameter."""
@@ -88,6 +89,7 @@ class TestRawFunctionParameterValidation:
             "get_products_raw": {
                 "min_exposures",  # Optional filtering
                 "strategy_id",  # Optional linking
+                "adcp_version",  # Used to decide pre-v3 default-to-brief
             },
         }
 
@@ -126,8 +128,8 @@ class TestRawFunctionParameterValidation:
         params = list(sig.parameters.keys())
 
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
-        # Note: promoted_offering removed per adcp v1.2.1 migration
-        expected_params = ["brief", "brand", "filters", "property_list", "context"]
+        # adcp 3.0 buying_mode/refine: added for the three-mode contract.
+        expected_params = ["brief", "brand", "filters", "property_list", "context", "buying_mode", "refine"]
 
         assert params == expected_params, (
             f"create_get_products_request signature changed!\n"
@@ -196,7 +198,8 @@ class TestHelperFunctionDocumentation:
         # Verify create_get_products_request (the one that caused the bug)
         assert "create_get_products_request" in signatures
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
-        expected = ["brief", "brand", "filters", "property_list", "context"]
+        # adcp 3.0 buying_mode/refine: added for the three-mode contract.
+        expected = ["brief", "brand", "filters", "property_list", "context", "buying_mode", "refine"]
         actual = signatures["create_get_products_request"]
         assert actual == expected, (
             f"create_get_products_request signature changed!\n"

@@ -102,22 +102,31 @@ def create_get_products_request(
     filters: dict[str, Any] | ProductFilters | None = None,
     property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,
+    buying_mode: str | None = None,
+    refine: list[dict[str, Any]] | None = None,
 ) -> GetProductsRequest:
-    """Create GetProductsRequest aligned with adcp v3.6.0 spec.
+    """Create GetProductsRequest aligned with the AdCP 3.0 three-mode contract.
 
     Args:
-        brief: Natural language description of campaign requirements
+        brief: Natural language description of campaign requirements (required when
+            buying_mode='brief'; forbidden when buying_mode='wholesale' or 'refine')
         brand: Brand reference per adcp 3.6.0 (BrandReference or dict with domain field).
                Example: BrandReference(domain="acme.com") or {"domain": "acme.com"}
         filters: Structured filters for product discovery (dict or ProductFilters)
         property_list: Property list reference for filtering by buyer's property list
         context: Application-level context (dict or ContextObject)
+        buying_mode: Buyer intent — 'brief' / 'wholesale' / 'refine'. Required for v3
+            clients (the transport wrapper is responsible for defaulting pre-v3 clients
+            to 'brief' before calling this helper).
+        refine: Array of change requests for refining a previous get_products response;
+            only valid when buying_mode='refine'.
 
     Returns:
         GetProductsRequest
 
     Examples:
         >>> req = create_get_products_request(
+        ...     buying_mode="brief",
         ...     brand=BrandReference(domain="acme.com"),
         ...     brief="Display ads"
         ... )
@@ -130,12 +139,14 @@ def create_get_products_request(
         elif isinstance(filters, dict):
             filters_obj = ProductFilters(**filters)
 
-    return GetProductsRequest(  # type: ignore[call-arg]
+    return GetProductsRequest(
         brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,
         property_list=to_property_list_reference(property_list),
         context=to_context_object(context),
+        buying_mode=buying_mode,
+        refine=refine,
     )
 
 

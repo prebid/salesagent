@@ -219,7 +219,9 @@ class TestFunctionCallIntegration:
 
         # Create minimal AdCP-compliant request
         # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
-        request = GetProductsRequest(brief="test product search", brand={"domain": "testbrand.com"})
+        request = GetProductsRequest(
+            buying_mode="brief", brief="test product search", brand={"domain": "testbrand.com"}
+        )
 
         # This should not fail with import/call errors
         # We're not testing the business logic, just that the function can be called
@@ -229,9 +231,7 @@ class TestFunctionCallIntegration:
 
             async def test_call():
                 # Mock the database and other external dependencies
-                with (
-                    pytest.MonkeyPatch().context() as m,
-                ):
+                with (pytest.MonkeyPatch().context() as m,):
                     # Mock database session and queries
                     m.setattr("src.core.main.get_db_session", lambda: Mock())
 

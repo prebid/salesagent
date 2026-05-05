@@ -67,6 +67,10 @@ class GetProductsBody(BaseModel):
     brief: str = ""
     brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     filters: dict[str, Any] | None = None
+    buying_mode: str | None = None  # 'brief' | 'wholesale' | 'refine' (v3 required, pre-v3 default to 'brief')
+    refine: list[dict[str, Any]] | None = None  # only valid when buying_mode='refine'
+    property_list: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -162,14 +166,27 @@ class SyncAccountsBody(BaseModel):
 @router.post("/products")
 async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
     """Get available products matching the brief (auth-optional discovery skill)."""
+    from src.core.product_conversion import is_pre_v3
+
+    # Pre-v3 default-to-brief shim (mirrors MCP/A2A wrappers)
+    buying_mode = body.buying_mode
+    defaulted_to_brief = False
+    if buying_mode is None and is_pre_v3(body.adcp_version):
+        buying_mode = "brief"
+        defaulted_to_brief = True
+
     req = products_module.create_get_products_request(
         brief=body.brief,
         brand=body.brand,
         filters=body.filters,
+        property_list=body.property_list,
+        context=body.context,
+        buying_mode=buying_mode,
+        refine=body.refine,
     )
 
     try:
-        response = await products_module._get_products_impl(req, identity)
+        response = await products_module._get_products_impl(req, identity, defaulted_to_brief=defaulted_to_brief)
     except ToolError as e:
         return _handle_tool_error(e)
 

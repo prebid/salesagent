@@ -1415,6 +1415,9 @@ class AdCPRequestHandler(RequestHandler):
                 min_exposures=parameters.get("min_exposures"),
                 strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
+                buying_mode=parameters.get("buying_mode"),
+                refine=parameters.get("refine"),
+                adcp_version=parameters.get("adcp_version"),
                 identity=identity,
             )
 
@@ -1569,9 +1572,11 @@ class AdCPRequestHandler(RequestHandler):
                 validation_mode=parameters.get("validation_mode", "strict"),
                 push_notification_config=parameters.get("push_notification_config"),
                 context=context,
-                account=LibraryAccountReference.model_validate(parameters["account"])
-                if isinstance(parameters.get("account"), dict)
-                else parameters.get("account"),
+                account=(
+                    LibraryAccountReference.model_validate(parameters["account"])
+                    if isinstance(parameters.get("account"), dict)
+                    else parameters.get("account")
+                ),
                 identity=identity,
             )
 

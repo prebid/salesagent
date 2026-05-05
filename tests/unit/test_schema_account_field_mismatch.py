@@ -22,7 +22,7 @@ class TestAccountFieldMismatch:
 
     def test_get_products_model_accepts_account_field(self):
         """Model accepts 'account' as AccountReference (variant 1: by ID)."""
-        req = GetProductsRequest(account={"account_id": "acc_123"}, brief="test")
+        req = GetProductsRequest(buying_mode="brief", account={"account_id": "acc_123"}, brief="test")
         assert isinstance(req.account, AccountReference)
         assert req.account.account_id == "acc_123"
 

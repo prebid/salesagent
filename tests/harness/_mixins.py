@@ -460,16 +460,22 @@ class ProductMixin:
         filters: dict[str, Any] | None = None,
         property_list: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
+        buying_mode: str | None = None,
         **extra: Any,
     ) -> GetProductsResponse:
         """Call _get_products_impl with the given parameters.
 
         Args:
-            brief: Search brief text.
+            brief: Search brief text. Default 'test brief' selects 'brief' mode unless
+                buying_mode is explicitly overridden.
             brand: Brand reference dict (defaults to {"domain": "test.com"}).
             filters: ProductFilters dict.
             property_list: PropertyListReference dict.
             context: ContextObject dict.
+            buying_mode: Optional explicit buying_mode. When None, the harness picks the
+                appropriate mode from the brief (non-empty -> 'brief', empty -> 'wholesale').
+                Tests that exercise refine mode should pass buying_mode='refine' explicitly
+                with a refine list in **extra.
             **extra: Additional kwargs forwarded to request construction.
 
         Returns:
@@ -484,12 +490,23 @@ class ProductMixin:
         if brand is None:
             brand = {"domain": "test.com"}
 
+        # Default buying_mode based on whether brief is provided so the v3 cross-mode
+        # invariants are satisfied. Tests can override by passing buying_mode explicitly.
+        if buying_mode is None:
+            buying_mode = "brief" if (brief and brief.strip()) else "wholesale"
+
+        # Brief is forbidden in wholesale/refine; clear it if the mode says so.
+        effective_brief: str | None = brief
+        if buying_mode in {"wholesale", "refine"}:
+            effective_brief = None
+
         req = GetProductsRequestGenerated(
-            brief=brief,
+            brief=effective_brief,
             brand=brand,
             filters=filters,
             property_list=property_list,
             context=context,
+            buying_mode=buying_mode,
             **extra,
         )
         return await _get_products_impl(req, identity)

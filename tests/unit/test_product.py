@@ -52,7 +52,7 @@ class TestProductPreconditions:
             from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
             from src.core.tools.products import _get_products_impl
 
-            req = GetProductsRequestGenerated(brief="test", brand={"domain": "test.com"})
+            req = GetProductsRequestGenerated(buying_mode="brief", brief="test", brand={"domain": "test.com"})
             with pytest.raises(AdCPValidationError, match="Identity is required"):
                 await _get_products_impl(req, identity=None)
 
