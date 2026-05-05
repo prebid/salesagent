@@ -464,5 +464,6 @@ class TestTenantContextFromA2AHeaders:
         )
 
         with CreativeFormatsEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="tenant"):
+            # A2A transport translates AdCPError to a2a-sdk errors; catch either
+            with pytest.raises((AdCPAuthenticationError, Exception), match="tenant"):
                 env.call_a2a(identity=identity_no_tenant)
