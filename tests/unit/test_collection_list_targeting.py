@@ -11,11 +11,16 @@ This is the path package_config takes through MediaPackage.JSONType().
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import CollectionListReference, Targeting
+
+_SPEC_PATH = (
+    Path(__file__).resolve().parents[2] / "schemas" / "latest" / "_schemas_latest_core_collection-list-ref_json.json"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -135,3 +140,51 @@ class TestRoundTripThroughJson:
         dumped = t.model_dump(exclude_none=True, mode="json")
         assert "collection_list" in dumped
         assert dumped["collection_list"]["list_id"] == "c1"
+
+
+# ---------------------------------------------------------------------------
+# Spec-drift guards: local model must match AdCP collection-list-ref.json
+# ---------------------------------------------------------------------------
+class TestCollectionListReferenceSpecDrift:
+    """Guard against drift between local CollectionListReference and the AdCP spec.
+
+    Local extension exists because adcp 3.12.0 Python codegen lags the spec.
+    When the library catches up, this test surfaces the drift so we can delete
+    the local mirror and inherit instead.
+    """
+
+    @pytest.fixture(scope="class")
+    def spec(self) -> dict:
+        if not _SPEC_PATH.exists():
+            pytest.skip(f"AdCP spec cache not present at {_SPEC_PATH}")
+        return json.loads(_SPEC_PATH.read_text())
+
+    def test_field_set_matches_spec(self, spec: dict):
+        spec_fields = set(spec["properties"].keys())
+        local_fields = set(CollectionListReference.model_fields.keys())
+        assert spec_fields == local_fields, (
+            f"CollectionListReference drift vs spec.\n"
+            f"  spec only:  {spec_fields - local_fields}\n"
+            f"  local only: {local_fields - spec_fields}"
+        )
+
+    def test_required_fields_match_spec(self, spec: dict):
+        spec_required = set(spec["required"])
+        local_required = {name for name, info in CollectionListReference.model_fields.items() if info.is_required()}
+        assert spec_required == local_required, (
+            f"CollectionListReference required-field drift vs spec.\n"
+            f"  spec required:  {spec_required}\n"
+            f"  local required: {local_required}"
+        )
+
+    def test_additional_properties_forbid_matches_spec(self, spec: dict):
+        # Spec sets additionalProperties: false; local must enforce extra="forbid".
+        assert spec.get("additionalProperties") is False
+        assert CollectionListReference.model_config.get("extra") == "forbid"
+
+    def test_targeting_carries_both_collection_fields(self):
+        """Targeting must surface both collection_list (inclusion) and
+        collection_list_exclude (exclusion) per AdCP core/targeting.json:193-200."""
+        targeting_fields = set(Targeting.model_fields.keys())
+        assert "collection_list" in targeting_fields
+        assert "collection_list_exclude" in targeting_fields
