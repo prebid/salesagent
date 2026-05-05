@@ -67,8 +67,12 @@ def _adcp_error_from_code(
         cls.error_code: cls
         for cls in (
             AdCPValidationError,
-            AdCPAuthenticationError,
+            # AdCPAuthorizationError listed before AdCPAuthenticationError so the
+            # latter wins the dict comprehension for the shared AUTH_REQUIRED code
+            # — at the wire we can't disambiguate auth-missing from auth-insufficient,
+            # and Authentication is the more common case (missing tenant/token).
             AdCPAuthorizationError,
+            AdCPAuthenticationError,
             AdCPNotFoundError,
             AdCPAccountNotFoundError,
             AdCPAccountSetupRequiredError,
