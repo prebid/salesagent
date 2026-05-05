@@ -11,68 +11,66 @@
         margin-bottom: var(--sa-space-6);
     }
 
+    /* Ledger metric cards — flat editorial blocks. No gradient strips,
+       no rainbow color coding. The number itself is the hero (Newsreader
+       serif, tabular). Color only when something is blocking. */
     .metric-card {
         background: var(--sa-bg-surface);
-        border: 1px solid var(--sa-border);
-        border-radius: var(--sa-radius-xl);
+        border: 1px solid var(--sa-rule);
+        border-radius: var(--sa-radius-sm);
         padding: var(--sa-space-5);
-        box-shadow: var(--sa-shadow-sm);
+        box-shadow: none;
         position: relative;
         overflow: hidden;
-        transition: transform var(--sa-duration-base) var(--sa-easing),
-                    box-shadow var(--sa-duration-base) var(--sa-easing),
-                    border-color var(--sa-duration-base) var(--sa-easing);
+        transition: border-color var(--sa-duration-base) var(--sa-easing),
+                    background var(--sa-duration-base) var(--sa-easing);
     }
-
-    .metric-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 3px;
-    }
-
-    .metric-card.revenue::before     { background: linear-gradient(90deg, #10b981, #34d399); }
-    .metric-card.buys::before        { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
-    .metric-card.workflows::before   { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-    .metric-card.advertisers::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
 
     a.metric-card:hover {
         cursor: pointer;
-        transform: translateY(-1px);
-        border-color: var(--sa-border-strong);
-        box-shadow: var(--sa-shadow-md);
+        border-color: var(--sa-ink);
+        background: var(--sa-bg-surface);
     }
 
     .metric-label {
-        color: var(--sa-text-muted);
-        font-size: var(--sa-text-xs);
-        font-weight: 600;
+        font-family: var(--sa-font-sans);
+        color: var(--sa-ink-50);
+        font-size: 10.5px;
+        font-weight: 500;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin-bottom: var(--sa-space-2);
+        letter-spacing: 0.08em;
+        margin-bottom: var(--sa-space-3);
     }
 
     .metric-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: var(--sa-text-strong);
-        line-height: var(--sa-leading-tight);
-        letter-spacing: -0.01em;
+        font-family: var(--sa-font-serif);
+        font-size: 36px;
+        font-weight: 500;
+        color: var(--sa-ink);
+        line-height: 1;
+        letter-spacing: -0.02em;
+        font-variant-numeric: tabular-nums;
     }
 
     .metric-change {
-        font-size: var(--sa-text-sm);
-        margin-top: var(--sa-space-2);
+        font-size: 12px;
+        margin-top: var(--sa-space-3);
         display: flex;
         align-items: center;
         gap: var(--sa-space-1);
+        color: var(--sa-ink-70);
     }
 
-    .metric-change.positive { color: var(--sa-success); }
-    .metric-change.negative { color: var(--sa-danger); }
-    .metric-change.neutral  { color: var(--sa-text-muted); }
+    /* Trend direction reads from the icon and tabular delta, not from
+       red/green color — staying inside the Ledger color rule. Action-
+       required (workflows-needs-attention) is the one amber callout. */
+    .metric-change.positive,
+    .metric-change.negative,
+    .metric-change.neutral { color: var(--sa-ink-70); }
+    .metric-card.workflows .metric-change.negative {
+        color: var(--sa-warning);
+    }
+    .metric-change i { font-size: 10px; opacity: 0.8; }
 
     .dashboard-main {
         display: grid;
@@ -122,9 +120,9 @@
         animation: pulse 2s ease-in-out infinite;
     }
 
-    .status-dot.active     { background: var(--sa-success); }
+    .status-dot.active     { background: var(--sa-ink); }
     .status-dot.connecting { background: var(--sa-warning); }
-    .status-dot.idle       { background: var(--sa-text-muted); }
+    .status-dot.idle       { background: var(--sa-ink-30); }
 
     @keyframes pulse {
         0%, 100% { opacity: 1; }
@@ -151,7 +149,7 @@
     }
 
     .activity-item.action-required {
-        border-left: 3px solid var(--sa-warning);
+        border-left: 2px solid var(--sa-warning);
         background: var(--sa-warning-tint);
     }
 
@@ -214,10 +212,16 @@
         white-space: nowrap;
     }
 
-    .activity-badge.success { background: var(--sa-success-tint); color: var(--sa-success-text); }
-    .activity-badge.error   { background: var(--sa-danger-tint);  color: var(--sa-danger-text); }
-    .activity-badge.a2a     { background: #dbeafe; color: var(--sa-primary-strong); }
-    .activity-badge.mcp     { background: #e0e7ff; color: #3730a3; }
+    .activity-badge {
+        font-family: var(--sa-font-sans);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        border: 1px solid var(--sa-rule);
+    }
+    .activity-badge.success { background: transparent;            color: var(--sa-ink-70); border-color: var(--sa-rule); }
+    .activity-badge.error   { background: var(--sa-warning-tint); color: var(--sa-warning); border-color: transparent; }
+    .activity-badge.a2a,
+    .activity-badge.mcp     { background: transparent;            color: var(--sa-ink-70); border-color: var(--sa-rule); font-family: var(--sa-font-mono); }
 
     .expand-indicator {
         font-size: var(--sa-text-xs);
@@ -262,68 +266,6 @@
         }
     }
 
-
-    .quick-actions {
-        background: var(--sa-bg-surface);
-        border: 1px solid var(--sa-border);
-        border-radius: var(--sa-radius-xl);
-        padding: var(--sa-space-5);
-        box-shadow: var(--sa-shadow-sm);
-    }
-
-    .quick-actions h3 {
-        margin: 0 0 var(--sa-space-4) 0;
-        font-size: var(--sa-text-lg);
-        font-weight: 600;
-        color: var(--sa-text-strong);
-    }
-
-    .action-grid {
-        display: grid;
-        gap: var(--sa-space-3);
-    }
-
-    .action-button {
-        display: flex;
-        align-items: center;
-        gap: var(--sa-space-3);
-        padding: var(--sa-space-3) var(--sa-space-4);
-        background: var(--sa-bg-surface);
-        border: 1px solid var(--sa-border);
-        border-radius: var(--sa-radius-lg);
-        text-decoration: none;
-        color: var(--sa-text-strong);
-        transition: background var(--sa-duration-fast) var(--sa-easing),
-                    border-color var(--sa-duration-fast) var(--sa-easing),
-                    transform var(--sa-duration-fast) var(--sa-easing);
-        font-size: var(--sa-text-sm);
-    }
-
-    .action-button:hover {
-        background: var(--sa-gray-50);
-        border-color: var(--sa-border-strong);
-        text-decoration: none;
-        color: var(--sa-text-strong);
-    }
-
-    .action-icon {
-        width: 36px;
-        height: 36px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: var(--sa-radius-md);
-        font-size: var(--sa-text-base);
-        flex-shrink: 0;
-    }
-
-    .action-icon.settings { background: #ede9fe; color: #7c3aed; }
-    .action-icon.products { background: #dbeafe; color: #2563eb; }
-    .action-icon.properties { background: #fef3c7; color: #d97706; }
-    .action-icon.creatives { background: #fce7f3; color: #db2777; }
-    .action-icon.workflows { background: #dbeafe; color: #1e40af; }
-    .action-icon.inventory { background: #d1fae5; color: #059669; }
-    .action-icon.reports { background: #fed7aa; color: #ea580c; }
 
     .revenue-chart {
         background: var(--sa-bg-surface);
@@ -450,14 +392,26 @@
         font-weight: 600;
     }
 
-    .buy-status.live            { background: var(--sa-success-tint); color: var(--sa-success-text); }
-    .buy-status.scheduled       { background: #dbeafe;                color: var(--sa-primary-strong); }
-    .buy-status.needs_creatives { background: #fef3c7;                color: var(--sa-warning-text); }
-    .buy-status.needs_approval  { background: #fed7aa;                color: #9a3412; }
-    .buy-status.completed       { background: var(--sa-gray-200);     color: var(--sa-gray-700); }
-    .buy-status.failed          { background: var(--sa-danger-tint);  color: var(--sa-danger-text); }
-    .buy-status.paused          { background: #e0e7ff;                color: #3730a3; }
-    .buy-status.draft           { background: var(--sa-gray-100);     color: var(--sa-text-muted); }
+    /* Status pills — Ledger keeps these monochrome. Color is reserved for
+       blocking states (needs_*, failed). Live / scheduled / done all
+       share the same neutral chip. */
+    .buy-status {
+        font-family: var(--sa-font-sans);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 500;
+        border: 1px solid var(--sa-rule);
+        background: transparent;
+        color: var(--sa-ink-70);
+    }
+    .buy-status.live,
+    .buy-status.scheduled,
+    .buy-status.completed,
+    .buy-status.draft,
+    .buy-status.paused          { background: transparent;            color: var(--sa-ink-70);      border-color: var(--sa-rule); }
+    .buy-status.needs_creatives { background: var(--sa-warning-tint); color: var(--sa-warning);     border-color: transparent; }
+    .buy-status.needs_approval  { background: var(--sa-warning-tint); color: var(--sa-warning);     border-color: transparent; }
+    .buy-status.failed          { background: var(--sa-danger-tint);  color: var(--sa-danger);      border-color: transparent; }
 
     .spend-amount {
         font-weight: 600;
@@ -481,27 +435,355 @@
 </style>
 
 {% set crumbs = [
-    {"label": tenant.name}
+    {"label": "Storefront"},
+    {"label": "Overview"}
 ] %}
 {% set crumbs = crumbs | with_embed_root %}
 {% include "_breadcrumb.html" %}
 
-<!-- Header Section -->
-<header class="sa-page-header">
+<style>
+    /* Dashboard-local styles for the Ledger editorial top — masthead,
+       three-stage pipeline, revenue + attention rail, activity ledger.
+       Tokens come from admin.css; this file only adds the bespoke
+       editorial layout. */
+    /* Constrain dashboard content to the design canvas's editorial width
+       (1280px). The chrome (.header, breadcrumb) stays full-width; only
+       the content blocks reflow. */
+    .ld-masthead,
+    .sa-pipeline,
+    .ld-chart-row,
+    .ld-ledger-card {
+        max-width: 1280px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .ld-masthead {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 32px;
+        padding-bottom: 20px;
+        margin-bottom: 28px;
+        border-bottom: 1px solid var(--sa-rule);
+        flex-wrap: wrap;
+    }
+    .ld-masthead__date {
+        font-family: var(--sa-font-sans);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--sa-ink-50);
+        margin-bottom: 8px;
+    }
+    .ld-masthead__title {
+        font-family: var(--sa-font-serif);
+        font-size: 44px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        line-height: 1;
+        margin: 0;
+        color: var(--sa-ink);
+    }
+    .ld-masthead__meta {
+        margin-top: 10px;
+        font-size: 13px;
+        color: var(--sa-ink-70);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+    }
+    .ld-masthead__meta .domain { font-family: var(--sa-font-mono); font-size: 12px; }
+    .ld-masthead__meta .sep { color: var(--sa-ink-30); }
+    .ld-masthead__meta .heartbeat {
+        display: inline-flex;
+        gap: 14px;
+        align-items: center;
+    }
+    .ld-masthead__meta .heartbeat .label {
+        font-family: var(--sa-font-sans);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--sa-ink-50);
+    }
+    .ld-masthead__rev {
+        text-align: right;
+    }
+    .ld-masthead__rev-label {
+        font-family: var(--sa-font-sans);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--sa-ink-50);
+        margin-bottom: 6px;
+    }
+    .ld-masthead__rev-value {
+        font-family: var(--sa-font-serif);
+        font-size: 48px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+    }
+    .ld-masthead__rev-delta {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--sa-ink-70);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        justify-content: flex-end;
+    }
+    .ld-masthead__rev-delta .num { font-family: var(--sa-font-mono); }
+
+    /* Pipeline three-column row uses the .sa-pipeline atom from admin.css */
+    .ld-row-amount-mono {
+        font-family: var(--sa-font-mono);
+        font-size: 11px;
+    }
+
+    /* Pacing micro-bar inside a Running row */
+    .ld-pacing-mark {
+        width: 28px;
+        flex-shrink: 0;
+        margin-top: 8px;
+    }
+    .ld-pacing-track {
+        height: 3px;
+        background: var(--sa-rule-soft);
+        position: relative;
+    }
+    .ld-pacing-fill {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        background: var(--sa-ink);
+    }
+    .ld-pacing-fill.is-under { background: var(--sa-warning); }
+    .ld-pacing-tick {
+        position: absolute;
+        top: -2px;
+        bottom: -2px;
+        width: 1px;
+        background: var(--sa-ink-50);
+    }
+    .ld-pacing-label {
+        font-size: 9.5px;
+        font-family: var(--sa-font-mono);
+        color: var(--sa-ink-50);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-top: 3px;
+        text-align: center;
+    }
+    .ld-pacing-label.is-under { color: var(--sa-warning); }
+
+    /* NEW chip on Pipeline rows */
+    .ld-new-chip {
+        display: inline-block;
+        padding: 1px 5px;
+        margin-left: 6px;
+        font-family: var(--sa-font-mono);
+        font-size: 9.5px;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--sa-bg-page);
+        background: var(--sa-ink);
+        border-radius: 1px;
+        vertical-align: middle;
+    }
+
+    /* Revenue chart + needs-attention split */
+    .ld-chart-row {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 24px;
+        margin-bottom: 32px;
+    }
+    .ld-chart-card,
+    .ld-attention-card {
+        background: var(--sa-bg-surface);
+        border: 1px solid var(--sa-rule);
+        padding: 20px 22px 16px;
+    }
+    .ld-chart-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        margin-bottom: 14px;
+    }
+    .ld-chart-head .figures {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        margin-top: 6px;
+    }
+    .ld-chart-head .vs {
+        font-size: 12px;
+        color: var(--sa-ink-70);
+    }
+    .ld-chart-periods {
+        display: flex;
+        gap: 4px;
+        font-family: var(--sa-font-mono);
+        font-size: 11px;
+        color: var(--sa-ink-70);
+    }
+    .ld-chart-periods .period {
+        padding: 4px 8px;
+        border: 1px solid transparent;
+    }
+    .ld-chart-periods .period.is-active {
+        border-color: var(--sa-ink);
+        color: var(--sa-ink);
+    }
+    .ld-attention-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 0;
+        border-top: 1px solid var(--sa-rule-soft);
+    }
+    .ld-attention-row:first-of-type { border-top: none; padding-top: 4px; }
+    .ld-attention-mark {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        margin-top: 2px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--sa-ink-50);
+    }
+    .ld-attention-mark.is-amber { color: var(--sa-warning); }
+    .ld-attention-title {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--sa-ink);
+    }
+    .ld-attention-title.is-amber { color: var(--sa-warning); }
+    .ld-attention-sub {
+        font-size: 11.5px;
+        color: var(--sa-ink-70);
+        margin-top: 2px;
+    }
+
+    /* Activity ledger (audit feed table) */
+    .ld-ledger-card {
+        background: var(--sa-bg-surface);
+        border: 1px solid var(--sa-rule);
+        margin-bottom: 32px;
+    }
+    .ld-ledger-head {
+        display: flex;
+        align-items: center;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--sa-rule);
+    }
+    .ld-ledger-head .last-window {
+        font-family: var(--sa-font-mono);
+        font-size: 11px;
+        color: var(--sa-ink-50);
+    }
+    .ld-ledger-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12.5px;
+    }
+    .ld-ledger-table th {
+        font-family: var(--sa-font-sans);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--sa-ink-50);
+        padding: 8px 20px;
+        text-align: left;
+        border-bottom: none;
+        background: transparent;
+    }
+    .ld-ledger-table td {
+        padding: 10px 20px;
+        border-top: 1px solid var(--sa-rule-soft);
+        vertical-align: middle;
+    }
+    .ld-ledger-table .col-time {
+        font-family: var(--sa-font-mono);
+        color: var(--sa-ink-50);
+        white-space: nowrap;
+        width: 70px;
+    }
+    .ld-ledger-table .col-actor { color: var(--sa-ink-70); width: 160px; }
+    .ld-ledger-table .col-object {
+        font-family: var(--sa-font-mono);
+        font-size: 11.5px;
+        color: var(--sa-ink-70);
+        text-align: right;
+    }
+    .ld-ledger-table .col-status { text-align: right; width: 120px; }
+
+    @media (max-width: 1100px) {
+        .ld-chart-row { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+        .ld-masthead { flex-direction: column; align-items: flex-start; }
+        .ld-masthead__rev { text-align: left; }
+        .ld-masthead__rev-delta { justify-content: flex-start; }
+    }
+</style>
+
+<!-- Masthead — editorial publisher header with operational heartbeat -->
+{% set m = ledger.masthead %}
+<header class="ld-masthead">
     <div>
-        <h1 class="sa-page-header__title">{{ tenant.name }}</h1>
-        <p class="sa-page-header__subtitle">
-            Operational Dashboard ·
-            {% if tenant.ad_server %}{{ tenant.ad_server|title|replace('_', ' ') }}{% else %}No Ad Server{% endif %}
-        </p>
+        <div class="ld-masthead__date">The Daily — {{ m.today_label }}</div>
+        <h1 class="ld-masthead__title">{{ m.publisher_name }}</h1>
+        <div class="ld-masthead__meta">
+            {% if m.publisher_domain %}
+                <span class="domain">{{ m.publisher_domain }}</span>
+                <span class="sep">·</span>
+            {% endif %}
+            <span class="sa-chip sa-chip--success">
+                <i class="fas fa-check" style="font-size:9px;"></i> Live
+            </span>
+            <span class="sep">·</span>
+            <span>{{ m.property_count }} propert{{ 'y' if m.property_count == 1 else 'ies' }} · {{ m.agent_count }} sales agent · {{ m.product_count }} product{{ 's' if m.product_count != 1 else '' }}</span>
+            {% if m.last_brief_relative or m.last_offer_relative %}
+                <span class="sep">·</span>
+                <span class="heartbeat">
+                    {% if m.last_brief_relative %}
+                        <span><span class="label">Last brief</span> {{ m.last_brief_relative }}</span>
+                    {% endif %}
+                    {% if m.last_offer_relative %}
+                        <span><span class="label">Last offer</span> {{ m.last_offer_relative }}</span>
+                    {% endif %}
+                </span>
+            {% endif %}
+        </div>
     </div>
-    <div class="sa-page-header__actions">
-        <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/settings" class="btn btn-ghost">
-            <i class="fas fa-cog"></i> Settings
-        </a>
-        <button onclick="refreshDashboard()" class="btn btn-primary">
-            <i class="fas fa-sync-alt"></i> Refresh
-        </button>
+    <div class="ld-masthead__rev">
+        <div class="ld-masthead__rev-label">Net revenue, last 30d</div>
+        <div class="ld-masthead__rev-value">${{ "{:,.0f}".format(m.net_revenue_30d) }}</div>
+        <div class="ld-masthead__rev-delta">
+            {% if m.revenue_delta_pct > 0 %}
+                <i class="fas fa-arrow-up" style="font-size:10px;"></i>
+                <span class="num">+{{ "{:.1f}".format(m.revenue_delta_pct) }}%</span>
+            {% elif m.revenue_delta_pct < 0 %}
+                <i class="fas fa-arrow-down" style="font-size:10px;"></i>
+                <span class="num">{{ "{:.1f}".format(m.revenue_delta_pct) }}%</span>
+            {% else %}
+                <i class="fas fa-minus" style="font-size:10px;"></i>
+                <span class="num">flat</span>
+            {% endif %}
+            <span>vs prior 30</span>
+        </div>
     </div>
 </header>
 
@@ -510,337 +792,252 @@
 {% include 'components/setup_checklist_widget.html' %}
 {% endif %}
 
-<!-- Key Metrics -->
-<div class="dashboard-grid">
-    <div class="metric-card revenue">
-        <div class="metric-label">Total Revenue (30d)</div>
-        <div class="metric-value">${{ "{:,.0f}".format(metrics.total_revenue) }}</div>
-        <div class="metric-change {{ 'positive' if metrics.revenue_change > 0 else 'negative' if metrics.revenue_change < 0 else 'neutral' }}">
-            {% if metrics.revenue_change > 0 %}
-                <i class="fas fa-arrow-up"></i>
-            {% elif metrics.revenue_change < 0 %}
-                <i class="fas fa-arrow-down"></i>
-            {% else %}
-                <i class="fas fa-minus"></i>
-            {% endif %}
-            {{ "{:.1f}".format(metrics.revenue_change_abs) }}% vs last period
-        </div>
-    </div>
-
-    <div class="metric-card buys">
-        <div class="metric-label">Live Media Buys</div>
-        <div class="metric-value">{{ metrics.live_buys }}</div>
-        <div class="metric-change neutral">
-            {% if metrics.scheduled_buys > 0 %}
-                <i class="fas fa-calendar-check"></i>
-                {{ metrics.scheduled_buys }} scheduled to start
-            {% else %}
-                No media buys scheduled
+<!-- Three-stage business framing: Incoming · Running · Pipeline -->
+{% set inc = ledger.incoming %}
+{% set run = ledger.running %}
+{% set pl = ledger.pipeline %}
+<div class="sa-pipeline">
+    <!-- Incoming -->
+    <div class="sa-pipeline__col">
+        <div class="sa-pipeline__head">
+            <h3 class="sa-pipeline__title">
+                Incoming
+                <span class="sa-pipeline__count">{{ inc.count }}</span>
+            </h3>
+            {% if inc.urgent_count %}
+                <span class="sa-chip sa-chip--warning">
+                    <i class="fas fa-exclamation-triangle" style="font-size:9px;"></i>
+                    {{ inc.urgent_count }} urgent
+                </span>
             {% endif %}
         </div>
-    </div>
-
-    <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buys{% if metrics.needs_creatives > 0 %}?status=needs_creatives{% elif metrics.needs_approval > 0 %}?status=needs_approval{% endif %}" class="metric-card workflows" style="text-decoration: none; color: inherit; cursor: pointer;">
-        <div class="metric-label">Needs Attention</div>
-        <div class="metric-value">{{ metrics.needs_attention }}</div>
-        <div class="metric-change {{ 'negative' if metrics.needs_attention > 0 else 'positive' }}">
-            {% if metrics.needs_creatives > 0 %}
-                <i class="fas fa-image"></i>
-                {{ metrics.needs_creatives }} need creatives
-            {% elif metrics.needs_approval > 0 %}
-                <i class="fas fa-hand-paper"></i>
-                {{ metrics.needs_approval }} need approval
-            {% else %}
-                <i class="fas fa-check-circle"></i>
-                All media buys ready
-            {% endif %}
+        <div class="sa-pipeline__sub">
+            Offers waiting on you · <span class="total">${{ "{:,.0f}".format(inc.total_value) }} potential</span>
         </div>
-    </a>
-
-    <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/settings#advertisers" class="metric-card advertisers" style="text-decoration: none; color: inherit;">
-        <div class="metric-label">Active Advertisers</div>
-        <div class="metric-value">{{ metrics.active_advertisers }}</div>
-        <div class="metric-change neutral">
-            {{ metrics.total_advertisers }} total registered
-        </div>
-    </a>
-</div>
-
-<!-- Main Dashboard Area -->
-<div class="dashboard-main">
-    <!-- Activity Feed -->
-    <div class="activity-feed">
-        <div class="activity-header">
-            <h3>Recent Activity</h3>
-            <div class="activity-status">
-                <span class="status-dot active"></span>
-                <span id="connection-status">Connected</span>
-            </div>
-        </div>
-
-        <div class="activity-list" id="activity-list">
-            <!-- Show recent BUSINESS activity -->
-            {% if metrics.recent_activity %}
-                {% for activity in metrics.recent_activity %}
-                    <div class="activity-item {{ activity.type }} {{ 'action-required' if activity.action_required else '' }}" data-activity-id="activity-{{ loop.index }}">
-                        <div class="activity-header" style="cursor: pointer; padding: 1rem;" onclick="toggleActivityDetails('activity-{{ loop.index }}')">
-                            <div class="activity-main">
-                                <span class="activity-icon">
-                                    {% if activity.type == 'product_search' %}🔍
-                                    {% elif activity.type == 'media_buy' %}💰
-                                    {% elif activity.type == 'action_needed' %}⚠️
-                                    {% elif activity.type == 'creative_review' %}🎨
-                                    {% else %}📌{% endif %}
-                                </span>
-                                <div class="activity-content-text">
-                                    <div class="activity-summary">{{ activity.title }}</div>
-                                    <div class="activity-meta">
-                                        {% if activity.action_required %}
-                                            <span class="activity-badge error">Action Needed</span>
-                                        {% else %}
-                                            <span class="activity-badge success">{{ activity.type|replace('_', ' ')|title }}</span>
-                                        {% endif %}
-                                        <span>{{ activity.description }}</span>
-                                        <span style="margin-left: auto; white-space: nowrap;">{{ activity.time_relative }}</span>
-                                    </div>
-                                </div>
-                                <span class="expand-indicator">▼</span>
-                            </div>
-                        </div>
-                        <div class="activity-expanded" id="details-activity-{{ loop.index }}" style="display: none;">
-                            <div class="expanded-content">
-                                <h4 style="margin-top: 0; font-size: 0.875rem; font-weight: 600;">Details</h4>
-                                <dl style="margin: 0.5rem 0; display: grid; grid-template-columns: auto 1fr; gap: 0.5rem; font-size: 0.875rem;">
-                                    <dt style="font-weight: 600;">Principal:</dt>
-                                    <dd style="margin: 0;">{{ activity.principal_name }}</dd>
-
-                                    <dt style="font-weight: 600;">Timestamp:</dt>
-                                    <dd style="margin: 0;">{{ activity.timestamp }}</dd>
-
-                                    {% if activity.metadata %}
-                                        {% for key, value in activity.metadata.items() %}
-                                            <dt style="font-weight: 600;">{{ key|replace('_', ' ')|title }}:</dt>
-                                            <dd style="margin: 0;">{{ value }}</dd>
-                                        {% endfor %}
-                                    {% endif %}
-                                </dl>
-
-                                <!-- Quick Links to Related Objects -->
-                                {% if activity.links %}
-                                    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;">
-                                        <h5 style="margin: 0 0 0.5rem 0; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #6b7280;">Quick Links</h5>
-                                        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-                                            {% for link in activity.links %}
-                                                <a href="{{ script_name }}{{ link.url }}"
-                                                   class="btn btn-sm btn-link"
-                                                   style="text-decoration: none; font-size: 0.875rem; padding: 0.25rem 0.75rem; border: 1px solid #e5e7eb; border-radius: 4px; background: #f9fafb; color: #374151; display: inline-flex; align-items: center; gap: 0.25rem;"
-                                                   onclick="event.stopPropagation();">
-                                                    <span>{{ link.icon }}</span>
-                                                    <span>{{ link.text }}</span>
-                                                </a>
-                                            {% endfor %}
-                                        </div>
-                                    </div>
-                                {% endif %}
-
-                                {% if activity.action_required %}
-                                    <div class="action-buttons">
-                                        {% if activity.type == 'action_needed' %}
-                                            <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/workflows/{{ activity.metadata.workflow_id }}/steps/{{ activity.metadata.step_id }}/review" class="btn btn-primary" style="text-decoration: none;">
-                                                → View Full Details & Approve
-                                            </a>
-                                            <button class="btn btn-secondary" onclick="event.stopPropagation(); quickRejectWorkflow('{{ activity.metadata.workflow_id }}', '{{ activity.metadata.step_id }}')">
-                                                ✗ Quick Reject
-                                            </button>
-                                        {% elif activity.type == 'creative_review' %}
-                                            <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/creatives/{{ activity.metadata.creative_id }}/review" class="btn btn-primary" style="text-decoration: none;">
-                                                → View Creative & Approve
-                                            </a>
-                                            <button class="btn btn-secondary" onclick="event.stopPropagation(); quickRejectCreative('{{ activity.metadata.creative_id }}')">
-                                                ✗ Quick Reject
-                                            </button>
-                                        {% endif %}
-                                    </div>
-                                {% endif %}
-                            </div>
-                        </div>
-                    </div>
-                {% endfor %}
-            {% else %}
-                <div class="activity-item info" style="text-align: center; padding: 2rem; color: #6b7280;">
-                    <i class="fas fa-chart-line" style="font-size: 2rem; margin-bottom: 1rem; opacity: 0.5;"></i>
-                    <p>No recent business activity</p>
-                    <p style="font-size: 0.875rem;">Activity will appear as advertisers search for products and create campaigns</p>
+        {% for r in inc.rows %}
+            <a class="sa-pipeline__row" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buys/{{ r.media_buy_id }}" style="text-decoration:none; color:inherit;">
+                <span class="sa-pipeline__row-dot{{ ' sa-pipeline__row-dot--urgent' if r.urgent }}"></span>
+                <div class="sa-pipeline__row-meta">
+                    <div class="sa-pipeline__row-who">{{ r.advertiser_name }}</div>
+                    <div class="sa-pipeline__row-what">{{ r.order_name }}</div>
                 </div>
-            {% endif %}
-        </div>
-
-        <div style="text-align: center; padding: 1rem; border-top: 1px solid #e5e7eb;">
-            <small style="color: #6b7280;">Showing business activity from last 7 days</small>
-        </div>
+                <div>
+                    <div class="sa-pipeline__row-amount">${{ "{:,.0f}".format(r.budget) }}</div>
+                    <div class="sa-pipeline__row-stale">{{ r.age_relative }}</div>
+                </div>
+            </a>
+        {% else %}
+            <div class="sa-pipeline__row" style="color: var(--sa-ink-50); font-size: 12px;">
+                <div class="sa-pipeline__row-meta">No offers waiting.</div>
+            </div>
+        {% endfor %}
     </div>
 
-    <!-- Quick Actions -->
-    <div>
-        <div class="quick-actions">
-            <h3>Operations</h3>
-            <div class="action-grid">
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/creatives/review" class="action-button">
-                    <div class="action-icon creatives">🎨</div>
-                    <div>
-                        <div style="font-weight: 600;">Uploaded Creatives</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">View all creatives & media buys</div>
-                    </div>
-                </a>
-
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/buyer-routing" class="action-button">
-                    <div class="action-icon" style="background: #ede9fe; color: #6d28d9;">🧭</div>
-                    <div>
-                        <div style="font-weight: 600;">Buyer Routing</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Default advertiser, rules, recent activity</div>
-                    </div>
-                </a>
-
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory/browse" class="action-button">
-                    <div class="action-icon inventory">📦</div>
-                    <div>
-                        <div style="font-weight: 600;">Browse Inventory</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Ad units, placements, hierarchy</div>
-                    </div>
-                </a>
-
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/targeting" class="action-button">
-                    <div class="action-icon inventory">🎯</div>
-                    <div>
-                        <div style="font-weight: 600;">Targeting Criteria</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Custom keys, audiences, labels</div>
-                    </div>
-                </a>
-
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory-profiles/" class="action-button">
-                    <div class="action-icon inventory">🗂️</div>
-                    <div>
-                        <div style="font-weight: 600;">Inventory Profiles</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Reusable inventory bundles for products</div>
-                    </div>
-                </a>
-
-                {% if not tenant.is_embedded %}
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory" class="action-button">
-                    <div class="action-icon inventory">🔄</div>
-                    <div>
-                        <div style="font-weight: 600;">Sync Inventory</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Pull ad-server data into the local mirror</div>
-                    </div>
-                </a>
-                {% endif %}
-
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/reporting" class="action-button">
-                    <div class="action-icon reports">📈</div>
-                    <div>
-                        <div style="font-weight: 600;">Reports</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Performance & delivery data</div>
-                    </div>
-                </a>
-
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/workflows" class="action-button">
-                    <div class="action-icon workflows">📋</div>
-                    <div>
-                        <div style="font-weight: 600;">Workflows</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Approvals & reviews</div>
-                    </div>
-                </a>
-
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/webhooks" class="action-button">
-                    <div class="action-icon" style="background: #e0e7ff; color: #4338ca;">🔔</div>
-                    <div>
-                        <div style="font-weight: 600;">Webhooks</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Delivery notifications</div>
-                    </div>
-                </a>
-
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/settings" class="action-button">
-                    <div class="action-icon settings">⚙️</div>
-                    <div>
-                        <div style="font-weight: 600;">Settings</div>
-                        <div style="font-size: 0.75rem; color: #6b7280;">Products, properties, configuration</div>
-                    </div>
-                </a>
-            </div>
+    <!-- Running -->
+    <div class="sa-pipeline__col">
+        <div class="sa-pipeline__head">
+            <h3 class="sa-pipeline__title">
+                Running
+                <span class="sa-pipeline__count">{{ run.count }}</span>
+            </h3>
         </div>
-
-        <!-- Pending Tasks -->
-        {% if pending_tasks %}
-        <div class="quick-actions" style="margin-top: 1rem;">
-            <h3 style="color: #dc2626;">⚠️ Pending Tasks ({{ pending_tasks|length }})</h3>
-            <div class="action-grid">
-                {% for task in pending_tasks[:3] %}
-                <div class="action-button" style="background: #fef2f2; border-color: #fecaca;">
-                    <div>
-                        <div style="font-weight: 600; color: #991b1b;">{{ task.type }}</div>
-                        <div style="font-size: 0.75rem; color: #dc2626;">{{ task.description }}</div>
+        <div class="sa-pipeline__sub">
+            Live deals delivering now · <span class="total">${{ "{:,.0f}".format(run.total_value) }} committed</span>
+        </div>
+        {% for r in run.rows %}
+            <a class="sa-pipeline__row" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buys/{{ r.media_buy_id }}" style="text-decoration:none; color:inherit;">
+                <div class="ld-pacing-mark" title="Delivery vs flight progress">
+                    <div class="ld-pacing-track">
+                        {# Filled bar = delivery progress; tick = flight progress #}
+                        <div class="ld-pacing-fill{{ ' is-under' if r.pacing == 'under' }}"
+                             style="width: {{ (r.delivery_pct * 100)|round(1) }}%;"></div>
+                        <div class="ld-pacing-tick" style="left: {{ (r.flight_pct * 100)|round(1) }}%;"></div>
                     </div>
                 </div>
-                {% endfor %}
-                {% if pending_tasks|length > 3 %}
-                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/tasks" class="action-button">
-                    <div>View all {{ pending_tasks|length }} tasks →</div>
-                </a>
-                {% endif %}
+                <div class="sa-pipeline__row-meta">
+                    <div class="sa-pipeline__row-who">{{ r.advertiser_name }}</div>
+                    <div class="sa-pipeline__row-what">{{ r.order_name }}</div>
+                </div>
+                <div>
+                    <div class="sa-pipeline__row-amount">${{ "{:,.0f}".format(r.rate_per_week) }}/wk</div>
+                    <div class="sa-pipeline__row-stale{% if r.pacing == 'under' %}" style="color: var(--sa-warning);{% endif %}">
+                        {{ r.pacing }}
+                    </div>
+                </div>
+            </a>
+        {% else %}
+            <div class="sa-pipeline__row" style="color: var(--sa-ink-50); font-size: 12px;">
+                <div class="sa-pipeline__row-meta">No live deals right now.</div>
+            </div>
+        {% endfor %}
+    </div>
+
+    <!-- Pipeline -->
+    <div class="sa-pipeline__col">
+        <div class="sa-pipeline__head">
+            <h3 class="sa-pipeline__title">
+                Pipeline
+                <span class="sa-pipeline__count">{{ pl.count }}</span>
+            </h3>
+        </div>
+        <div class="sa-pipeline__sub">
+            Unique buyers in market · <span class="total">{{ pl.window_days }}d window · {{ pl.new_count }} new</span>
+        </div>
+        {% for r in pl.rows %}
+            <div class="sa-pipeline__row">
+                <span class="sa-pipeline__row-dot"></span>
+                <div class="sa-pipeline__row-meta">
+                    <div class="sa-pipeline__row-who">
+                        {{ r.display_name }}{% if r.is_new %}<span class="ld-new-chip">New</span>{% endif %}
+                    </div>
+                    <div class="sa-pipeline__row-what">
+                        {% if r.brand_domain %}{{ r.brand_domain }} · {% endif %}{{ r.operator }}
+                    </div>
+                </div>
+                <div>
+                    <div class="sa-pipeline__row-amount" style="font-size: 13px;">{{ r.brief_count }}</div>
+                    <div class="sa-pipeline__row-stale">{{ r.last_brief_relative }}</div>
+                </div>
+            </div>
+        {% else %}
+            <div class="sa-pipeline__row" style="color: var(--sa-ink-50); font-size: 12px;">
+                <div class="sa-pipeline__row-meta">No briefs in the last {{ pl.window_days }} days.</div>
+            </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Revenue chart + Needs your attention -->
+<div class="ld-chart-row">
+    <div class="ld-chart-card">
+        <div class="ld-chart-head">
+            <div>
+                <div class="sa-label">Revenue · 30 days</div>
+                <div class="figures">
+                    <span class="sa-num sa-num-lg">${{ "{:,.0f}".format(m.net_revenue_30d) }}</span>
+                    <span class="vs">vs ${{ "{:,.0f}".format(m.net_revenue_prior_30) }} prior</span>
+                </div>
+            </div>
+            <div class="ld-chart-periods">
+                <span class="period">7D</span>
+                <span class="period is-active">30D</span>
+                <span class="period">90D</span>
+                <span class="period">YTD</span>
             </div>
         </div>
-        {% endif %}
-    </div>
-</div>
-
-<!-- Revenue Chart -->
-<div class="revenue-chart">
-    <div class="chart-header">
-        <h3>Revenue by Advertiser</h3>
-        <div class="chart-filters">
-            <button class="filter-button active" data-period="7d">7 Days</button>
-            <button class="filter-button" data-period="30d">30 Days</button>
-            <button class="filter-button" data-period="90d">90 Days</button>
+        <div style="position: relative; height: 180px;">
+            <canvas id="revenueLedgerChart"></canvas>
         </div>
     </div>
-    <canvas id="revenueChart" height="80"></canvas>
+
+    <aside class="ld-attention-card">
+        <div class="sa-label" style="margin-bottom: 12px;">Needs your attention</div>
+        {% for item in ledger.needs_attention %}
+            <div class="ld-attention-row">
+                <span class="ld-attention-mark{{ ' is-amber' if item.level == 'amber' }}">
+                    {% if item.level == 'amber' %}
+                        <i class="fas fa-exclamation-triangle" style="font-size:11px;"></i>
+                    {% else %}
+                        <i class="fas fa-circle" style="font-size:6px;"></i>
+                    {% endif %}
+                </span>
+                <div>
+                    <div class="ld-attention-title{{ ' is-amber' if item.level == 'amber' }}">{{ item.title }}</div>
+                    <div class="ld-attention-sub">{{ item.sub }}</div>
+                </div>
+            </div>
+        {% endfor %}
+    </aside>
 </div>
 
-<!-- Recent Media Buys -->
-<div class="media-buys-table">
-    <div class="table-header">
-        <h3>Recent Media Buys</h3>
-        <!-- TODO: Implement view all media buys page -->
-        <!-- <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buys" class="view-all-link">View all →</a> -->
+<!-- Activity ledger -->
+<div class="ld-ledger-card">
+    <div class="ld-ledger-head">
+        <div class="sa-label">Ledger · Recent activity</div>
+        <div style="flex: 1;"></div>
+        <span class="last-window">Last 7 days</span>
     </div>
+    <table class="ld-ledger-table">
+        <thead>
+            <tr>
+                <th class="col-time">Time</th>
+                <th class="col-actor">Actor</th>
+                <th>Event</th>
+                <th class="col-object">Object</th>
+                <th class="col-status">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in ledger.activity_ledger %}
+                <tr>
+                    <td class="col-time">{{ r.time }}</td>
+                    <td class="col-actor">{{ r.actor }}</td>
+                    <td>{{ r.operation|replace('_', ' ') }}</td>
+                    <td class="col-object">{{ r.object }}</td>
+                    <td class="col-status">
+                        {% if r.success %}
+                            <span class="sa-chip sa-chip--neutral">
+                                <i class="fas fa-check" style="font-size:9px;"></i> ok
+                            </span>
+                        {% else %}
+                            <span class="sa-chip sa-chip--warning">
+                                <i class="fas fa-exclamation-triangle" style="font-size:9px;"></i> error
+                            </span>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="5" style="text-align: center; color: var(--sa-ink-50); padding: 24px;">No recent activity.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
 
-    <table class="mini-table">
+
+<!-- Recent media buys — flat editorial table, distinct from the 3-column
+     pipeline above (this surface lists every buy regardless of stage). -->
+<div class="ld-ledger-card" style="margin-top: 32px;">
+    <div class="ld-ledger-head">
+        <div class="sa-label">Ledger · Recent media buys</div>
+        <div style="flex: 1;"></div>
+        <span class="last-window">Top 5</span>
+    </div>
+    <table class="ld-ledger-table">
         <thead>
             <tr>
                 <th>Advertiser</th>
-                <th>Media Buy ID</th>
+                <th>Media buy</th>
                 <th>Status</th>
-                <th>Budget</th>
-                <th>Spend</th>
-                <th>Created</th>
+                <th class="col-object">Budget</th>
+                <th class="col-object">Spend</th>
+                <th class="col-status">Created</th>
             </tr>
         </thead>
         <tbody>
             {% for buy in recent_media_buys[:5] %}
             <tr {% if buy.media_buy_id %}style="cursor: pointer;" onclick="window.location='{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}'"{% endif %}>
-                <td class="advertiser-name">{{ buy.advertiser_name }}</td>
-                <td><code style="font-size: 0.75rem;">{{ buy.media_buy_id or 'N/A' }}</code></td>
+                <td>{{ buy.advertiser_name }}</td>
+                <td class="col-object" style="text-align: left;">{{ buy.media_buy_id or '—' }}</td>
                 <td>
-                    <span class="buy-status {{ buy.readiness_state }}" title="{% if buy.readiness_details.gam_order_status %}GAM: {{ buy.readiness_details.gam_order_status }}{% if buy.readiness_details.gam_line_items_total > 0 %} ({{ buy.readiness_details.gam_line_items_ready }}/{{ buy.readiness_details.gam_line_items_total }} line items ready){% endif %}&#10;{% endif %}{{ buy.readiness_details.blocking_issues|join(', ') if buy.readiness_details.blocking_issues else 'Ready' }}{% if buy.readiness_details.warnings %}&#10;{{ buy.readiness_details.warnings|join(', ') }}{% endif %}">
-                        {{ buy.readiness_state|upper|replace('_', ' ') }}
-                        {% if buy.is_ready %}✓{% endif %}
-                        {% if buy.readiness_details.gam_order_status %}<span style="font-size: 0.7em; opacity: 0.7;">📋</span>{% endif %}
-                    </span>
+                    {% set state = buy.readiness_state %}
+                    {% if state in ['needs_creatives', 'needs_approval', 'failed'] %}
+                        <span class="sa-chip sa-chip--warning">
+                            <i class="fas fa-exclamation-triangle" style="font-size: 9px;"></i>
+                            {{ state|replace('_', ' ') }}
+                        </span>
+                    {% else %}
+                        <span class="sa-chip sa-chip--neutral">
+                            {% if buy.is_ready %}<i class="fas fa-check" style="font-size: 9px;"></i> {% endif %}
+                            {{ state|replace('_', ' ') }}
+                        </span>
+                    {% endif %}
                 </td>
-                <td class="spend-amount">${{ "{:,.0f}".format(buy.budget) }} {{ buy.currency or 'USD' }}</td>
-                <td>${{ "{:,.0f}".format(buy.spend) }}</td>
-                <td style="color: #6b7280;">{{ buy.created_at_relative }}</td>
+                <td class="col-object">${{ "{:,.0f}".format(buy.budget) }}</td>
+                <td class="col-object">${{ "{:,.0f}".format(buy.spend) }}</td>
+                <td class="col-status">{{ buy.created_at_relative }}</td>
             </tr>
+            {% else %}
+            <tr><td colspan="6" style="text-align: center; color: var(--sa-ink-50); padding: 24px;">No recent media buys.</td></tr>
             {% endfor %}
         </tbody>
     </table>
@@ -1204,60 +1401,48 @@ function addActivity(activity, isNewActivity = true) {
     }
 }
 
-// Revenue Chart
-const ctx = document.getElementById('revenueChart').getContext('2d');
-const revenueChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-        labels: {{ chart_labels | tojson }},
-        datasets: [{
-            label: 'Revenue',
-            data: {{ chart_data | tojson }},
-            backgroundColor: 'rgba(59, 130, 246, 0.5)',
-            borderColor: 'rgba(59, 130, 246, 1)',
-            borderWidth: 1
-        }]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-            legend: {
-                display: false
-            }
+// Revenue Chart — Ledger-styled line chart on #revenueLedgerChart canvas.
+// Uses ink for the line, paper-deep grid, no axis colors, tabular figures.
+const revenueCanvas = document.getElementById('revenueLedgerChart');
+if (revenueCanvas) {
+    const inkColor = getComputedStyle(document.documentElement).getPropertyValue('--sa-ink').trim() || '#1a1815';
+    const ruleSoft = 'rgba(26, 24, 21, 0.08)';
+    const ctx = revenueCanvas.getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: {{ chart_labels | tojson }},
+            datasets: [{
+                label: 'Revenue',
+                data: {{ chart_data | tojson }},
+                borderColor: inkColor,
+                backgroundColor: 'rgba(26, 24, 21, 0.06)',
+                borderWidth: 1.4,
+                fill: true,
+                tension: 0.25,
+                pointRadius: 0,
+                pointHoverRadius: 3,
+            }]
         },
-        scales: {
-            y: {
-                beginAtZero: true,
-                ticks: {
-                    callback: function(value) {
-                        return '$' + value.toLocaleString();
-                    }
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { grid: { display: false }, ticks: { display: false }, border: { display: false } },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: ruleSoft, drawBorder: false },
+                    ticks: {
+                        font: { family: 'JetBrains Mono, monospace', size: 10 },
+                        color: 'rgba(26, 24, 21, 0.5)',
+                        callback: v => '$' + v.toLocaleString(),
+                    },
+                    border: { display: false },
                 }
             }
         }
-    }
-});
-
-// Chart period filters
-document.querySelectorAll('.filter-button').forEach(button => {
-    button.addEventListener('click', function() {
-        document.querySelectorAll('.filter-button').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
-
-        // Fetch new data based on period
-        fetchChartData(this.dataset.period);
     });
-});
-
-function fetchChartData(period) {
-    fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/revenue-chart?period=${period}`)
-        .then(response => response.json())
-        .then(data => {
-            revenueChart.data.labels = data.labels;
-            revenueChart.data.datasets[0].data = data.values;
-            revenueChart.update();
-        });
 }
 
 function refreshDashboard() {

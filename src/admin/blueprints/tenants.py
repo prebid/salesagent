@@ -83,6 +83,11 @@ def dashboard(tenant_id):
         # Get chart data
         chart_data_dict = dashboard_service.get_chart_data()
 
+        # Ledger dashboard data — masthead + 3-column pipeline + chart +
+        # attention rail + activity ledger. Bundled in one service call
+        # so the template never reaches back for piecemeal queries.
+        ledger = dashboard_service.get_ledger_dashboard()
+
         # Get tenant config for features
         config = get_tenant_config_from_db(tenant_id)
         features = config.get("features", {})
@@ -114,6 +119,9 @@ def dashboard(tenant_id):
             chart_data=chart_data_dict["data"],
             # Metrics object (single source of truth)
             metrics=metrics,
+            # Ledger dashboard bundle (masthead, incoming, running, pipeline,
+            # revenue_chart, needs_attention, activity_ledger)
+            ledger=ledger,
             # Setup checklist
             setup_status=setup_status,
         )

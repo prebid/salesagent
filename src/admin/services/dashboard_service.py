@@ -6,13 +6,14 @@ table for activity data, eliminating dependencies on workflow_steps, tasks, etc.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from typing import cast as type_cast
 
 from src.admin.services.business_activity_service import get_business_activities
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, Principal, Product, Tenant
+from src.core.database.models import AuditLog, AuthorizedProperty, Creative, MediaBuy, Principal, Product, Tenant
 from src.core.database.repositories import MediaBuyRepository
 from src.core.schemas import CreativeStatusEnum
 
@@ -296,6 +297,404 @@ class DashboardService:
         revenue_data = metrics["revenue_data"]
 
         return {"labels": [d["date"] for d in revenue_data], "data": [d["revenue"] for d in revenue_data]}
+
+    # ------------------------------------------------------------------
+    # Ledger dashboard — Incoming / Running / Pipeline three-stage view.
+    # See https://github.com/bokelley/salesagent/issues/22 for the
+    # principal→account refactor that will simplify the buyer-identity
+    # resolution below.
+    # ------------------------------------------------------------------
+
+    def get_ledger_dashboard(self) -> dict[str, Any]:
+        """Aggregate everything the Ledger dashboard renders.
+
+        One bundled call — the dashboard template should not have to
+        reach back into the service for piecemeal data.
+        """
+
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, self.tenant_id)
+            tenant = self._load_tenant(session)
+            return {
+                "masthead": self._masthead(session, tenant),
+                "incoming": self._incoming(repo),
+                "running": self._running(repo),
+                "pipeline": self._pipeline(session),
+                "revenue_chart": self._revenue_chart(session, repo, days=30),
+                "needs_attention": self._needs_attention(session, repo),
+                "activity_ledger": self._activity_ledger(session, limit=8),
+            }
+
+    def _load_tenant(self, session) -> Tenant | None:
+        from sqlalchemy import select
+
+        stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
+        return session.scalars(stmt).first()
+
+    def _masthead(self, session, tenant: Tenant | None) -> dict[str, Any]:
+        from sqlalchemy import func, select
+
+        properties_count = (
+            session.scalar(
+                select(func.count())
+                .select_from(AuthorizedProperty)
+                .where(AuthorizedProperty.tenant_id == self.tenant_id)
+            )
+            or 0
+        )
+        products_count = (
+            session.scalar(select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id)) or 0
+        )
+
+        last_brief_at = session.scalar(
+            select(func.max(AuditLog.timestamp))
+            .where(AuditLog.tenant_id == self.tenant_id)
+            .where(AuditLog.operation == "get_products")
+        )
+        last_offer_at = session.scalar(
+            select(func.max(MediaBuy.approved_at)).where(MediaBuy.tenant_id == self.tenant_id)
+        )
+
+        # Net revenue uses the delivery snapshot when present; falls back
+        # to budget pro-rata (the legacy estimate) when the snapshot has
+        # not been written yet (no delivery polls have happened).
+        now = datetime.now(UTC)
+        net_30d = self._net_revenue_in_window(session, now - timedelta(days=30), now)
+        net_prior_30 = self._net_revenue_in_window(session, now - timedelta(days=60), now - timedelta(days=30))
+        delta_pct = 0.0
+        if net_prior_30 > 0:
+            delta_pct = ((net_30d - net_prior_30) / net_prior_30) * 100
+
+        return {
+            "publisher_name": tenant.name if tenant else self.tenant_id,
+            "publisher_domain": (tenant.subdomain if tenant else None) or "",
+            "property_count": properties_count,
+            "product_count": products_count,
+            "agent_count": 1,
+            "last_brief_at": last_brief_at,
+            "last_offer_at": last_offer_at,
+            "last_brief_relative": self._format_relative_time(last_brief_at) if last_brief_at else None,
+            "last_offer_relative": self._format_relative_time(last_offer_at) if last_offer_at else None,
+            "net_revenue_30d": float(net_30d),
+            "net_revenue_prior_30": float(net_prior_30),
+            "revenue_delta_pct": round(delta_pct, 1),
+            "today_label": now.strftime("%a, %b %-d"),
+        }
+
+    def _net_revenue_in_window(self, session, start: datetime, end: datetime) -> float:
+        """Net revenue for media buys approved in [start, end].
+
+        Prefers the delivery snapshot (`delivered_amount`) when present;
+        falls back to budget for buys that have never been polled.
+        """
+        from sqlalchemy import select
+
+        stmt = (
+            select(MediaBuy.budget, MediaBuy.delivered_amount)
+            .where(MediaBuy.tenant_id == self.tenant_id)
+            .where(MediaBuy.approved_at != None)  # noqa: E711
+            .where(MediaBuy.approved_at >= start)
+            .where(MediaBuy.approved_at < end)
+        )
+        total = 0.0
+        for budget, delivered in session.execute(stmt):
+            if delivered is not None:
+                total += float(delivered)
+            elif budget is not None:
+                total += float(budget)
+        return total
+
+    def _incoming(self, repo: MediaBuyRepository) -> dict[str, Any]:
+        """Offers waiting on a yes / no / counter from the publisher."""
+        pending = repo.list_by_statuses(["pending_approval", "pending_creative_approval"])
+        pending.sort(key=lambda b: b.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+
+        now = datetime.now(UTC)
+        rows: list[dict[str, Any]] = []
+        urgent_threshold = timedelta(hours=4)
+        for buy in pending[:6]:
+            created = (
+                buy.created_at
+                if buy.created_at and buy.created_at.tzinfo
+                else (buy.created_at.replace(tzinfo=UTC) if buy.created_at else now)
+            )
+            age = now - created
+            rows.append(
+                {
+                    "advertiser_name": buy.advertiser_name or "Unknown",
+                    "order_name": buy.order_name or "",
+                    "budget": float(buy.budget or 0),
+                    "currency": buy.currency or "USD",
+                    "age_relative": self._format_relative_time(buy.created_at),
+                    "urgent": age >= urgent_threshold,
+                    "media_buy_id": buy.media_buy_id,
+                }
+            )
+
+        urgent_count = sum(1 for r in rows if r["urgent"])
+        total_value = sum(r["budget"] for r in rows)
+        return {
+            "count": len(pending),
+            "total_value": total_value,
+            "urgent_count": urgent_count,
+            "rows": rows,
+        }
+
+    def _running(self, repo: MediaBuyRepository) -> dict[str, Any]:
+        """Live deals delivering now, with linear-pacing classification."""
+        active = repo.list_by_statuses(["active", "live"])
+        now = datetime.now(UTC)
+        running_now = [b for b in active if not getattr(b, "is_paused", False)]
+        running_now.sort(key=lambda b: b.approved_at or b.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+
+        rows: list[dict[str, Any]] = [self._running_row(buy, now) for buy in running_now[:6]]
+
+        total_committed = sum(float(b.budget or 0) for b in running_now)
+        return {
+            "count": len(running_now),
+            "total_value": total_committed,
+            "rows": rows,
+        }
+
+    def _running_row(self, buy: MediaBuy, now: datetime) -> dict[str, Any]:
+        """Compute pacing for a single running buy using the linear assumption.
+
+        Linear: at any point in the flight, expected_pct = elapsed / total.
+        Compare against actual delivery_pct = delivered_amount / budget
+        (preferred) or delivered_impressions / planned_impressions.
+        Threshold ±10% — narrower bands felt noisy in practice.
+        """
+        budget = float(buy.budget or 0)
+        delivered = float(buy.delivered_amount) if buy.delivered_amount is not None else 0.0
+        delivery_pct = (delivered / budget) if budget > 0 else 0.0
+
+        # Flight progress.
+        # Cast SQLAlchemy `Mapped[Date]` → stdlib `date` so arithmetic
+        # type-checks (existing pattern in src/core/tools/media_buy_delivery.py).
+        flight_pct = 0.0
+        if buy.start_date and buy.end_date:
+            buy_start = type_cast(date, buy.start_date)
+            buy_end = type_cast(date, buy.end_date)
+            total = (buy_end - buy_start).days + 1
+            if total > 0:
+                today = now.date()
+                if today < buy_start:
+                    flight_pct = 0.0
+                elif today > buy_end:
+                    flight_pct = 1.0
+                else:
+                    elapsed = (today - buy_start).days + 1
+                    flight_pct = elapsed / total
+
+        # Pacing classification (linear)
+        threshold = 0.10
+        if buy.delivered_amount is None:
+            pacing = "unknown"
+        elif delivery_pct < flight_pct - threshold:
+            pacing = "under"
+        elif delivery_pct > flight_pct + threshold:
+            pacing = "over"
+        else:
+            pacing = "on-pace"
+
+        # Budget rate — derive a /wk number for editorial display
+        weeks = 0
+        if buy.start_date and buy.end_date:
+            buy_start = type_cast(date, buy.start_date)
+            buy_end = type_cast(date, buy.end_date)
+            weeks = max(1, ((buy_end - buy_start).days + 1) // 7)
+        rate_per_week = budget / weeks if weeks else budget
+
+        return {
+            "advertiser_name": buy.advertiser_name or "Unknown",
+            "order_name": buy.order_name or "",
+            "budget": budget,
+            "currency": buy.currency or "USD",
+            "rate_per_week": rate_per_week,
+            "delivery_pct": round(delivery_pct, 3),
+            "flight_pct": round(flight_pct, 3),
+            "pacing": pacing,
+            "delivery_synced_at": buy.delivery_synced_at,
+            "delivery_synced_relative": (
+                self._format_relative_time(buy.delivery_synced_at) if buy.delivery_synced_at else None
+            ),
+            "media_buy_id": buy.media_buy_id,
+        }
+
+    def _pipeline(self, session) -> dict[str, Any]:
+        """Unique buyers in market this week, grouped by (operator, brand_domain).
+
+        The audit_logs row written by get_products carries operator + brand_domain
+        in `details` JSON. We group there and surface the top buyers by recency.
+        """
+        from sqlalchemy import select
+
+        window_days = 7
+        new_buyer_lookback_days = 30
+        window_start = datetime.now(UTC) - timedelta(days=window_days)
+        new_buyer_cutoff = datetime.now(UTC) - timedelta(days=new_buyer_lookback_days)
+
+        stmt = (
+            select(AuditLog.timestamp, AuditLog.principal_id, AuditLog.principal_name, AuditLog.details)
+            .where(AuditLog.tenant_id == self.tenant_id)
+            .where(AuditLog.operation == "get_products")
+            .where(AuditLog.timestamp >= window_start)
+            .order_by(AuditLog.timestamp.desc())
+        )
+
+        # Group by (operator, brand_domain) — fall back to principal_id when
+        # the brand isn't on the request (anonymous discovery, etc.).
+        groups: dict[tuple[str, str | None], dict[str, Any]] = {}
+        for ts, principal_id, principal_name, details in session.execute(stmt):
+            details = details or {}
+            operator = details.get("operator") or principal_id or "anonymous"
+            brand_domain = details.get("brand_domain")
+            key = (operator, brand_domain)
+            grp = groups.setdefault(
+                key,
+                {
+                    "operator": operator,
+                    "brand_domain": brand_domain,
+                    "display_name": brand_domain or principal_name or operator,
+                    "brief_count": 0,
+                    "last_brief_at": ts,
+                },
+            )
+            grp["brief_count"] += 1
+            grp["last_brief_at"] = max(grp["last_brief_at"], ts)
+
+        # NEW = no get_products row from this (operator, brand_domain) in the
+        # 30→7d window before this one. One extra query, indexed by timestamp.
+        rows = list(groups.values())
+        rows.sort(key=lambda r: r["last_brief_at"], reverse=True)
+
+        if rows:
+            prior_stmt = (
+                select(AuditLog.principal_id, AuditLog.details)
+                .where(AuditLog.tenant_id == self.tenant_id)
+                .where(AuditLog.operation == "get_products")
+                .where(AuditLog.timestamp >= new_buyer_cutoff)
+                .where(AuditLog.timestamp < window_start)
+            )
+            prior_keys: set[tuple[str, str | None]] = set()
+            for principal_id, details in session.execute(prior_stmt):
+                details = details or {}
+                op = details.get("operator") or principal_id or "anonymous"
+                bd = details.get("brand_domain")
+                prior_keys.add((op, bd))
+            for r in rows:
+                r["is_new"] = (r["operator"], r["brand_domain"]) not in prior_keys
+                r["last_brief_relative"] = self._format_relative_time(r["last_brief_at"])
+        new_count = sum(1 for r in rows if r.get("is_new"))
+
+        return {
+            "count": len(rows),
+            "new_count": new_count,
+            "rows": rows[:6],
+            "window_days": window_days,
+        }
+
+    def _revenue_chart(self, session, repo: MediaBuyRepository, days: int = 30) -> list[dict[str, Any]]:
+        """Per-day delivered revenue series. Falls back to flat-pace
+        budget allocation for buys with no snapshot."""
+        return self._calculate_revenue_trend(session, days=days, repo=repo)
+
+    def _needs_attention(self, session, repo: MediaBuyRepository) -> list[dict[str, Any]]:
+        """Bullet-list items for the right-rail attention panel."""
+        from sqlalchemy import func, select
+
+        items = []
+
+        pending_creatives_count = (
+            session.scalar(
+                select(func.count())
+                .select_from(Creative)
+                .where(Creative.tenant_id == self.tenant_id)
+                .where(Creative.status == CreativeStatusEnum.pending_review.value)
+            )
+            or 0
+        )
+        if pending_creatives_count:
+            items.append(
+                {
+                    "level": "amber",
+                    "title": f"{pending_creatives_count} creative{'s' if pending_creatives_count != 1 else ''} need approval",
+                    "sub": "Creative review queue",
+                }
+            )
+
+        # Deals expiring in next 24h (live, end_date today or tomorrow).
+        # Cast Mapped[Date] → stdlib date for the comparison (mypy strictness).
+        active = repo.list_by_statuses(["active", "live"])
+        today = datetime.now(UTC).date()
+        tomorrow = today + timedelta(days=1)
+        expiring = [b for b in active if b.end_date and today <= type_cast(date, b.end_date) <= tomorrow]
+        if expiring:
+            items.append(
+                {
+                    "level": "amber" if len(expiring) > 1 else "neutral",
+                    "title": f"{len(expiring)} deal{'s' if len(expiring) != 1 else ''} expiring in <24h",
+                    "sub": ", ".join(b.advertiser_name or "Unknown" for b in expiring[:3]),
+                }
+            )
+
+        # Pacing under: scan running buys
+        now = datetime.now(UTC)
+        under = []
+        for b in active:
+            if getattr(b, "is_paused", False):
+                continue
+            row = self._running_row(b, now)
+            if row["pacing"] == "under":
+                under.append((b.advertiser_name or "Unknown", row["delivery_pct"], row["flight_pct"]))
+        for name, dpct, fpct in under[:2]:
+            items.append(
+                {
+                    "level": "amber",
+                    "title": f"{name} pacing under",
+                    "sub": f"{int(dpct * 100)}% delivered · should be {int(fpct * 100)}%",
+                }
+            )
+
+        if not items:
+            items.append(
+                {
+                    "level": "neutral",
+                    "title": "Nothing needs your attention",
+                    "sub": "Everything is on pace.",
+                }
+            )
+
+        return items
+
+    def _activity_ledger(self, session, limit: int = 8) -> list[dict[str, Any]]:
+        """Recent audit-log activity rendered for the ledger table.
+
+        Distinct from `recent_activity` (business-summary view); this is the
+        raw audit feed shown editorial-style with HH:mm time, actor, event,
+        object, status.
+        """
+        from sqlalchemy import select
+
+        stmt = (
+            select(AuditLog)
+            .where(AuditLog.tenant_id == self.tenant_id)
+            .order_by(AuditLog.timestamp.desc())
+            .limit(limit)
+        )
+        rows = []
+        for log in session.scalars(stmt):
+            rows.append(
+                {
+                    "time": log.timestamp.strftime("%H:%M") if log.timestamp else "",
+                    "actor": log.principal_name or "System",
+                    "operation": log.operation,
+                    "object": (log.details or {}).get("media_buy_id") or (log.details or {}).get("brand_domain") or "",
+                    "status": "ok" if log.success else "error",
+                    "success": log.success,
+                }
+            )
+        return rows
 
     @staticmethod
     def health_check() -> dict[str, Any]:

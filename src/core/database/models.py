@@ -987,6 +987,13 @@ class MediaBuy(Base):
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Delivery snapshot — populated opportunistically when a buyer calls
+    # get_media_buy_delivery, so the publisher dashboard can show pacing
+    # without making an adapter call on render. Nullable until first poll.
+    delivered_impressions: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    delivered_amount: Mapped[Decimal | None] = mapped_column(DECIMAL(15, 2), nullable=True)
+    delivery_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
     principal = relationship(

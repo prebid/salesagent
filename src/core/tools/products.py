@@ -12,9 +12,7 @@ from typing import Any, cast
 from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
-from adcp.types import PropertyListReference, PushNotificationConfig
-from adcp.types import BrandReference
-from adcp.types import ContextObject
+from adcp.types import BrandReference, ContextObject, PropertyListReference, PushNotificationConfig
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
@@ -765,8 +763,17 @@ async def _get_products_impl(
         context=req.context,
     )
 
-    # Log successful get_products call
+    # Log successful get_products call. The (operator, brand_domain) pair
+    # is the buyer-identity tuple the publisher dashboard groups Pipeline
+    # by — see #22 for the principal→account refactor that will eventually
+    # make this lookup go through the Account record directly.
     elapsed_ms = int((time.time() - start_time) * 1000)
+    operator = (
+        req.account.operator
+        if getattr(req, "account", None) and getattr(req.account, "operator", None)
+        else principal_id
+    )
+    brand_domain = req.brand.domain if req.brand else None
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
     audit_logger.log_operation(
         operation="get_products",
@@ -778,7 +785,8 @@ async def _get_products_impl(
             "product_count": len(eligible_products),
             "brief_length": len(brief_text),
             "has_filters": req.filters is not None,
-            "has_brand": req.brand is not None,
+            "operator": operator,
+            "brand_domain": brand_domain,
             "elapsed_ms": elapsed_ms,
         },
     )

@@ -24,8 +24,7 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 console = Console()
 
-from adcp.types import Error, MediaBuyStatus
-from adcp.types import ContextObject
+from adcp.types import ContextObject, Error, MediaBuyStatus
 
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
@@ -280,6 +279,23 @@ def _get_media_buy_delivery_impl(
                         impressions = int(adapter_response.totals.impressions)
                         adapter_conversions = getattr(adapter_response.totals, "conversions", None)
                         adapter_viewability = getattr(adapter_response.totals, "viewability", None)
+
+                        # Persist a delivery snapshot on the media buy so the
+                        # publisher dashboard can read pacing without making
+                        # an adapter call on every render. Opportunistic — a
+                        # scheduled poll (follow-up issue) will keep this
+                        # fresh independent of buyer cadence.
+                        try:
+                            from decimal import Decimal as _Decimal
+
+                            repo.update_fields(
+                                media_buy_id,
+                                delivered_impressions=int(total_impressions_from_adapter),
+                                delivered_amount=_Decimal(str(round(total_spend_from_adapter, 2))),
+                                delivery_synced_at=datetime.now(UTC),
+                            )
+                        except Exception as snap_err:
+                            logger.warning(f"Failed to persist delivery snapshot for {media_buy_id}: {snap_err}")
 
                     except Exception as e:
                         logger.error(f"Error getting delivery for {media_buy_id}: {e}")

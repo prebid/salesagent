@@ -1,131 +1,253 @@
-<!-- Setup Checklist Widget Component
-     Display onboarding progress and next steps for new tenants.
-     Shows critical, recommended, and optional setup tasks.
--->
+<!-- Setup Checklist Widget — Ledger redesign.
+     Onboarding progress strip shown until critical tasks complete. Editorial:
+     paper card, serif percent, monochrome chrome, amber only for the
+     action-required call-to-action (incomplete critical tasks). -->
 
 {% if setup_status %}
-<div class="setup-checklist-widget" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; padding: 1.5rem; color: white; margin-bottom: 1.5rem; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);">
+<style>
+    .ld-setup {
+        background: var(--sa-bg-surface);
+        border: 1px solid var(--sa-rule);
+        padding: 20px 24px;
+        margin-bottom: var(--sa-space-6);
+        max-width: 1280px;
+        margin-left: auto;
+        margin-right: auto;
+        font-family: var(--sa-font-sans);
+        color: var(--sa-ink);
+    }
+    .ld-setup__head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--sa-rule);
+        margin-bottom: 14px;
+    }
+    .ld-setup__title {
+        font-family: var(--sa-font-serif);
+        font-size: 22px;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        line-height: 1;
+        margin: 0;
+        color: var(--sa-ink);
+    }
+    .ld-setup__sub {
+        margin-top: 6px;
+        font-size: 12.5px;
+        color: var(--sa-ink-70);
+    }
+    .ld-setup__sub.is-amber { color: var(--sa-warning); }
+    .ld-setup__pct-block { text-align: right; }
+    .ld-setup__pct {
+        font-family: var(--sa-font-serif);
+        font-size: 36px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+    }
+    .ld-setup__pct-meta {
+        margin-top: 4px;
+        font-family: var(--sa-font-mono);
+        font-size: 11px;
+        color: var(--sa-ink-50);
+    }
+    .ld-setup__bar {
+        height: 3px;
+        background: var(--sa-rule-soft);
+        position: relative;
+        margin-bottom: 18px;
+    }
+    .ld-setup__bar-fill {
+        position: absolute;
+        left: 0; top: 0; bottom: 0;
+        background: var(--sa-ink);
+    }
+    .ld-setup__section-label {
+        font-family: var(--sa-font-sans);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--sa-ink-50);
+        margin-bottom: 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .ld-setup__task-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 10px 0;
+        border-top: 1px solid var(--sa-rule-soft);
+    }
+    .ld-setup__task-row:first-of-type { border-top: none; padding-top: 4px; }
+    .ld-setup__task-mark {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        margin-top: 2px;
+        color: var(--sa-warning);
+    }
+    .ld-setup__task-name {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--sa-ink);
+    }
+    .ld-setup__task-desc {
+        font-size: 11.5px;
+        color: var(--sa-ink-70);
+        margin-top: 2px;
+    }
+    .ld-setup__task-cta {
+        margin-top: 6px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        background: var(--sa-ink);
+        color: var(--sa-bg-page);
+        font-family: var(--sa-font-sans);
+        font-size: 11.5px;
+        font-weight: 500;
+        text-decoration: none;
+        border-radius: var(--sa-radius-sm);
+    }
+    .ld-setup__task-cta:hover { color: var(--sa-bg-page); background: #000; text-decoration: none; }
+    .ld-setup__counts {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 24px;
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid var(--sa-rule);
+    }
+    .ld-setup__count-label {
+        font-family: var(--sa-font-sans);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--sa-ink-50);
+    }
+    .ld-setup__count-value {
+        font-family: var(--sa-font-serif);
+        font-size: 22px;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        line-height: 1.2;
+        font-variant-numeric: tabular-nums;
+        color: var(--sa-ink);
+        margin-top: 2px;
+    }
+    .ld-setup__view-all {
+        display: inline-block;
+        margin-top: 16px;
+        font-size: 12px;
+        color: var(--sa-ink-70);
+        text-decoration: none;
+        border-bottom: 1px dashed var(--sa-rule);
+    }
+    .ld-setup__view-all:hover { color: var(--sa-ink); }
+</style>
 
-    <!-- Header -->
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+{% set incomplete_critical = setup_status.critical | selectattr('is_complete', 'equalto', false) | list %}
+
+<div class="ld-setup">
+    <div class="ld-setup__head">
         <div>
-            <h3 style="margin: 0; font-size: 1.25rem; font-weight: 700;">Setup Progress</h3>
-            <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem; opacity: 0.9;">
+            <h3 class="ld-setup__title">Setup progress</h3>
+            <div class="ld-setup__sub{% if not setup_status.ready_for_orders %} is-amber{% endif %}">
                 {% if setup_status.ready_for_orders %}
-                    ✅ Ready to take orders!
+                    Ready to take orders.
                 {% else %}
-                    Complete setup to start taking orders
+                    Complete setup before taking orders.
                 {% endif %}
-            </p>
+            </div>
         </div>
-        <div style="text-align: right;">
-            <div style="font-size: 2rem; font-weight: 700;">{{ setup_status.progress_percent }}%</div>
-            <div style="font-size: 0.75rem; opacity: 0.9;">{{ setup_status.completed_count }}/{{ setup_status.total_count }} tasks</div>
+        <div class="ld-setup__pct-block">
+            <div class="ld-setup__pct">{{ setup_status.progress_percent }}%</div>
+            <div class="ld-setup__pct-meta">{{ setup_status.completed_count }}/{{ setup_status.total_count }} tasks</div>
         </div>
     </div>
 
-    <!-- Progress Bar -->
-    <div style="background: rgba(255,255,255,0.2); border-radius: 999px; height: 8px; overflow: hidden; margin-bottom: 1.5rem;">
-        <div style="background: white; height: 100%; width: {{ setup_status.progress_percent }}%; transition: width 0.3s ease;"></div>
+    <div class="ld-setup__bar">
+        <div class="ld-setup__bar-fill" style="width: {{ setup_status.progress_percent }}%;"></div>
     </div>
 
-    <!-- Critical Tasks (if incomplete) -->
-    {% set incomplete_critical = setup_status.critical | selectattr('is_complete', 'equalto', false) | list %}
     {% if incomplete_critical %}
-    <div style="background: rgba(255,255,255,0.15); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; backdrop-filter: blur(10px);">
-        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
-            <span style="font-size: 1.25rem;">🚨</span>
-            <h4 style="margin: 0; font-size: 0.875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Critical Tasks</h4>
+        <div class="ld-setup__section-label">
+            <i class="fas fa-exclamation-triangle" style="color: var(--sa-warning); font-size: 11px;"></i>
+            Critical tasks
         </div>
-        <div style="display: grid; gap: 0.5rem;">
-            {% for task in incomplete_critical[:3] %}
-            <div style="display: flex; align-items: start; gap: 0.75rem;">
-                <span style="font-size: 1.25rem; line-height: 1;">❌</span>
+        {% for task in incomplete_critical[:3] %}
+            <div class="ld-setup__task-row">
+                <span class="ld-setup__task-mark">
+                    <i class="fas fa-exclamation-triangle" style="font-size: 12px;"></i>
+                </span>
                 <div style="flex: 1;">
-                    <div style="font-weight: 600; font-size: 0.875rem;">{{ task.name }}</div>
-                    <div style="font-size: 0.75rem; opacity: 0.9; margin-top: 0.125rem;">{{ task.description }}</div>
+                    <div class="ld-setup__task-name">{{ task.name }}</div>
+                    <div class="ld-setup__task-desc">{{ task.description }}</div>
                     {% if task.action_url %}
-                    <a href="{{ request.script_root }}{{ task.action_url }}" style="display: inline-block; margin-top: 0.5rem; padding: 0.25rem 0.75rem; background: white; color: #667eea; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600;">
-                        Configure →
-                    </a>
+                        <a href="{{ request.script_root }}{{ task.action_url }}" class="ld-setup__task-cta">
+                            Configure
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                        </a>
                     {% elif task.details %}
-                    <div style="font-size: 0.75rem; opacity: 0.8; margin-top: 0.25rem; font-style: italic;">{{ task.details }}</div>
+                        <div class="ld-setup__task-desc" style="font-style: italic; margin-top: 4px;">{{ task.details }}</div>
                     {% endif %}
                 </div>
             </div>
-            {% endfor %}
-        </div>
+        {% endfor %}
         {% if incomplete_critical | length > 3 %}
-        <div style="margin-top: 0.75rem; font-size: 0.75rem; opacity: 0.9;">
-            + {{ incomplete_critical | length - 3 }} more critical tasks
-        </div>
+            <div class="ld-setup__task-desc" style="margin-top: 10px;">
+                + {{ incomplete_critical | length - 3 }} more critical task{{ 's' if incomplete_critical | length - 3 != 1 else '' }}
+            </div>
         {% endif %}
-    </div>
     {% endif %}
 
-    <!-- Success State (all critical complete) -->
     {% if setup_status.ready_for_orders %}
-    <div style="background: rgba(255,255,255,0.15); border-radius: 8px; padding: 1rem; backdrop-filter: blur(10px); margin-bottom: 1rem;">
-        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: {% if setup_status.progress_percent < 100 %}0.75rem{% else %}0{% endif %};">
-            <span style="font-size: 2rem;">🎉</span>
-            <div>
-                <div style="font-weight: 600; font-size: 0.875rem;">All Critical Tasks Complete!</div>
-                <div style="font-size: 0.75rem; opacity: 0.9; margin-top: 0.125rem;">
-                    Your sales agent is ready to take orders from advertisers.
-                </div>
-            </div>
-        </div>
-
-        <!-- Show recommended tasks preview if not 100% complete -->
-        {% if setup_status.progress_percent < 100 %}
         {% set incomplete_recommended = setup_status.recommended | selectattr('is_complete', 'equalto', false) | list %}
         {% set incomplete_optional = setup_status.optional | selectattr('is_complete', 'equalto', false) | list %}
-        {% if incomplete_recommended or incomplete_optional %}
-        <div style="padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.2);">
-            <div style="font-size: 0.75rem; opacity: 0.9; margin-bottom: 0.5rem;">✨ Consider completing these recommended tasks:</div>
-            <div style="display: grid; gap: 0.25rem;">
+        <div class="ld-setup__section-label">
+            <i class="fas fa-check" style="color: var(--sa-ink); font-size: 11px;"></i>
+            All critical tasks complete
+        </div>
+        <div class="ld-setup__task-desc" style="margin-bottom: 4px;">
+            Your sales agent is ready to take orders from advertisers.
+        </div>
+        {% if setup_status.progress_percent < 100 and (incomplete_recommended or incomplete_optional) %}
+            <div class="ld-setup__task-desc" style="margin-top: 14px;">
+                Consider completing:
                 {% for task in incomplete_recommended[:2] %}
-                <div style="font-size: 0.75rem; opacity: 0.9;">
-                    ⚠️ {{ task.name }}
-                </div>
+                    <span style="display: inline-block; margin-right: 8px;">{{ task.name }}{% if not loop.last %},{% endif %}</span>
                 {% endfor %}
                 {% if incomplete_recommended | length > 2 %}
-                <div style="font-size: 0.75rem; opacity: 0.8; font-style: italic;">
-                    + {{ incomplete_recommended | length - 2 }} more recommended
-                </div>
+                    <span style="font-style: italic; opacity: 0.8;">+ {{ incomplete_recommended | length - 2 }} more</span>
                 {% endif %}
             </div>
-        </div>
         {% endif %}
-        {% endif %}
-    </div>
     {% endif %}
 
-    <!-- Quick Stats -->
-    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.2);">
+    <div class="ld-setup__counts">
         <div>
-            <div style="font-size: 0.75rem; opacity: 0.9;">Critical</div>
-            <div style="font-weight: 700; font-size: 1.125rem;">
-                {{ setup_status.critical | selectattr('is_complete', 'equalto', true) | list | length }}/{{ setup_status.critical | length }}
-            </div>
+            <div class="ld-setup__count-label">Critical</div>
+            <div class="ld-setup__count-value">{{ setup_status.critical | selectattr('is_complete', 'equalto', true) | list | length }}/{{ setup_status.critical | length }}</div>
         </div>
         <div>
-            <div style="font-size: 0.75rem; opacity: 0.9;">Recommended</div>
-            <div style="font-weight: 700; font-size: 1.125rem;">
-                {{ setup_status.recommended | selectattr('is_complete', 'equalto', true) | list | length }}/{{ setup_status.recommended | length }}
-            </div>
+            <div class="ld-setup__count-label">Recommended</div>
+            <div class="ld-setup__count-value">{{ setup_status.recommended | selectattr('is_complete', 'equalto', true) | list | length }}/{{ setup_status.recommended | length }}</div>
         </div>
         <div>
-            <div style="font-size: 0.75rem; opacity: 0.9;">Optional</div>
-            <div style="font-weight: 700; font-size: 1.125rem;">
-                {{ setup_status.optional | selectattr('is_complete', 'equalto', true) | list | length }}/{{ setup_status.optional | length }}
-            </div>
+            <div class="ld-setup__count-label">Optional</div>
+            <div class="ld-setup__count-value">{{ setup_status.optional | selectattr('is_complete', 'equalto', true) | list | length }}/{{ setup_status.optional | length }}</div>
         </div>
     </div>
 
-    <!-- View Full Checklist -->
-    <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/setup-checklist" style="display: block; margin-top: 1rem; padding: 0.75rem; background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; text-align: center; color: white; text-decoration: none; font-weight: 600; font-size: 0.875rem; transition: all 0.2s; backdrop-filter: blur(10px);" onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">
-        View Full Setup Checklist →
-    </a>
+    <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/setup-checklist" class="ld-setup__view-all">View full setup checklist →</a>
 </div>
 {% endif %}

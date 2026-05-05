@@ -17,12 +17,46 @@
   See ``src/admin/utils/breadcrumbs.py``.
 #}
 <nav class="breadcrumb" aria-label="Breadcrumb">
-{% for crumb in crumbs %}
-  {% if crumb.url and not loop.last %}
-    <a href="{{ crumb.url }}">{{ crumb.label }}</a>
-    <span class="breadcrumb-sep" aria-hidden="true">/</span>
-  {% else %}
-    <span class="breadcrumb-current" aria-current="page">{{ crumb.label }}</span>
+  <div class="breadcrumb__crumbs">
+  {% for crumb in crumbs %}
+    {% if crumb.url and not loop.last %}
+      <a href="{{ crumb.url }}">{{ crumb.label }}</a>
+      <span class="breadcrumb-sep" aria-hidden="true">/</span>
+    {% else %}
+      <span class="breadcrumb-current" aria-current="page">{{ crumb.label }}</span>
+    {% endif %}
+  {% endfor %}
+  </div>
+  {# Configure menu lives in the breadcrumb sub-bar so it renders in BOTH
+     embedded mode (where the .header is hidden) and standalone. Only
+     populated when the request has a tenant in scope. #}
+  {% if tenant %}
+  <div class="sa-menu" data-sa-menu>
+      <button type="button" class="sa-menu__trigger" data-sa-menu-trigger aria-haspopup="true" aria-expanded="false">
+          Configure
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="sa-menu__panel" role="menu">
+          <div class="sa-menu__group-label">Inventory</div>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory/browse">Browse inventory</a>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory-profiles/">Inventory profiles</a>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/targeting">Targeting criteria</a>
+          {% if not tenant.is_embedded %}
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory">Sync inventory</a>
+          {% endif %}
+
+          <div class="sa-menu__group-label">Buying</div>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/buyer-routing">Buyer routing</a>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/workflows">Workflows</a>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/creatives/review">Creatives</a>
+
+          <div class="sa-menu__group-label">Reporting</div>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/reporting">Reports</a>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/webhooks">Webhooks</a>
+
+          <div class="sa-menu__group-label">Workspace</div>
+          <a class="sa-menu__item" role="menuitem" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/settings">Settings</a>
+      </div>
+  </div>
   {% endif %}
-{% endfor %}
 </nav>
