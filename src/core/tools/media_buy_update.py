@@ -218,6 +218,48 @@ def _update_media_buy_impl(
         adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
         today = req.today or date.today()
 
+        # AdCP 3.0.1 spec (core/targeting.json:191): reject property_list targeting
+        # on products with property_targeting_allowed=False. Runs before the dry_run
+        # early return so dry_run requests are also rejected (parity with create).
+        if req.packages:
+            from src.core.database.models import Product as ProductModel
+            from src.services.targeting_capabilities import (
+                validate_property_targeting_allowed,
+            )
+
+            for pkg_update in req.packages:
+                if (
+                    pkg_update.targeting_overlay is None
+                    or pkg_update.targeting_overlay.property_list is None
+                    or not pkg_update.package_id
+                ):
+                    continue
+                media_package = uow.media_buys.get_package(req.media_buy_id, pkg_update.package_id)
+                if media_package is None:
+                    continue
+                package_product_id = (media_package.package_config or {}).get("product_id")
+                if not package_product_id:
+                    continue
+                product = session.scalars(
+                    select(ProductModel).where(
+                        ProductModel.tenant_id == tenant["tenant_id"],
+                        ProductModel.product_id == package_product_id,
+                    )
+                ).first()
+                violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
+                if violation:
+                    if step is not None:
+                        ctx_manager.update_workflow_step(
+                            step.step_id,
+                            status="failed",
+                            response_data={"errors": [{"code": "VALIDATION_ERROR", "message": violation}]},
+                            error_message=violation,
+                        )
+                    return UpdateMediaBuyError(
+                        errors=[Error(code="VALIDATION_ERROR", message=violation)],
+                        context=req.context,
+                    )
+
         # Dry-run mode: Return simulated response without any database writes
         # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
         if testing_ctx.dry_run:
@@ -1031,38 +1073,8 @@ def _update_media_buy_impl(
                         )
                         return response_data
 
-                    # AdCP 3.0.1 spec (core/targeting.json:191): reject property_list
-                    # targeting on products with property_targeting_allowed=False. Shared
-                    # rule with _create_media_buy_impl via validate_property_targeting_allowed.
-                    if pkg_update.targeting_overlay.property_list is not None:
-                        from src.core.database.models import Product as ProductModel
-                        from src.services.targeting_capabilities import (
-                            validate_property_targeting_allowed,
-                        )
-
-                        package_product_id = (media_package.package_config or {}).get("product_id")
-                        if package_product_id:
-                            product_stmt = select(ProductModel).where(
-                                ProductModel.tenant_id == tenant["tenant_id"],
-                                ProductModel.product_id == package_product_id,
-                            )
-                            product = session.scalars(product_stmt).first()
-                            violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
-                            if violation:
-                                # Build response shape as dict to avoid .model_dump() in _impl
-                                # (architecture guard test_architecture_no_model_dump_in_impl).
-                                err_payload = {
-                                    "errors": [{"code": "VALIDATION_ERROR", "message": violation}],
-                                }
-                                ctx_manager.update_workflow_step(
-                                    step.step_id,
-                                    status="failed",
-                                    response_data=err_payload,
-                                    error_message=violation,
-                                )
-                                return UpdateMediaBuyError(
-                                    errors=[Error(code="VALIDATION_ERROR", message=violation)],
-                                )
+                    # property_targeting_allowed validation runs earlier (before dry_run gate);
+                    # by this point the request is known-valid against that rule.
 
                     # Store Targeting model directly — engine's pydantic_core.to_json serializer handles it
                     media_package.package_config["targeting_overlay"] = pkg_update.targeting_overlay

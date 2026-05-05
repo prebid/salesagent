@@ -27,32 +27,31 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto).
 # Line numbers reflect FIXME comment restored in media_buy_update.py (PR04 review item 1).
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 22 violations (workflow step response_data)
-    # Line numbers updated after adcp 3.12 migration (buyer_ref removal shifted lines)
+    # _update_media_buy_impl: 22 violations (workflow step response_data).
+    # Line numbers reflect post-restructure positions after the property_targeting_allowed
+    # validation was hoisted above the dry_run gate (parity with create-time semantics).
     ("media_buy_update.py", 213),
-    ("media_buy_update.py", 265),
-    ("media_buy_update.py", 266),
-    ("media_buy_update.py", 320),
-    ("media_buy_update.py", 377),
-    ("media_buy_update.py", 400),
-    ("media_buy_update.py", 431),
-    ("media_buy_update.py", 458),
-    ("media_buy_update.py", 475),
-    ("media_buy_update.py", 529),
-    ("media_buy_update.py", 559),
-    ("media_buy_update.py", 579),
-    ("media_buy_update.py", 605),
-    ("media_buy_update.py", 784),
-    ("media_buy_update.py", 812),
-    ("media_buy_update.py", 840),
-    ("media_buy_update.py", 1011),
-    ("media_buy_update.py", 1029),
-    # Lines below shifted by ~+34 when property_targeting_allowed validation was
-    # added at media_buy_update.py:1034. Same pre-existing violations, new positions.
-    ("media_buy_update.py", 1112),
-    ("media_buy_update.py", 1205),
-    ("media_buy_update.py", 1237),
-    ("media_buy_update.py", 1297),
+    ("media_buy_update.py", 307),
+    ("media_buy_update.py", 308),
+    ("media_buy_update.py", 362),
+    ("media_buy_update.py", 419),
+    ("media_buy_update.py", 442),
+    ("media_buy_update.py", 473),
+    ("media_buy_update.py", 500),
+    ("media_buy_update.py", 517),
+    ("media_buy_update.py", 571),
+    ("media_buy_update.py", 601),
+    ("media_buy_update.py", 621),
+    ("media_buy_update.py", 647),
+    ("media_buy_update.py", 826),
+    ("media_buy_update.py", 854),
+    ("media_buy_update.py", 882),
+    ("media_buy_update.py", 1053),
+    ("media_buy_update.py", 1071),
+    ("media_buy_update.py", 1124),
+    ("media_buy_update.py", 1217),
+    ("media_buy_update.py", 1249),
+    ("media_buy_update.py", 1309),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 617),
     # _list_creatives_impl: 1 violation (filter dict conversion)
