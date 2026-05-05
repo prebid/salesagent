@@ -78,7 +78,7 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "reporting_dimensions",  # Schema defines it, library doesn't have it yet
     },
     "/schemas/latest/media-buy/sync-creatives-request.json": {
-        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "account_id",  # Schema defines 'account_id' (string); library/local model uses 'account' (AccountReference object). Tracked under #1247.
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
     "/schemas/latest/media-buy/list-creatives-request.json": {
