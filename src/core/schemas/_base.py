@@ -602,6 +602,29 @@ class FormatReference(SalesAgentBaseModel):
     format_id: str = Field(..., serialization_alias="id", description="Format ID within that agent's format catalog")
 
 
+# TODO: remove once adcp library generates CollectionListReference and adds it to TargetingOverlay.
+# Tracked upstream at github.com/adcontextprotocol/adcp-client-python — spec defines this at
+# /schemas/3.0.1/core/collection-list-ref.json but Python codegen lags as of adcp 3.12.0.
+class CollectionListReference(SalesAgentBaseModel):
+    """Reference to an externally managed collection list, mirroring AdCP 3.0.1 spec.
+
+    Enables passing large collection inclusion/exclusion sets without embedding them
+    in requests. The receiving agent fetches and caches the list independently.
+
+    Mirrors the shape of adcp.types.PropertyListReference exactly (agent_url, list_id,
+    optional auth_token) — see /schemas/3.0.1/core/collection-list-ref.json.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_url: AnyUrl = Field(..., description="URL of the agent managing the collection list")
+    list_id: str = Field(..., min_length=1, description="Identifier for the collection list within the agent")
+    auth_token: str | None = Field(
+        None,
+        description="JWT or other authorization token for accessing the list. Optional if the list is public or caller has implicit access.",
+    )
+
+
 class Format(LibraryFormat):
     """Creative format definition per AdCP spec.
 
@@ -856,6 +879,12 @@ class Targeting(TargetingOverlay):
     geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
     geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
     geo_postal_areas_exclude: list[GeoPostalArea] | None = None  # type: ignore[assignment]
+
+    # --- Collection-list targeting (AdCP 3.0.1 spec; library codegen lag at 3.12.0) ---
+    # property_list is inherited from TargetingOverlay; collection_list / _exclude are
+    # added locally pending upstream regen — see CollectionListReference above.
+    collection_list: CollectionListReference | None = None
+    collection_list_exclude: CollectionListReference | None = None
 
     # --- Internal dimensions (unchanged) ---
 
@@ -2241,6 +2270,10 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
     start_time: str | None = Field(default=None, description="Package start time (ISO 8601)")
     end_time: str | None = Field(default=None, description="Package end time (ISO 8601)")
     paused: bool | None = Field(default=None, description="Whether this package is paused")
+    targeting_overlay: Targeting | None = Field(
+        default=None,
+        description="Targeting overlay echoed from the most recent create_media_buy or update_media_buy. Includes any property_list / collection_list references the buyer attached, so callers can verify what was persisted without replaying the request.",
+    )
     creative_approvals: list["CreativeApproval"] | None = Field(
         default=None, description="Creative approval state for creatives assigned to this package"
     )
@@ -2250,6 +2283,12 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
     snapshot_unavailable_reason: SnapshotUnavailableReason | None = Field(
         default=None, description="Reason snapshot is unavailable (present when include_snapshot=true but no snapshot)"
     )
+
+    def model_dump(self, **kwargs):
+        result = super().model_dump(**kwargs)
+        if "targeting_overlay" in result and self.targeting_overlay is not None:
+            result["targeting_overlay"] = self.targeting_overlay.model_dump(**kwargs)
+        return result
 
 
 class GetMediaBuysMediaBuy(SalesAgentBaseModel):

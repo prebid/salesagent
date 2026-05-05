@@ -1725,6 +1725,83 @@ class TestUC003UpdateTargetingOverlay:
         assert isinstance(result, UpdateMediaBuySuccess)
         standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
 
+    def test_property_list_update_rejected_when_product_disallows(self, standard_mocks):
+        """Update with property_list against a product where property_targeting_allowed=False
+        is rejected with VALIDATION_ERROR before persistence — mirrors create-time rule.
+
+        Covers: UC-003-MAIN-14
+        """
+        from src.core.schemas import UpdateMediaBuyError
+
+        mock_session = _setup_db_session(standard_mocks)
+
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {"product_id": "prod_strict"}
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        # Product load returns a product that disallows property targeting
+        mock_product = MagicMock()
+        mock_product.property_targeting_allowed = False
+        mock_session.scalars.return_value.first.return_value = mock_product
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_pta_reject",
+            packages=[
+                {
+                    "package_id": "pkg_1",
+                    "targeting_overlay": {
+                        "property_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "v1",
+                        },
+                    },
+                }
+            ],
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuyError)
+        # Persistence must NOT have happened — package_config still untouched
+        assert "targeting_overlay" not in mock_pkg.package_config
+        # Error message identifies the constraint
+        error_msg = result.errors[0].message
+        assert "prod_strict" in error_msg
+        assert "property_targeting_allowed" in error_msg
+
+    def test_collection_list_update_skips_property_targeting_check(self, standard_mocks):
+        """Update with only collection_list does not trigger the property_list-specific
+        property_targeting_allowed check — that gate is property_list-only.
+
+        Covers: UC-003-MAIN-13
+        """
+        _setup_db_session(standard_mocks)
+
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {"product_id": "prod_strict"}
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_coll_only",
+            packages=[
+                {
+                    "package_id": "pkg_1",
+                    "targeting_overlay": {
+                        "collection_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "c_v1",
+                        },
+                    },
+                }
+            ],
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        # Targeting persisted; no property_list rejection
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert mock_pkg.package_config["targeting_overlay"] is not None
+
 
 # ---------------------------------------------------------------------------
 # ALT: Manual Approval Required

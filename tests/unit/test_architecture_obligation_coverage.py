@@ -43,6 +43,7 @@ _UNIT_ENTITY_FILES = [
     "test_quiet_failure_propagation.py",
     "test_get_products_impl_coverage.py",
     "test_creative_formats_behavioral.py",
+    "test_get_media_buys.py",
 ]
 
 # Integration behavioral test files (non-v3) that carry canonical Covers: tags
@@ -252,9 +253,10 @@ class TestObligationCoverage:
         covered = _get_covered_obligations()
 
         invalid = covered - all_ids
-        assert not invalid, (
-            f"Found {len(invalid)} Covers: tag(s) referencing non-existent obligation IDs:\n"
-            + "\n".join(f"  {oid}" for oid in sorted(invalid))
+        assert (
+            not invalid
+        ), f"Found {len(invalid)} Covers: tag(s) referencing non-existent obligation IDs:\n" + "\n".join(
+            f"  {oid}" for oid in sorted(invalid)
         )
 
     def test_obligation_count_documented(self):

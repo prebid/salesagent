@@ -1619,6 +1619,26 @@ async def _create_media_buy_impl(
                 error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
                 raise ValueError(error_msg)
 
+            # AdCP 3.0.1 spec (core/targeting.json:191): "Sellers SHOULD return a
+            # validation error if the product has property_targeting_allowed: false."
+            # Lives here because product_map is in scope; the rest of targeting
+            # validation runs further down outside this UoW block.
+            if req.packages:
+                property_targeting_violations = []
+                for package in req.packages:
+                    if (
+                        package.targeting_overlay is not None
+                        and package.targeting_overlay.property_list is not None
+                        and package.product_id in product_map
+                        and not product_map[package.product_id].property_targeting_allowed
+                    ):
+                        property_targeting_violations.append(
+                            f"Product {package.product_id} does not allow property_list targeting "
+                            f"(property_targeting_allowed=false)"
+                        )
+                if property_targeting_violations:
+                    raise ValueError(f"Targeting validation failed: {'; '.join(property_targeting_violations)}")
+
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
             if req.packages:
@@ -2696,9 +2716,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url

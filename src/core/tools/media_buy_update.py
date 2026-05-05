@@ -1031,6 +1031,40 @@ def _update_media_buy_impl(
                         )
                         return response_data
 
+                    # AdCP 3.0.1 spec (core/targeting.json:191): reject property_list
+                    # targeting on products with property_targeting_allowed=False. Same
+                    # rule as create-time validation; consistency means buyers can't
+                    # back into targeting via update that would have been rejected at create.
+                    if pkg_update.targeting_overlay.property_list is not None:
+                        from src.core.database.models import Product as ProductModel
+
+                        package_product_id = (media_package.package_config or {}).get("product_id")
+                        if package_product_id:
+                            product_stmt = select(ProductModel).where(
+                                ProductModel.tenant_id == tenant["tenant_id"],
+                                ProductModel.product_id == package_product_id,
+                            )
+                            product = session.scalars(product_stmt).first()
+                            if product is not None and not product.property_targeting_allowed:
+                                error_msg = (
+                                    f"Product {package_product_id} does not allow property_list "
+                                    f"targeting (property_targeting_allowed=false)"
+                                )
+                                # Build response shape as dict to avoid .model_dump() in _impl
+                                # (architecture guard test_architecture_no_model_dump_in_impl).
+                                err_payload = {
+                                    "errors": [{"code": "VALIDATION_ERROR", "message": error_msg}],
+                                }
+                                ctx_manager.update_workflow_step(
+                                    step.step_id,
+                                    status="failed",
+                                    response_data=err_payload,
+                                    error_message=error_msg,
+                                )
+                                return UpdateMediaBuyError(
+                                    errors=[Error(code="VALIDATION_ERROR", message=error_msg)],
+                                )
+
                     # Store Targeting model directly — engine's pydantic_core.to_json serializer handles it
                     media_package.package_config["targeting_overlay"] = pkg_update.targeting_overlay
                     # Flag the JSON field as modified so SQLAlchemy persists it
