@@ -519,13 +519,6 @@ def then_media_buy_persisted(ctx: dict) -> None:
         assert tenant is not None, "No tenant in ctx — cannot verify tenant_id on persisted media buy"
         assert mb.tenant_id == tenant.tenant_id, f"Expected tenant_id '{tenant.tenant_id}', got '{mb.tenant_id}'"
         assert mb.status is not None, f"Media buy {media_buy_id} persisted with no status"
-        # Verify buyer_ref from the request was persisted correctly
-        request_kwargs = ctx.get("request_kwargs", {})
-        expected_buyer_ref = request_kwargs.get("buyer_ref")
-        if expected_buyer_ref:
-            assert mb.buyer_ref == expected_buyer_ref, (
-                f"Expected buyer_ref '{expected_buyer_ref}' on persisted media buy, got '{mb.buyer_ref}'"
-            )
         # Verify principal linkage
         principal = ctx.get("principal")
         if principal is not None:
@@ -892,7 +885,6 @@ def then_response_no_success_fields(ctx: dict) -> None:
     # These MUST NOT appear as truthy values on the error response.
     disallowed_fields = (
         "media_buy_id",
-        "buyer_ref",
         "buyer_campaign_ref",
         "account",
         "creative_deadline",

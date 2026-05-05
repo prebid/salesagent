@@ -244,8 +244,8 @@ class AdServerAdapter(ABC):
     ) -> list[ResponsePackage]:
         """Build AdCP-compliant package responses from MediaPackage list.
 
-        Per AdCP spec, CreateMediaBuyResponse.Package requires package_id
-        and buyer_ref. This builds the list consistently across adapters.
+        Per AdCP spec, CreateMediaBuyResponse.Package requires package_id.
+        This builds the list consistently across adapters.
 
         Args:
             packages: List of MediaPackage objects from the request.
@@ -259,7 +259,6 @@ class AdServerAdapter(ABC):
         responses = []
         for package in packages:
             kwargs: dict[str, Any] = {
-                "buyer_ref": package.buyer_ref or "unknown",
                 "package_id": package.package_id,
                 "paused": paused,
             }
@@ -282,7 +281,7 @@ class AdServerAdapter(ABC):
     ) -> CreateMediaBuySuccess:
         """Build a CreateMediaBuySuccess response with standard fields.
 
-        Constructs the response with buyer_ref, media_buy_id, creative_deadline,
+        Constructs the response with media_buy_id, creative_deadline,
         and package responses. If package_responses is not provided, builds them
         from the packages list.
 
@@ -309,7 +308,6 @@ class AdServerAdapter(ABC):
             datetime.now(UTC) + timedelta(days=creative_deadline_days) if creative_deadline_days is not None else None
         )
         return CreateMediaBuySuccess(
-            buyer_ref=request.buyer_ref or "unknown",
             media_buy_id=media_buy_id,
             creative_deadline=creative_deadline,
             packages=package_responses,
@@ -460,7 +458,6 @@ class AdServerAdapter(ABC):
     def update_media_buy(
         self,
         media_buy_id: str,
-        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,

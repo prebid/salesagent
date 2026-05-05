@@ -91,7 +91,6 @@ class TestA2AMessageFieldValidation:
                 "brand": {"domain": "testbrand.com"},
                 "packages": [
                     {
-                        "buyer_ref": f"pkg_{sample_products[0]}",
                         "product_id": sample_products[0],
                         "pricing_option_id": "cpm_usd_fixed",
                         "budget": 10000.0,
@@ -169,7 +168,6 @@ class TestA2AMessageFieldValidation:
         """Test list_creatives returns a valid message field."""
         with mock_auth_context(handler):
             params = {
-                "buyer_ref": "test_creative",
                 "page": 1,
                 "limit": 10,
             }
@@ -225,7 +223,6 @@ class TestA2AResponseDictConstruction:
         from src.core.schemas import CreateMediaBuySuccess
 
         response = CreateMediaBuySuccess(
-            buyer_ref="test-123",
             media_buy_id="mb-456",
             packages=[],  # Required field in adcp v1.2.1
         )

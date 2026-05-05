@@ -92,7 +92,6 @@ class MediaBuyCreateEnv(IntegrationEnv):
             media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
             return CreateMediaBuySuccess(
                 media_buy_id=media_buy_id,
-                buyer_ref=getattr(req_obj, "buyer_ref", "test-buyer"),
                 packages=[
                     {
                         "package_id": f"pkg_{uuid.uuid4().hex[:8]}",

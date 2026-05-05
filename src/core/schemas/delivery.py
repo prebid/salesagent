@@ -62,7 +62,7 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     Examples:
     - Single buy: media_buy_ids=["buy_123"]
-    - Multiple buys: buyer_refs=["ref_123", "ref_456"]
+    - Multiple buys: media_buy_ids=["buy_123", "buy_456"]
     - All active buys: status_filter="active"
     - All buys: status_filter="all"
     - Date range: start_date="2025-01-01", end_date="2025-01-31"
@@ -131,7 +131,6 @@ class PackageDelivery(SalesAgentBaseModel):
     """
 
     package_id: str = Field(description="Publisher's package identifier")
-    buyer_ref: str | None = Field(None, description="Buyer's reference identifier for this package")
     impressions: float = Field(ge=0, description="Package impressions")
     spend: float = Field(ge=0, description="Package spend")
     clicks: float | None = Field(None, ge=0, description="Package clicks")
@@ -183,7 +182,6 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
     """
 
     media_buy_id: str = Field(description="Publisher's media buy identifier")
-    buyer_ref: str | None = Field(None, description="Buyer's reference identifier for this media buy")
     # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_activation``
     # where salesagent uses ``ready``. Align naming to spec when updating
     # _compute_media_buy_status and all status references.
@@ -360,7 +358,7 @@ class GetCreativeDeliveryRequest(SalesAgentBaseModel):
 
     Flattened from the adcp library's union-based GetCreativeDeliveryRequest
     (RootModel of 3 variants). At least one scoping filter is required:
-    media_buy_ids, media_buy_buyer_refs, or creative_ids.
+    media_buy_ids or creative_ids.
 
     All fields mirror the adcp spec; this flat model is easier to work with
     for MCP parameter expansion and validation.
@@ -372,11 +370,6 @@ class GetCreativeDeliveryRequest(SalesAgentBaseModel):
         None,
         min_length=1,
         description="Filter to specific media buys by publisher ID.",
-    )
-    media_buy_buyer_refs: list[str] | None = Field(
-        None,
-        min_length=1,
-        description="Filter to specific media buys by buyer reference ID.",
     )
     creative_ids: list[str] | None = Field(
         None,
@@ -434,7 +427,7 @@ class GetCreativeDeliveryResponse(NestedModelSerializerMixin, LibraryGetCreative
     """Extends library GetCreativeDeliveryResponse.
 
     Library provides: reporting_period, currency, creatives, errors,
-    pagination, media_buy_id, media_buy_buyer_ref, context, ext.
+    pagination, media_buy_id, context, ext.
 
     Local override:
     - creatives: Uses local CreativeDeliveryData for consistent serialization

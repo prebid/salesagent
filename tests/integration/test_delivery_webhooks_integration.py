@@ -107,16 +107,13 @@ def _create_basic_media_buy_with_webhook(
             media_buy_id=media_buy_id,
             tenant_id=tenant_id,
             principal_id=principal_id,
-            buyer_ref="buyer_ref_123",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
             start_date=start_date,
             end_date=end_date,
             status="active",
             raw_request={
-                "packages": [
-                    {"buyer_ref": "nike_web", "product_id": product.product_id, "pricing_option_id": pricing_option.id}
-                ],
+                "packages": [{"product_id": product.product_id, "pricing_option_id": pricing_option.id}],
                 "reporting_webhook": {
                     "url": "https://example.com/webhook",  # outbound HTTP will be mocked
                     "frequency": "daily",

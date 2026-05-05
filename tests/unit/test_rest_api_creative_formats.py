@@ -24,12 +24,11 @@ class TestRESTCreativeFormatsFilterForwarding:
         "body,field,expected",
         [
             ({"name_search": "banner"}, "name_search", "banner"),
-            ({"type": "display"}, "type", "display"),  # enum coerced
             ({"max_width": 728, "max_height": 90}, "max_width", 728),
             ({"is_responsive": True}, "is_responsive", True),
             ({"min_width": 300}, "min_width", 300),
         ],
-        ids=["name_search", "type", "max_width", "is_responsive", "min_width"],
+        ids=["name_search", "max_width", "is_responsive", "min_width"],
     )
     @patch("src.core.resolved_identity.resolve_identity")
     @patch("src.core.tools.creative_formats._list_creative_formats_impl")

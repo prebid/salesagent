@@ -64,6 +64,13 @@ class TestSchemaFieldMapping:
             "show_ids",  # Show/series identifiers from adcp 3.10 spec
             "exclusivity",  # Exclusivity constraints from adcp 3.10 spec
             "episodes",  # Episode-level targeting from adcp 3.10 spec
+            # AdCP 3.12+ fields - inherited from library Product, not yet stored in database
+            "collections",  # Collection grouping from adcp 3.12 spec
+            "collection_targeting_allowed",  # Collection targeting flag from adcp 3.12 spec
+            "installments",  # Installment payment config from adcp 3.12 spec
+            "material_submission",  # Material submission config from adcp 3.12 spec
+            "measurement_readiness",  # Measurement readiness from adcp 3.12 spec
+            "trusted_match",  # Trusted match config from adcp 3.12 spec
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)

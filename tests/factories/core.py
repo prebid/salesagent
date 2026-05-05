@@ -16,6 +16,7 @@ from src.core.database.models import (
     AdapterConfig,
     AuthorizedProperty,
     CurrencyLimit,
+    GAMInventory,
     PropertyTag,
     PublisherPartner,
     Tenant,
@@ -152,6 +153,11 @@ def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> None
 class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = AuthorizedProperty
+
+
+class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = GAMInventory
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
@@ -166,6 +172,19 @@ class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
     verification_status = "verified"
     created_at = LazyFunction(_now)
     updated_at = LazyFunction(_now)
+    inventory_type = "ad_unit"
+    inventory_id = Sequence(lambda n: f"au_{n:04d}")
+    name = LazyAttribute(lambda o: f"Ad Unit {o.inventory_id}")
+    path = LazyAttribute(lambda o: [o.name])
+    status = "ACTIVE"
+    inventory_metadata = LazyAttribute(
+        lambda o: {
+            "parent_id": None,
+            "has_children": False,
+            "ad_unit_code": f"code_{o.inventory_id}",
+            "sizes": [{"width": 300, "height": 250}],
+        }
+    )
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):

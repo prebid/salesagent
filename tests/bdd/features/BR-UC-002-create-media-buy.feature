@@ -1767,3 +1767,225 @@ Feature: BR-UC-002 Create Media Buy
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
 
+    # ── Hand-authored: idempotency_key (adcp 3.12 / rc.3, PR #1217 review) ──
+
+  @T-UC-002-idempotency-replay @invariant @BR-RULE-081 @idempotency @hand-authored
+  Scenario: Retry with same idempotency_key returns original media buy
+    Given the tenant is configured for auto-approval
+    And a valid create_media_buy request with:
+    | field           | value                                |
+    | idempotency_key | 550e8400-e29b-41d4-a716-446655440000 |
+    | account         | account_id "acc-001"                 |
+    | brand           | domain "acme.com"                    |
+    | start_time      | 2026-04-01T00:00:00Z                 |
+    | end_time        | 2026-04-30T23:59:59Z                 |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the response should include a "media_buy_id"
+    And I remember the "media_buy_id" as "original_id"
+    When the Buyer Agent sends the same create_media_buy request with idempotency_key "550e8400-e29b-41d4-a716-446655440000"
+    Then the response should succeed
+    And the response "media_buy_id" should equal the remembered "original_id"
+    And no duplicate ad server booking should be created
+    # BR-RULE-081: Same idempotency_key + account → return existing media buy
+    # POST-F1: System state unchanged on replay (no second adapter call)
+
+  @T-UC-002-idempotency-absent @invariant @BR-RULE-081 @idempotency @hand-authored
+  Scenario: Absent idempotency_key proceeds without dedup protection
+    Given the tenant is configured for auto-approval
+    And a valid create_media_buy request with:
+    | field      | value                        |
+    | account    | account_id "acc-001"         |
+    | brand      | domain "acme.com"            |
+    | start_time | 2026-04-01T00:00:00Z         |
+    | end_time   | 2026-04-30T23:59:59Z         |
+    And the request does NOT include an idempotency_key
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the response should include a "media_buy_id"
+    # BR-RULE-081 INV-1: Key absent → proceeds without idempotency
+
+  @T-UC-002-idempotency-new-key @invariant @BR-RULE-081 @idempotency @hand-authored
+  Scenario: New idempotency_key creates a new media buy
+    Given the tenant is configured for auto-approval
+    And a valid create_media_buy request with:
+    | field           | value                                |
+    | idempotency_key | 550e8400-e29b-41d4-a716-446655440000 |
+    | account         | account_id "acc-001"                 |
+    | brand           | domain "acme.com"                    |
+    | start_time      | 2026-04-01T00:00:00Z                 |
+    | end_time        | 2026-04-30T23:59:59Z                 |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And I remember the "media_buy_id" as "first_id"
+    Given a valid create_media_buy request with:
+    | field           | value                                |
+    | idempotency_key | 661f9511-f30c-52e5-b827-557766551111 |
+    | account         | account_id "acc-001"                 |
+    | brand           | domain "acme.com"                    |
+    | start_time      | 2026-04-01T00:00:00Z                 |
+    | end_time        | 2026-04-30T23:59:59Z                 |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the response "media_buy_id" should NOT equal the remembered "first_id"
+    # BR-RULE-081: Different key → independent media buy created
+
+  @T-UC-002-partition-idempotency-key @partition @idempotency_key @hand-authored
+  Scenario Outline: Idempotency key partition validation - <partition>
+    Given the tenant is configured for auto-approval
+    And a valid create_media_buy request with:
+    | field      | value                        |
+    | account    | account_id "acc-001"         |
+    | brand      | domain "acme.com"            |
+    | start_time | 2026-04-01T00:00:00Z         |
+    | end_time   | 2026-04-30T23:59:59Z         |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    And the idempotency_key is set to <value>
+    When the Buyer Agent sends the create_media_buy request
+    Then the result should be <outcome>
+
+    Examples: Valid partitions
+      | partition      | value                                  | outcome |
+      | absent         | <not provided>                         | success |
+      | typical_valid  | abc12345-retry-001                     | success |
+      | boundary_min   | 12345678                               | success |
+      | boundary_max   | <255 character string>                 | success |
+      | uuid_format    | 550e8400-e29b-41d4-a716-446655440000   | success |
+
+    Examples: Invalid partitions
+      | partition      | value          | outcome                                              |
+      | empty_string   |                | error "INVALID_REQUEST" with suggestion               |
+      | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion               |
+      | too_long       | <256 chars>    | error "INVALID_REQUEST" with suggestion               |
+
+  @T-UC-002-boundary-idempotency-key @boundary @idempotency_key @hand-authored
+  Scenario Outline: Idempotency key boundary validation - <boundary_point>
+    Given the tenant is configured for auto-approval
+    And a valid create_media_buy request with:
+    | field      | value                        |
+    | account    | account_id "acc-001"         |
+    | brand      | domain "acme.com"            |
+    | start_time | 2026-04-01T00:00:00Z         |
+    | end_time   | 2026-04-30T23:59:59Z         |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    And the idempotency_key is set to <value>
+    When the Buyer Agent sends the create_media_buy request
+    Then the result should be <outcome>
+
+    Examples: Boundary values
+      | boundary_point                  | value               | outcome                                |
+      | absent (field not provided)     | <not provided>      | success                                |
+      | empty string (length 0)         |                     | error "INVALID_REQUEST" with suggestion |
+      | length 7 (min - 1)             | abc1234             | error "INVALID_REQUEST" with suggestion |
+      | length 8 (min, inclusive)       | 12345678            | success                                |
+      | length 9 (min + 1)             | 123456789           | success                                |
+      | length 254 (max - 1)           | <254 char string>   | success                                |
+      | length 255 (max, inclusive)     | <255 char string>   | success                                |
+      | length 256 (max + 1)           | <256 char string>   | error "INVALID_REQUEST" with suggestion |
+
+    # ── Hand-authored: order name uniqueness (adcp 3.12 / PR #1217 review) ──
+
+  @T-UC-002-order-name-unique @invariant @order-naming @hand-authored
+  Scenario: Two media buys for the same tenant produce distinct ad server order names
+    Given the tenant is configured for auto-approval
+    And a valid create_media_buy request with:
+    | field      | value                        |
+    | account    | account_id "acc-001"         |
+    | brand      | domain "acme.com"            |
+    | start_time | 2026-04-01T00:00:00Z         |
+    | end_time   | 2026-04-30T23:59:59Z         |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And I remember the ad server order name as "first_order_name"
+    When the Buyer Agent sends a second create_media_buy request with the same parameters
+    Then the response should succeed
+    And the ad server order name should differ from the remembered "first_order_name"
+    # Two creates must never collide on order name — ad servers reject duplicates
+    # Regression: buyer_ref removal left timestamp-only suffix (second-level granularity)
+
+  @T-UC-002-order-name-no-empty-vars @invariant @order-naming @hand-authored
+  Scenario: Order name template resolves all variables — no empty placeholders
+    Given the tenant is configured for auto-approval
+    And the tenant order_name_template is "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
+    And a valid create_media_buy request with:
+    | field      | value                        |
+    | account    | account_id "acc-001"         |
+    | brand      | domain "acme.com"            |
+    | start_time | 2026-04-01T00:00:00Z         |
+    | end_time   | 2026-04-30T23:59:59Z         |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the ad server order name should not contain "  "
+    And the ad server order name should contain the media_buy_id from the response
+    # Regression: {media_buy_id} was missing from naming context → rendered as empty string
+    # Produces "Nike -  - Oct 7-14, 2025" with double-space artifact
+
+  @T-UC-002-order-name-media-buy-id @invariant @order-naming @hand-authored
+  Scenario: Default template includes media_buy_id in the ad server order name
+    Given the tenant is configured for auto-approval
+    And the tenant uses the default order_name_template
+    And a valid create_media_buy request with:
+    | field      | value                        |
+    | account    | account_id "acc-001"         |
+    | brand      | domain "acme.com"            |
+    | start_time | 2026-04-01T00:00:00Z         |
+    | end_time   | 2026-04-30T23:59:59Z         |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the ad server order name should contain the media_buy_id from the response
+    # Default template is "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
+    # media_buy_id must be present in build_order_name_context()
+
+  @T-UC-002-order-name-legacy-buyer-ref @invariant @order-naming @hand-authored
+  Scenario: Tenant with legacy {buyer_ref} template does not produce empty-variable order names
+    Given the tenant is configured for auto-approval
+    And the tenant order_name_template is "{campaign_name|brand_name} - {buyer_ref} - {date_range}"
+    And a valid create_media_buy request with:
+    | field      | value                        |
+    | account    | account_id "acc-001"         |
+    | brand      | domain "acme.com"            |
+    | start_time | 2026-04-01T00:00:00Z         |
+    | end_time   | 2026-04-30T23:59:59Z         |
+    And the request includes 1 package with a valid product_id
+    And the package has a positive budget meeting minimum spend
+    And the account "acc-001" exists and is active
+    And the ad server adapter is available
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the ad server order name should not contain "  "
+    # Regression: existing tenants may still have {buyer_ref} in their template
+    # after adcp 3.12 migration. buyer_ref was removed — template must not produce
+    # empty-variable artifacts. Either migrate the template or fall back gracefully.
+

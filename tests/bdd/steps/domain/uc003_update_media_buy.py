@@ -152,7 +152,6 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
 
     _supported_fields = {
         "media_buy_id",
-        "buyer_ref",
         "paused",
         "start_time",
         "end_time",
@@ -175,8 +174,6 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         )
         if field == "media_buy_id":
             kwargs["media_buy_id"] = value
-        elif field == "buyer_ref":
-            kwargs["buyer_ref"] = value
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
         elif field == "start_time":
@@ -191,10 +188,6 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             # Expand <N character string> placeholders (e.g. "<256 character string>")
             length_match = re.match(r"<(\d+)\s*char(?:acter)?\s*string>", value)
             kwargs["idempotency_key"] = "x" * int(length_match.group(1)) if length_match else value
-
-    # AdCP oneOf constraint: if table sets buyer_ref without media_buy_id, remove default
-    if "buyer_ref" in table_fields and "media_buy_id" not in table_fields:
-        kwargs.pop("media_buy_id", None)
 
 
 @given("the request does NOT include start_time, end_time, or paused fields")
@@ -356,16 +349,8 @@ def given_daily_spend_ok(ctx: dict) -> None:
 
 @given(parsers.parse('the buyer_ref "{buyer_ref}" resolves to the existing media buy'))
 def given_buyer_ref_resolves(ctx: dict, buyer_ref: str) -> None:
-    """Ensure the existing media buy has the specified buyer_ref."""
-    mb = ctx.get("existing_media_buy")
-    assert mb is not None, (
-        f"No existing_media_buy in ctx — step claims buyer_ref '{buyer_ref}' "
-        "resolves to media buy but no media buy exists"
-    )
-    if mb.buyer_ref != buyer_ref:
-        mb.buyer_ref = buyer_ref
-        env = ctx["env"]
-        env._commit_factory_data()
+    """buyer_ref removed in adcp 3.12. Assert media buy exists."""
+    assert ctx.get("existing_media_buy") is not None, "No existing_media_buy in ctx"
 
 
 # ═══════════════════════════════════════════════════════════════════════

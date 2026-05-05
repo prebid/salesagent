@@ -17,6 +17,7 @@ from tests.factories.core import (
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
     CurrencyLimitFactory,
+    GAMInventoryFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
     TenantFactory,
@@ -30,6 +31,7 @@ from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory
 
 ALL_FACTORIES = [
@@ -39,6 +41,7 @@ ALL_FACTORIES = [
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
     CurrencyLimitFactory,
+    GAMInventoryFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
     PrincipalFactory,
@@ -51,6 +54,8 @@ ALL_FACTORIES = [
     CreativeFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
+    UserFactory,
+    TenantAuthConfigFactory,
 ]
 
 __all__ = [
@@ -66,6 +71,7 @@ __all__ = [
     "FormatIdFactory",
     "InventoryProfileFactory",
     "CurrencyLimitFactory",
+    "GAMInventoryFactory",
     "FormatPerformanceMetricsFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
@@ -75,6 +81,8 @@ __all__ = [
     "PropertyTagFactory",
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
+    "TenantAuthConfigFactory",
     "TenantFactory",
     "set_adapter_test_behavior",
+    "UserFactory",
 ]

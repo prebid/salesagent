@@ -71,7 +71,7 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "3.10.0"
+version = "3.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
@@ -81,9 +81,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/9d/eb1890c05451b0d27e0b55213c77ad4194455a101fa6c0bff86f05f0f255/adcp-3.10.0.tar.gz", hash = "sha256:86ad404b4c173a87a958acce22866830f298677f10387cc1b001640615141daf", size = 430568, upload-time = "2026-03-17T00:45:25.962Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/77/27fea571a7022cd2acf922ca62d3f5d3e2e51a2cdd8e3c8dd0396b9b9db4/adcp-3.12.0.tar.gz", hash = "sha256:55b340ba67cde6bdc164ddc72c84454cb7bbe8ffbc2f1e9333726bfd87200975", size = 501580, upload-time = "2026-04-16T02:43:43.763Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/61/aaeee441dc78404ff763cd9b8d22c1d4066981c77e8aef23135d3a3c4be2/adcp-3.10.0-py3-none-any.whl", hash = "sha256:19dd7f40979cf935ecf79b619fe01174057b284ea1ea63d1529173542baca8a7", size = 574989, upload-time = "2026-03-17T00:45:24.807Z" },
+    { url = "https://files.pythonhosted.org/packages/80/f8/e33ddb3b7094a37f038f7010d88ed61c4306bacd97d32b14fb35fd188049/adcp-3.12.0-py3-none-any.whl", hash = "sha256:854d4dc8afe39cc2fadba7c03fe6fd966d5838ea6d94dc47e148079e7f03a41a", size = 635027, upload-time = "2026-04-16T02:43:41.848Z" },
 ]
 
 [[package]]
@@ -187,6 +187,7 @@ dev = [
     { name = "ruff" },
     { name = "semgrep" },
     { name = "types-psycopg2" },
+    { name = "types-python-dateutil" },
     { name = "types-pytz" },
     { name = "types-requests" },
     { name = "types-waitress" },
@@ -197,7 +198,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.3.19" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", specifier = ">=3.10.0" },
+    { name = "adcp", specifier = ">=3.12.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.13.5" },
@@ -284,6 +285,7 @@ dev = [
     { name = "ruff", specifier = ">=0.8.0" },
     { name = "semgrep", specifier = ">=1.50.0" },
     { name = "types-psycopg2", specifier = ">=2.9.21.20251012" },
+    { name = "types-python-dateutil", specifier = ">=2.9.0.20260408" },
     { name = "types-pytz", specifier = ">=2025.2.0.20250809" },
     { name = "types-requests", specifier = ">=2.32.4.20250913" },
     { name = "types-waitress", specifier = ">=3.0.1.20250801" },
@@ -539,15 +541,14 @@ wheels = [
 
 [[package]]
 name = "authlib"
-version = "1.7.0"
+version = "1.6.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
-    { name = "joserfc" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/82/4d0603f30c1b4629b1f091bb266b0d7986434891d6940a8c87f8098db24e/authlib-1.7.0.tar.gz", hash = "sha256:b3e326c9aa9cc3ea95fe7d89fd880722d3608da4d00e8a27e061e64b48d801d5", size = 175890, upload-time = "2026-04-18T11:00:28.559Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/10/b325d58ffe86815b399334a101e63bc6fa4e1953921cb23703b48a0a0220/authlib-1.6.11.tar.gz", hash = "sha256:64db35b9b01aeccb4715a6c9a6613a06f2bd7be2ab9d2eb89edd1dfc7580a38f", size = 165359, upload-time = "2026-04-16T07:22:50.279Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/48/c954218b2a250e23f178f10167c4173fecb5a75d2c206f0a67ba58006c26/authlib-1.7.0-py2.py3-none-any.whl", hash = "sha256:e36817afb02f6f0b6bf55f150782499ddd6ddf44b402bb055d3263cc65ac9ae0", size = 258779, upload-time = "2026-04-18T11:00:26.64Z" },
+    { url = "https://files.pythonhosted.org/packages/57/2f/55fca558f925a51db046e5b929deb317ddb05afed74b22d89f4eca578980/authlib-1.6.11-py2.py3-none-any.whl", hash = "sha256:c8687a9a26451c51a34a06fa17bb97cb15bba46a6a626755e2d7f50da8bff3e3", size = 244469, upload-time = "2026-04-16T07:22:48.413Z" },
 ]
 
 [[package]]
@@ -2088,18 +2089,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/00/2a/e867e8531cf3e36b41201936b7fa7ba7b5702dbef42922193f05c8976cd6/jmespath-1.0.1.tar.gz", hash = "sha256:90261b206d6defd58fdd5e85f478bf633a2901798906be2ad389150c5c60edbe", size = 25843, upload-time = "2022-06-17T18:00:12.224Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/b4/b9b800c45527aadd64d5b442f9b932b00648617eb5d63d2c7a6587b7cafc/jmespath-1.0.1-py3-none-any.whl", hash = "sha256:02e2e4cc71b5bcab88332eebf907519190dd9e6e82107fa7f83b1003a6252980", size = 20256, upload-time = "2022-06-17T18:00:10.251Z" },
-]
-
-[[package]]
-name = "joserfc"
-version = "1.6.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cryptography" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/de/c6/de8fdbdfa75c8ca04fead38a82d573df8a82906e984c349d58665f459558/joserfc-1.6.4.tar.gz", hash = "sha256:34ce5f499bfcc5e9ad4cc75077f9278ab3227b71da9aaf28f9ab705f8a560d3c", size = 231866, upload-time = "2026-04-13T13:15:40.632Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/f7/210b27752e972edb36d239315b08d3eb6b14824cc4a590da2337d195260b/joserfc-1.6.4-py3-none-any.whl", hash = "sha256:3e4a22b509b41908989237a045e25c8308d5fd47ab96bdae2dd8057c6451003a", size = 70464, upload-time = "2026-04-13T13:15:39.259Z" },
 ]
 
 [[package]]
@@ -4528,6 +4517,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9b/b3/2d09eaf35a084cffd329c584970a3fa07101ca465c13cad1576d7c392587/types_psycopg2-2.9.21.20251012.tar.gz", hash = "sha256:4cdafd38927da0cfde49804f39ab85afd9c6e9c492800e42f1f0c1a1b0312935", size = 26710, upload-time = "2025-10-12T02:55:39.5Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/0c/05feaf8cb51159f2c0af04b871dab7e98a2f83a3622f5f216331d2dd924c/types_psycopg2-2.9.21.20251012-py3-none-any.whl", hash = "sha256:712bad5c423fe979e357edbf40a07ca40ef775d74043de72bd4544ca328cc57e", size = 24883, upload-time = "2025-10-12T02:55:38.439Z" },
+]
+
+[[package]]
+name = "types-python-dateutil"
+version = "2.9.0.20260408"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/f3/2427775f80cd5e19a0a71ba8e5ab7645a01a852f43a5fd0ffc24f66338e0/types_python_dateutil-2.9.0.20260408.tar.gz", hash = "sha256:8b056ec01568674235f64ecbcef928972a5fac412f5aab09c516dfa2acfbb582", size = 16981, upload-time = "2026-04-08T04:28:10.995Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/c6/eeba37bfee282a6a97f889faef9352d6172c6a5088eb9a4daf570d9d748d/types_python_dateutil-2.9.0.20260408-py3-none-any.whl", hash = "sha256:473139d514a71c9d1fbd8bb328974bedcb1cc3dba57aad04ffa4157f483c216f", size = 18437, upload-time = "2026-04-08T04:28:10.095Z" },
 ]
 
 [[package]]

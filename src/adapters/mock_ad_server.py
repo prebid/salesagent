@@ -1,6 +1,9 @@
+import logging
 import random
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
@@ -276,7 +279,7 @@ class MockAdServer(AdServerAdapter):
                     if isinstance(result, dict):
                         return result
         except Exception:
-            pass
+            logger.debug("Failed to load test behavior from DB", exc_info=True)
         return {}
 
     def _validate_targeting(self, targeting_overlay):
@@ -517,7 +520,6 @@ class MockAdServer(AdServerAdapter):
                 return CreateMediaBuySuccess(
                     media_buy_id="pending",  # Placeholder for pending manual approval
                     creative_deadline=None,
-                    buyer_ref=request.buyer_ref or "unknown",
                     packages=[],  # No packages yet - operation not complete
                 )
 
@@ -637,7 +639,6 @@ class MockAdServer(AdServerAdapter):
         # The workflow_step_id (from step['step_id']) will track this pending operation
         # Client can poll the step or wait for webhook notification when complete
         return CreateMediaBuySuccess(
-            buyer_ref=request.buyer_ref or "unknown",
             media_buy_id="pending",  # Placeholder for async processing in progress
             creative_deadline=None,
             packages=[],  # No packages yet - operation not complete
@@ -711,7 +712,7 @@ class MockAdServer(AdServerAdapter):
         from src.core.database.models import Tenant
         from src.core.utils.naming import apply_naming_template, build_order_name_context
 
-        order_name_template = "{campaign_name|brand_name} - {date_range}"  # Default
+        order_name_template = "{campaign_name|brand_name} - {media_buy_id} - {date_range}"  # Default
         tenant_gemini_key = None
         try:
             with get_db_session() as db_session:
@@ -723,10 +724,12 @@ class MockAdServer(AdServerAdapter):
                         tenant_gemini_key = tenant_obj.gemini_api_key
         except Exception:
             # Database not available (e.g., in unit tests) - use default template
-            pass
+            logger.debug("Could not load tenant config from DB, using defaults", exc_info=True)
 
         # Build context and apply template
-        context = build_order_name_context(request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key)
+        context = build_order_name_context(
+            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=media_buy_id
+        )
         print(
             f"[NAMING DEBUG] template={repr(order_name_template)}, has_promoted_offering={('promoted_offering' in context)}"
         )
@@ -837,7 +840,6 @@ class MockAdServer(AdServerAdapter):
                 "id": media_buy_id,
                 "name": order_name,
                 "po_number": request.po_number,
-                "buyer_ref": request.buyer_ref,
                 "packages": packages,
                 "total_budget": total_budget,
                 "start_time": start_time,
@@ -1084,9 +1086,9 @@ class MockAdServer(AdServerAdapter):
         else:
             status = "delivering"
 
-        # Get buyer_ref from stored media buy data
-        buyer_ref = buy.get("buyer_ref", buy.get("po_number", "unknown"))
-        return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, buyer_ref=buyer_ref, status=status)
+        # Get buyer_ref from stored media buy data (legacy, may not exist for new buys)
+
+        return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
 
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
@@ -1339,7 +1341,6 @@ class MockAdServer(AdServerAdapter):
     def update_media_buy(
         self,
         media_buy_id: str,
-        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,
@@ -1386,7 +1387,6 @@ class MockAdServer(AdServerAdapter):
 
         return UpdateMediaBuySuccess(
             media_buy_id=media_buy_id,
-            buyer_ref=buyer_ref,
             affected_packages=[],
             implementation_date=today,
         )
@@ -1452,7 +1452,7 @@ class MockAdServer(AdServerAdapter):
                         # Handle format selection
                         formats = request.form.getlist("formats")
                         if formats:
-                            product_obj.formats = formats
+                            product_obj.format_ids = formats
 
                         # Validate the configuration
                         validation_errors = self.validate_product_config(new_config)
@@ -1468,7 +1468,7 @@ class MockAdServer(AdServerAdapter):
                                 product=product,
                                 config=config,
                                 formats=available_formats,
-                                selected_formats=product_obj.formats or [],
+                                selected_formats=product_obj.format_ids or [],
                                 error=validation_errors[0],
                             )
 
@@ -1487,7 +1487,7 @@ class MockAdServer(AdServerAdapter):
                             product=product,
                             config=new_config,
                             formats=available_formats,
-                            selected_formats=product_obj.formats or [],
+                            selected_formats=product_obj.format_ids or [],
                             success=True,
                         )
 
@@ -1502,7 +1502,7 @@ class MockAdServer(AdServerAdapter):
                         product=product,
                         config=config,
                         formats=available_formats,
-                        selected_formats=product_obj.formats or [],
+                        selected_formats=product_obj.format_ids or [],
                     )
 
             return wrapped_view()

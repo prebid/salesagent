@@ -67,14 +67,12 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
         product_id = product.product_id if product else "guaranteed_display"
         pricing_option_id = _pricing_option_id(pricing_option) if pricing_option else "cpm_usd_fixed"
         ctx["request_kwargs"] = {
-            "buyer_ref": f"test-buyer-{uuid.uuid4().hex[:8]}",
             "brand": {"domain": "testbrand.com"},
             "start_time": _future(1).isoformat(),
             "end_time": _future(30).isoformat(),
             "packages": [
                 {
                     "product_id": product_id,
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": pricing_option_id,
                 }
@@ -350,9 +348,7 @@ def given_valid_create_request_with_table(ctx: dict, datatable: list[list[str]])
     clock = ctx["env"].clock
     for row in datatable:
         field, value = row[0].strip(), row[1].strip()
-        if field == "buyer_ref":
-            kwargs["buyer_ref"] = value
-        elif field == "brand":
+        if field == "brand":
             # Parse: domain "acme.com"
             if value.startswith("domain "):
                 domain = value.split('"')[1]
@@ -467,13 +463,11 @@ def given_request_2_packages(ctx: dict) -> None:
     kwargs["packages"] = [
         {
             "product_id": ctx["default_product"].product_id,
-            "buyer_ref": "pkg-1",
             "budget": 5000.0,
             "pricing_option_id": _pricing_option_id(ctx["default_pricing_option"]),
         },
         {
             "product_id": product2.product_id,
-            "buyer_ref": "pkg-2",
             "budget": 3000.0,
             "pricing_option_id": _pricing_option_id(po2),
         },
@@ -584,13 +578,11 @@ def given_request_2_packages_simple(ctx: dict) -> None:
     kwargs["packages"] = [
         {
             "product_id": ctx["default_product"].product_id,
-            "buyer_ref": "pkg-1",
             "budget": 5000.0,
             "pricing_option_id": _pricing_option_id(ctx["default_pricing_option"]),
         },
         {
             "product_id": product2.product_id,
-            "buyer_ref": "pkg-2",
             "budget": 3000.0,
             "pricing_option_id": _pricing_option_id(po2),
         },
@@ -1132,7 +1124,6 @@ def _setup_multi_package_request(ctx: dict, currencies: list[str]) -> None:
         packages.append(
             {
                 "product_id": product.product_id,
-                "buyer_ref": f"pkg-{i + 1}",
                 "budget": 5000.0,
                 "pricing_option_id": _pricing_option_id(po),
             }
@@ -1261,7 +1252,7 @@ def _setup_multi_product_request(ctx: dict, product_ids: list[str]) -> None:
     kwargs = _ensure_request_defaults(ctx)
     packages = []
 
-    for i, pid in enumerate(product_ids):
+    for _i, pid in enumerate(product_ids):
         default_product = ctx.get("default_product")
         if default_product is not None and pid == default_product.product_id:
             product = default_product
@@ -1289,7 +1280,6 @@ def _setup_multi_product_request(ctx: dict, product_ids: list[str]) -> None:
         packages.append(
             {
                 "product_id": product.product_id,
-                "buyer_ref": f"pkg-{i + 1}",
                 "budget": 5000.0,
                 "pricing_option_id": _pricing_option_id(po),
             }
@@ -2694,7 +2684,6 @@ def given_existing_media_buy(ctx: dict, state: str) -> None:
     - In-process: factory with deterministic IDs (per-test DB, no collision)
     - E2E: HTTP POST to Docker → server-generated UUID (shared DB, no collision)
     """
-    import uuid
 
     env = ctx["env"]
     product = ctx.get("default_product")
@@ -2707,7 +2696,6 @@ def given_existing_media_buy(ctx: dict, state: str) -> None:
         principal=ctx["principal"],
         product=product,
         status=state,
-        buyer_ref=f"ref-{uuid.uuid4().hex[:8]}",
         push_notification_config=ctx.get("push_notification_config"),
     )
     ctx["existing_media_buy"] = media_buy
@@ -2845,7 +2833,6 @@ def given_catalog_boundary(ctx: dict, config: str) -> None:
             import copy
 
             pkg2 = copy.deepcopy(kwargs["packages"][0])
-            pkg2["buyer_ref"] = "pkg-2"
             kwargs["packages"].append(pkg2)
         kwargs["packages"][1]["catalogs"] = [_make_catalog("product")]
 

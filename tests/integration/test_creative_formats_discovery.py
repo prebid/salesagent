@@ -27,12 +27,10 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 def _make_format(format_id: str, name: str) -> Format:
     """Build a minimal Format for testing."""
-    from adcp.types.generated_poc.enums.format_category import FormatCategory
-
     return Format(
         format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
         name=name,
-        type=FormatCategory.display,
+        type="display",
         is_standard=True,
     )
 

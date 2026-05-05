@@ -25,34 +25,32 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
 # FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto).
+# Line numbers reflect FIXME comment restored in media_buy_update.py (PR04 review item 1).
 KNOWN_VIOLATIONS = {
-    # FIXME: _update_media_buy_impl: 22 violations (workflow step response_data)
-    ("media_buy_update.py", 231),
-    ("media_buy_update.py", 286),
-    ("media_buy_update.py", 287),
-    ("media_buy_update.py", 341),
-    ("media_buy_update.py", 398),
-    ("media_buy_update.py", 422),
-    ("media_buy_update.py", 456),
-    ("media_buy_update.py", 484),
-    ("media_buy_update.py", 501),
-    ("media_buy_update.py", 556),
-    ("media_buy_update.py", 587),
-    ("media_buy_update.py", 607),
-    ("media_buy_update.py", 633),
-    ("media_buy_update.py", 813),
-    ("media_buy_update.py", 841),
-    ("media_buy_update.py", 870),
-    ("media_buy_update.py", 1042),
-    ("media_buy_update.py", 1060),
-    ("media_buy_update.py", 1111),
-    ("media_buy_update.py", 1205),
-    ("media_buy_update.py", 1237),
-    ("media_buy_update.py", 1299),
-    # _get_products_impl: 1 violation (logging)
-    ("products.py", 644),
-    # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 153),
+    ("creatives/listing.py", 143),
+    ("media_buy_update.py", 220),
+    ("media_buy_update.py", 272),
+    ("media_buy_update.py", 273),
+    ("media_buy_update.py", 327),
+    ("media_buy_update.py", 384),
+    ("media_buy_update.py", 407),
+    ("media_buy_update.py", 438),
+    ("media_buy_update.py", 465),
+    ("media_buy_update.py", 482),
+    ("media_buy_update.py", 536),
+    ("media_buy_update.py", 566),
+    ("media_buy_update.py", 586),
+    ("media_buy_update.py", 612),
+    ("media_buy_update.py", 791),
+    ("media_buy_update.py", 819),
+    ("media_buy_update.py", 847),
+    ("media_buy_update.py", 1018),
+    ("media_buy_update.py", 1036),
+    ("media_buy_update.py", 1086),
+    ("media_buy_update.py", 1179),
+    ("media_buy_update.py", 1211),
+    ("media_buy_update.py", 1271),
+    ("products.py", 624),
 }
 
 

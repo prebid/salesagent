@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
     from sqlalchemy.orm import Session
 
 
@@ -18,5 +19,6 @@ def db_session(ctx: dict[str, Any]) -> Generator[Session, None, None]:
         yield env._session
         return
     from src.core.database.database_session import get_db_session
+
     with get_db_session() as session:
         yield session

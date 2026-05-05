@@ -164,7 +164,6 @@ class TestA2ASpecCompliance:
         """Test create_media_buy returns only spec-defined fields."""
         ctx = {"user_id": "1234567890"}
         response = CreateMediaBuySuccess(
-            buyer_ref="test-123",
             media_buy_id="mb-456",
             packages=[],  # Required field per AdCP spec
             context=ctx,
@@ -172,7 +171,6 @@ class TestA2ASpecCompliance:
 
         # Check response can be dumped (has all required fields)
         response_dict = response.model_dump()
-        assert "buyer_ref" in response_dict
         assert "media_buy_id" in response_dict
         assert "packages" in response_dict
 
@@ -187,13 +185,11 @@ class TestA2ASpecCompliance:
         """Test update_media_buy returns only spec-defined fields."""
         ctx = {"user_id": "1234567890"}
         response = UpdateMediaBuySuccess(
-            buyer_ref="test-123",
             media_buy_id="mb-456",
             context=ctx,
         )
 
         response_dict = response.model_dump()
-        assert "buyer_ref" in response_dict
         assert "media_buy_id" in response_dict
         assert str(response) == "Media buy mb-456 updated successfully."
 

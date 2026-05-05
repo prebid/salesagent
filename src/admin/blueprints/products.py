@@ -129,7 +129,6 @@ def get_creative_formats(
     is_responsive: bool | None = None,
     asset_types: list[str] | None = None,
     name_search: str | None = None,
-    type_filter: str | None = None,
 ):
     """Get all available creative formats for the product form.
 
@@ -145,7 +144,6 @@ def get_creative_formats(
         is_responsive: Filter for responsive formats
         asset_types: Filter by asset types
         name_search: Search by name
-        type_filter: Filter by format type (display, video, audio)
 
     Returns:
         List of format dictionaries for frontend
@@ -163,7 +161,6 @@ def get_creative_formats(
             is_responsive=is_responsive,
             asset_types=asset_types,
             name_search=name_search,
-            type_filter=type_filter,
         )
     except (asyncio.CancelledError, TimeoutError, ADCPTimeoutError) as e:
         logger.warning(f"Timeout fetching formats from creative agent registry: {e}")
@@ -198,8 +195,8 @@ def get_creative_formats(
 
         formats_list.append(format_dict)
 
-    # Sort by type, then name
-    formats_list.sort(key=lambda x: (x["type"], x["name"]))
+    # Sort by name (type field was removed from Format in adcp 3.12)
+    formats_list.sort(key=lambda x: x["name"])
 
     logger.info(f"get_creative_formats: Returning {len(formats_list)} formatted formats")
 
@@ -1235,7 +1232,8 @@ def add_product(tenant_id):
                         try:
                             product_kwargs["variant_ttl_days"] = int(variant_ttl_days)
                         except ValueError:
-                            pass  # Leave as None if invalid
+                            flash(f"Invalid variant TTL days: '{variant_ttl_days}' is not a number", "error")
+                            return _render_add_product_form(tenant_id, form_data=form_data)
 
                 # Create product with correct fields matching the Product model
                 product = Product(**product_kwargs)
@@ -2183,7 +2181,7 @@ def delete_product(tenant_id, product_id):
         try:
             db_session.rollback()
         except Exception:
-            pass
+            logger.debug("Rollback failed during error handling", exc_info=True)
 
         # More specific error handling
         error_message = str(e)

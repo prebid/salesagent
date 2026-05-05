@@ -31,7 +31,6 @@ class _MediaBuyData:
     """Plain data extracted from a MediaBuy ORM row."""
 
     media_buy_id: str
-    buyer_ref: str | None
     currency: str | None
     budget: Decimal | None
     start_date: date | None
@@ -60,7 +59,7 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthRequiredError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -92,9 +91,7 @@ def _get_media_buys_impl(
         GetMediaBuysResponse with matching media buys
     """
     if identity is None:
-        raise AdCPAuthRequiredError(
-            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
-        )
+        raise AdCPAuthenticationError("Identity is required")
 
     if req.account is not None or req.account_id is not None:
         raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
@@ -107,7 +104,7 @@ def _get_media_buys_impl(
             errors=[{"code": "principal_id_missing", "message": "Principal ID not found in context"}],
         )
 
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
+    principal = get_principal_object(principal_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
@@ -143,7 +140,6 @@ def _get_media_buys_impl(
             principal,
             dry_run=testing_ctx.dry_run if testing_ctx else False,
             testing_context=testing_ctx,
-            tenant=tenant,
         )
         if adapter.capabilities.supports_realtime_reporting:
             # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
@@ -183,7 +179,6 @@ def _get_media_buys_impl(
             response_packages.append(
                 GetMediaBuysPackage(
                     package_id=pkg_id,
-                    buyer_ref=pkg_config.get("buyer_ref"),
                     budget=float(pkg.budget) if pkg.budget is not None else None,
                     bid_price=float(pkg.bid_price) if pkg.bid_price is not None else None,
                     product_id=pkg_config.get("product_id"),
@@ -202,7 +197,6 @@ def _get_media_buys_impl(
         response_media_buys.append(
             GetMediaBuysMediaBuy(
                 media_buy_id=buy.media_buy_id,
-                buyer_ref=buy.buyer_ref,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
                 currency=buy.currency or "USD",
@@ -221,7 +215,6 @@ def _get_media_buys_impl(
 
 async def get_media_buys(
     media_buy_ids: list[str] | None = None,
-    buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
     account: dict | None = None,
@@ -234,7 +227,6 @@ async def get_media_buys(
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
-        buyer_refs: Array of buyer reference IDs to retrieve (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
         account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
@@ -247,7 +239,6 @@ async def get_media_buys(
     try:
         req = GetMediaBuysRequest(
             media_buy_ids=media_buy_ids,
-            buyer_refs=buyer_refs,
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             account=account,
             context=cast(ContextObject | None, context),
@@ -262,7 +253,6 @@ async def get_media_buys(
 
 def get_media_buys_raw(
     media_buy_ids: list[str] | None = None,
-    buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
     account: dict | None = None,
@@ -274,7 +264,6 @@ def get_media_buys_raw(
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
-        buyer_refs: Array of buyer reference IDs to retrieve (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
         account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
@@ -292,7 +281,6 @@ def get_media_buys_raw(
 
     req = GetMediaBuysRequest(
         media_buy_ids=media_buy_ids,
-        buyer_refs=buyer_refs,
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
         account=account,
         context=cast(ContextObject | None, context),
@@ -311,22 +299,16 @@ def _fetch_target_media_buys(
 ) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters."""
     assert uow.media_buys is not None
-    # Per AdCP spec: the default status filter (active-only) applies only when
-    # media_buy_ids AND buyer_refs are both omitted. When the caller specifies
-    # explicit IDs or refs, return all matching buys regardless of status.
-    has_explicit_ids = bool(req.media_buy_ids or req.buyer_refs)
-    filter_statuses = _resolve_status_filter(req.status_filter, skip_default=has_explicit_ids)
+    filter_statuses = _resolve_status_filter(req.status_filter)
 
     buys = uow.media_buys.get_by_principal(
         principal_id,
         media_buy_ids=req.media_buy_ids,
-        buyer_refs=req.buyer_refs,
     )
 
     return [
         _MediaBuyData(
             media_buy_id=buy.media_buy_id,
-            buyer_ref=buy.buyer_ref,
             currency=buy.currency,
             budget=buy.budget,
             start_date=cast(date, buy.start_date),
@@ -338,22 +320,16 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
         )
         for buy in buys
-        if filter_statuses is None or _compute_status(buy, today) in filter_statuses
+        if _compute_status(buy, today) in filter_statuses
     ]
 
 
 def _resolve_status_filter(
     status_filter: MediaBuyStatus | Any | None,
-    *,
-    skip_default: bool = False,
-) -> set[MediaBuyStatus] | None:
-    """Resolve status_filter request field to a set of MediaBuyStatus values.
-
-    Returns None when no filtering should be applied (explicit IDs with no filter).
-    """
+) -> set[MediaBuyStatus]:
+    """Resolve status_filter request field to a set of MediaBuyStatus values."""
     if status_filter is None:
-        if skip_default:
-            return None  # No filtering — return all statuses
+        # Default: active only
         return {MediaBuyStatus.active}
 
     if isinstance(status_filter, RootModel):

@@ -98,7 +98,7 @@ class Tenant(Base, JSONValidatorMixin):
 
     # Naming templates (business rules - shared across all adapters)
     order_name_template: Mapped[str | None] = mapped_column(
-        String(500), nullable=True, server_default="{campaign_name|brand_name} - {buyer_ref} - {date_range}"
+        String(500), nullable=True, server_default="{campaign_name|brand_name} - {media_buy_id} - {date_range}"
     )
     line_item_name_template: Mapped[str | None] = mapped_column(
         String(500), nullable=True, server_default="{order_name} - {product_name}"
@@ -174,9 +174,10 @@ class Tenant(Base, JSONValidatorMixin):
 
         try:
             return decrypt_api_key(self._gemini_api_key)
-        except ValueError:
-            logger.warning(f"Failed to decrypt Gemini API key for tenant {self.tenant_id}")
-            return None
+        except ValueError as exc:
+            from src.core.exceptions import AdCPConfigurationError
+
+            raise AdCPConfigurationError(f"Failed to decrypt Gemini API key for tenant {self.tenant_id}") from exc
 
     @gemini_api_key.setter
     def gemini_api_key(self, value: str | None) -> None:
@@ -638,7 +639,12 @@ class TenantAuthConfig(Base):
             return None
         from src.core.utils.encryption import decrypt_api_key
 
-        return decrypt_api_key(self.oidc_client_secret_encrypted)
+        try:
+            return decrypt_api_key(self.oidc_client_secret_encrypted)
+        except ValueError as exc:
+            from src.core.exceptions import AdCPConfigurationError
+
+            raise AdCPConfigurationError(f"Failed to decrypt OIDC client secret for tenant {self.tenant_id}") from exc
 
     @oidc_client_secret.setter
     def oidc_client_secret(self, value: str | None) -> None:
@@ -895,7 +901,6 @@ class MediaBuy(Base):
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
     principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
-    buyer_ref: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     order_name: Mapped[str] = mapped_column(String(255), nullable=False)
     advertiser_name: Mapped[str] = mapped_column(String(255), nullable=False)
     campaign_objective: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -917,6 +922,7 @@ class MediaBuy(Base):
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
@@ -953,16 +959,18 @@ class MediaBuy(Base):
             ["accounts.tenant_id", "accounts.account_id"],
             ondelete="SET NULL",
         ),
-        UniqueConstraint(
-            "tenant_id",
-            "principal_id",
-            "buyer_ref",
-            name="uq_media_buys_buyer_ref",
-        ),
         Index("idx_media_buys_tenant", "tenant_id"),
         Index("idx_media_buys_status", "status"),
         Index("idx_media_buys_strategy", "strategy_id"),
         Index("idx_media_buys_account", "account_id"),
+        Index(
+            "idx_media_buys_idempotency_key",
+            "tenant_id",
+            "principal_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
 
@@ -1187,9 +1195,12 @@ class AdapterConfig(Base):
 
         try:
             return decrypt_api_key(self._gam_service_account_json)
-        except ValueError:
-            logger.warning(f"Failed to decrypt GAM service account JSON for tenant {self.tenant_id}")
-            return None
+        except ValueError as exc:
+            from src.core.exceptions import AdCPConfigurationError
+
+            raise AdCPConfigurationError(
+                f"Failed to decrypt GAM service account JSON for tenant {self.tenant_id}"
+            ) from exc
 
     @gam_service_account_json.setter
     def gam_service_account_json(self, value: str | None) -> None:
@@ -1304,6 +1315,7 @@ class GAMInventory(Base):
         Index("idx_gam_inventory_tenant", "tenant_id"),
         Index("idx_gam_inventory_type", "inventory_type"),
         Index("idx_gam_inventory_status", "status"),
+        Index("idx_gam_inventory_tenant_type_status", "tenant_id", "inventory_type", "status"),
     )
 
 

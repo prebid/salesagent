@@ -70,7 +70,7 @@ def resolve_identity_from_context(
     try:
         headers = get_http_headers(include_all=True)
     except Exception:
-        pass
+        logger.debug("get_http_headers() unavailable, trying fallback", exc_info=True)
 
     # Fallback to context.meta if available
     if not headers and ctx is not None:
@@ -93,7 +93,7 @@ def resolve_identity_from_context(
         if ctx is not None:
             testing_context = TestContext.from_context(ctx)
     except Exception:
-        pass
+        logger.debug("Could not extract testing context", exc_info=True)
 
     return resolve_identity(
         headers=headers,

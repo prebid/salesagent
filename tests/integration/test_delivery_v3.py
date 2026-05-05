@@ -189,7 +189,6 @@ def _create_media_buy(
     media_buy_id: str,
     tenant_id: str = "test_tenant",
     principal_id: str = "test_principal",
-    buyer_ref: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
     budget: Decimal = Decimal("10000.00"),
@@ -207,14 +206,12 @@ def _create_media_buy(
             packages[0]["pricing_option_id"] = str(pricing_option_id)
         raw_request = {
             "packages": packages,
-            "buyer_ref": buyer_ref,
         }
 
     buy = MediaBuy(
         media_buy_id=media_buy_id,
         tenant_id=tenant_id,
         principal_id=principal_id,
-        buyer_ref=buyer_ref,
         order_name=f"Order {media_buy_id}",
         advertiser_name="Test Advertiser",
         budget=budget,
@@ -261,12 +258,10 @@ class TestDeliverySingleBuyIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_int_single",
-                buyer_ref="buyer_1",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
                 raw_request={
                     "packages": [{"package_id": "pkg_a", "product_id": "prod_display"}],
-                    "buyer_ref": "buyer_1",
                 },
             )
             session.commit()
@@ -307,7 +302,6 @@ class TestDeliverySingleBuyIntegration:
         assert len(response.media_buy_deliveries) == 1
         delivery = response.media_buy_deliveries[0]
         assert delivery.media_buy_id == "mb_int_single"
-        assert delivery.buyer_ref == "buyer_1"
 
         # totals
         assert delivery.totals.impressions == 8000
@@ -322,61 +316,6 @@ class TestDeliverySingleBuyIntegration:
 
         # no errors
         assert response.errors is None
-
-
-@pytest.mark.requires_db
-class TestDeliveryIdentificationModesIntegration:
-    """Integration: media_buy_ids vs buyer_refs with real DB."""
-
-    def test_media_buy_ids_precedence_over_buyer_refs(self, integration_db):
-        """UC-004-MAIN-05: media_buy_ids takes precedence when both provided.
-
-        Covers: UC-004-MAIN-05
-        Spec: UNSPECIFIED. With real DB, verifies that the query uses media_buy_ids
-        and ignores buyer_refs.
-        """
-        with get_db_session() as session:
-            _setup_base_state(session)
-
-            _create_media_buy(
-                session,
-                media_buy_id="mb_priority",
-                buyer_ref="buyer_should_ignore",
-                start_date=date(2025, 1, 1),
-                end_date=date(2025, 12, 31),
-            )
-            # Create a second buy reachable only by buyer_ref
-            _create_media_buy(
-                session,
-                media_buy_id="mb_other",
-                buyer_ref="buyer_alt",
-                start_date=date(2025, 1, 1),
-                end_date=date(2025, 12, 31),
-            )
-            session.commit()
-
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_priority",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_mb_priority", "impressions": 100, "spend": 10.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_priority"],
-            buyer_refs=["buyer_alt"],  # should be ignored
-            start_date="2025-01-01",
-            end_date="2025-06-30",
-        )
-        identity = _make_identity()
-
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        # Only the buy matching media_buy_ids is returned
-        assert len(response.media_buy_deliveries) == 1
-        assert response.media_buy_deliveries[0].media_buy_id == "mb_priority"
 
     def test_media_buy_ids_lookup(self, integration_db):
         """UC-004-MAIN-01: media_buy_ids resolves correctly from real DB.
@@ -437,7 +376,6 @@ class TestDeliveryStatusFilterIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_ready",
-                buyer_ref="ready_ref",
                 start_date=date(2025, 7, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -445,7 +383,6 @@ class TestDeliveryStatusFilterIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_active",
-                buyer_ref="active_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -453,7 +390,6 @@ class TestDeliveryStatusFilterIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_completed",
-                buyer_ref="completed_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 5, 1),
             )
@@ -509,7 +445,6 @@ class TestDeliveryStatusFilterIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_active_only",
-                buyer_ref="active_only_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -517,7 +452,6 @@ class TestDeliveryStatusFilterIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_done",
-                buyer_ref="done_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 5, 1),
             )
@@ -556,7 +490,6 @@ class TestDeliveryStatusFilterIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_only_active",
-                buyer_ref="only_active_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -597,7 +530,6 @@ class TestDeliveryPricingOptionIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_pricing",
-                buyer_ref="pricing_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
                 raw_request={
@@ -608,7 +540,6 @@ class TestDeliveryPricingOptionIntegration:
                             "pricing_option_id": str(po_id),
                         }
                     ],
-                    "buyer_ref": "pricing_ref",
                 },
             )
             session.commit()
@@ -670,7 +601,6 @@ class TestDeliveryOwnershipIntegration:
                 session,
                 media_buy_id="mb_mine",
                 principal_id="test_principal",
-                buyer_ref="mine_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -679,7 +609,6 @@ class TestDeliveryOwnershipIntegration:
                 session,
                 media_buy_id="mb_theirs",
                 principal_id="other_principal",
-                buyer_ref="theirs_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -728,7 +657,6 @@ class TestDeliveryOwnershipIntegration:
                 session,
                 media_buy_id="mb_secret",
                 principal_id="secret_principal",
-                buyer_ref="secret_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -774,7 +702,6 @@ class TestDeliveryOwnershipIntegration:
                 session,
                 media_buy_id="mb_owned",
                 principal_id="test_principal",
-                buyer_ref="owned_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -782,7 +709,6 @@ class TestDeliveryOwnershipIntegration:
                 session,
                 media_buy_id="mb_not_owned",
                 principal_id="other_principal",
-                buyer_ref="not_owned_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -834,12 +760,10 @@ class TestDeliverySerializationIntegration:
             _create_media_buy(
                 session,
                 media_buy_id="mb_serial",
-                buyer_ref="serial_ref",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
                 raw_request={
                     "packages": [{"package_id": "pkg_serial", "product_id": "prod_display"}],
-                    "buyer_ref": "serial_ref",
                 },
             )
             session.commit()

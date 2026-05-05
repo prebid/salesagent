@@ -279,6 +279,149 @@ class TestInventoryDataValidation:
         )
 
 
+@pytest.fixture
+def _bind_factories_for_sizes():
+    """Bind factory-boy sessions so GAMInventoryFactory can persist rows."""
+    from src.core.database.database_session import get_db_session
+    from tests.factories import ALL_FACTORIES
+
+    with get_db_session() as session:
+        saved = {}
+        for f in ALL_FACTORIES:
+            saved[f] = (f._meta.sqlalchemy_session, f._meta.sqlalchemy_session_persistence)
+            f._meta.sqlalchemy_session = session
+            f._meta.sqlalchemy_session_persistence = "commit"
+        yield session
+    for f, (orig_session, orig_persistence) in saved.items():
+        f._meta.sqlalchemy_session = orig_session
+        f._meta.sqlalchemy_session_persistence = orig_persistence
+
+
+@pytest.mark.requires_db
+class TestInventorySizesEndpoint:
+    """Regression tests for GET /api/tenant/<id>/inventory/sizes.
+
+    GAM sync writes sizes as dicts ({"width": 300, "height": 250}) — see
+    src/adapters/gam_inventory_discovery.py:54,70 and
+    src/services/gam_inventory_service.py:134. The endpoint previously only
+    accepted string-format sizes ("300x250") and silently dropped every dict,
+    returning {"sizes": [], "count": 0} for all GAM-synced inventory. This
+    broke size autodetection in add_product_gam.html after PR #1176 rewired
+    extractSizesFromInventory() to use this API.
+    """
+
+    def _seed_inventory(self, tenant, inventory_id: str, sizes_metadata: list) -> None:
+        from tests.factories import GAMInventoryFactory
+
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_id=inventory_id,
+            name=f"Unit {inventory_id}",
+            path=["/test", inventory_id],
+            inventory_metadata={"sizes": sizes_metadata},
+        )
+
+    def _load_tenant(self, tenant_id: str, session):
+        from sqlalchemy import select
+
+        from src.core.database.models import Tenant
+
+        return session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).one()
+
+    def test_endpoint_handles_gam_dict_format_sizes(
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, _bind_factories_for_sizes
+    ):
+        """Dict-format sizes (how GAM sync writes them) must be returned as 'WxH' strings."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        tenant = self._load_tenant(tenant_id, _bind_factories_for_sizes)
+        self._seed_inventory(
+            tenant,
+            "gam_unit_1",
+            [{"width": 300, "height": 250}, {"width": 728, "height": 90}],
+        )
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=gam_unit_1")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["sizes"] == ["300x250", "728x90"], (
+            f"Expected dict-format GAM sizes to be normalized to WxH strings, got: {data}"
+        )
+        assert data["count"] == 2
+
+    def test_endpoint_handles_legacy_string_format_sizes(
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, _bind_factories_for_sizes
+    ):
+        """Pre-existing string-format sizes must continue to work (backward compat)."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        tenant = self._load_tenant(tenant_id, _bind_factories_for_sizes)
+        self._seed_inventory(tenant, "legacy_unit", ["300x250", "970x250"])
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=legacy_unit")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["sizes"] == ["300x250", "970x250"]
+        assert data["count"] == 2
+
+    def test_endpoint_merges_mixed_format_sizes(
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, _bind_factories_for_sizes
+    ):
+        """Dict and string sizes across units deduplicate and sort by (width, height)."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        tenant = self._load_tenant(tenant_id, _bind_factories_for_sizes)
+        self._seed_inventory(tenant, "unit_dict", [{"width": 300, "height": 250}])
+        self._seed_inventory(tenant, "unit_str", ["300x250", "728x90"])
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=unit_dict,unit_str")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["sizes"] == ["300x250", "728x90"], f"Expected dedup + sort by (width, height), got: {data}"
+        assert data["count"] == 2
+
+    def test_endpoint_resolves_placement_to_ad_unit_sizes(
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, _bind_factories_for_sizes
+    ):
+        """Placement IDs must resolve to their constituent ad units' sizes."""
+        from tests.factories import GAMInventoryFactory
+
+        tenant_id = test_tenant_with_data["tenant_id"]
+        tenant = self._load_tenant(tenant_id, _bind_factories_for_sizes)
+
+        # Create ad units that the placement references
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="ad_unit",
+            inventory_id="au_in_placement_1",
+            name="Ad Unit in Placement 1",
+            inventory_metadata={"sizes": [{"width": 300, "height": 250}]},
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="ad_unit",
+            inventory_id="au_in_placement_2",
+            name="Ad Unit in Placement 2",
+            inventory_metadata={"sizes": [{"width": 728, "height": 90}]},
+        )
+
+        # Create a placement that references those ad units
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="placement",
+            inventory_id="placement_1",
+            name="Test Placement",
+            inventory_metadata={"ad_unit_ids": ["au_in_placement_1", "au_in_placement_2"]},
+        )
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=placement_1")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["sizes"] == ["300x250", "728x90"], f"Placement should resolve to its ad units' sizes, got: {data}"
+        assert data["count"] == 2
+
+
 class TestDashboardDataValidation:
     """Validate that dashboard shows correct metrics."""
 
@@ -311,7 +454,6 @@ class TestDashboardDataValidation:
                     tenant_id=tenant_id,
                     media_buy_id=f"test_mb_dashboard_{i}",
                     principal_id=principal.principal_id,
-                    buyer_ref=f"buyer_ref_dashboard_{i}",
                     order_name=f"Test Order Dashboard {i}",
                     advertiser_name="Test Advertiser",
                     budget=Decimal("1000.00"),
@@ -370,7 +512,6 @@ class TestMediaBuysDataValidation:
                 tenant_id=tenant_id,
                 media_buy_id="test_mb_duplicate_check",
                 principal_id="test_principal_mb",
-                buyer_ref="test_ref_duplicate_check",
                 order_name="Test Order Duplicate Check",
                 advertiser_name="Test Advertiser",
                 budget=Decimal("5000.00"),
@@ -379,7 +520,6 @@ class TestMediaBuysDataValidation:
                 end_date=date.today() + timedelta(days=30),
                 status="live",
                 raw_request={
-                    "buyer_ref": "test_ref",
                     "packages": [
                         {"package_id": "pkg1"},
                         {"package_id": "pkg2"},
@@ -432,7 +572,6 @@ class TestMediaBuysDataValidation:
                     tenant_id=tenant_id,
                     media_buy_id=f"test_mb_{status}",
                     principal_id="test_principal_status",
-                    buyer_ref=f"buyer_ref_{status}",
                     order_name=f"Test Order {status}",
                     advertiser_name="Test Advertiser",
                     budget=Decimal("1000.00"),
@@ -440,7 +579,7 @@ class TestMediaBuysDataValidation:
                     start_date=date.today(),
                     end_date=date.today() + timedelta(days=30),
                     status=status,
-                    raw_request={"buyer_ref": f"ref_{status}"},
+                    raw_request={"status_ref": f"ref_{status}"},
                 )
                 db_session.add(media_buy)
             db_session.commit()

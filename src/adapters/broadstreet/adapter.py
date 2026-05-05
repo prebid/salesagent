@@ -17,12 +17,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from src.adapters.base import (
-    AdapterCapabilities,
-    AdServerAdapter,
-    CreativeEngineAdapter,
-    TargetingCapabilities,
-)
+from src.adapters.base import AdapterCapabilities, AdServerAdapter, CreativeEngineAdapter, TargetingCapabilities
 from src.adapters.broadstreet.client import BroadstreetClient
 from src.adapters.broadstreet.config_schema import parse_implementation_config
 from src.adapters.broadstreet.managers import (
@@ -124,41 +119,23 @@ class BroadstreetAdapter(AdServerAdapter):
         elif not self.network_id or not self.api_key:
             raise ValueError("Broadstreet config is missing 'network_id' or 'api_key'")
         else:
-            self.client = BroadstreetClient(
-                access_token=self.api_key,
-                network_id=self.network_id,
-            )
+            self.client = BroadstreetClient(access_token=self.api_key, network_id=self.network_id)
 
         # Initialize managers
         self.campaign_manager = BroadstreetCampaignManager(
-            client=self.client,
-            advertiser_id=self.advertiser_id or "",
-            dry_run=self.dry_run,
-            log_func=self.log,
+            client=self.client, advertiser_id=self.advertiser_id or "", dry_run=self.dry_run, log_func=self.log
         )
         self.placement_manager = BroadstreetPlacementManager(
-            client=self.client,
-            advertiser_id=self.advertiser_id or "",
-            dry_run=self.dry_run,
-            log_func=self.log,
+            client=self.client, advertiser_id=self.advertiser_id or "", dry_run=self.dry_run, log_func=self.log
         )
         self.advertisement_manager = BroadstreetAdvertisementManager(
-            client=self.client,
-            advertiser_id=self.advertiser_id or "",
-            dry_run=self.dry_run,
-            log_func=self.log,
+            client=self.client, advertiser_id=self.advertiser_id or "", dry_run=self.dry_run, log_func=self.log
         )
         self.workflow_manager = BroadstreetWorkflowManager(
-            tenant_id=self.tenant_id,
-            principal=self.principal,
-            audit_logger=self.audit_logger,
-            log_func=self.log,
+            tenant_id=self.tenant_id, principal=self.principal, audit_logger=self.audit_logger, log_func=self.log
         )
         self.inventory_manager = BroadstreetInventoryManager(
-            client=self.client,
-            network_id=self.network_id or "",
-            dry_run=self.dry_run,
-            log_func=self.log,
+            client=self.client, network_id=self.network_id or "", dry_run=self.dry_run, log_func=self.log
         )
 
     def _extract_campaign_id(self, media_buy_id: str) -> str:
@@ -240,9 +217,7 @@ class BroadstreetAdapter(AdServerAdapter):
         for ad_id in advertisement_ids:
             try:
                 self.client.update_advertisement(
-                    advertiser_id=advertiser_id,
-                    advertisement_id=ad_id,
-                    params={"active": active_value},
+                    advertiser_id=advertiser_id, advertisement_id=ad_id, params={"active": active_value}
                 )
                 self.log(f"{action_verb} advertisement {ad_id}")
             except Exception as e:
@@ -362,7 +337,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             message=f"Product {product_id} has no zones configured",
                             details={"product_id": product_id},
                         )
-                    ],
+                    ]
                 )
             all_zone_ids.update(zone_ids)
 
@@ -383,19 +358,11 @@ class BroadstreetAdapter(AdServerAdapter):
             self.log("Manual mode - creating workflow step for human intervention")
 
             workflow_step_id = self.workflow_manager.create_manual_campaign_workflow_step(
-                request=request,
-                packages=packages,
-                start_time=start_time,
-                end_time=end_time,
-                media_buy_id=media_buy_id,
+                request=request, packages=packages, start_time=start_time, end_time=end_time, media_buy_id=media_buy_id
             )
 
             return self._build_create_success(
-                request,
-                media_buy_id,
-                packages,
-                paused=True,
-                workflow_step_id=workflow_step_id,
+                request, media_buy_id, packages, paused=True, workflow_step_id=workflow_step_id
             )
 
         # Build campaign name
@@ -409,9 +376,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
         # Create campaign
         campaign_data = self.campaign_manager.create_campaign(
-            name=campaign_name,
-            start_date=start_time,
-            end_date=end_time,
+            name=campaign_name, start_date=start_time, end_date=end_time
         )
 
         # Update media_buy_id with actual campaign ID
@@ -433,16 +398,10 @@ class BroadstreetAdapter(AdServerAdapter):
         if automation_mode == "confirmation_required":
             self.log("Confirmation required mode - creating activation workflow step")
             workflow_step_id = self.workflow_manager.create_activation_workflow_step(
-                media_buy_id=media_buy_id,
-                packages=packages,
+                media_buy_id=media_buy_id, packages=packages
             )
 
-        response = self._build_create_success(
-            request,
-            media_buy_id,
-            packages,
-            workflow_step_id=workflow_step_id,
-        )
+        response = self._build_create_success(request, media_buy_id, packages, workflow_step_id=workflow_step_id)
 
         # Persist campaign ID so update_media_buy can reconstruct state from DB
         # Core layer (media_buy_create.py) stores this as package_config["platform_line_item_id"]
@@ -452,10 +411,7 @@ class BroadstreetAdapter(AdServerAdapter):
         return response
 
     def add_creative_assets(
-        self,
-        media_buy_id: str,
-        assets: list[dict[str, Any]],
-        today: datetime,
+        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets to a media buy.
 
@@ -503,11 +459,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
         return results
 
-    def associate_creatives(
-        self,
-        line_item_ids: list[str],
-        platform_creative_ids: list[str],
-    ) -> list[dict[str, Any]]:
+    def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:
         """Associate already-uploaded creatives with placements.
 
         In Broadstreet, this creates placements linking ads to zones.
@@ -552,11 +504,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
         return results
 
-    def check_media_buy_status(
-        self,
-        media_buy_id: str,
-        today: datetime,
-    ) -> CheckMediaBuyStatusResponse:
+    def check_media_buy_status(self, media_buy_id: str, today: datetime) -> CheckMediaBuyStatusResponse:
         """Check the status of a media buy.
 
         Args:
@@ -573,25 +521,14 @@ class BroadstreetAdapter(AdServerAdapter):
 
         if self.dry_run:
             self.log(f"Would check status for campaign: {campaign_id}")
-            return CheckMediaBuyStatusResponse(
-                media_buy_id=media_buy_id,
-                buyer_ref=media_buy_id,
-                status="active",
-            )
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="active")
 
         # In production, would query campaign status from Broadstreet
         # For now, return active
-        return CheckMediaBuyStatusResponse(
-            media_buy_id=media_buy_id,
-            buyer_ref=media_buy_id,
-            status="active",
-        )
+        return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="active")
 
     def get_media_buy_delivery(
-        self,
-        media_buy_id: str,
-        date_range: ReportingPeriod,
-        today: datetime,
+        self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Get delivery data for a media buy.
 
@@ -605,10 +542,7 @@ class BroadstreetAdapter(AdServerAdapter):
         Returns:
             Delivery data response
         """
-        self.log(
-            f"Broadstreet.get_media_buy_delivery for '{media_buy_id}'",
-            dry_run_prefix=False,
-        )
+        self.log(f"Broadstreet.get_media_buy_delivery for '{media_buy_id}'", dry_run_prefix=False)
         self.log(f"Date range: {date_range.start} to {date_range.end}", dry_run_prefix=False)
 
         if self.dry_run:
@@ -641,22 +575,13 @@ class BroadstreetAdapter(AdServerAdapter):
         return AdapterGetMediaBuyDeliveryResponse(
             media_buy_id=media_buy_id,
             reporting_period=date_range,
-            totals=DeliveryTotals(
-                impressions=0,
-                spend=0,
-                clicks=0,
-                ctr=0.0,
-                video_completions=0,
-                completion_rate=0.0,
-            ),
+            totals=DeliveryTotals(impressions=0, spend=0, clicks=0, ctr=0.0, video_completions=0, completion_rate=0.0),
             by_package=[],
             currency="USD",
         )
 
     def update_media_buy_performance_index(
-        self,
-        media_buy_id: str,
-        package_performance: list[PackagePerformance],
+        self, media_buy_id: str, package_performance: list[PackagePerformance]
     ) -> bool:
         """Update performance index for packages.
 
@@ -670,21 +595,12 @@ class BroadstreetAdapter(AdServerAdapter):
         Returns:
             True (always succeeds as no-op)
         """
-        self.log(
-            f"Broadstreet.update_media_buy_performance_index for '{media_buy_id}'",
-            dry_run_prefix=False,
-        )
+        self.log(f"Broadstreet.update_media_buy_performance_index for '{media_buy_id}'", dry_run_prefix=False)
         self.log("[yellow]Broadstreet does not support performance index updates[/yellow]")
         return True
 
     def update_media_buy(
-        self,
-        media_buy_id: str,
-        buyer_ref: str,
-        action: str,
-        package_id: str | None,
-        budget: int | None,
-        today: datetime,
+        self, media_buy_id: str, action: str, package_id: str | None, budget: int | None, today: datetime
     ) -> UpdateMediaBuyResponse:
         """Update a media buy with a specific action.
 
@@ -694,7 +610,6 @@ class BroadstreetAdapter(AdServerAdapter):
 
         Args:
             media_buy_id: Media buy (campaign) ID
-            buyer_ref: Buyer reference
             action: Action to perform
             package_id: Package ID (for package-level actions)
             budget: New budget or impressions (for budget/impression updates)
@@ -708,10 +623,7 @@ class BroadstreetAdapter(AdServerAdapter):
         from src.core.database.database_session import get_db_session
         from src.core.database.repositories.media_buy import MediaBuyRepository
 
-        self.log(
-            f"Broadstreet.update_media_buy for '{media_buy_id}' with action '{action}'",
-            dry_run_prefix=False,
-        )
+        self.log(f"Broadstreet.update_media_buy for '{media_buy_id}' with action '{action}'", dry_run_prefix=False)
 
         if action not in REQUIRED_UPDATE_ACTIONS:
             return UpdateMediaBuyError(
@@ -721,7 +633,7 @@ class BroadstreetAdapter(AdServerAdapter):
                         message=f"Action '{action}' not supported. Supported: {REQUIRED_UPDATE_ACTIONS}",
                         details=None,
                     )
-                ],
+                ]
             )
 
         assert self.tenant_id is not None, "tenant_id required for DB operations"
@@ -745,7 +657,7 @@ class BroadstreetAdapter(AdServerAdapter):
                                 message=f"No packages found for media buy {media_buy_id}",
                                 details=None,
                             )
-                        ],
+                        ]
                     )
 
                 # Collect all advertisement IDs across packages
@@ -771,27 +683,20 @@ class BroadstreetAdapter(AdServerAdapter):
                                         message=f"Failed to update {len(failed)} advertisements",
                                         details={"failed_advertisement_ids": failed},
                                     )
-                                ],
+                                ]
                             )
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs found for {media_buy_id}[/yellow]")
 
                 affected = [
                     AffectedPackage(
-                        package_id=pkg.package_id,
-                        buyer_ref=buyer_ref or pkg.package_id,
-                        paused=is_pause,
-                        changes_applied=None,
-                        buyer_package_ref=None,
+                        package_id=pkg.package_id, paused=is_pause, changes_applied=None, buyer_package_ref=None
                     )
                     for pkg in db_packages
                 ]
 
                 return UpdateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
-                    affected_packages=affected,
-                    implementation_date=today,
+                    media_buy_id=media_buy_id, affected_packages=affected, implementation_date=today
                 )
 
         # Package-level pause/resume
@@ -804,7 +709,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             message=f"package_id is required for {action} action",
                             details=None,
                         )
-                    ],
+                    ]
                 )
 
             action_verb = "Pausing" if is_pause else "Resuming"
@@ -821,7 +726,7 @@ class BroadstreetAdapter(AdServerAdapter):
                                 message=f"Package {package_id} not found in media buy {media_buy_id}",
                                 details=None,
                             )
-                        ],
+                        ]
                     )
 
                 ad_ids = db_package.package_config.get("broadstreet_advertisement_ids", [])
@@ -840,21 +745,16 @@ class BroadstreetAdapter(AdServerAdapter):
                                         message=f"Failed to update {len(failed)} advertisements",
                                         details={"failed_advertisement_ids": failed},
                                     )
-                                ],
+                                ]
                             )
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs for package {package_id}[/yellow]")
 
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
                     affected_packages=[
                         AffectedPackage(
-                            package_id=package_id,
-                            buyer_ref=buyer_ref,
-                            paused=is_pause,
-                            changes_applied=None,
-                            buyer_package_ref=None,
+                            package_id=package_id, paused=is_pause, changes_applied=None, buyer_package_ref=None
                         )
                     ],
                     implementation_date=today,
@@ -870,7 +770,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             message="package_id is required for update_package_budget action",
                             details=None,
                         )
-                    ],
+                    ]
                 )
             if budget is None:
                 return UpdateMediaBuyError(
@@ -880,7 +780,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             message="budget is required for update_package_budget action",
                             details=None,
                         )
-                    ],
+                    ]
                 )
 
             with get_db_session() as session:
@@ -890,12 +790,8 @@ class BroadstreetAdapter(AdServerAdapter):
                 if not db_package:
                     return UpdateMediaBuyError(
                         errors=[
-                            Error(
-                                code="package_not_found",
-                                message=f"Package {package_id} not found",
-                                details=None,
-                            )
-                        ],
+                            Error(code="package_not_found", message=f"Package {package_id} not found", details=None)
+                        ]
                     )
 
                 db_package.package_config["budget"] = float(budget)
@@ -905,14 +801,9 @@ class BroadstreetAdapter(AdServerAdapter):
 
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
                 affected_packages=[
                     AffectedPackage(
-                        package_id=package_id,
-                        buyer_ref=buyer_ref,
-                        paused=False,
-                        changes_applied={"budget": budget},
-                        buyer_package_ref=None,
+                        package_id=package_id, paused=False, changes_applied={"budget": budget}, buyer_package_ref=None
                     )
                 ],
                 implementation_date=today,
@@ -927,7 +818,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             message="package_id is required for update_package_impressions action",
                             details=None,
                         )
-                    ],
+                    ]
                 )
             if budget is None:
                 return UpdateMediaBuyError(
@@ -937,7 +828,7 @@ class BroadstreetAdapter(AdServerAdapter):
                             message="budget (impressions) is required for update_package_impressions action",
                             details=None,
                         )
-                    ],
+                    ]
                 )
 
             with get_db_session() as session:
@@ -947,12 +838,8 @@ class BroadstreetAdapter(AdServerAdapter):
                 if not db_package:
                     return UpdateMediaBuyError(
                         errors=[
-                            Error(
-                                code="package_not_found",
-                                message=f"Package {package_id} not found",
-                                details=None,
-                            )
-                        ],
+                            Error(code="package_not_found", message=f"Package {package_id} not found", details=None)
+                        ]
                     )
 
                 db_package.package_config["impressions"] = budget
@@ -962,11 +849,9 @@ class BroadstreetAdapter(AdServerAdapter):
 
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
                 affected_packages=[
                     AffectedPackage(
                         package_id=package_id,
-                        buyer_ref=buyer_ref,
                         paused=False,
                         changes_applied={"impressions": budget},
                         buyer_package_ref=None,
@@ -976,12 +861,7 @@ class BroadstreetAdapter(AdServerAdapter):
             )
 
         # Should not reach here - all actions are handled above
-        return UpdateMediaBuySuccess(
-            media_buy_id=media_buy_id,
-            buyer_ref=buyer_ref,
-            affected_packages=[],
-            implementation_date=today,
-        )
+        return UpdateMediaBuySuccess(media_buy_id=media_buy_id, affected_packages=[], implementation_date=today)
 
     async def get_available_inventory(self) -> dict[str, Any]:
         """Fetch available inventory (zones) from Broadstreet.
