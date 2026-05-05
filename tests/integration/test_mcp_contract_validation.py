@@ -36,35 +36,35 @@ class TestMCPContractValidation:
     """Test MCP tools can be called with minimal required parameters."""
 
     def test_get_products_minimal_call(self):
-        """Test get_products can be called with just brand.
+        """Test get_products can be called with just brand in wholesale mode.
 
-        Per AdCP spec, all fields are optional, including brief.
+        Within a buying_mode, other fields are optional per spec. Wholesale mode
+        forbids brief; brand alone is the minimal viable wholesale request.
         """
-        request = GetProductsRequest(brand={"domain": "testbrand.com"})
+        request = GetProductsRequest(buying_mode="wholesale", brand={"domain": "testbrand.com"})
 
-        assert request.brief is None  # Optional, defaults to None per spec
-        # brand is BrandReference with required domain field
+        assert request.brief is None  # Forbidden in wholesale mode
         assert request.brand is not None
         assert request.brand.domain == "testbrand.com"
 
     def test_get_products_with_brief(self):
-        """Test get_products works with both brief and brand."""
-        request = GetProductsRequest(brief="pet supplies campaign", brand={"domain": "testbrand.com"})
+        """Test get_products works with both brief and brand in brief mode."""
+        request = GetProductsRequest(
+            buying_mode="brief", brief="pet supplies campaign", brand={"domain": "testbrand.com"}
+        )
 
         assert request.brief == "pet supplies campaign"
-        # brand is BrandReference with required domain field
         assert request.brand is not None
         assert request.brand.domain == "testbrand.com"
 
     def test_get_products_accepts_brief_only(self):
-        """Test that GetProductsRequest accepts brief without brand per AdCP spec.
+        """Test that GetProductsRequest accepts brief without brand in brief mode.
 
-        Per AdCP spec, all fields in GetProductsRequest are OPTIONAL.
+        Within brief mode, brand is optional per spec.
         """
         from src.core.schemas import GetProductsRequest as SchemaGetProductsRequest
 
-        # brand is optional per spec - brief-only request should succeed
-        request = SchemaGetProductsRequest(brief="just a brief")
+        request = SchemaGetProductsRequest(buying_mode="brief", brief="just a brief")
         assert request.brief == "just a brief"
         assert request.brand is None
 
@@ -225,9 +225,9 @@ class TestSchemaDefaultValues:
 
     def test_optional_fields_have_reasonable_defaults(self):
         """Test that optional fields have defaults that make sense."""
-        # GetProductsRequest - per AdCP spec, all fields are optional and default to None
-        req = GetProductsRequest(brand={"domain": "testbrand.com"})
-        assert req.brief is None  # Optional, defaults to None per spec
+        # GetProductsRequest in wholesale mode — within mode, other fields default to None.
+        req = GetProductsRequest(buying_mode="wholesale", brand={"domain": "testbrand.com"})
+        assert req.brief is None
 
         # CreateMediaBuyRequest (with required fields per AdCP v3.12 spec)
         req = CreateMediaBuyRequest(
@@ -267,13 +267,11 @@ class TestMCPToolMinimalCalls:
     """Simplified contract validation - schema tests only."""
 
     def test_contract_validation_prevents_original_issue(self):
-        """Test that GetProductsRequest works with all fields optional per AdCP spec."""
-        # Test that GetProductsRequest can be created with just brand
-        # (and actually, even empty per spec)
+        """Test that GetProductsRequest works with brand-only in wholesale mode per AdCP spec."""
+        # Within wholesale mode, brand is the minimal viable request body.
         try:
-            request = GetProductsRequest(brand={"domain": "testbrand.com"})
-            assert request.brief is None  # Optional, defaults to None per spec
-            # brand is BrandReference with required domain field
+            request = GetProductsRequest(buying_mode="wholesale", brand={"domain": "testbrand.com"})
+            assert request.brief is None  # Forbidden in wholesale mode
             assert request.brand is not None
             assert request.brand.domain == "testbrand.com"
         except Exception as e:

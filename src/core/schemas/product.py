@@ -405,6 +405,44 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
 
         return base_msg
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_refinement_applied_inbound(cls, values: Any) -> Any:
+        """Inbound mirror of the rc.3 -> 3.0.6 wire shim on refinement_applied.
+
+        When a serialized response is round-tripped (e.g., A2A test harness parses the
+        artifact dict back into the response model), each refinement_applied item carries
+        the 3.0.6 wire field name (`product_id` / `proposal_id`). The library
+        RefinementAppliedItem declares extra='forbid' on the rc.3 `id` field, so without
+        this normalization the parse fails. Removable alongside the outbound rename in
+        model_dump when the installed adcp library targets spec 3.0.6+.
+        """
+        if not isinstance(values, dict):
+            return values
+        applied = values.get("refinement_applied")
+        if not isinstance(applied, list):
+            return values
+
+        normalized: list[Any] = []
+        for item in applied:
+            if not isinstance(item, dict):
+                normalized.append(item)
+                continue
+            scope = item.get("scope")
+            wire_key = "product_id" if scope == "product" else "proposal_id" if scope == "proposal" else None
+            if wire_key is not None and wire_key in item:
+                wire_val = item[wire_key]
+                if "id" in item and item["id"] != wire_val:
+                    raise ValueError(
+                        f"refinement_applied item has both 'id' ({item['id']!r}) and "
+                        f"{wire_key!r} ({wire_val!r}) with different values; provide only one"
+                    )
+                item = {k: v for k, v in item.items() if k != wire_key}
+                item["id"] = wire_val
+            normalized.append(item)
+
+        return {**values, "refinement_applied": normalized}
+
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         """Serialize the response with rc.3 -> 3.0.6 wire compatibility for refinement_applied.
 

@@ -206,7 +206,12 @@ async def _get_products_impl(
     # cross-mode invariants (brief required in brief mode, refine required in refine mode,
     # mutual exclusion across modes). Default to "brief" defensively if validator was
     # bypassed (it shouldn't be in normal flows).
-    mode: str = req.buying_mode or "brief"
+    #
+    # The library type annotates buying_mode as the BuyingMode enum, but our local
+    # GetProductsRequest widens it to str|None. Normalize to plain string here so the
+    # rest of the function compares against bare strings.
+    raw_mode: Any = req.buying_mode
+    mode: str = (raw_mode.value if hasattr(raw_mode, "value") else raw_mode) or "brief"
 
     # Wholesale and refine modes legitimately omit brief/brand/filters; only brief mode
     # needs a discovery criterion, and the validator already enforces brief presence there.
@@ -895,12 +900,19 @@ async def get_products(
     """
     from src.core.product_conversion import is_pre_v3
 
-    # Pre-v3 default-to-brief shim: AdCP spec says sellers SHOULD default pre-v3 clients
-    # without buying_mode to 'brief'. Track the decision for the audit log.
+    # Pre-v3 default shim: AdCP spec says sellers SHOULD default pre-v3 clients without
+    # buying_mode. We pick the mode from what they sent: a non-empty brief implies brief
+    # mode; absence of a brief implies wholesale (raw inventory). This matches existing
+    # v2 client behavior — they could send either {brief: "..."} or {brand: ...} alone
+    # and get a sensible response. The audit log records that the wrapper applied a
+    # default so operations can detect mode mix in the field.
     defaulted_to_brief = False
     if buying_mode is None and is_pre_v3(adcp_version):
-        buying_mode = "brief"
-        defaulted_to_brief = True
+        if brief and brief.strip():
+            buying_mode = "brief"
+            defaulted_to_brief = True
+        else:
+            buying_mode = "wholesale"
 
     # Build request object for shared implementation
     try:
@@ -983,11 +995,15 @@ async def get_products_raw(
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
 
-    # Pre-v3 default-to-brief shim (mirrors MCP wrapper)
+    # Pre-v3 default shim (mirrors MCP wrapper): pre-v3 clients without buying_mode
+    # are defaulted based on whether they sent a brief.
     defaulted_to_brief = False
     if buying_mode is None and is_pre_v3(adcp_version):
-        buying_mode = "brief"
-        defaulted_to_brief = True
+        if brief and brief.strip():
+            buying_mode = "brief"
+            defaulted_to_brief = True
+        else:
+            buying_mode = "wholesale"
 
     # Create request object - adcp library validates schema
     req = create_get_products_request(

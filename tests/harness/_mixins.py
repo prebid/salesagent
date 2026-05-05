@@ -489,6 +489,10 @@ class ProductMixin:
         # but not a GetProductsRequest field.
         identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
 
+        # Strip transport-only kwargs that other dispatchers consume but the IMPL path
+        # would forward into the request constructor where they get rejected.
+        extra.pop("adcp_version", None)
+
         if brand is None:
             brand = {"domain": "test.com"}
 

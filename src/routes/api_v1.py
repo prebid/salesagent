@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.tools import accounts as accounts_module
@@ -168,22 +168,40 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     """Get available products matching the brief (auth-optional discovery skill)."""
     from src.core.product_conversion import is_pre_v3
 
-    # Pre-v3 default-to-brief shim (mirrors MCP/A2A wrappers)
+    # Pre-v3 default shim (mirrors MCP/A2A wrappers): pre-v3 clients without buying_mode
+    # are defaulted based on whether they sent a brief — non-empty brief -> brief mode,
+    # otherwise wholesale.
     buying_mode = body.buying_mode
     defaulted_to_brief = False
     if buying_mode is None and is_pre_v3(body.adcp_version):
-        buying_mode = "brief"
-        defaulted_to_brief = True
+        if body.brief and body.brief.strip():
+            buying_mode = "brief"
+            defaulted_to_brief = True
+        else:
+            buying_mode = "wholesale"
 
-    req = products_module.create_get_products_request(
-        brief=body.brief,
-        brand=body.brand,
-        filters=body.filters,
-        property_list=body.property_list,
-        context=body.context,
-        buying_mode=buying_mode,
-        refine=body.refine,
-    )
+    try:
+        req = products_module.create_get_products_request(
+            brief=body.brief,
+            brand=body.brand,
+            filters=body.filters,
+            property_list=body.property_list,
+            context=body.context,
+            buying_mode=buying_mode,
+            refine=body.refine,
+        )
+    except ValidationError as e:
+        # Schema validator (cross-mode invariants) rejected the request.
+        # Translate to a 400 error response with VALIDATION_ERROR code.
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error_code": "VALIDATION_ERROR",
+                "message": str(e),
+                "recovery": "correctable",
+                "details": None,
+            },
+        )
 
     try:
         response = await products_module._get_products_impl(req, identity, defaulted_to_brief=defaulted_to_brief)

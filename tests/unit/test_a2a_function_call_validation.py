@@ -231,7 +231,9 @@ class TestFunctionCallIntegration:
 
             async def test_call():
                 # Mock the database and other external dependencies
-                with (pytest.MonkeyPatch().context() as m,):
+                with (
+                    pytest.MonkeyPatch().context() as m,
+                ):
                     # Mock database session and queries
                     m.setattr("src.core.main.get_db_session", lambda: Mock())
 

@@ -189,6 +189,7 @@ async def test_full_request_flow():
     """Test the full request flow with policy checking."""
     # This would be an integration test with the actual endpoint
     request = GetProductsRequest(
+        buying_mode="brief",
         brief="Looking to advertise a new smartphone",
         brand={"domain": "testbrand.com"},
     )
