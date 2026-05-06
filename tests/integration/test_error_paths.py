@@ -172,7 +172,6 @@ class TestCreateMediaBuyErrorPaths:
             ],
             start_time=future_start.isoformat(),
             end_time=future_end.isoformat(),
-            budget={"total": 5000.0, "currency": "USD"},
             identity=identity,
         )
 
@@ -221,7 +220,6 @@ class TestCreateMediaBuyErrorPaths:
             ],
             start_time=past_start.isoformat(),
             end_time=past_end.isoformat(),
-            budget={"total": 5000.0, "currency": "USD"},
             identity=identity,
         )
 
@@ -264,7 +262,6 @@ class TestCreateMediaBuyErrorPaths:
             ],
             start_time=start.isoformat(),
             end_time=end.isoformat(),
-            budget={"total": 5000.0, "currency": "USD"},
             identity=identity,
         )
 
@@ -311,7 +308,6 @@ class TestCreateMediaBuyErrorPaths:
                 ],
                 start_time=future_start.isoformat(),
                 end_time=future_end.isoformat(),
-                budget={"total": -1000.0, "currency": "USD"},
                 identity=identity,
             )
 
@@ -336,7 +332,6 @@ class TestCreateMediaBuyErrorPaths:
             packages=[],  # Empty packages!
             start_time=future_start.isoformat(),
             end_time=future_end.isoformat(),
-            budget={"total": 5000.0, "currency": "USD"},
             identity=identity,
         )
 

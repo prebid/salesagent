@@ -1502,15 +1502,15 @@ class AdCPRequestHandler(RequestHandler):
                     **error_body,
                 }
 
-            # Call core function with validated parameters and identity
+            # Call core function with validated parameters and identity.
+            # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
+            # PackageRequest; only request-level spec fields are forwarded here.
             response = await core_create_media_buy_tool(
                 brand=params.get("brand"),
                 po_number=req.po_number,
                 packages=params["packages"],  # Required — validated above
                 start_time=params.get("start_time"),
                 end_time=params.get("end_time"),
-                budget=params.get("budget"),
-                targeting_overlay=params.get("targeting_overlay", {}),
                 push_notification_config=params.get("push_notification_config"),
                 reporting_webhook=params.get("reporting_webhook"),
                 context=params.get("context"),

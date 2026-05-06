@@ -77,10 +77,7 @@ class CreateMediaBuyBody(BaseModel):
     packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
     start_time: str | None = None
     end_time: str | None = None
-    budget: float | None = None
     po_number: str | None = None
-    product_ids: list[str] | None = None
-    total_budget: float | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -224,17 +221,18 @@ async def list_authorized_properties(
 
 @router.post("/media-buys")
 async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity = require_auth):
-    """Create a new media buy (auth required)."""
+    """Create a new media buy (auth required).
+
+    Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
+    targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
+    """
     try:
         response = await media_buy_create_module.create_media_buy_raw(
             brand=body.brand,
             packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
             start_time=body.start_time,
             end_time=body.end_time,
-            budget=body.budget,
             po_number=body.po_number,
-            product_ids=body.product_ids,
-            total_budget=body.total_budget,
             identity=identity,
         )
     except ToolError as e:
