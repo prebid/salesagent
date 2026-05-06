@@ -119,7 +119,7 @@ class TestMCPToolRoundtripMinimal:
                     "update_media_buy",
                     {
                         "media_buy_id": create_content["media_buy_id"],
-                        "paused": True,  # adcp 2.12.0+: paused=True means pause, paused=False means resume
+                        "budget": 2000.0,  # update_budget is valid from pending_creatives
                     },
                 )
 

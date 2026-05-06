@@ -105,8 +105,7 @@ class TestMCPToolTypedSchemas:
             "use packages[].targeting_overlay instead"
         )
         assert "creatives" not in params, (
-            "creatives was moved to PackageRequest in adcp 4.3 (commit 3c604130); "
-            "use packages[].creatives instead"
+            "creatives was moved to PackageRequest in adcp 4.3 (commit 3c604130); use packages[].creatives instead"
         )
 
     def test_update_media_buy_uses_typed_parameters(self):

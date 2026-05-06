@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from adcp import PushNotificationConfig
-from adcp.server.helpers import is_terminal_status, valid_actions_for_status
+from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, valid_actions_for_status
 from pydantic import Field
 
 # ---------------------------------------------------------------------------
@@ -208,13 +208,17 @@ def _update_media_buy_impl(
 
         _requested = _requested_actions(req)
         _allowed = set(valid_actions_for_status(_current_status))
-        _disallowed = [a for a in _requested if a not in _allowed]
-        if _requested and _disallowed:
-            raise AdCPGoneError(
-                f"Action(s) {_disallowed} not allowed in status '{_current_status}'",
-                field="media_buy_id",
-                suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
-            )
+        # Only enforce state machine for statuses defined in the spec.
+        # Pre-confirmation internal states (e.g., "draft") are not in the
+        # SDK state machine — allow all actions on those.
+        if _allowed or _current_status in MEDIA_BUY_STATE_MACHINE:
+            _disallowed = [a for a in _requested if a not in _allowed]
+            if _requested and _disallowed:
+                raise AdCPGoneError(
+                    f"Action(s) {_disallowed} not allowed in status '{_current_status}'",
+                    field="media_buy_id",
+                    suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
+                )
 
         # Extract testing context early (needed for dry_run check)
         testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()

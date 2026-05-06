@@ -3586,9 +3586,7 @@ async def _create_media_buy_impl(
 
             # Per AdCP 4.3, creatives live on each PackageRequest. Count creatives across
             # all request packages for the notification.
-            notification_creatives_count = sum(
-                len(pkg.creatives) for pkg in (req.packages or []) if pkg.creatives
-            )
+            notification_creatives_count = sum(len(pkg.creatives) for pkg in (req.packages or []) if pkg.creatives)
             success_details = {
                 "total_budget": total_budget,
                 "po_number": req.po_number,
