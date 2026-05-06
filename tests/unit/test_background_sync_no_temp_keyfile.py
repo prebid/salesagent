@@ -39,11 +39,19 @@ class TestNoTempKeyfileForServiceAccount:
                     "to avoid writing secrets to disk"
                 )
 
-    def test_uses_from_service_account_info(self):
-        """background_sync_service must use from_service_account_info (not _file)."""
+    def test_no_from_service_account_file(self):
+        """background_sync_service must not call from_service_account_file.
+
+        Service account credentials must be passed as a dict — either directly
+        via google.oauth2.service_account.Credentials.from_service_account_info,
+        or indirectly via GAMClientManager / GAMAuthManager which use the same
+        dict-based call. from_service_account_file requires writing JSON to
+        disk and risks credential leakage on cleanup failure.
+        """
         source = _SYNC_FILE.read_text()
 
-        assert "from_service_account_info" in source, (
-            "background_sync_service.py should use from_service_account_info "
-            "(dict-based, no temp file) instead of from_service_account_file"
+        assert "from_service_account_file" not in source, (
+            "background_sync_service.py must not use from_service_account_file — "
+            "use GAMClientManager + build_gam_config_from_adapter, which routes "
+            "service account JSON through from_service_account_info (dict-based)"
         )

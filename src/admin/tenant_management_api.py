@@ -207,15 +207,24 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
         session.flush()
 
     if isinstance(adapter, GAMAdapterConfig):
+        # Service-account JSON is required by the schema; refresh_token is optional.
+        # Set gam_auth_method to match the credential that's actually present so
+        # background sync paths that branch on it (inventory, custom_targeting) don't
+        # fall through to the OAuth code path with no refresh token.
+        sa_json = adapter.service_account_key_json.get_secret_value() if adapter.service_account_key_json else None
+        refresh_token = adapter.refresh_token.get_secret_value() if adapter.refresh_token else None
+        auth_method = "service_account" if sa_json else "oauth"
         ac = AdapterConfig(
             tenant_id=tenant_id,
             adapter_type="google_ad_manager",
             gam_network_code=adapter.network_code,
             gam_service_account_email=adapter.service_account_email,
-            gam_refresh_token=adapter.refresh_token.get_secret_value() if adapter.refresh_token else None,
+            gam_refresh_token=refresh_token,
+            gam_auth_method=auth_method,
         )
         # Encryption is wired via the property setter (see models.py:AdapterConfig).
-        ac.gam_service_account_json = adapter.service_account_key_json.get_secret_value()
+        if sa_json is not None:
+            ac.gam_service_account_json = sa_json
     else:  # MockAdapterConfig
         ac = AdapterConfig(
             tenant_id=tenant_id,

@@ -87,17 +87,27 @@ def test_service_account_credentials_creation(mock_from_info):
     assert call_args[1]["scopes"] == ["https://www.googleapis.com/auth/dfp"]
 
 
-def test_build_gam_config_with_service_account():
-    """Test build_gam_config_from_adapter with service account auth."""
+def _make_adapter_config(*, auth_method, service_account_json, refresh_token):
+    """Build a mock AdapterConfig row for build_gam_config_from_adapter tests."""
     adapter_config = Mock()
     adapter_config.gam_network_code = "12345"
     adapter_config.gam_trafficker_id = "67890"
     adapter_config.gam_manual_approval_required = False
-    adapter_config.gam_auth_method = "service_account"
-    adapter_config.gam_service_account_json = '{"type": "service_account"}'
-    adapter_config.gam_refresh_token = None
+    adapter_config.gam_auth_method = auth_method
+    adapter_config.gam_service_account_json = service_account_json
+    adapter_config.gam_refresh_token = refresh_token
+    return adapter_config
 
-    config = build_gam_config_from_adapter(adapter_config)
+
+def test_build_gam_config_with_service_account():
+    """Test build_gam_config_from_adapter with service account auth."""
+    config = build_gam_config_from_adapter(
+        _make_adapter_config(
+            auth_method="service_account",
+            service_account_json='{"type": "service_account"}',
+            refresh_token=None,
+        )
+    )
 
     assert config["network_code"] == "12345"
     assert config["trafficker_id"] == "67890"
@@ -107,20 +117,50 @@ def test_build_gam_config_with_service_account():
 
 def test_build_gam_config_with_oauth():
     """Test build_gam_config_from_adapter with OAuth."""
-    adapter_config = Mock()
-    adapter_config.gam_network_code = "12345"
-    adapter_config.gam_trafficker_id = "67890"
-    adapter_config.gam_manual_approval_required = False
-    adapter_config.gam_auth_method = "oauth"
-    adapter_config.gam_service_account_json = None
-    adapter_config.gam_refresh_token = "test_token"
-
-    config = build_gam_config_from_adapter(adapter_config)
+    config = build_gam_config_from_adapter(
+        _make_adapter_config(auth_method="oauth", service_account_json=None, refresh_token="test_token")
+    )
 
     assert config["network_code"] == "12345"
     assert config["trafficker_id"] == "67890"
     assert config["refresh_token"] == "test_token"
     assert "service_account_json" not in config
+
+
+def test_build_gam_config_prefers_service_account_when_auth_method_stale():
+    """Service-account JSON wins when present, even if gam_auth_method='oauth'.
+
+    Reproduces the embedded-mode provisioning bug: tenants created via
+    src/admin/tenant_management_api.py before the fix had
+    gam_auth_method='oauth' (the column server_default) but a populated
+    service_account_json and no refresh_token. The config builder must
+    detect from credential presence so the inventory + custom-targeting
+    sync paths don't fall through to GoogleRefreshTokenClient.
+    """
+    config = build_gam_config_from_adapter(
+        _make_adapter_config(
+            auth_method="oauth",  # stale — does not match credentials present
+            service_account_json='{"type": "service_account"}',
+            refresh_token=None,
+        )
+    )
+
+    assert config["service_account_json"] == '{"type": "service_account"}'
+    assert "refresh_token" not in config
+
+
+def test_build_gam_config_no_credentials_returns_no_auth_keys():
+    """When no credentials are present, neither auth key appears in the config.
+
+    Callers must check this explicitly before constructing GAMClientManager,
+    which raises if neither is in the config dict.
+    """
+    config = build_gam_config_from_adapter(
+        _make_adapter_config(auth_method="oauth", service_account_json=None, refresh_token=None)
+    )
+
+    assert "service_account_json" not in config
+    assert "refresh_token" not in config
 
 
 @patch("src.adapters.gam.auth.google.oauth2.service_account.Credentials.from_service_account_info")

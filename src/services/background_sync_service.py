@@ -212,11 +212,7 @@ def _run_sync_thread(
         logger.info(f"[{sync_id}] Starting inventory sync for {tenant_id}")
 
         # Import here to avoid circular dependencies
-        import os
-
-        import google.oauth2.service_account
-        from googleads import ad_manager, oauth2
-
+        from src.adapters.gam import GAMClientManager, build_gam_config_from_adapter
         from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
         from src.core.database.models import Tenant
         from src.services.gam_inventory_service import GAMInventoryService
@@ -241,43 +237,16 @@ def _run_sync_thread(
                 _mark_sync_failed(sync_id, "GAM not configured")
                 return
 
-            # Determine auth method
-            auth_method = getattr(adapter_config, "gam_auth_method", None)
-            if not auth_method:
-                if adapter_config.gam_refresh_token:
-                    auth_method = "oauth"
-                elif hasattr(adapter_config, "gam_service_account_json") and adapter_config.gam_service_account_json:
-                    auth_method = "service_account"
-                else:
-                    _mark_sync_failed(sync_id, "No GAM authentication configured")
-                    return
+            # build_gam_config_from_adapter detects auth method from credential
+            # presence (service_account_json wins over refresh_token), so this
+            # path stays consistent with the connection-test and advertisers
+            # sync paths even when the row's gam_auth_method column is stale.
+            gam_config = build_gam_config_from_adapter(adapter_config)
+            if "service_account_json" not in gam_config and "refresh_token" not in gam_config:
+                _mark_sync_failed(sync_id, "No GAM authentication configured")
+                return
 
-            # Create GAM client based on auth method
-            if auth_method == "service_account":
-                service_account_json_str = adapter_config.gam_service_account_json
-                if not service_account_json_str:
-                    _mark_sync_failed(sync_id, "Service account JSON not found")
-                    return
-
-                import json as json_mod
-
-                service_account_info = json_mod.loads(service_account_json_str)
-                credentials = google.oauth2.service_account.Credentials.from_service_account_info(
-                    service_account_info, scopes=["https://www.googleapis.com/auth/dfp"]
-                )
-                oauth2_client = oauth2.GoogleCredentialsClient(credentials)
-                client = ad_manager.AdManagerClient(
-                    oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
-                )
-            else:  # OAuth
-                oauth2_client = oauth2.GoogleRefreshTokenClient(
-                    client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
-                    client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
-                    refresh_token=adapter_config.gam_refresh_token,
-                )
-                client = ad_manager.AdManagerClient(
-                    oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
-                )
+            client = GAMClientManager(gam_config, network_code=adapter_config.gam_network_code).get_client()
 
         # Get last successful sync time for incremental mode
         last_sync_time = None
@@ -513,7 +482,9 @@ def _run_sync_thread(
         # Mirror completion onto the companion custom_targeting row when
         # /refresh fanned one out — same lifecycle, bundled work.
         if targeting_sync_id is not None:
-            _mark_sync_complete(targeting_sync_id, {"bundled_with": sync_id, "summary": "custom_targeting synced as part of inventory"})
+            _mark_sync_complete(
+                targeting_sync_id, {"bundled_with": sync_id, "summary": "custom_targeting synced as part of inventory"}
+            )
         logger.info(f"[{sync_id}] Sync completed successfully")
 
         # Invalidate inventory tree cache after successful sync

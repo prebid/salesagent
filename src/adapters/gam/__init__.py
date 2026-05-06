@@ -36,12 +36,19 @@ def build_gam_config_from_adapter(adapter_config) -> dict:
         "manual_approval_required": adapter_config.gam_manual_approval_required,
     }
 
-    # Add authentication credentials based on method
-    if adapter_config.gam_auth_method == "service_account" and adapter_config.gam_service_account_json:
-        config["service_account_json"] = adapter_config.gam_service_account_json
-    elif adapter_config.gam_refresh_token:
-        # OAuth (default)
-        config["refresh_token"] = adapter_config.gam_refresh_token
+    # Detect auth method from credential presence rather than trusting
+    # gam_auth_method alone. Embedded-mode provisioning paths can leave
+    # gam_auth_method at its "oauth" server-default while populating
+    # gam_service_account_json — see migration 47e05de8f5c2 for the default,
+    # and src/admin/tenant_management_api.py:_persist_adapter_config for the
+    # provisioning fix. Service-account JSON wins when both are present
+    # (matches src/services/gam_advertisers_sync.py:_build_gam_client_for_tenant).
+    sa_json = getattr(adapter_config, "gam_service_account_json", None)
+    refresh_token = getattr(adapter_config, "gam_refresh_token", None)
+    if sa_json:
+        config["service_account_json"] = sa_json
+    elif refresh_token:
+        config["refresh_token"] = refresh_token
 
     return config
 

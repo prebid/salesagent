@@ -78,12 +78,14 @@ def _cleanup_mocked_modules(added):
         sys.modules.pop(mod_name, None)
 
 
-def _run_sync_with_mode(sync_mode, mocks):
+def _run_sync_with_mode(sync_mode, mocks, *, adapter_config_overrides=None):
     """Run _run_sync_thread with the given sync_mode and mocked dependencies.
 
     Args:
         sync_mode: "incremental" or "full"
         mocks: Dict from _setup_mock_dependencies()
+        adapter_config_overrides: Optional dict of attrs to override on the
+            mock adapter_config (e.g. simulate a stale gam_auth_method).
     """
     mock_tenant = MagicMock()
     mock_adapter_config = MagicMock()
@@ -92,6 +94,9 @@ def _run_sync_with_mode(sync_mode, mocks):
     mock_adapter_config.gam_auth_method = "oauth"
     mock_adapter_config.gam_refresh_token = "fake-token"
     mock_adapter_config.gam_service_account_json = None
+    if adapter_config_overrides:
+        for k, v in adapter_config_overrides.items():
+            setattr(mock_adapter_config, k, v)
 
     # For incremental mode, we need a previous successful sync
     mock_last_sync = MagicMock()
@@ -118,6 +123,12 @@ def _run_sync_with_mode(sync_mode, mocks):
 
     added_modules = _ensure_googleads_mocked()
     try:
+        # GAMClientManager is bypassed at the seam — the GAM client itself is
+        # not under test here; we want to exercise build_gam_config_from_adapter
+        # and the orchestration in _run_sync_thread without dragging in real
+        # google-auth credential machinery.
+        mock_client_manager_cls = MagicMock()
+        mock_client_manager_cls.return_value.get_client.return_value = MagicMock()
         with (
             patch(
                 "src.services.background_sync_service.get_db_session",
@@ -131,6 +142,10 @@ def _run_sync_with_mode(sync_mode, mocks):
                 "src.services.gam_inventory_service.GAMInventoryService",
                 return_value=mocks["inventory_service"],
             ),
+            patch(
+                "src.adapters.gam.GAMClientManager",
+                mock_client_manager_cls,
+            ),
         ):
             from src.services.background_sync_service import _run_sync_thread
 
@@ -142,6 +157,7 @@ def _run_sync_with_mode(sync_mode, mocks):
                 custom_targeting_limit=None,
                 audience_segment_limit=None,
             )
+            return mock_client_manager_cls
     finally:
         _cleanup_mocked_modules(added_modules)
 
@@ -170,3 +186,42 @@ def test_full_sync_should_call_mark_stale():
     mocks = _setup_mock_dependencies()
     _run_sync_with_mode("full", mocks)
     mocks["inventory_service"]._mark_stale_inventory.assert_called_once()
+
+
+def test_sync_uses_service_account_when_auth_method_is_stale_oauth():
+    """Regression: when gam_auth_method='oauth' but service_account_json is
+    present and refresh_token is None, the sync must still pick the
+    service-account credential — not fall through to GoogleRefreshTokenClient
+    with refresh_token=None (which produces 'credentials do not contain
+    refresh_token, token_uri, client_id, client_secret').
+
+    This is the embedded-mode tenant provisioning bug: the AdapterConfig
+    column server_default is 'oauth', and the pre-fix
+    src/admin/tenant_management_api.py:_persist_adapter_config never
+    overrode it, so service-account-only tenants ended up with stale auth
+    method.
+    """
+    mocks = _setup_mock_dependencies()
+    sa_json = '{"type": "service_account", "client_email": "sa@x.iam.gserviceaccount.com"}'
+
+    client_manager_cls = _run_sync_with_mode(
+        "full",
+        mocks,
+        adapter_config_overrides={
+            "gam_auth_method": "oauth",  # stale!
+            "gam_refresh_token": None,
+            "gam_service_account_json": sa_json,
+        },
+    )
+
+    # The config passed to GAMClientManager must carry service_account_json,
+    # not refresh_token. If the pre-fix logic were still in place, the config
+    # would carry no auth at all (legacy build_gam_config gated SA on
+    # gam_auth_method=='service_account') and the sync would fail before
+    # constructing the client.
+    assert client_manager_cls.called, "GAMClientManager was never constructed — sync failed before client build"
+    config_arg = client_manager_cls.call_args[0][0]
+    assert config_arg.get("service_account_json") == sa_json
+    assert "refresh_token" not in config_arg
+    # And the sync proceeded past the client build into actual inventory work.
+    mocks["inventory_service"]._write_inventory_batch.assert_called()
