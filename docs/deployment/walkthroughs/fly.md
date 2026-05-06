@@ -242,7 +242,7 @@ fly apps restart your-app-name
 
 The deployment uses these files from the repository:
 - `fly.toml` - Main Fly.io configuration
-- `Dockerfile` - Docker image with nginx and supercronic
+- `Dockerfile` - Docker image with supercronic (no in-image nginx; Fly.io's edge proxy fronts the python app directly on port 8080)
 - `scripts/deploy/run_all_services.py` - Service orchestration
 
 ## Costs

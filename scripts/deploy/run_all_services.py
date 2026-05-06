@@ -245,6 +245,16 @@ def run_mcp_server():
 
 def run_nginx():
     """Run nginx as reverse proxy."""
+    import shutil as _shutil
+
+    if _shutil.which("nginx") is None:
+        print(
+            "❌ run_nginx() invoked but nginx binary is not installed in this image. "
+            "The runtime image dropped the bundled nginx (see PR #29). "
+            "Set SKIP_NGINX=true (the image default) or use a separate nginx sidecar."
+        )
+        sys.exit(1)
+
     print("Starting nginx reverse proxy on port 8000...")
 
     # Create nginx directories if they don't exist

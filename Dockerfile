@@ -59,13 +59,12 @@ RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
     echo 'path-exclude /usr/share/lintian/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc && \
     echo 'path-exclude /usr/share/linda/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc
 
-# Install runtime dependencies including nginx (no gcc/libpq-dev/git — build deps stay in builder)
+# Install runtime dependencies (no gcc/libpq-dev/git — build deps stay in builder)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5 \
-    curl \
-    nginx
+    curl
 
 # Install supercronic for cron jobs (container-friendly cron)
 ARG TARGETARCH
@@ -85,18 +84,6 @@ COPY . .
 
 # Copy pre-built virtual environment from builder stage (contains all compiled deps)
 COPY --from=builder /app/.venv /app/.venv
-
-# Copy nginx configs - run_all_services.py selects based on ADCP_MULTI_TENANT
-# Default: single-tenant (path-based routing, localhost upstreams)
-# ADCP_MULTI_TENANT=true: multi-tenant (subdomain routing)
-# Development config included for docker-compose.yml multi-container setup
-COPY config/nginx/nginx-single-tenant.conf /etc/nginx/nginx-single-tenant.conf
-COPY config/nginx/nginx-multi-tenant.conf /etc/nginx/nginx-multi-tenant.conf
-COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
-
-# Create nginx directories with proper permissions
-RUN mkdir -p /var/log/nginx /var/run && \
-    chown -R www-data:www-data /var/log/nginx /var/run
 
 # Add .venv to PATH and set PYTHONPATH for module imports
 ENV PATH="/app/.venv/bin:$PATH"
