@@ -217,9 +217,9 @@ class TestInventoryProfileDelete:
         assert profile is None
 
     def test_delete_nonexistent_profile_returns_404(self, client, test_tenant):
-        """POST delete for a nonexistent profile returns 404."""
+        """DELETE for a nonexistent profile returns 404."""
         _auth_session(client, test_tenant)
-        response = client.post(
+        response = client.delete(
             f"/tenant/{test_tenant}/inventory-profiles/999999/delete",
             follow_redirects=False,
         )
