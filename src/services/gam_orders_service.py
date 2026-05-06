@@ -12,16 +12,21 @@ import logging
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
-from sqlalchemy import create_engine, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload, scoped_session, sessionmaker
 
 from src.adapters.gam_orders_discovery import GAMOrdersDiscovery, LineItem, Order
-from src.core.database.db_config import DatabaseConfig
+from src.core.database.database_session import get_engine
 from src.core.database.models import GAMLineItem, GAMOrder
 
-# Create database session factory
-engine = create_engine(DatabaseConfig.get_connection_string())
-SessionLocal = sessionmaker(bind=engine)
+# Reuse the canonical database engine — DO NOT call ``create_engine`` here.
+# Pre-fix history: this module created its own ``engine`` + ``SessionLocal``,
+# stacking a third connection pool on top of the one in ``database_session.py``
+# (alongside the one in ``gam_inventory_service.py``). The extra pools never got
+# ``dispose()``-d on shutdown, contributing to the production memory leak
+# (Brian's leak triage #2). Binding ``SessionLocal`` to ``get_engine()``
+# consolidates everything onto one shared pool.
+SessionLocal = sessionmaker(bind=get_engine())
 # Use scoped_session for thread-local sessions
 db_session = scoped_session(SessionLocal)
 

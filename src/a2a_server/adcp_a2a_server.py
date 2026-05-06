@@ -5,7 +5,10 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
 import logging
+import os
+import time
 import uuid
+from collections import OrderedDict
 from collections.abc import AsyncGenerator
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
@@ -137,13 +140,94 @@ DISCOVERY_SKILLS = frozenset(
 )
 
 
+class _BoundedTaskCache:
+    """Bounded LRU + TTL cache for in-memory A2A task state.
+
+    The previous unbounded ``self.tasks = {}`` retained every Task object
+    (with full request artifacts) forever — root cause of the production
+    memory leak (linear ramp to ~12 GB ceiling, ~3-4 day OOM cycle).
+
+    Bounds:
+    - ``max_entries`` (default 10_000) — hard ceiling; LRU evicts oldest
+    - ``ttl_seconds`` (default 86_400 = 24h) — expiry on read; expired
+      entries are dropped without re-fetching
+
+    Per-process upper bound at default settings: ``max_entries × sizeof(Task)``.
+    Tasks are A2A SDK objects with full request/response artifacts;
+    typical size ~5-50 KB, so worst-case retention is ~500 MB. Tune via
+    env vars ``ADCP_A2A_TASK_CACHE_SIZE`` and
+    ``ADCP_A2A_TASK_CACHE_TTL_SECONDS`` if your workload pushes against
+    these defaults.
+
+    Read paths follow the same TTL-eviction-on-read pattern as the
+    framework's ``CallableSubdomainTenantRouter`` cache (adcp PR #544).
+    No background sweeper — eviction is lazy on access, with the LRU
+    cap as the hard memory ceiling.
+
+    The class duck-types as a dict for ``self.tasks[id] = task`` and
+    ``self.tasks.get(id)`` — no call-site changes required.
+    """
+
+    def __init__(self, *, max_entries: int = 10_000, ttl_seconds: float = 86_400) -> None:
+        if max_entries <= 0:
+            raise ValueError(f"max_entries must be > 0, got {max_entries}")
+        if ttl_seconds <= 0:
+            raise ValueError(f"ttl_seconds must be > 0, got {ttl_seconds}")
+        self._entries: OrderedDict[str, tuple[Task, float]] = OrderedDict()
+        self._max = max_entries
+        self._ttl = ttl_seconds
+
+    def __setitem__(self, key: str, value: Task) -> None:
+        expires_at = time.monotonic() + self._ttl
+        self._entries[key] = (value, expires_at)
+        self._entries.move_to_end(key)
+        # Bound size — evict oldest until under the ceiling.
+        while len(self._entries) > self._max:
+            self._entries.popitem(last=False)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        entry = self._entries.get(key)
+        if entry is None:
+            return default
+        value, expires_at = entry
+        if time.monotonic() > expires_at:
+            # Expired — drop and miss.
+            self._entries.pop(key, None)
+            return default
+        # LRU touch
+        self._entries.move_to_end(key)
+        return value
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        return self.get(key) is not None
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+def _build_task_cache() -> _BoundedTaskCache:
+    """Build the per-handler task cache, sized from environment overrides."""
+    max_entries = int(os.environ.get("ADCP_A2A_TASK_CACHE_SIZE", "10000"))
+    ttl_seconds = float(os.environ.get("ADCP_A2A_TASK_CACHE_TTL_SECONDS", "86400"))
+    return _BoundedTaskCache(max_entries=max_entries, ttl_seconds=ttl_seconds)
+
+
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
 
     def __init__(self):
         """Initialize the AdCP A2A request handler."""
-        self.tasks = {}  # In-memory task storage
-        logger.info("AdCP Request Handler initialized for direct function calls")
+        # Bounded LRU + TTL cache for tasks. Replaces the previous
+        # unbounded dict that was the dominant production memory leak.
+        # Sized via ADCP_A2A_TASK_CACHE_SIZE / _TTL_SECONDS env vars.
+        self.tasks = _build_task_cache()
+        logger.info(
+            "AdCP Request Handler initialized (task cache: max=%d entries, ttl=%ds)",
+            self.tasks._max,
+            int(self.tasks._ttl),
+        )
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
