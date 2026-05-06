@@ -1,0 +1,38 @@
+name: '[AZ] App Deployment'
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  BRANCH_TO_TARGET_ENV: 'main=prod develop=dev'
+
+jobs:
+  deploy:
+    name: Deploy to ECS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set target environment
+        run: |-
+          BRANCH_NAME=${GITHUB_REF##*/}
+          TARGET_ENV=$(echo $BRANCH_TO_TARGET_ENV | tr ' ' '\n' | grep "^${BRANCH_NAME}=" | cut -d '=' -f2)
+          echo "TARGET_ENV=${TARGET_ENV:-$BRANCH_NAME}" >> $GITHUB_ENV
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS CLI
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: 'arn:aws:iam::509399601946:role/onefms-prod-prebid-sales-agent-cicd-pipeline-prebidsalesagent'
+          aws-region: eu-central-1
+
+      - name: Build & Deploy
+        run: make deploy env=$TARGET_ENV

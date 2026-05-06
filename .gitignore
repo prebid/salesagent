@@ -1,5 +1,5 @@
 # Local configuration
-config.json
+/config.json
 __pycache__
 adcp.db
 *.db

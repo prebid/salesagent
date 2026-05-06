@@ -1,0 +1,11 @@
+{
+  "name_prefix": "onefms-",
+  "name_suffix": "-prebid-sales-agent",
+  "environments": {
+    "prod": {
+      "platform": "ECS",
+      "account_id": "509399601946",
+      "region": "eu-central-1"
+    }
+  }
+}
