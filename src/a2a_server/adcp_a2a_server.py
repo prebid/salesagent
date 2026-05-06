@@ -110,6 +110,21 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 
+def _coerce_account_reference(account: Any) -> Any:
+    """Coerce a raw dict account param to AccountReference at the A2A boundary.
+
+    A2A clients may send account as a plain dict. The MCP wrapper's TypeAdapter
+    handles this automatically, but the A2A raw path passes dicts through. This
+    wraps dicts in the SDK AccountReference Pydantic model so downstream code
+    gets a typed object.
+    """
+    if account is None or not isinstance(account, dict):
+        return account
+    from adcp.types import AccountReference as LibraryAccountReference
+
+    return LibraryAccountReference.model_validate(account)
+
+
 def _dict_to_value(d: dict) -> struct_pb2.Value:
     """Convert a Python dict to a protobuf Value for use in Part.data."""
     val = struct_pb2.Value()
@@ -1569,7 +1584,7 @@ class AdCPRequestHandler(RequestHandler):
                 validation_mode=parameters.get("validation_mode", "strict"),
                 push_notification_config=parameters.get("push_notification_config"),
                 context=context,
-                account=parameters.get("account"),
+                account=_coerce_account_reference(parameters.get("account")),
                 identity=identity,
             )
 
