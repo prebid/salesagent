@@ -13,7 +13,7 @@ repos:
       # Check for tenant.config references
       - id: no-tenant-config
         name: No tenant.config references
-        entry: sh -c 'if grep -r "tenant\.config\|tenant\[.config.\]" --include="*.py" . | grep -v "test_migration\|postmortem\|pre-commit"; then echo "Found tenant.config references!"; exit 1; fi'
+        entry: sh -c 'if grep -rE "tenant\.config([^_a-zA-Z0-9]|$)|tenant\[.config.\]" --include="*.py" . | grep -v "test_migration\|postmortem\|pre-commit"; then echo "Found tenant.config references!"; exit 1; fi'
         language: system
         pass_filenames: false
 
