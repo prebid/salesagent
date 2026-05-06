@@ -463,8 +463,10 @@ def then_accounts_have_fields(ctx: dict) -> None:
 
     account_id, name, status: always required — must be non-None.
     advertiser, rate_card, payment_terms: optional fields — verify the
-    serialized output exposes them (via model_dump()), allowing callers to read
-    the field even when the value is None.
+    schema exposes them (via model_fields), allowing callers to read the
+    field even when the value is None. We use schema introspection rather
+    than model_dump() because AdCPBaseModel.model_dump() defaults to
+    exclude_none=True, which strips optional fields with None values.
     """
     resp = ctx["response"]
     for i, acct in enumerate(resp.accounts):
@@ -472,11 +474,10 @@ def then_accounts_have_fields(ctx: dict) -> None:
         assert acct.account_id is not None, f"Account {i} missing account_id"
         assert acct.name is not None, f"Account {i} missing name"
         assert acct.status is not None, f"Account {i} missing status"
-        # Optional fields — schema must expose them in serialized output
-        dumped = acct.model_dump()
-        assert "advertiser" in dumped, f"Account {i} serialized output missing 'advertiser' field"
-        assert "rate_card" in dumped, f"Account {i} serialized output missing 'rate_card' field"
-        assert "payment_terms" in dumped, f"Account {i} serialized output missing 'payment_terms' field"
+        # Optional fields — schema must expose them
+        fields = type(acct).model_fields
+        for field_name in ("advertiser", "rate_card", "payment_terms"):
+            assert field_name in fields, f"Account {i} schema missing optional field '{field_name}'"
 
 
 @then("the accounts are only those accessible to the authenticated agent")
