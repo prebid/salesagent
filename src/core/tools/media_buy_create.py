@@ -3948,7 +3948,7 @@ async def create_media_buy_raw(
     )
 
     # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
-    # FIXME(salesagent-k5cn): legacy A2A params (budget, total_budget, product_ids,
+    # FIXME(salesagent-sz3): legacy A2A params (budget, total_budget, product_ids,
     # start_date, end_date, pacing, daily_budget, required_axe_signals,
     # enable_creative_macro, strategy_id, buyer_campaign_ref) are accepted by the
     # signature but silently dropped. They are not CreateMediaBuyRequest spec fields
