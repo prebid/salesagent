@@ -400,6 +400,39 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                 break
 
+        # UC-004 reporting_dimensions breakdowns (by_geo, by_device_type, by_audience):
+        # PackageDelivery model only declares by_placement. The optional fields
+        # by_geo, by_device_type, by_audience and their *_truncated siblings are not
+        # on the model, and media_buy_delivery._impl only branches on req.reporting_dimensions.placement.
+        # Tracked by salesagent-zk1: feat: implement reporting_dimensions breakdowns
+        # (geo, device_type, audience) per BR-RULE-091.
+        _UC004_DIM_XFAIL_TAGS: dict[str, tuple[str, bool]] = {
+            "T-UC-004-dim-supported": (
+                "by_device_type breakdown not implemented — see salesagent-zk1: "
+                "feat: implement reporting_dimensions breakdowns (geo, device_type, audience) per BR-RULE-091",
+                True,
+            ),
+            "T-UC-004-dim-truncated": (
+                "by_geo breakdown + truncation flag not implemented — see salesagent-zk1: "
+                "feat: implement reporting_dimensions breakdowns (geo, device_type, audience) per BR-RULE-091",
+                True,
+            ),
+            "T-UC-004-dim-complete": (
+                "by_device_type breakdown + truncation flag not implemented — see salesagent-zk1: "
+                "feat: implement reporting_dimensions breakdowns (geo, device_type, audience) per BR-RULE-091",
+                True,
+            ),
+            "T-UC-004-dim-multi": (
+                "by_geo and by_device_type breakdowns not implemented — see salesagent-zk1: "
+                "feat: implement reporting_dimensions breakdowns (geo, device_type, audience) per BR-RULE-091",
+                True,
+            ),
+        }
+        for tag, (reason, strict) in _UC004_DIM_XFAIL_TAGS.items():
+            if tag in marker_names:
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
+                break
+
         # UC-004 status filter: "active" works, other values may not
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
             (
