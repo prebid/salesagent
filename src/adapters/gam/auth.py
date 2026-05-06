@@ -55,7 +55,10 @@ class GAMAuthManager:
             else:
                 raise ValueError("No valid authentication method configured")
         except Exception as e:
-            logger.error(f"Error creating GAM credentials: {e}")
+            # Log the type and short message only — never the full repr,
+            # which on JSONDecodeError carries the input doc and could
+            # surface SA-key fragments adjacent to the parse error.
+            logger.error("Error creating GAM credentials: %s: %s", type(e).__name__, str(e))
             raise
 
     def _get_oauth_credentials(self):
@@ -101,7 +104,10 @@ class GAMAuthManager:
                 logger.info("Using service account credentials from JSON string")
                 return oauth2_client
             except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid service account JSON: {e}") from e
+                # Reconstruct only the parser's own diagnostic — never `e`
+                # itself or `e.doc`, both of which carry the failing input
+                # and would leak SA-key bytes near the parse error.
+                raise ValueError(f"Invalid service account JSON: {e.msg} at line {e.lineno} column {e.colno}") from None
         elif self.key_file:
             # Legacy: Load from file
             credentials = google.oauth2.service_account.Credentials.from_service_account_file(

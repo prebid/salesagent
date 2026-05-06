@@ -58,14 +58,13 @@ class _EmptyAdvertiserResult(RuntimeError):
 def _build_gam_client_for_tenant(tenant_id: str) -> Any:
     """Build a real GAM ad_manager.AdManagerClient for ``tenant_id``.
 
-    Default ``client_factory`` for :func:`sync_advertisers`. Mirrors the
-    auth-method branching in
-    :mod:`src.services.background_sync_service`.
+    Default ``client_factory`` for :func:`sync_advertisers`. Routes through
+    the canonical builder so auth-method detection stays consistent with
+    every other GAM client construction site (connection test, inventory
+    sync, custom-targeting sync). Service-account JSON wins over refresh
+    token when both are present — see build_gam_config_from_adapter.
     """
-    import os
-
-    import google.oauth2.service_account
-    from googleads import ad_manager, oauth2
+    from src.adapters.gam import GAMClientManager, build_gam_config_from_adapter
 
     with get_db_session() as session:
         adapter = session.scalars(
@@ -74,27 +73,11 @@ def _build_gam_client_for_tenant(tenant_id: str) -> Any:
         if adapter is None or not adapter.gam_network_code:
             raise GamClientUnavailable(f"Tenant {tenant_id!r} has no GAM adapter configured")
 
-        # OAuth refresh token wins when both are present (matches existing behavior).
-        if adapter.gam_refresh_token:
-            oauth2_client = oauth2.GoogleRefreshTokenClient(
-                client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
-                client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
-                refresh_token=adapter.gam_refresh_token,
-            )
-        elif adapter.gam_service_account_json:
-            credentials = google.oauth2.service_account.Credentials.from_service_account_info(
-                json.loads(adapter.gam_service_account_json),
-                scopes=["https://www.googleapis.com/auth/dfp"],
-            )
-            oauth2_client = oauth2.GoogleCredentialsClient(credentials)
-        else:
+        config = build_gam_config_from_adapter(adapter)
+        if "service_account_json" not in config and "refresh_token" not in config:
             raise GamClientUnavailable(f"Tenant {tenant_id!r} has no GAM credentials")
 
-        return ad_manager.AdManagerClient(
-            oauth2_client,
-            "Prebid Sales Agent",
-            network_code=adapter.gam_network_code,
-        )
+        return GAMClientManager(config, network_code=adapter.gam_network_code).get_client()
 
 
 def _iter_advertisers_from_gam(client: Any) -> Iterable[dict[str, Any]]:

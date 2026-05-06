@@ -58,6 +58,33 @@ def test_service_account_json_invalid_format():
         auth_manager.get_credentials()
 
 
+def test_invalid_service_account_json_does_not_leak_payload():
+    """The raised ValueError must not contain the failing input.
+
+    json.JSONDecodeError carries the entire failing payload on `e.doc`. A
+    naive ``f"{e}"`` interpolation calls ``__str__`` (safe), but any caller
+    that logs the exception via ``%r`` or formats the cause chain may
+    surface ``e.doc`` — which on a malformed SA key blob would contain
+    bytes adjacent to the parse error (potentially including private-key
+    material). Suppress the chain with ``from None`` and reconstruct only
+    the parser's own diagnostic (msg + position) in the new ValueError.
+    """
+    sentinel_secret = "PRIVATE_KEY_FRAGMENT_DO_NOT_LEAK"
+    payload = '{"type": "service_account", "private_key": "' + sentinel_secret + '"'  # missing closing brace
+    config = {"service_account_json": payload}
+    auth_manager = GAMAuthManager(config)
+
+    with pytest.raises(ValueError) as exc_info:
+        auth_manager.get_credentials()
+
+    rendered = str(exc_info.value)
+    assert sentinel_secret not in rendered, "Error message leaked SA key fragment"
+    # And the suppressed cause chain ensures repr-based logging can't
+    # surface the original exception's `doc` attribute either.
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__ is True
+
+
 @patch("src.adapters.gam.auth.google.oauth2.service_account.Credentials.from_service_account_info")
 def test_service_account_credentials_creation(mock_from_info):
     """Test that service account credentials are created and wrapped correctly."""
