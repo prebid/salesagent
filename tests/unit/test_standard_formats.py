@@ -81,6 +81,39 @@ class TestIsStandardAgent:
         assert is_standard_agent(None) is False  # type: ignore[arg-type]
 
 
+class TestExtendedFormatRegression:
+    """Lock in the Critical Pattern #1 fix from PR #40 (issue #49).
+
+    The catalog used to import Format from the **adcp library** instead of
+    src.core.schemas.Format. The library Format lacks the salesagent-extended
+    ``platform_config`` field. The GAM adapter at
+    ``src/adapters/gam/managers/orders.py`` reads ``format_obj.platform_config``
+    to build creative placeholders, so the wrong import threw AttributeError
+    at line-item creation time.
+
+    The class-level ``isinstance(fmt, Format)`` check above passes regardless
+    (Format → ExtendedFormat is a subclass relationship), so we need a
+    dedicated regression that fails if the import drifts back.
+    """
+
+    def test_catalog_entries_are_salesagent_extended_format(self):
+        from src.core.schemas import Format as ExtendedFormat
+
+        for fid, fmt in STANDARD_FORMATS.items():
+            assert isinstance(fmt, ExtendedFormat), (
+                f"format {fid} is {type(fmt).__module__}.{type(fmt).__name__}; "
+                "expected src.core.schemas.Format. "
+                "standard_formats.py likely imported Format from the adcp library again."
+            )
+
+    def test_catalog_entries_expose_platform_config_attr(self):
+        for fid, fmt in STANDARD_FORMATS.items():
+            assert hasattr(fmt, "platform_config"), (
+                f"format {fid} missing platform_config — "
+                "the GAM adapter reads this attribute when building creative placeholders"
+            )
+
+
 class TestRegistryShortCircuit:
     def test_get_format_short_circuits_for_standard_agent(self):
         """Standard agent + standard format → returns from catalog
