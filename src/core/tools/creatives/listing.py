@@ -375,12 +375,12 @@ def _list_creatives_impl(
 
 
 async def list_creatives(
-    media_buy_id: Annotated[str, PydanticField(description="Filter creatives by a single media buy ID")] = None,
+    media_buy_id: Annotated[str | None, PydanticField(description="Filter creatives by a single media buy ID")] = None,
     media_buy_ids: list[str] = None,
     status: Annotated[
-        str, PydanticField(description="Filter by creative status (e.g. 'approved', 'pending', 'rejected')")
+        str | None, PydanticField(description="Filter by creative status (e.g. 'approved', 'pending', 'rejected')")
     ] = None,
-    format: Annotated[str, PydanticField(description="Filter by creative format ID")] = None,
+    format: Annotated[str | None, PydanticField(description="Filter by creative format ID")] = None,
     tags: list[str] = None,
     created_after: Annotated[
         str, PydanticField(description="Filter creatives created after this ISO 8601 datetime")
@@ -388,7 +388,9 @@ async def list_creatives(
     created_before: Annotated[
         str, PydanticField(description="Filter creatives created before this ISO 8601 datetime")
     ] = None,
-    search: Annotated[str, PydanticField(description="Free-text search across creative name and metadata")] = None,
+    search: Annotated[
+        str | None, PydanticField(description="Free-text search across creative name and metadata")
+    ] = None,
     filters: CreativeFilters | None = None,
     sort: Sort | None = None,
     pagination: PaginationRequest | None = None,
