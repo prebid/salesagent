@@ -117,6 +117,18 @@ def authorize_embedded_request(request, tenant_id: str) -> EmbeddedAuthResult:
         # Not our concern — let the route handler 404 / 403 as it sees fit.
         return EmbeddedAuthPassthrough()
 
+    # Stash on Flask ``g`` so ``_maybe_block_embedded_write`` and any other
+    # request-scoped consumer can reuse the load. The instance is detached
+    # from its session by the time it lands here; callers reading scalar
+    # columns are fine, but they must not lazy-load relationships.
+    try:
+        from flask import g, has_request_context
+
+        if has_request_context():
+            g.tenant = tenant
+    except RuntimeError:  # pragma: no cover — has_request_context guards this
+        pass
+
     if tenant.external_org_id is None:
         # Tenant has no upstream org binding, so X-Identity-Org-Id can't
         # be matched. Embedded mode is unavailable; fall through to OAuth.
@@ -158,7 +170,7 @@ def authorize_embedded_request(request, tenant_id: str) -> EmbeddedAuthResult:
 
 
 def is_embedded_view(tenant: Tenant | None = None) -> bool:
-    """Whether the current request should render in embedded chrome.
+    """Whether the current request is operating in an embedded view.
 
     Two independent signals — either is sufficient:
 
@@ -166,8 +178,8 @@ def is_embedded_view(tenant: Tenant | None = None) -> bool:
        the request was authorized via ``X-Identity-*`` headers. This is
        the per-request signal that powers *preview mode*: an
        ``is_embedded=False`` tenant accessed through the storefront
-       iframe should look embedded for that request without flipping the
-       tenant flag.
+       iframe should be treated as embedded for that request without
+       flipping the tenant flag.
     2. ``tenant.is_embedded`` — the persistent tenant flag. Covers test
        harnesses that bypass ``require_tenant_access`` (no synthetic
        user) and any other path where the per-request signal is missing
@@ -179,10 +191,21 @@ def is_embedded_view(tenant: Tenant | None = None) -> bool:
     on such a tenant always has ``embedded_mode`` set. The fallback exists
     for test-mode and defense-in-depth.
 
-    Use this in **rendering** decisions — chrome stripping, hiding edit
-    affordances, lock-banner pages. Do NOT use this for *tenant-policy*
-    decisions (write guards, setup-task scoping, API output describing
-    the tenant): those describe a property of the tenant itself and
+    Used for two kinds of decisions where the per-request signal is the
+    correct policy input:
+
+    - **Rendering**: chrome stripping, hiding edit affordances, lock-banner
+      pages. The page should look embedded for the duration of this
+      request.
+    - **Mutation gating**: ``require_tenant_access`` blocks
+      POST/PUT/DELETE/PATCH on embedded views because the upstream platform
+      owns the tenant's state. Preview requests must be blocked too — if
+      we used only ``tenant.is_embedded``, a header-auth caller could POST
+      against a non-embedded tenant whose preview the storefront is
+      serving.
+
+    Do NOT use this for purely *static* tenant properties (e.g., the API
+    output that describes the tenant's persisted configuration): those
     should continue to read ``tenant.is_embedded`` directly.
     """
     from flask import g, has_request_context

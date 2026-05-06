@@ -319,10 +319,17 @@ class TestEmbeddedPreviewOnNonEmbeddedTenant:
         assert resp.status_code == 403
 
 
-class TestEmbeddedViewBlocksUserMutations:
-    """Mutation endpoints under /tenant/<id>/users must reject header-auth
-    callers in embedded view — preview OR permanently-embedded. Lock banners
-    on GET pages don't block POSTs; the blueprint helper does.
+class TestEmbeddedViewBlocksMutations:
+    """Mutation methods (POST/PUT/DELETE/PATCH) on tenant-scoped routes
+    must reject header-auth callers when the request is in embedded view —
+    preview OR permanently-embedded. The gate lives in
+    ``require_tenant_access`` (``_maybe_block_embedded_write``) so every
+    blueprint inherits it without per-route bookkeeping. GETs are not
+    affected (they render the lock-banner UI normally).
+
+    Closes a pre-existing security gap: lock banners on GET pages did
+    nothing to stop a header-auth caller from POSTing directly to mutation
+    routes. The decorator now blocks all writes structurally.
     """
 
     def test_preview_blocks_add_user(self, client, preview_tenant, monkeypatch):
@@ -355,8 +362,7 @@ class TestEmbeddedViewBlocksUserMutations:
         assert resp.status_code == 403
 
     def test_managed_blocks_add_user(self, client, managed_tenant, monkeypatch):
-        """Same gate fires on permanently-embedded tenants. Closes the
-        pre-existing hole where lock banners only protected GETs."""
+        """Same gate fires on permanently-embedded tenants."""
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         resp = client.post(
             f"/tenant/{managed_tenant['tenant_id']}/users/add",
@@ -364,3 +370,54 @@ class TestEmbeddedViewBlocksUserMutations:
             headers=_identity_headers(managed_tenant["external_org_id"]),
         )
         assert resp.status_code == 403
+
+    def test_preview_blocks_settings_mutation(self, client, preview_tenant, monkeypatch):
+        """The decorator gates ALL blueprints, not just users. Any mutation
+        route under tenant scope inherits the block — settings, principals,
+        currencies, etc. were previously exposed by chrome-only hiding.
+
+        Picks /users/<id>/toggle as a smoke check for a non-add mutation
+        method on an arbitrary user_id. The handler never runs (decorator
+        intercepts) so the user_id need not exist.
+        """
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        resp = client.post(
+            f"/tenant/{preview_tenant['tenant_id']}/users/nonexistent_user/toggle",
+            headers=_identity_headers(preview_tenant["external_org_id"]),
+        )
+        assert resp.status_code == 403
+        # Decorator intercepts before the route handler so the response
+        # reflects the central gate, not the route's own "user not found".
+        assert b"platform-managed" in resp.data
+
+    def test_preview_allows_get_dashboard(self, client, preview_tenant, monkeypatch):
+        """GETs are not gated — the chrome shows the lock banner instead.
+        Confirms the gate is method-scoped, not blanket-blocking embedded
+        views entirely (which would break read access)."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        resp = client.get(
+            f"/tenant/{preview_tenant['tenant_id']}/users",
+            headers=_identity_headers(preview_tenant["external_org_id"]),
+        )
+        assert resp.status_code in (200, 302), resp.get_data(as_text=True)
+
+    def test_api_mode_returns_json_envelope(self, client, preview_tenant, monkeypatch):
+        """Routes decorated with ``require_tenant_access(api_mode=True)``
+        return JSON, not HTML, on the 403. Stable error code lets
+        programmatic callers branch without substring-matching messages.
+
+        ``/buyer-routing/api/rules`` is api_mode=True. Verify the JSON
+        envelope shape so a client regression to HTML-only responses
+        (or a different code) is caught here.
+        """
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        resp = client.post(
+            f"/tenant/{preview_tenant['tenant_id']}/buyer-routing/api/rules",
+            json={},
+            headers=_identity_headers(preview_tenant["external_org_id"]),
+        )
+        assert resp.status_code == 403
+        body = resp.get_json()
+        assert body is not None, f"expected JSON, got: {resp.get_data(as_text=True)[:200]}"
+        assert body.get("error") == "embedded_writes_not_permitted"
+        assert "platform-managed" in body.get("message", "")

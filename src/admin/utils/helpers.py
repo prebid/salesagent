@@ -13,8 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
+from src.admin.utils.embedded_mode_auth import is_managed_instance
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantManagementConfig, User
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 
 T = TypeVar("T")
 
@@ -323,8 +325,98 @@ def require_auth(admin_only=False):
     return decorator
 
 
+_MUTATION_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
+# GET/HEAD render lock banners (chrome-level UX, not a security boundary).
+# OPTIONS is CORS preflight — Flask handles it before the view runs, and
+# preflight is not a write.
+
+
+def _maybe_block_embedded_write(tenant_id: str, api_mode: bool):
+    """Block writes to platform-managed tenants at the decorator boundary.
+
+    Embedded tenants — whether permanently flagged ``is_embedded=True`` or
+    rendered in embedded preview via ``X-Identity-*`` headers — are owned
+    by the upstream platform (Storefront, etc.). Writes via the publisher-
+    facing admin UI would conflict with the platform's authoritative state
+    (User records, principals, currencies, settings, ...). Lock banners
+    on GETs hide the affordances; this gate enforces the policy on the
+    backend so a header-auth caller can't POST around the chrome.
+
+    Cheap signals are checked first to avoid an extra tenant load on every
+    mutation request — only do the DB lookup when we have positive evidence
+    embedded mode could be in play:
+
+    1. Preview path — ``g.user["embedded_mode"]`` set by the header-auth
+       handler. Always blocks; no DB needed.
+    2. Production embedded deployment — ``MANAGED_INSTANCE=true`` env var.
+       Some tenants on this instance may be ``is_embedded=True``; load the
+       tenant and check the flag.
+    3. Anywhere else (open-instance dev/test deployments where
+       ``MANAGED_INSTANCE`` is unset and the request authenticated via
+       OAuth/test-mode): no embedded scenario is reachable, skip the DB
+       lookup entirely. This keeps unit tests that POST through
+       ``require_tenant_access`` from triggering a real DB session.
+
+    The decision is point-in-time; if ``tenant.is_embedded`` flips
+    concurrently with this check the upstream platform owns that race.
+
+    Returns ``None`` to allow the request to proceed, or a 403 response
+    tuple (``api_mode=True``) / raises ``abort(403)`` (``api_mode=False``).
+    JSON envelope is ``{"error": "embedded_writes_not_permitted",
+    "message": ...}`` so programmatic callers branch on the stable code,
+    not the message text.
+    """
+    from flask import request
+
+    if request.method not in _MUTATION_METHODS:
+        return None
+
+    # Cheap signal: per-request embedded_mode (preview / header-auth).
+    user = getattr(g, "user", None)
+    if isinstance(user, dict) and user.get("embedded_mode"):
+        return _embedded_write_blocked(api_mode)
+
+    # On production embedded instances, check the persistent tenant flag.
+    # Deploy invariant: ``is_embedded=True`` is only meaningful when the
+    # host instance has ``MANAGED_INSTANCE=true``. The cheap-signal short-
+    # circuit here means a misconfigured deployment (embedded tenant on a
+    # non-managed instance) gets the gate skipped — but ``is_embedded=True``
+    # already requires header auth, which is only trusted under
+    # ``MANAGED_INSTANCE=true``, so the front door is closed elsewhere.
+    if not is_managed_instance():
+        return None
+
+    # Reuse a tenant cached on ``g`` (set by ``authorize_embedded_request``
+    # when header-auth resolves) to avoid loading the tenant twice per
+    # request. The cached object is detached from its session — only read
+    # scalar columns, never lazy-load relationships.
+    tenant = getattr(g, "tenant", None)
+    if tenant is None:
+        with get_db_session() as db_session:
+            tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
+        if tenant is not None:
+            g.tenant = tenant
+    if tenant is None or not bool(getattr(tenant, "is_embedded", False)):
+        return None
+    return _embedded_write_blocked(api_mode)
+
+
+def _embedded_write_blocked(api_mode: bool):
+    """Render the 403 response for an embedded-write rejection."""
+    msg = "Tenant is platform-managed; writes via this surface are not permitted."
+    if api_mode:
+        return jsonify({"error": "embedded_writes_not_permitted", "message": msg}), 403
+    abort(403, description=msg)
+
+
 def require_tenant_access(api_mode=False):
-    """Decorator to require tenant access for routes."""
+    """Decorator to require tenant access for routes.
+
+    On embedded views (permanent ``is_embedded=True`` OR header-auth
+    preview), mutation methods (POST/PUT/DELETE/PATCH) are rejected with
+    403 — the upstream platform owns the tenant's state. GETs render
+    normally so deep-links land on the platform-managed lock banner.
+    """
 
     def decorator(f):
         @wraps(f)
@@ -337,6 +429,13 @@ def require_tenant_access(api_mode=False):
             logger.info(
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
+
+            def _call_handler():
+                """After auth resolves, gate writes on embedded views, then dispatch."""
+                blocked = _maybe_block_embedded_write(tenant_id, api_mode)
+                if blocked is not None:
+                    return blocked
+                return f(tenant_id, *args, **kwargs)
 
             # Embedded-mode bypass — checked BEFORE session-based auth.
             # When MANAGED_INSTANCE=true and the tenant is embedded,
@@ -356,7 +455,7 @@ def require_tenant_access(api_mode=False):
                 abort(403, description=f"{embedded_result.error}: {embedded_result.message}")
             if isinstance(embedded_result, EmbeddedAuthOk):
                 g.user = synthetic_user_dict(embedded_result.identity)
-                return f(tenant_id, *args, **kwargs)
+                return _call_handler()
             # EmbeddedAuthPassthrough → fall through to existing OAuth path
 
             # Check for test mode (global env var OR per-tenant auth_setup_mode)
@@ -377,10 +476,10 @@ def require_tenant_access(api_mode=False):
                 g.user = session["test_user"]
                 # Test users can access their assigned tenant
                 if "test_tenant_id" in session and session["test_tenant_id"] == tenant_id:
-                    return f(tenant_id, *args, **kwargs)
+                    return _call_handler()
                 # Super admins can access all tenants
                 if session.get("test_user_role") == "super_admin":
-                    return f(tenant_id, *args, **kwargs)
+                    return _call_handler()
 
             if "user" not in session:
                 if api_mode:
@@ -401,7 +500,7 @@ def require_tenant_access(api_mode=False):
 
             # Check super admin status (is_super_admin handles env + db + session caching internally)
             if is_super_admin(email):
-                return f(tenant_id, *args, **kwargs)
+                return _call_handler()
 
             # Check if user has access to this specific tenant
             try:
@@ -414,7 +513,7 @@ def require_tenant_access(api_mode=False):
                             return jsonify({"error": "Access denied"}), 403
                         abort(403)
 
-                    return f(tenant_id, *args, **kwargs)
+                    return _call_handler()
 
             except Exception as e:
                 # Don't catch abort exceptions (they should propagate)

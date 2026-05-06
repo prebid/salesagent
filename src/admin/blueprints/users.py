@@ -19,35 +19,6 @@ logger = logging.getLogger(__name__)
 users_bp = Blueprint("users", __name__, url_prefix="/tenant/<tenant_id>/users")
 
 
-def _reject_if_embedded(tenant_id: str):
-    """Block user-management mutations on embedded views (preview or required).
-
-    User records, domain authorization, and auth-setup-mode are owned by the
-    upstream platform on embedded tenants — the publisher-facing UI hides the
-    affordances behind ``_embedded_locked_page.html`` but a header-auth caller
-    could still POST directly to these endpoints. Returns a 403 JSON response
-    when the request is in embedded view, otherwise ``None`` (caller proceeds).
-
-    Same gate covers permanently-embedded tenants (closes a pre-existing hole)
-    and preview requests on non-embedded tenants (the new opt-in cell).
-    """
-    from src.core.database.repositories.tenant_config import TenantConfigRepository
-
-    with get_db_session() as db_session:
-        tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
-    if tenant is not None and is_embedded_view(tenant):
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "User management is platform-managed for embedded tenants.",
-                }
-            ),
-            403,
-        )
-    return None
-
-
 @users_bp.route("")
 @require_tenant_access()
 def list_users(tenant_id):
@@ -117,9 +88,6 @@ def list_users(tenant_id):
 )
 def add_user(tenant_id):
     """Add a new user to the tenant."""
-    rejected = _reject_if_embedded(tenant_id)
-    if rejected is not None:
-        return rejected
     try:
         email = request.form.get("email", "").strip().lower()
         role = request.form.get("role", "viewer")
@@ -175,9 +143,6 @@ def add_user(tenant_id):
 @require_tenant_access()
 def toggle_user(tenant_id, user_id):
     """Toggle user active status."""
-    rejected = _reject_if_embedded(tenant_id)
-    if rejected is not None:
-        return rejected
     try:
         with get_db_session() as db_session:
             user = db_session.scalars(select(User).filter_by(tenant_id=tenant_id, user_id=user_id)).first()
@@ -203,9 +168,6 @@ def toggle_user(tenant_id, user_id):
 @require_tenant_access()
 def update_role(tenant_id, user_id):
     """Update user role."""
-    rejected = _reject_if_embedded(tenant_id)
-    if rejected is not None:
-        return rejected
     try:
         new_role = request.form.get("role")
         if not new_role or new_role not in ["admin", "manager", "viewer"]:
@@ -235,9 +197,6 @@ def update_role(tenant_id, user_id):
 @log_admin_action("add_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def add_domain(tenant_id):
     """Add an authorized domain for the tenant."""
-    rejected = _reject_if_embedded(tenant_id)
-    if rejected is not None:
-        return rejected
     try:
         data = request.json
         domain = data.get("domain", "").strip().lower()
@@ -281,9 +240,6 @@ def add_domain(tenant_id):
 @log_admin_action("remove_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def remove_domain(tenant_id):
     """Remove an authorized domain from the tenant."""
-    rejected = _reject_if_embedded(tenant_id)
-    if rejected is not None:
-        return rejected
     try:
         data = request.json
         domain = data.get("domain", "").strip().lower()
@@ -324,9 +280,6 @@ def disable_setup_mode(tenant_id):
     Once disabled, test credentials no longer work and only SSO authentication is allowed.
     Requires the user to be logged in via SSO to prevent lockout.
     """
-    rejected = _reject_if_embedded(tenant_id)
-    if rejected is not None:
-        return rejected
     try:
         # Require the user to be logged in via SSO (not test credentials)
         # This ensures they can actually authenticate via SSO before disabling test auth
@@ -384,9 +337,6 @@ def enable_setup_mode(tenant_id):
     who reaches this endpoint can flip the tenant back into setup mode and
     chain into full OAuth-equivalent access.
     """
-    rejected = _reject_if_embedded(tenant_id)
-    if rejected is not None:
-        return rejected
     auth_method = session.get("auth_method")
     if auth_method != "oidc":
         return (
