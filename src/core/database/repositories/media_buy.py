@@ -81,6 +81,46 @@ class MediaBuyRepository:
             result = self.find_by_idempotency_key(identifier, principal_id)
         return result
 
+    def get_by_external_id(self, external_id: str) -> MediaBuy | None:
+        """Get a media buy by adapter-side ID (e.g. GAM order ID)."""
+        return self._session.scalars(
+            select(MediaBuy).where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.external_id == external_id,
+            )
+        ).first()
+
+    def list_external_ids_for_source(self, source: str, external_ids: list[str]) -> set[str]:
+        """Return the subset of ``external_ids`` that already have a row
+        with the given ``source`` within this tenant.
+
+        Used by the GAM projection to skip orders that have already been
+        materialized so a buyer doesn't see duplicates.
+        """
+        if not external_ids:
+            return set()
+        rows = self._session.scalars(
+            select(MediaBuy.external_id).where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.source == source,
+                MediaBuy.external_id.in_(external_ids),
+            )
+        ).all()
+        return {r for r in rows if r is not None}
+
+    def get_by_id_or_external_id(self, identifier: str) -> MediaBuy | None:
+        """Resolve a media buy by canonical ``media_buy_id`` or by ``external_id``.
+
+        Lookup convergence — buyers can pass either form. Native AdCP buys
+        carry an ``mb_<uuid>`` PK plus an ``external_id`` populated after the
+        adapter assigns one; imported buys use ``gam_<order_id>`` for both
+        the PK (with the prefix) and the ``external_id`` (without).
+        """
+        result = self.get_by_id(identifier)
+        if result is None:
+            result = self.get_by_external_id(identifier)
+        return result
+
     # ------------------------------------------------------------------
     # List queries
     # ------------------------------------------------------------------
@@ -386,6 +426,50 @@ class MediaBuyRepository:
             kwargs["account_id"] = account_id
 
         media_buy = MediaBuy(**kwargs)
+        self._session.add(media_buy)
+        self._session.flush()
+        return media_buy
+
+    def create_from_gam_import(
+        self,
+        *,
+        media_buy_id: str,
+        principal_id: str,
+        order_name: str,
+        advertiser_name: str,
+        budget: Decimal | None,
+        currency: str,
+        start_date: datetime.date,
+        end_date: datetime.date,
+        start_time: datetime.datetime | None,
+        end_time: datetime.datetime | None,
+        status: str,
+        external_id: str,
+        raw_request: dict,
+    ) -> MediaBuy:
+        """Create a media buy materialized from an imported GAM order.
+
+        Marks the row with ``source='gam_import'`` and stamps
+        ``external_id`` with the GAM order id so the buyer can update it
+        later via either id form. Does NOT commit — UoW handles that.
+        """
+        media_buy = MediaBuy(
+            media_buy_id=media_buy_id,
+            tenant_id=self._tenant_id,
+            principal_id=principal_id,
+            order_name=order_name,
+            advertiser_name=advertiser_name,
+            budget=budget,
+            currency=currency,
+            start_date=start_date,
+            end_date=end_date,
+            start_time=start_time,
+            end_time=end_time,
+            status=status,
+            raw_request=raw_request,
+            source="gam_import",
+            external_id=external_id,
+        )
         self._session.add(media_buy)
         self._session.flush()
         return media_buy

@@ -50,6 +50,10 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools._gam_projection import (
+    get_or_materialize_media_buy,
+    is_projected_media_buy_id,
+)
 from src.core.tools.financial_validation import (
     validate_max_campaign_budget,
     validate_max_daily_package_spend,
@@ -160,8 +164,59 @@ def _update_media_buy_impl(
         if not media_buy_id_to_use:
             raise ValueError("media_buy_id is required")
 
+        # Materialize projected GAM orders on first write. The buyer
+        # received this id from get_media_buys' projection (gam_<order_id>);
+        # we now create a real media_buys row so packages, push configs,
+        # and audit logs have a stable PK to attach to. Authorization
+        # check happens inside materialize_projected_buy via the
+        # GamAdvertiser.principal_id assignment.
+        #
+        # Native AdCP buys (mb_<uuid> ids) skip this whole branch — no
+        # extra DB calls in the hot path.
+        imported_buy = None
+        if is_projected_media_buy_id(media_buy_id_to_use):
+            imported_buy = uow.media_buys.get_by_id(media_buy_id_to_use)
+            if imported_buy is None:
+                imported_buy = get_or_materialize_media_buy(
+                    session=session,
+                    tenant_id=tenant["tenant_id"],
+                    principal_id=principal_id,
+                    media_buy_id=media_buy_id_to_use,
+                )
+
         # Verify principal owns this media buy
         _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
+
+        # Imported buys (source='gam_import') don't yet support adapter
+        # writeback — see #100 follow-ups. Returning success when the
+        # mutation isn't propagated to GAM would lie about the seller's
+        # state, so reject any request that carries mutating fields.
+        # No-op calls (used to trigger materialization) are still allowed.
+        if imported_buy is not None and imported_buy.source == "gam_import":
+            mutating = (
+                req.paused is not None
+                or req.canceled is not None
+                or req.start_time is not None
+                or req.end_time is not None
+                or req.budget is not None
+                or bool(req.packages)
+                or bool(req.new_packages)
+            )
+            if mutating:
+                return UpdateMediaBuyError(
+                    media_buy_id=media_buy_id_to_use,
+                    errors=[
+                        Error(
+                            code="not_implemented",
+                            message=(
+                                "Updating an imported GAM media buy is not yet supported. "
+                                "Adapter writeback to GAM is in development; tracked at "
+                                "github.com/bokelley/salesagent/issues/100."
+                            ),
+                        )
+                    ],
+                    context=req.context,
+                )
 
         # Extract testing context early (needed for dry_run check)
         testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()

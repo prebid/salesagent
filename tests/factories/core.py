@@ -16,6 +16,8 @@ from src.core.database.models import (
     CurrencyLimit,
     GamAdvertiser,
     GAMInventory,
+    GAMLineItem,
+    GAMOrder,
     ProductInventoryMapping,
     PropertyTag,
     PublisherPartner,
@@ -193,3 +195,47 @@ class GamAdvertiserFactory(factory.alchemy.SQLAlchemyModelFactory):
     name = LazyAttribute(lambda o: f"Advertiser {o.advertiser_id}")
     currency_code = "USD"
     status = "active"
+
+
+class GAMOrderFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """Synced GAM order row used by the get_media_buys projection.
+
+    The projection module reads ``gam_orders`` for advertisers assigned
+    to the calling principal and renders them as MediaBuy entries in
+    the response.
+    """
+
+    class Meta:
+        model = GAMOrder
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    order_id = Sequence(lambda n: f"order_{n:08d}")
+    name = LazyAttribute(lambda o: f"Order {o.order_id}")
+    advertiser_id = Sequence(lambda n: str(10000 + n))
+    advertiser_name = LazyAttribute(lambda o: f"Advertiser {o.advertiser_id}")
+    status = "APPROVED"
+    total_budget = 10000.0
+    currency_code = "USD"
+    is_programmatic = False
+
+
+class GAMLineItemFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """Synced GAM line item row, child of a GAMOrder."""
+
+    class Meta:
+        model = GAMLineItem
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    line_item_id = Sequence(lambda n: f"li_{n:08d}")
+    order_id = Sequence(lambda n: f"order_{n:08d}")
+    name = LazyAttribute(lambda o: f"Line Item {o.line_item_id}")
+    status = "DELIVERING"
+    line_item_type = "STANDARD"
+    cost_type = "CPM"
+    cost_per_unit = 5.0

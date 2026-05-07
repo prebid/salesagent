@@ -37,6 +37,31 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+@pytest.fixture
+def factory_session(integration_db):
+    """Bind factory-boy factories to a fresh session against the integration DB.
+
+    Used by GAM projection / materialization tests that need to seed
+    ``gam_orders``, ``gam_line_items``, and ``gam_advertisers`` rows.
+    """
+    from sqlalchemy.orm import Session as SASession
+
+    from src.core.database.database_session import get_engine
+    from tests.factories import ALL_FACTORIES
+
+    engine = get_engine()
+    session = SASession(bind=engine)
+    originals = {f: f._meta.sqlalchemy_session for f in ALL_FACTORIES}
+    try:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = session
+        yield session
+    finally:
+        for f, orig in originals.items():
+            f._meta.sqlalchemy_session = orig
+        session.close()
+
+
 def cleanup_tenant(tenant_id: str) -> None:
     """Delete tenant and all dependent data (correct FK order)."""
     with get_db_session() as session:

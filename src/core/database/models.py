@@ -1065,6 +1065,14 @@ class MediaBuy(Base):
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Origin marker. ``adcp`` for buys created via the AdCP protocol;
+    # ``gam_import`` for buys materialized from gam_orders when an
+    # assigned buyer first updates an imported order.
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="adcp", server_default="adcp")
+    # Adapter-side ID (e.g. GAM order ID). Populated for both native and
+    # imported buys so lookups can resolve by either the canonical
+    # ``media_buy_id`` or the adapter ID.
+    external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Delivery snapshot — populated opportunistically when a buyer calls
     # get_media_buy_delivery, so the publisher dashboard can show pacing
@@ -1119,6 +1127,12 @@ class MediaBuy(Base):
             "idempotency_key",
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index(
+            "idx_media_buys_external_id",
+            "tenant_id",
+            "external_id",
+            postgresql_where=text("external_id IS NOT NULL"),
         ),
     )
 
@@ -2196,16 +2210,33 @@ class GamAdvertiser(Base):
         onupdate=func.now(),
         nullable=False,
     )
+    # Buyer agent (Principal) assigned to this advertiser. NULL means no
+    # agent has claimed it yet — orders for this advertiser are not
+    # surfaced to any buyer via get_media_buys. Set via the buyer
+    # mapping UI.
+    principal_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     tenant = relationship("Tenant", backref="gam_advertisers")
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="SET NULL",
+            name="fk_gam_advertisers_principal",
+        ),
         Index("idx_gam_advertisers_tenant", "tenant_id"),
         # Compound index supports the case-insensitive name search in
         # GET /gam/advertisers. Mirrors the migration index so
         # Base.metadata.create_all() (used by integration tests) builds
         # the same constraint.
         Index("idx_gam_advertisers_name", "tenant_id", "name"),
+        Index(
+            "idx_gam_advertisers_principal",
+            "tenant_id",
+            "principal_id",
+            postgresql_where=text("principal_id IS NOT NULL"),
+        ),
     )
 
 

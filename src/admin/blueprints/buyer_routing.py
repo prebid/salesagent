@@ -43,8 +43,11 @@ from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
     AdvertiserRoutingRule,
     GamAdvertiser,
+    Principal,
     Tenant,
 )
+from src.core.database.repositories.gam_sync import GAMSyncRepository
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.services.recent_buyers_service import compute_recent_buyers
 
 logger = logging.getLogger(__name__)
@@ -147,6 +150,33 @@ def buyer_routing_page(tenant_id: str):
         is_embedded = is_embedded_view(tenant)
         tenant_name = tenant.name
 
+        # Advertiser → buyer-agent assignments. Listed independently of
+        # routing rules so the operator can see every synced advertiser
+        # and pick which buyer agent should see its orders via
+        # get_media_buys.
+        advertiser_rows = session.scalars(
+            select(GamAdvertiser)
+            .where(GamAdvertiser.tenant_id == tenant_id)
+            .order_by(GamAdvertiser.name.asc(), GamAdvertiser.advertiser_id.asc())
+        ).all()
+        principal_rows = session.scalars(
+            select(Principal)
+            .where(Principal.tenant_id == tenant_id)
+            .order_by(Principal.name.asc(), Principal.principal_id.asc())
+        ).all()
+        principal_name_by_id = {p.principal_id: p.name for p in principal_rows}
+        advertiser_assignments = [
+            {
+                "advertiser_id": r.advertiser_id,
+                "name": r.name,
+                "status": r.status,
+                "principal_id": r.principal_id,
+                "principal_name": principal_name_by_id.get(r.principal_id) if r.principal_id else None,
+            }
+            for r in advertiser_rows
+        ]
+        principals_for_picker = [{"principal_id": p.principal_id, "name": p.name} for p in principal_rows]
+
         recent_rows = compute_recent_buyers(tenant_id, days=30, limit=100)
 
         activity_rows: list[dict] = []
@@ -194,6 +224,8 @@ def buyer_routing_page(tenant_id: str):
         activity=activity_rows,
         sandbox_rows=sandbox_rows,
         advertiser_names=advertiser_names,
+        advertiser_assignments=advertiser_assignments,
+        principals_for_picker=principals_for_picker,
     )
 
 
@@ -469,3 +501,138 @@ def delete_rule(tenant_id: str, rule_id: str):
             session.rollback()
             return _api_error_json("managed_tenant_write_blocked", str(exc), 403)
     return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Advertiser → buyer-agent assignment.
+#
+# Independent of routing rules: routing rules map (operator, brand_house,
+# brand_id) → advertiser, while these endpoints map advertiser → buyer
+# agent. Used by get_media_buys to project gam_orders rows into the
+# assigned agent's response.
+# ---------------------------------------------------------------------------
+
+
+@buyer_routing_bp.route(
+    "/<tenant_id>/buyer-routing/api/advertiser-assignments",
+    methods=["GET"],
+    strict_slashes=False,
+)
+@require_tenant_access(api_mode=True)
+def list_advertiser_assignments(tenant_id: str):
+    """List GAM advertisers and their currently assigned buyer agent.
+
+    Returns every active advertiser plus the principal_id (if any) the
+    operator has assigned. Used to populate the assignment table in the
+    buyer-routing page.
+    """
+    with get_db_session() as session:
+        tenant_repo = TenantConfigRepository(session, tenant_id)
+        if tenant_repo.get_tenant() is None:
+            return _api_error_json("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        rows = GAMSyncRepository(session, tenant_id).list_advertisers()
+
+        principal_ids = [r.principal_id for r in rows if r.principal_id]
+        principals_by_id = tenant_repo.get_principal_names(principal_ids)
+
+        advertisers = [
+            {
+                "advertiser_id": r.advertiser_id,
+                "name": r.name,
+                "status": r.status,
+                "currency_code": r.currency_code,
+                "principal_id": r.principal_id,
+                "principal_name": principals_by_id.get(r.principal_id) if r.principal_id else None,
+            }
+            for r in rows
+        ]
+    return jsonify({"advertisers": advertisers})
+
+
+@buyer_routing_bp.route(
+    "/<tenant_id>/buyer-routing/api/advertiser-assignments/<advertiser_id>",
+    methods=["PATCH"],
+    strict_slashes=False,
+)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
+def patch_advertiser_assignment(tenant_id: str, advertiser_id: str):
+    """Assign or clear the buyer agent for a GAM advertiser.
+
+    Body: ``{"principal_id": "<id>" | null}``. Setting ``null`` clears
+    the assignment so the advertiser's orders are no longer projected
+    to any buyer.
+    """
+    payload = request.get_json(silent=True) or {}
+    if "principal_id" not in payload:
+        return _api_error_json(
+            "invalid_request",
+            "Body must include a 'principal_id' field (string or null).",
+            400,
+        )
+    new_principal_id = payload["principal_id"]
+    if new_principal_id is not None and not isinstance(new_principal_id, str):
+        return _api_error_json(
+            "invalid_request",
+            "'principal_id' must be a string or null.",
+            400,
+        )
+    if new_principal_id == "":
+        new_principal_id = None
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        gam_repo = GAMSyncRepository(session, tenant_id)
+        tenant_repo = TenantConfigRepository(session, tenant_id)
+        advertiser = gam_repo.get_advertiser(advertiser_id)
+        if advertiser is None:
+            return _api_error_json(
+                "advertiser_not_found",
+                f"GAM advertiser {advertiser_id!r} not found for tenant {tenant_id!r}",
+                404,
+            )
+
+        if new_principal_id is not None:
+            principal = tenant_repo.get_principal(new_principal_id)
+            if principal is None:
+                return _api_error_json(
+                    "principal_not_found",
+                    f"Principal {new_principal_id!r} not found for tenant {tenant_id!r}",
+                    404,
+                    details={"principal_id": new_principal_id},
+                )
+
+        advertiser.principal_id = new_principal_id
+        try:
+            session.commit()
+        except EmbeddedTenantWriteError as exc:
+            session.rollback()
+            return _api_error_json("managed_tenant_write_blocked", str(exc), 403)
+
+        return jsonify(
+            {
+                "advertiser_id": advertiser_id,
+                "principal_id": new_principal_id,
+            }
+        )
+
+
+@buyer_routing_bp.route(
+    "/<tenant_id>/buyer-routing/api/principals",
+    methods=["GET"],
+    strict_slashes=False,
+)
+@require_tenant_access(api_mode=True)
+def list_principals(tenant_id: str):
+    """List buyer agents available for advertiser assignment.
+
+    Used to populate the agent dropdown in the assignment UI.
+    """
+    with get_db_session() as session:
+        tenant_repo = TenantConfigRepository(session, tenant_id)
+        if tenant_repo.get_tenant() is None:
+            return _api_error_json("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        rows = tenant_repo.list_principals()
+        principals = [{"principal_id": p.principal_id, "name": p.name} for p in rows]
+    return jsonify({"principals": principals})

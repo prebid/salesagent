@@ -36,6 +36,9 @@ class _MediaBuyData:
     raw_request: dict | None
     created_at: datetime | None
     updated_at: datetime | None
+    # Pre-computed status for projected GAM buys (whose state comes from
+    # GAM, not just flight dates). None means use the date-derived status.
+    projected_status: object | None = None
 
 
 @dataclass
@@ -65,6 +68,12 @@ from src.core.schemas import (
     GetMediaBuysResponse,
     Snapshot,
     SnapshotUnavailableReason,
+)
+from src.core.tools._gam_projection import (
+    line_item_to_package_fields,
+    order_to_media_buy_fields,
+    project_gam_status,
+    project_orders_for_principal,
 )
 
 
@@ -124,6 +133,21 @@ def _get_media_buys_impl(
 
         # Resolve package configs for all media buys in one batch query
         packages_by_media_buy = _fetch_packages(all_media_buy_ids, uow)
+
+        # Project GAM orders + line items for advertisers assigned to this
+        # principal. Projected buys appear alongside native ones; they have
+        # no creative approvals and their snapshots are looked up by
+        # platform_line_item_id like any other adapter package.
+        projected_buys, projected_packages = _project_gam_buys(
+            uow.session,
+            tenant_id,
+            principal_id,
+            req,
+            today,
+        )
+        target_media_buys.extend(projected_buys)
+        for media_buy_id, packages in projected_packages.items():
+            packages_by_media_buy[media_buy_id] = packages
 
     # Get snapshots from adapter if requested
     snapshot_data: dict[str, dict[str, Snapshot | None]] = {}  # media_buy_id -> package_id -> Snapshot
@@ -259,6 +283,8 @@ def _resolve_status_filter(
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
     """Compute the current AdCP status of a media buy based on its dates."""
+    if isinstance(buy, _MediaBuyData) and buy.projected_status is not None:
+        return cast(MediaBuyStatus, buy.projected_status)
     start = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
     end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
 
@@ -267,6 +293,45 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     if today > end:
         return MediaBuyStatus.completed
     return MediaBuyStatus.active
+
+
+def _project_gam_buys(
+    session: Session,
+    tenant_id: str,
+    principal_id: str,
+    req: GetMediaBuysRequest,
+    today: date,
+) -> tuple[list[_MediaBuyData], dict[str, list[_PackageData]]]:
+    """Project GAM orders into _MediaBuyData / _PackageData for the response.
+
+    Applies the same status_filter and media_buy_ids filter as native
+    buys. Status is derived from the GAM order status (PAUSED / CANCELED /
+    DELETED short-circuit) combined with flight dates for non-terminal
+    states.
+    """
+    media_buy_ids_filter = req.media_buy_ids if req.media_buy_ids else None
+    orders, line_items_by_order = project_orders_for_principal(session, tenant_id, principal_id, media_buy_ids_filter)
+    if not orders:
+        return [], {}
+
+    filter_statuses = _resolve_status_filter(req.status_filter)
+
+    projected_buys: list[_MediaBuyData] = []
+    projected_packages: dict[str, list[_PackageData]] = {}
+    for order in orders:
+        fields = order_to_media_buy_fields(order)
+        status = project_gam_status(order.status, fields["start_date"], fields["end_date"], today)
+        if status not in filter_statuses:
+            continue
+        buy_data = _MediaBuyData(**fields, projected_status=status)
+        projected_buys.append(buy_data)
+
+        packages = [
+            _PackageData(**line_item_to_package_fields(li)) for li in line_items_by_order.get(order.order_id, [])
+        ]
+        projected_packages[buy_data.media_buy_id] = packages
+
+    return projected_buys, projected_packages
 
 
 def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, list[_PackageData]]:

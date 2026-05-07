@@ -418,7 +418,67 @@
     </div>
 </section>
 
-<!-- Section 3: Recent activity -->
+<!-- Section 3: Advertiser → buyer-agent assignments -->
+<section class="br-section" data-section="advertiser-assignments">
+    <h2>Advertisers</h2>
+    <p class="br-section-help">
+        Every GAM advertiser synced from your network. Assign a buyer agent
+        to surface that advertiser's orders and line items in the agent's
+        <code>get_media_buys</code> response. Unassigned advertisers stay
+        invisible to all buyers.
+    </p>
+    <div class="br-card" style="padding: 0;">
+    <table class="br-table">
+        <thead>
+            <tr>
+                <th>Advertiser</th>
+                <th>GAM id</th>
+                <th>Status</th>
+                <th>Assigned agent</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody data-testid="advertiser-assignments-tbody">
+            {% if advertiser_assignments %}
+                {% for adv in advertiser_assignments %}
+                <tr data-advertiser-id="{{ adv.advertiser_id }}"
+                    data-advertiser-principal-id="{{ adv.principal_id or '' }}">
+                    <td>{{ adv.name }}</td>
+                    <td><code>{{ adv.advertiser_id }}</code></td>
+                    <td>
+                        {% if adv.status == "inactive" %}
+                            <span class="br-advertiser-inactive-chip">inactive</span>
+                        {% else %}
+                            {{ adv.status }}
+                        {% endif %}
+                    </td>
+                    <td data-testid="advertiser-assignment-cell">
+                        <select data-action="assign-agent" class="br-assign-agent-select">
+                            <option value="" {% if not adv.principal_id %}selected{% endif %}>— Unassigned</option>
+                            {% for p in principals_for_picker %}
+                                <option value="{{ p.principal_id }}"
+                                        {% if adv.principal_id == p.principal_id %}selected{% endif %}>
+                                    {{ p.name }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td><span class="br-assign-status" style="font-size: 0.85rem; color: #6b7280;"></span></td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="5" class="br-empty">
+                        No advertisers synced. Run an advertiser sync from the GAM settings page.
+                    </td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+    </div>
+</section>
+
+<!-- Section 4: Recent activity -->
 <section class="br-section" data-section="recent-activity">
     <h2>Recent activity (last 30 days)</h2>
     <p class="br-section-help">
@@ -911,6 +971,45 @@
                 brand_id: tr.getAttribute('data-activity-brand-id') || '',
             };
             openRuleModal('add', prefill);
+        });
+    });
+
+    // Advertiser → agent assignment selects
+    document.querySelectorAll('[data-action="assign-agent"]').forEach(function (select) {
+        select.addEventListener('change', async function () {
+            const tr = select.closest('tr');
+            const advertiserId = tr.getAttribute('data-advertiser-id');
+            const newPrincipalId = select.value || null;
+            const statusSpan = tr.querySelector('.br-assign-status');
+            statusSpan.textContent = 'Saving…';
+            statusSpan.style.color = '#6b7280';
+
+            try {
+                const res = await fetch(
+                    baseUrl + '/api/advertiser-assignments/' + encodeURIComponent(advertiserId),
+                    {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ principal_id: newPrincipalId }),
+                    }
+                );
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    statusSpan.textContent = err.message || ('Failed (' + res.status + ')');
+                    statusSpan.style.color = '#dc2626';
+                    select.value = tr.getAttribute('data-advertiser-principal-id') || '';
+                    return;
+                }
+                tr.setAttribute('data-advertiser-principal-id', newPrincipalId || '');
+                statusSpan.textContent = 'Saved';
+                statusSpan.style.color = '#16a34a';
+                setTimeout(function () { statusSpan.textContent = ''; }, 2000);
+            } catch (e) {
+                statusSpan.textContent = 'Network error';
+                statusSpan.style.color = '#dc2626';
+                select.value = tr.getAttribute('data-advertiser-principal-id') || '';
+            }
         });
     });
 })();

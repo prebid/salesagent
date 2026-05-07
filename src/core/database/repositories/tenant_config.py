@@ -62,6 +62,16 @@ class TenantConfigRepository:
             select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=principal_id)
         ).first()
 
+    def list_principals(self) -> list[Principal]:
+        """All principals (buyer agents) for the tenant, ordered by name."""
+        return list(
+            self._session.scalars(
+                select(Principal)
+                .where(Principal.tenant_id == self._tenant_id)
+                .order_by(Principal.name.asc(), Principal.principal_id.asc())
+            ).all()
+        )
+
     def get_principal_names(self, principal_ids: list[str]) -> dict[str, str]:
         """Bulk-load ``principal_id → name`` for principals within this tenant.
 
