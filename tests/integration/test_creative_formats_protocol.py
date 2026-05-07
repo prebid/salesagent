@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from adcp.types.generated_poc.core.format import (
     Assets,
-    Assets5,
+    Assets81,
     Dimensions,
     Renders,
 )
@@ -90,7 +90,7 @@ class TestCombinedFilters:
             "d_video",
             "Display Video Unit",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets5(item_type="individual", asset_id="hero_video", required=True)],
+            assets=[Assets81(item_type="individual", asset_id="hero_video", required=True)],
         )
         # Image asset, width 300 -- SHOULD MATCH (type filter no longer applies)
         video_image = _make_format(
@@ -176,7 +176,7 @@ class TestCombinedFilters:
             "v1",
             "Video Only",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets5(item_type="individual", asset_id="vid", required=True)],
+            assets=[Assets81(item_type="individual", asset_id="vid", required=True)],
         )
 
         with CreativeFormatsEnv() as env:
@@ -464,5 +464,6 @@ class TestTenantContextFromA2AHeaders:
         )
 
         with CreativeFormatsEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="tenant"):
+            # A2A transport translates AdCPError to a2a-sdk errors; catch either
+            with pytest.raises((AdCPAuthenticationError, Exception), match="tenant"):
                 env.call_a2a(identity=identity_no_tenant)

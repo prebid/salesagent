@@ -16,7 +16,9 @@ from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
-from adcp.types import SignalPricingOption
+from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.core.signal_id import SignalId, SignalId18
+from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
 
 from src.core.auth import get_principal_object
 from src.core.resolved_identity import ResolvedIdentity
@@ -30,10 +32,15 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 
 
-def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[SignalPricingOption]:
+def _agent_signal_id(segment_id: str) -> SignalId:
+    """Build a SignalId for an agent-native signal."""
+    return SignalId(SignalId18(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
+
+
+def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricingOption]:
     """Build a single-element pricing_options list for a CPM signal."""
     return [
-        SignalPricingOption.model_validate(
+        VendorPricingOption.model_validate(
             {"pricing_option_id": f"cpm_{currency.lower()}", "model": "cpm", "cpm": cpm, "currency": currency}
         )
     ]
@@ -65,6 +72,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     # Sample signals for demonstration using local types (extend AdCP library types)
     sample_signals = [
         Signal(
+            signal_id=_agent_signal_id("auto_intenders_q1_2025"),
             signal_agent_segment_id="auto_intenders_q1_2025",
             name="Auto Intenders Q1 2025",
             description="Users actively researching new vehicles in Q1 2025",
@@ -75,6 +83,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(3.0),
         ),
         Signal(
+            signal_id=_agent_signal_id("luxury_travel_enthusiasts"),
             signal_agent_segment_id="luxury_travel_enthusiasts",
             name="Luxury Travel Enthusiasts",
             description="High-income individuals interested in premium travel experiences",
@@ -85,6 +94,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(5.0),
         ),
         Signal(
+            signal_id=_agent_signal_id("sports_content"),
             signal_agent_segment_id="sports_content",
             name="Sports Content Pages",
             description="Target ads on sports-related content",
@@ -95,6 +105,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(1.5),
         ),
         Signal(
+            signal_id=_agent_signal_id("finance_content"),
             signal_agent_segment_id="finance_content",
             name="Finance & Business Content",
             description="Target ads on finance and business content",
@@ -105,6 +116,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(2.0),
         ),
         Signal(
+            signal_id=_agent_signal_id("urban_millennials"),
             signal_agent_segment_id="urban_millennials",
             name="Urban Millennials",
             description="Millennials living in major metropolitan areas",
@@ -115,6 +127,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(1.8),
         ),
         Signal(
+            signal_id=_agent_signal_id("pet_owners"),
             signal_agent_segment_id="pet_owners",
             name="Pet Owners",
             description="Households with dogs or cats",
@@ -194,7 +207,7 @@ async def _activate_signal_impl(
     signal_agent_segment_id: str,
     campaign_id: str = None,
     media_buy_id: str = None,
-    context: dict | None = None,  # payload-level context
+    context: ContextObject | dict | None = None,  # payload-level context
     identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:
     """Shared implementation for activate_signal (used by both MCP and A2A).
@@ -247,7 +260,7 @@ async def _activate_signal_impl(
             # Create a human task for approval - return error response
             errors = [
                 Error(
-                    code="APPROVAL_REQUIRED",
+                    code="VALIDATION_ERROR",
                     message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
                 )
             ]
@@ -272,7 +285,7 @@ async def _activate_signal_impl(
             )
         else:
             # Failure
-            errors = [Error(code="ACTIVATION_FAILED", message="Signal provider unavailable")]
+            errors = [Error(code="SERVICE_UNAVAILABLE", message="Signal provider unavailable")]
             return ActivateSignalResponse(
                 signal_id=signal_agent_segment_id,
                 activation_details=None,
@@ -287,7 +300,7 @@ async def _activate_signal_impl(
         return ActivateSignalResponse(
             signal_id=signal_agent_segment_id,
             activation_details=None,
-            errors=[Error(code="ACTIVATION_ERROR", message=str(e))],
+            errors=[Error(code="SERVICE_UNAVAILABLE", message=str(e))],
             context=context,
         )
 
@@ -348,7 +361,7 @@ async def activate_signal_raw(
     signal_agent_segment_id: str,
     campaign_id: str = None,
     media_buy_id: str = None,
-    context: dict | None = None,  # payload-level context
+    context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:

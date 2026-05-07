@@ -169,7 +169,7 @@ class TestGAMManualApprovalPath:
 
             assert isinstance(response, CreateMediaBuyError), "Workflow failure should return error response"
             assert len(response.errors) > 0, "Error response must have errors"
-            assert response.errors[0].code == "workflow_creation_failed", "Error code should indicate workflow failure"
+            assert response.errors[0].code == "WORKFLOW_CREATION_FAILED", "Error code should indicate workflow failure"
 
 
 class TestGAMActivationWorkflowPath:

@@ -39,13 +39,19 @@ class TestAgentCardURLRegression:
         agent_card = create_agent_card()
 
         # Critical: URL should not end with trailing slash
-        assert not agent_card.url.endswith("/"), f"Agent card URL '{agent_card.url}' should not end with trailing slash"
+        assert not agent_card.supported_interfaces[0].url.endswith("/"), (
+            f"Agent card URL '{agent_card.supported_interfaces[0].url}' should not end with trailing slash"
+        )
 
         # Should be a valid URL format
-        assert agent_card.url.startswith(("http://", "https://")), f"Invalid URL format: {agent_card.url}"
+        assert agent_card.supported_interfaces[0].url.startswith(("http://", "https://")), (
+            f"Invalid URL format: {agent_card.supported_interfaces[0].url}"
+        )
 
         # Should end with /a2a (no slash)
-        assert agent_card.url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {agent_card.url}"
+        assert agent_card.supported_interfaces[0].url.endswith("/a2a"), (
+            f"Agent card URL should end with '/a2a': {agent_card.supported_interfaces[0].url}"
+        )
 
     def test_dynamic_agent_card_urls_no_trailing_slash(self):
         """Test that dynamically generated agent card URLs don't have trailing slashes."""
@@ -107,7 +113,8 @@ class TestAgentCardURLRegression:
         """Integration test: Verify actual HTTP endpoint returns correct URL format."""
         # This test requires the server to be running - skip if not available
         try:
-            response = requests.get(f"{_a2a_base_url()}/.well-known/agent.json", timeout=2)
+            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+            response = requests.get(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
             if response.status_code == 200:
                 agent_card = response.json()
                 url = agent_card.get("url")
@@ -246,9 +253,9 @@ class TestHTTPBehaviorRegression:
     @pytest.mark.integration
     def test_no_redirect_on_agent_card_endpoints(self):
         """Integration test: Verify agent card endpoints don't redirect."""
+        # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
         endpoints_to_test = [
-            "/.well-known/agent.json",
-            "/agent.json",
+            "/.well-known/agent-card.json",
         ]
 
         for endpoint in endpoints_to_test:
@@ -268,10 +275,11 @@ class TestHTTPBehaviorRegression:
                     # Should have agent card data
                     data = response.json()
                     assert "name" in data
-                    assert "url" in data
+                    # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
+                    assert "supportedInterfaces" in data
 
                     # URL should not have trailing slash
-                    url = data["url"]
+                    url = data["supportedInterfaces"][0]["url"]
                     assert not url.endswith("/"), f"Agent card URL has trailing slash: {url}"
 
             except (requests.ConnectionError, requests.Timeout):
@@ -285,7 +293,7 @@ def test_regression_prevention_summary():
     try:
         # 1. Agent card URL format
         agent_card = create_agent_card()
-        assert not agent_card.url.endswith("/"), "REGRESSION: Agent card URL has trailing slash"
+        assert not agent_card.supported_interfaces[0].url.endswith("/"), "REGRESSION: Agent card URL has trailing slash"
 
         # 2. Function imports are callable
         # Note: signals tools removed - using get_products as core function check

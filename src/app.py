@@ -81,10 +81,17 @@ from src.core.exceptions import AdCPError  # noqa: E402
 
 @app.exception_handler(AdCPError)
 async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
-    """Convert AdCP exceptions to structured JSON error responses."""
+    """Convert AdCP exceptions to structured JSON error responses.
+
+    Translates non-standard error codes to STANDARD_ERROR_CODES via
+    ERROR_CODE_MAPPING at this REST transport boundary so wire output
+    is always spec-compliant.
+    """
+    body = exc.to_dict()
+    body["error_code"] = exc.wire_error_code
     return JSONResponse(
         status_code=exc.status_code,
-        content=exc.to_dict(),
+        content=body,
     )
 
 
@@ -93,7 +100,10 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
 # so middleware and scope["state"] propagate correctly within the same ASGI app.
 # ---------------------------------------------------------------------------
 
-from a2a.server.apps.jsonrpc.starlette_app import A2AStarletteApplication  # noqa: E402
+from a2a.server.request_handlers.response_helpers import agent_card_to_dict  # noqa: E402
+from a2a.server.routes import create_jsonrpc_routes  # noqa: E402
+from a2a.server.routes.agent_card_routes import create_agent_card_routes  # noqa: E402
+from a2a.types import AgentCard as A2AAgentCard  # noqa: E402
 from starlette.routing import Route  # noqa: E402
 
 from src.a2a_server.adcp_a2a_server import (  # noqa: E402
@@ -107,21 +117,22 @@ from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain  #
 _agent_card = create_agent_card()
 _request_handler = AdCPRequestHandler()
 
-a2a_app = A2AStarletteApplication(
-    agent_card=_agent_card,
-    http_handler=_request_handler,
+# Build A2A routes using a2a-sdk 1.0 route factories
+_a2a_rpc_routes = create_jsonrpc_routes(
+    request_handler=_request_handler,
+    rpc_url="/a2a",
     context_builder=AdCPCallContextBuilder(),
+    enable_v0_3_compat=True,
+)
+_a2a_card_routes = create_agent_card_routes(
+    agent_card=_agent_card,
+    card_url="/.well-known/agent-card.json",
 )
 
-# Add A2A SDK routes directly to the FastAPI app.
-# This gives us /a2a (JSON-RPC), /.well-known/agent-card.json, /agent.json
-a2a_app.add_routes_to_app(
-    app,
-    agent_card_url="/.well-known/agent-card.json",
-    rpc_url="/a2a",
-    extended_agent_card_url="/agent.json",
-)
-logger.info("A2A routes added: /a2a, /.well-known/agent-card.json, /agent.json")
+# Add routes directly to the FastAPI app
+for route in _a2a_rpc_routes + _a2a_card_routes:
+    app.routes.append(route)
+logger.info("A2A routes added: /a2a, /.well-known/agent-card.json")
 
 
 @app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
@@ -178,8 +189,11 @@ def _create_dynamic_agent_card(request: Request):
         else:
             server_url = get_a2a_server_url() or "http://localhost:8080/a2a"
 
-    dynamic_card = _agent_card.model_copy()
-    dynamic_card.url = server_url
+    dynamic_card = A2AAgentCard()
+    dynamic_card.CopyFrom(_agent_card)
+    # Update the URL in supported_interfaces
+    if dynamic_card.supported_interfaces:
+        dynamic_card.supported_interfaces[0].url = server_url
     return dynamic_card
 
 
@@ -194,7 +208,7 @@ def _replace_routes():
 
     async def dynamic_agent_card(request: Request):
         card = _create_dynamic_agent_card(request)
-        return JSONResponse(card.model_dump(mode="json"))
+        return JSONResponse(agent_card_to_dict(card))
 
     replaced_paths: set[str] = set()
     new_routes = []

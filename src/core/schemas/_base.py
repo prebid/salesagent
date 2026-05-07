@@ -45,6 +45,7 @@ from adcp.types.aliases import (
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -1392,9 +1393,12 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 3.9 makes account required. Our impl resolves identity at the transport
-    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
+    # adcp 4.3 makes account and idempotency_key required.  Our impl resolves
+    # identity at the transport layer (ResolvedIdentity), not from the request
+    # payload, so account is optional here.  idempotency_key is generated at
+    # the transport boundary when not supplied by the caller.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
@@ -1569,6 +1573,13 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # adcp 4.3 makes account and idempotency_key required.  Override as optional
+    # — identity is resolved at the transport boundary, and idempotency_key is
+    # generated at the boundary when not supplied by the caller.
+    account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
+
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None
@@ -2258,6 +2269,9 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     media_buy_id: str = Field(..., description="Publisher media buy identifier")
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
     status: MediaBuyStatus = Field(..., description="Current media buy status")
+    valid_actions: list[MediaBuyValidAction] | None = Field(
+        default=None, description="Actions available for this media buy given its current status"
+    )
     currency: str = Field(..., description="ISO 4217 currency code")
     total_budget: float = Field(..., description="Total budget across all packages")
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")

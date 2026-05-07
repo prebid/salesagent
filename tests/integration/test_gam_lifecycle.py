@@ -131,7 +131,7 @@ class TestGAMOrderLifecycleIntegration:
             # adcp v1.2.1: Error response has errors field
             assert hasattr(response, "errors"), "Should be UpdateMediaBuyError with errors"
             assert response.errors is not None and len(response.errors) > 0
-            assert response.errors[0].code == "insufficient_privileges"
+            assert response.errors[0].code == "AUTH_REQUIRED"
             # Note: Error variant doesn't have buyer_ref field in adcp v1.2.1
 
             # Admin user should be able to approve

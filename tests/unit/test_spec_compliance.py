@@ -80,13 +80,13 @@ class TestResponseSchemas:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
-            errors=[{"code": "validation_error", "message": "Validation error", "details": {"budget": -100}}],
+            errors=[{"code": "VALIDATION_ERROR", "message": "Validation error", "details": {"budget": -100}}],
         )
 
         # Verify domain fields
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "validation_error"
+        assert response.errors[0].code == "VALIDATION_ERROR"
 
         # Verify no protocol fields
         assert not hasattr(response, "status")
@@ -179,7 +179,7 @@ class TestProtocolCompliance:
         from src.core.schemas import CreateMediaBuyError
 
         error_response = CreateMediaBuyError(
-            errors=[{"code": "invalid_budget", "message": "Invalid budget"}],
+            errors=[{"code": "VALIDATION_ERROR", "message": "Invalid budget"}],
         )
 
         assert error_response.errors is not None

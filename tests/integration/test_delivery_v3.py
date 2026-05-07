@@ -415,7 +415,7 @@ class TestDeliveryStatusFilterIntegration:
         req = GetMediaBuyDeliveryRequest(
             media_buy_ids=["mb_ready", "mb_active", "mb_completed"],
             status_filter=[
-                MediaBuyStatus.pending_activation,
+                MediaBuyStatus.pending_start,
                 MediaBuyStatus.active,
                 MediaBuyStatus.completed,
             ],
@@ -629,7 +629,7 @@ class TestDeliveryOwnershipIntegration:
         assert response.media_buy_deliveries == []
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
 
     def test_ownership_no_info_leakage(self, integration_db):
         """UC-004-EXT-D2: SECURITY: error is media_buy_not_found not ownership_mismatch.
@@ -673,7 +673,7 @@ class TestDeliveryOwnershipIntegration:
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.errors is not None
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         # Must NOT reveal ownership
         assert "ownership" not in response.errors[0].message.lower()
 
@@ -739,7 +739,7 @@ class TestDeliveryOwnershipIntegration:
         # Non-owned reported as not found (no info leakage)
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_not_owned" in response.errors[0].message
 
 

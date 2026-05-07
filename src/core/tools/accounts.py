@@ -17,7 +17,7 @@ import base64
 import logging
 import uuid
 from datetime import UTC
-from typing import Any
+from typing import Annotated, Any
 
 from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
@@ -33,6 +33,7 @@ from adcp.types.generated_poc.core.pagination_request import PaginationRequest
 from adcp.types.generated_poc.core.pagination_response import PaginationResponse
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
@@ -178,7 +179,7 @@ def _list_accounts_impl(
 async def list_accounts(
     status: AccountStatus | None = None,
     pagination: PaginationRequest | None = None,
-    sandbox: bool | None = None,
+    sandbox: Annotated[bool | None, Field(description="When true, return only sandbox/test accounts")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -376,7 +377,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
         if brand_domain.endswith(tld):
             return [
                 Error(
-                    code="INVALID_DOMAIN",
+                    code="VALIDATION_ERROR",
                     message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
                     f"and cannot be used for account provisioning.",
                     suggestion="Use a real domain name for production accounts.",
@@ -407,7 +408,7 @@ def _check_billing_policy(
     if billing_val not in supported:
         return [
             Error(
-                code="BILLING_NOT_SUPPORTED",
+                code="UNSUPPORTED_FEATURE",
                 message=f"Billing model '{billing_val}' is not supported by this seller. "
                 f"Supported models: {', '.join(supported)}.",
                 suggestion=f"Use one of the supported billing models: {', '.join(supported)}.",
@@ -454,7 +455,7 @@ async def _sync_accounts_impl(
         SyncAccountsResponse with per-account action results.
     """
     if req is None:
-        req = SyncAccountsRequest(accounts=[])
+        req = SyncAccountsRequest(accounts=[], idempotency_key=str(uuid.uuid4()))
 
     # BR-RULE-055: sync requires auth
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
@@ -666,8 +667,10 @@ async def _sync_accounts_impl(
 
 async def sync_accounts(
     accounts: list[SyncAccountInput] | None = None,
-    delete_missing: bool | None = None,
-    dry_run: bool | None = None,
+    delete_missing: Annotated[
+        bool | None, Field(description="Deactivate accounts not present in the sync list")
+    ] = None,
+    dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -691,6 +694,7 @@ async def sync_accounts(
         delete_missing=delete_missing,
         dry_run=dry_run,
         context=context,
+        idempotency_key=str(uuid.uuid4()),
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)

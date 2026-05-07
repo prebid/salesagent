@@ -54,8 +54,8 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types import FormatId as AdcpFormatId
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError
@@ -377,7 +377,7 @@ class TestSyncCreativesResponseSchema:
             creatives=[
                 SyncCreativeResult(creative_id="c_1", action="created"),
                 SyncCreativeResult(creative_id="c_2", action="updated"),
-                SyncCreativeResult(creative_id="c_3", action="failed", errors=["bad"]),
+                SyncCreativeResult(creative_id="c_3", action="failed", errors=[{"code": "invalid", "message": "bad"}]),
             ],
         )
         msg = str(response)
@@ -2293,7 +2293,7 @@ class TestGenerativeCreativeBuild:
             if hasattr(action_val, "value"):
                 action_val = action_val.value
             assert action_val == "failed"
-            assert any("GEMINI_API_KEY" in e for e in (result.errors or []))
+            assert any("GEMINI_API_KEY" in e.message for e in (result.errors or []))
 
 
 # ============================================================================
@@ -4278,7 +4278,7 @@ class TestExtensionGaps:
                 creative_result.action.value if hasattr(creative_result.action, "value") else creative_result.action
             )
             assert action_val == "failed"
-            assert any("list_creative_formats" in e for e in (creative_result.errors or []))
+            assert any("list_creative_formats" in e.message for e in (creative_result.errors or []))
 
     def test_ext_g_unreachable_agent_retry(self):
         """Agent unreachable => action=failed with 'try again later' suggestion.
@@ -4331,7 +4331,10 @@ class TestExtensionGaps:
                 creative_result.action.value if hasattr(creative_result.action, "value") else creative_result.action
             )
             assert action_val == "failed"
-            assert any("unreachable" in e.lower() for e in (creative_result.errors or []))
+            assert any(
+                "unreachable" in (e.message if hasattr(e, "message") else str(e)).lower()
+                for e in (creative_result.errors or [])
+            )
 
     def test_ext_j_package_not_found_lenient(self):
         """Lenient mode: missing package logged in assignment_errors, others continue.

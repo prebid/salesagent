@@ -58,6 +58,12 @@ def standard_mocks():
     mock_uow = MagicMock()
     mock_uow.session = mock_session
     mock_uow.media_buys = MagicMock()
+    # Default media buy with non-terminal status so the state-machine
+    # precondition guard in _update_media_buy_impl passes. Tests that need
+    # a specific status override this via .return_value or .side_effect.
+    _default_mb = MagicMock()
+    _default_mb.status = "active"
+    mock_uow.media_buys.get_by_id.return_value = _default_mb
     mock_currency_limits_repo = MagicMock()
     mock_currency_limits_repo.get_for_currency.return_value = mock_cl
     mock_uow.currency_limits = mock_currency_limits_repo

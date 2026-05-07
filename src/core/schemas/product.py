@@ -77,6 +77,10 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
+    # adcp 4.3 makes reporting_capabilities required.  Override as optional
+    # — our product builder sets it when available from the adapter.
+    reporting_capabilities: Any | None = None  # type: ignore[assignment]
+
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
         default=None,
@@ -144,6 +148,9 @@ class Product(LibraryProduct):
         if isinstance(kwargs["exclude"], set):
             kwargs["exclude"].update({"implementation_config", "expires_at"})
 
+        # Override exclude_none so we can handle core-field None values ourselves
+        # (AdCPBaseModel defaults exclude_none=True which would strip required fields)
+        kwargs["exclude_none"] = False
         data = super().model_dump(**kwargs)
 
         # Convert formats to format_ids per AdCP spec
@@ -159,6 +166,7 @@ class Product(LibraryProduct):
             "format_ids",
             "delivery_type",
             "delivery_measurement",
+            "reporting_capabilities",
             "is_custom",
         }
 

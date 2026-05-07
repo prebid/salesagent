@@ -1127,7 +1127,7 @@ def then_billing_error_message(ctx: dict) -> None:
     """Assert the billing error has an explanatory message."""
     acct = ctx.get("last_account")
     assert acct is not None and acct.errors, "No account errors"
-    billing_err = next((e for e in acct.errors if e.code == "BILLING_NOT_SUPPORTED"), None)
+    billing_err = next((e for e in acct.errors if e.code == "UNSUPPORTED_FEATURE"), None)
     assert billing_err is not None, "No BILLING_NOT_SUPPORTED error found"
     assert "billing" in billing_err.message.lower() or "supported" in billing_err.message.lower(), (
         f"Expected billing-related message, got: {billing_err.message}"

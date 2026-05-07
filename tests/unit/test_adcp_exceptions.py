@@ -43,7 +43,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthenticationError("bad token")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 401
-        assert exc.error_code == "AUTH_TOKEN_INVALID"
+        assert exc.error_code == "AUTH_REQUIRED"
 
     def test_authorization_error(self):
         """AdCPAuthorizationError must have status_code=403."""
@@ -52,7 +52,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthorizationError("forbidden")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 403
-        assert exc.error_code == "AUTHORIZATION_ERROR"
+        assert exc.error_code == "AUTH_REQUIRED"
 
     def test_not_found_error(self):
         """AdCPNotFoundError must have status_code=404."""
@@ -70,7 +70,7 @@ class TestExceptionHierarchy:
         exc = AdCPRateLimitError("too many requests")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 429
-        assert exc.error_code == "RATE_LIMIT_EXCEEDED"
+        assert exc.error_code == "RATE_LIMITED"
 
     def test_adapter_error(self):
         """AdCPAdapterError must have status_code=502."""
@@ -79,7 +79,7 @@ class TestExceptionHierarchy:
         exc = AdCPAdapterError("GAM unavailable")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 502
-        assert exc.error_code == "ADAPTER_ERROR"
+        assert exc.error_code == "SERVICE_UNAVAILABLE"
 
     def test_conflict_error(self):
         """AdCPConflictError must have status_code=409."""
@@ -97,7 +97,7 @@ class TestExceptionHierarchy:
         exc = AdCPGoneError("proposal expired")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 410
-        assert exc.error_code == "GONE"
+        assert exc.error_code == "INVALID_STATE"
 
     def test_budget_exhausted_error(self):
         """AdCPBudgetExhaustedError must have status_code=422."""
@@ -288,7 +288,7 @@ class TestFastAPIExceptionHandlers:
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
         body = response.json()
-        assert body["error_code"] == "AUTH_TOKEN_INVALID"
+        assert body["error_code"] == "AUTH_REQUIRED"
 
     def test_not_found_error_returns_404(self):
         """AdCPNotFoundError raised in a route must return 404."""
@@ -318,7 +318,7 @@ class TestFastAPIExceptionHandlers:
         response = client.get("/test-exc/adapter")
         assert response.status_code == 502
         body = response.json()
-        assert body["error_code"] == "ADAPTER_ERROR"
+        assert body["error_code"] == "SERVICE_UNAVAILABLE"
 
     def test_conflict_error_returns_409(self):
         """AdCPConflictError raised in a route must return 409."""
@@ -348,7 +348,7 @@ class TestFastAPIExceptionHandlers:
         response = client.get("/test-exc/gone")
         assert response.status_code == 410
         body = response.json()
-        assert body["error_code"] == "GONE"
+        assert body["error_code"] == "INVALID_STATE"
 
     def test_budget_exhausted_error_returns_422(self):
         """AdCPBudgetExhaustedError raised in a route must return 422."""
@@ -423,3 +423,68 @@ class TestNoDeadA2AMap:
         assert not hasattr(exc_module, "to_a2a_error_code"), (
             "to_a2a_error_code() is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
         )
+
+
+# ---------------------------------------------------------------------------
+# Wire-format error code translation (ERROR_CODE_MAPPING)
+# ---------------------------------------------------------------------------
+
+
+class TestErrorCodeWireTranslation:
+    """ERROR_CODE_MAPPING translation must apply at every transport boundary.
+
+    Architecture: model layer (``to_dict``, ``to_adcp_error``) preserves the
+    raw ``error_code``. Transport boundaries (FastAPI handler, MCP wrapper,
+    A2A wrapper) call ``wire_error_code`` / ``translate_error_code()`` to
+    emit spec-compliant codes. This keeps the model honest while ensuring
+    wire output is always compliant.
+
+    Tests use existing AdCPError instances with a temporarily-overridden
+    ``error_code`` instance attribute (no new subclasses — that would trip
+    ``test_adcp_error_subclass_codes_are_compliant``).
+    """
+
+    def test_translate_mapped_code(self):
+        from src.core.exceptions import translate_error_code
+
+        # AUTH_TOKEN_INVALID is mapped to AUTH_REQUIRED
+        assert translate_error_code("AUTH_TOKEN_INVALID") == "AUTH_REQUIRED"
+        # BUDGET_CEILING_EXCEEDED is mapped to BUDGET_EXCEEDED
+        assert translate_error_code("BUDGET_CEILING_EXCEEDED") == "BUDGET_EXCEEDED"
+        # RATE_LIMIT_EXCEEDED is mapped to RATE_LIMITED
+        assert translate_error_code("RATE_LIMIT_EXCEEDED") == "RATE_LIMITED"
+
+    def test_translate_unmapped_code_passes_through(self):
+        from src.core.exceptions import translate_error_code
+
+        assert translate_error_code("VALIDATION_ERROR") == "VALIDATION_ERROR"
+        assert translate_error_code("MEDIA_BUY_NOT_FOUND") == "MEDIA_BUY_NOT_FOUND"
+        # Internal-only codes pass through at the helper layer; transport-specific
+        # behavior (e.g., redaction) happens at the boundary handler if needed.
+        assert translate_error_code("NOT_FOUND") == "NOT_FOUND"
+
+    def test_wire_error_code_property_translates(self):
+        """``wire_error_code`` exposes the translated code on an instance."""
+        from src.core.exceptions import AdCPError
+
+        # Override on an instance — does NOT create a new subclass, so this
+        # avoids tripping the AdCPError subclass compliance guard.
+        exc = AdCPError("over budget")
+        exc.error_code = "BUDGET_CEILING_EXCEEDED"
+        assert exc.wire_error_code == "BUDGET_EXCEEDED"
+
+    def test_to_dict_preserves_raw_error_code(self):
+        """Model serialization preserves the raw ``error_code`` (translation at boundary)."""
+        from src.core.exceptions import AdCPError
+
+        exc = AdCPError("over budget")
+        exc.error_code = "BUDGET_CEILING_EXCEEDED"
+        assert exc.to_dict()["error_code"] == "BUDGET_CEILING_EXCEEDED"
+
+    def test_to_adcp_error_preserves_raw_error_code(self):
+        """Model envelope preserves the raw ``error_code`` (translation at boundary)."""
+        from src.core.exceptions import AdCPError
+
+        exc = AdCPError("slow down")
+        exc.error_code = "RATE_LIMIT_EXCEEDED"
+        assert exc.to_adcp_error()["errors"][0]["code"] == "RATE_LIMIT_EXCEEDED"

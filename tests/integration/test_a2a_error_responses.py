@@ -14,7 +14,8 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
-from a2a.types import Message, MessageSendParams, Task
+from a2a.server.routes.common import ServerCallContext
+from a2a.types import Message, SendMessageRequest, Task
 from sqlalchemy import delete
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
@@ -154,20 +155,11 @@ class TestA2AErrorPropagation:
         """Extract DataPart data from A2A artifact.
 
         A2A artifacts may have multiple parts: optional TextPart followed by DataPart.
-        This helper iterates through parts to find the one with structured data.
+        In a2a-sdk 1.0, Part.data is a protobuf Value, not a plain dict.
         """
-        if not artifact or not artifact.parts:
-            return {}
+        from tests.utils.a2a_helpers import extract_data_from_artifact
 
-        for part in artifact.parts:
-            # Check for DataPart with root.data structure
-            if hasattr(part, "root") and hasattr(part.root, "data"):  # noqa: rootmodel
-                return part.root.data
-            # Check for direct data attribute
-            if hasattr(part, "data") and isinstance(part.data, dict):
-                return part.data
-
-        return {}
+        return extract_data_from_artifact(artifact)
 
     async def test_create_media_buy_validation_error_includes_errors_field(self, handler, test_tenant, test_principal):
         """Test that validation errors include errors field in A2A response."""
@@ -191,10 +183,10 @@ class TestA2AErrorPropagation:
             # Missing: packages, budget, start_time, end_time
         }
         message = self.create_message_with_skill("create_media_buy", skill_params)
-        params = MessageSendParams(message=message)
+        params = SendMessageRequest(message=message)
 
         # Process the message - should return error
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, ServerCallContext())
 
         # Verify task result structure
         assert isinstance(result, Task)
@@ -250,10 +242,10 @@ class TestA2AErrorPropagation:
             "end_time": end_time,
         }
         message = self.create_message_with_skill("create_media_buy", skill_params)
-        params = MessageSendParams(message=message)
+        params = SendMessageRequest(message=message)
 
         # Process the message - should return auth error
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, ServerCallContext())
 
         # Extract response data from artifact (handles TextPart + DataPart structure)
         artifact = result.artifacts[0]
@@ -267,7 +259,7 @@ class TestA2AErrorPropagation:
         # Verify error is about authentication
         error = artifact_data["errors"][0]
         assert "code" in error, "Error must include code"
-        assert error["code"] == "authentication_error"
+        assert error["code"] == "AUTH_REQUIRED"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
@@ -302,10 +294,10 @@ class TestA2AErrorPropagation:
             "end_time": end_time,
         }
         message = self.create_message_with_skill("create_media_buy", skill_params)
-        params = MessageSendParams(message=message)
+        params = SendMessageRequest(message=message)
 
         # Process the message - should succeed
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, ServerCallContext())
 
         # Extract response data from artifact (handles TextPart + DataPart structure)
         artifact = result.artifacts[0]
@@ -361,10 +353,10 @@ class TestA2AErrorPropagation:
             "end_time": end_time,
         }
         message = self.create_message_with_skill("create_media_buy", skill_params)
-        params = MessageSendParams(message=message)
+        params = SendMessageRequest(message=message)
 
         # Process the message
-        result = await handler.on_message_send(params)
+        result = await handler.on_message_send(params, ServerCallContext())
 
         # Extract response data from artifact (handles TextPart + DataPart structure)
         artifact = result.artifacts[0]
@@ -447,13 +439,13 @@ class TestA2AErrorResponseStructure:
         assert "required_parameters" in result, "Validation error should list required params"
 
     async def test_adcp_error_carries_recovery_through_a2a_boundary(self, integration_db, handler):
-        """A2A boundary translates AdCPError to ServerError with recovery in data field.
+        """A2A boundary translates AdCPError to A2AError with recovery in data field.
 
         This tests _adcp_to_a2a_error propagation through _handle_explicit_skill.
         """
         from unittest.mock import patch
 
-        from a2a.utils.errors import ServerError
+        from a2a.utils.errors import A2AError
 
         from src.core.exceptions import AdCPAdapterError, AdCPValidationError
 
@@ -462,11 +454,11 @@ class TestA2AErrorResponseStructure:
             raise AdCPAdapterError("GAM timeout")
 
         with patch.object(handler, "_handle_get_products_skill", mock_adapter_fail):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(A2AError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            error = exc_info.value.error
-            assert error.data is not None, "ServerError data must not be None"
+            error = exc_info.value
+            assert error.data is not None, "A2AError data must not be None"
             assert error.data["recovery"] == "transient", "AdCPAdapterError must have transient recovery"
 
         # Test correctable recovery (AdCPValidationError)
@@ -474,17 +466,17 @@ class TestA2AErrorResponseStructure:
             raise AdCPValidationError("invalid brief")
 
         with patch.object(handler, "_handle_get_products_skill", mock_validation_fail):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(A2AError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            error = exc_info.value.error
+            error = exc_info.value
             assert error.data["recovery"] == "correctable", "AdCPValidationError must have correctable recovery"
 
     async def test_custom_recovery_override_preserved_through_a2a(self, integration_db, handler):
         """Custom recovery= override on AdCPError is preserved through A2A serialization."""
         from unittest.mock import patch
 
-        from a2a.utils.errors import ServerError
+        from a2a.utils.errors import A2AError
 
         from src.core.exceptions import AdCPNotFoundError
 
@@ -492,10 +484,10 @@ class TestA2AErrorResponseStructure:
             raise AdCPNotFoundError("temporarily gone", recovery="transient")
 
         with patch.object(handler, "_handle_get_products_skill", mock_transient_not_found):
-            with pytest.raises(ServerError) as exc_info:
+            with pytest.raises(A2AError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            error = exc_info.value.error
+            error = exc_info.value
             assert error.data["recovery"] == "transient", (
                 "Custom recovery='transient' override must be preserved, not default 'terminal'"
             )

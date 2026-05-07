@@ -123,7 +123,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Empty array provided - schema rejects request
     When the Buyer Agent requests delivery metrics with media_buy_ids []
     Then the operation should fail
-    And the error code should be "validation_error"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "minItems"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one identifier"
@@ -135,7 +135,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Empty buyer_refs array - schema rejects request
     When the Buyer Agent requests delivery metrics with buyer_refs []
     Then the operation should fail
-    And the error code should be "validation_error"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "minItems"
     And the error should include "suggestion" field
     # Traces to BR-RULE-030 INV-1/INV-2 (schema minItems constraint on identification arrays)
@@ -170,7 +170,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with status_filter "nonexistent_status"
     Then the operation should fail
-    And the error code should be "validation_error"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "status_filter"
     And the error should include "suggestion" field
     And the suggestion should contain "valid status values"
@@ -225,7 +225,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-02-01" and end_date "2026-01-01"
     Then the operation should fail
-    And the error code should be "invalid_date_range"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "start_date must be before end_date"
     And the error should include "suggestion" field
     And the suggestion should contain "ensure start_date is before end_date"
@@ -239,7 +239,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-01-15" and end_date "2026-01-15"
     Then the operation should fail
-    And the error code should be "invalid_date_range"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-013 INV-3: end <= start -> rejected (boundary: equal dates)
 
@@ -391,7 +391,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Authentication error - missing principal
     When the Buyer Agent sends a delivery metrics request without authentication
     Then the operation should fail
-    And the error code should be "principal_id_missing"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "authentication"
     And the error should include "suggestion" field
     And the suggestion should contain "provide valid credentials"
@@ -405,7 +405,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And no principal "unknown-buyer" exists in the tenant database
     When the Buyer Agent requests delivery metrics
     Then the operation should fail
-    And the error code should be "principal_not_found"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "principal"
     And the error should include "suggestion" field
     And the suggestion should contain "verify account"
@@ -418,7 +418,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given no media buy exists with id "mb-nonexistent"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-nonexistent"]
     Then the operation should fail
-    And the error code should be "media_buy_not_found"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error message should contain "media buy"
     And the error should include "suggestion" field
     And the suggestion should contain "verify the identifier"
@@ -435,7 +435,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-other"]
     Then the operation should fail
-    And the error code should be "media_buy_not_found"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should NOT reveal that the media buy exists
     And the error should include "suggestion" field
     And the suggestion should contain "verify the identifier"
@@ -450,7 +450,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the ad server adapter is unavailable
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
     Then the operation should fail
-    And the error code should be "adapter_error"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error message should contain "delivery data"
     And the error should include "suggestion" field
     And the suggestion should contain "retry later"

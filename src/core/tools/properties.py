@@ -200,7 +200,6 @@ def _list_authorized_properties_impl(
 async def list_authorized_properties(
     publisher_domains: list[str] | None = None,
     property_tags: list[str] | None = None,
-    webhook_url: str | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -212,7 +211,6 @@ async def list_authorized_properties(
     Args:
         publisher_domains: Filter to specific publisher domains.
         property_tags: Filter by property tags (salesagent extension).
-        webhook_url: URL for async task completion notifications (AdCP spec, optional).
         context: Application-level context per AdCP spec.
         ctx: FastMCP context for authentication.
 

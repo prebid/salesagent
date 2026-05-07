@@ -28,7 +28,7 @@ def test_extreme_budget_rejected() -> None:
 
     assert isinstance(result, UpdateMediaBuyError)
     assert result.errors
-    assert result.errors[0].code == "budget_ceiling_exceeded"
+    assert result.errors[0].code == "BUDGET_EXCEEDED"
 
 
 # ---------------------------------------------------------------------------
@@ -67,4 +67,4 @@ def test_package_budget_uses_currency_limit_repository() -> None:
 
     assert isinstance(result, UpdateMediaBuyError)
     assert result.errors
-    assert result.errors[0].code == "budget_below_minimum"
+    assert result.errors[0].code == "BUDGET_TOO_LOW"

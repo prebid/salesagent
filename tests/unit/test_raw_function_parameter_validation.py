@@ -84,12 +84,7 @@ class TestRawFunctionParameterValidation:
 
         # Known valid "unused" parameters (metadata, optional features, etc.)
         # These are documented reasons why a parameter might not be directly passed through
-        valid_unused = {
-            "get_products_raw": {
-                "min_exposures",  # Optional filtering
-                "strategy_id",  # Optional linking
-            },
-        }
+        valid_unused: dict[str, set[str]] = {}
 
         issues = []
 

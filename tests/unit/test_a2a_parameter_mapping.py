@@ -135,10 +135,10 @@ class TestA2AParameterMapping:
 
             import asyncio
 
-            from a2a.utils.errors import ServerError
+            from a2a.utils.errors import A2AError
 
-            # Should raise ServerError for missing required parameter
-            with pytest.raises(ServerError) as exc_info:
+            # Should raise A2AError for missing required parameter
+            with pytest.raises(A2AError) as exc_info:
                 asyncio.run(
                     handler._handle_update_media_buy_skill(parameters=invalid_parameters, identity=_MOCK_IDENTITY)
                 )

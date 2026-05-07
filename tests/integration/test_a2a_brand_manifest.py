@@ -10,8 +10,9 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
-from a2a.types import MessageSendParams, Task
-from a2a.utils.errors import InvalidParamsError, ServerError
+from a2a.server.routes.common import ServerCallContext
+from a2a.types import SendMessageRequest, Task
+from a2a.utils.errors import A2AError, InvalidParamsError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.resolved_identity import ResolvedIdentity
@@ -49,9 +50,10 @@ async def test_get_products_with_brief_only(sample_tenant, sample_principal, sam
         skill_name="get_products",
         parameters={"brief": "Athletic footwear advertising"},
     )
-    params = MessageSendParams(message=message)
+    params = SendMessageRequest(message=message)
 
-    result = await handler.on_message_send(params)
+    context = ServerCallContext()
+    result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -77,9 +79,10 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
             "brief": "Athletic footwear advertising",
         },
     )
-    params = MessageSendParams(message=message)
+    params = SendMessageRequest(message=message)
 
-    result = await handler.on_message_send(params)
+    context = ServerCallContext()
+    result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -110,10 +113,11 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
             # No brief, no brand — but brand_manifest is translated to brand
         },
     )
-    params = MessageSendParams(message=message)
+    params = SendMessageRequest(message=message)
 
     # brand_manifest is now translated to brand: {domain: "nike.com"}
-    result = await handler.on_message_send(params)
+    context = ServerCallContext()
+    result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -140,10 +144,11 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
         skill_name="get_products",
         parameters={},
     )
-    params = MessageSendParams(message=message)
+    params = SendMessageRequest(message=message)
 
     # Empty params → AdCPValidationError → InvalidParamsError
-    with pytest.raises(ServerError) as exc_info:
-        await handler.on_message_send(params)
+    context = ServerCallContext()
+    with pytest.raises(A2AError) as exc_info:
+        await handler.on_message_send(params, context)
 
-    assert isinstance(exc_info.value.error, InvalidParamsError)
+    assert isinstance(exc_info.value, InvalidParamsError)
