@@ -236,61 +236,18 @@ class TestMCPToolRoundtripMinimal:
             error_msg = str(e).lower()
             assert "no_properties_configured" in error_msg or "properties" in error_msg
 
-    async def test_update_performance_index_minimal(self, mcp_client):
-        """Test update_performance_index with required parameters."""
-        # First, create a media buy to update
-        products_result = await mcp_client.call_tool(
-            "get_products", {"brand": {"domain": "testbrand.com"}, "brief": "test"}
-        )
-
-        products = (
-            products_result.structured_content if hasattr(products_result, "structured_content") else products_result
-        )
-        if products and len(products.get("products", [])) > 0:
-            product_id = products["products"][0]["product_id"]
-
-            # Create media buy
-            create_result = await mcp_client.call_tool(
-                "create_media_buy",
-                {
-                    "brand": {"domain": "testbrand.com"},
-                    "packages": [
-                        {
-                            "product_id": product_id,
-                            "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
-                            "budget": 1000.0,
-                        }
-                    ],
-                    "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-                    "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
-                },
-            )
-
-            create_content = (
-                create_result.structured_content if hasattr(create_result, "structured_content") else create_result
-            )
-            if "media_buy_id" in create_content:
-                media_buy_id = create_content["media_buy_id"]
-
-                # Now update performance index
-                result = await mcp_client.call_tool(
-                    "update_performance_index",
-                    {
-                        "media_buy_id": media_buy_id,
-                        "performance_data": [
-                            {
-                                "product_id": product_id,
-                                "performance_index": 1.2,  # 20% better than baseline
-                            }
-                        ],
-                    },
-                )
-
-                assert result is not None
-                content = result.structured_content if hasattr(result, "structured_content") else result
-                assert content is not None
-                # Should not crash - may return success or error status
-                assert "status" in content or "error" in content or "performance_data" in content
+    # update_performance_index used to exist as an MCP tool but the adcp
+    # library no longer exposes it on the wire (the tool was removed in
+    # an earlier spec revision). The impl still lives at
+    # src/core/tools/performance.py:_update_performance_index_impl and is
+    # covered by unit tests:
+    #   tests/unit/test_performance_index_behavioral.py    (behavioural)
+    #   tests/unit/test_auth_requirements.py               (auth boundary)
+    #   tests/unit/test_impl_resolved_identity.py          (identity param)
+    #   tests/unit/test_transport_agnostic_impl.py         (no console)
+    # Removing the MCP roundtrip test here — the wire path no longer
+    # exists, and unit-level coverage is sufficient until/unless the tool
+    # comes back to the spec.
 
 
 @pytest.mark.unit  # Changed from integration - these don't require server
