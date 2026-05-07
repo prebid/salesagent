@@ -43,6 +43,22 @@ def _parse_postgres_url(url: str) -> _PgConnInfo:
     return _PgConnInfo(user=user, password=password, host=host, port=int(port_str))
 
 
+def _reset_idempotency_store() -> None:
+    """Reset the process-wide idempotency singleton via its public test helper.
+
+    Safe no-op when the module hasn't been imported. Otherwise delegates to
+    ``core.idempotency.reset_for_tests()``, which clears the cached store + pool
+    under the module's lock without closing the pool (workers are bound to a
+    foreign loop; OS reclaims at process exit).
+    """
+    import sys
+
+    mod = sys.modules.get("core.idempotency")
+    if mod is None:
+        return
+    mod.reset_for_tests()
+
+
 def _import_all_models() -> None:
     """Import all ORM models so Base.metadata knows about every table.
 
@@ -135,6 +151,12 @@ def make_integration_db(
 
     src.core.context_manager._context_manager_instance = None
 
+    # Reset the process-wide idempotency store so its psycopg AsyncConnectionPool
+    # rebinds to the per-test DATABASE_URL on next use. Without this, the pool
+    # caches a connection to a previous test's database (now dropped) and every
+    # subsequent MCP call hits psycopg's 30s PoolTimeout.
+    _reset_idempotency_store()
+
     # ── Yield ───────────────────────────────────────────────────────────
     try:
         yield unique_db_name
@@ -142,6 +164,7 @@ def make_integration_db(
         # ── Teardown ────────────────────────────────────────────────────
         reset_engine()
         src.core.context_manager._context_manager_instance = None
+        _reset_idempotency_store()
         engine.dispose()
 
         # Restore environment
