@@ -42,6 +42,18 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture(autouse=True)
+def _ensure_integration_db(integration_db):
+    """Ensure every test in this file goes through the per-test DB setup.
+
+    Without this autouse hookup, the ``requires_db`` marker is a label only —
+    pytest never invokes the ``integration_db`` fixture, so when ``DATABASE_URL``
+    is absent the tests crash on ``get_db_session()`` instead of skipping cleanly
+    like sibling files (e.g., ``test_sync_accounts.py``).
+    """
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _stub_response_builder(monkeypatch):
     """Stub ``_build_sync_result`` to dodge the pre-existing library Account
     schema-drift (#49). DB state is what we assert against."""
