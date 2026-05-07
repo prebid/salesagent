@@ -47,6 +47,7 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.requires_db,
     pytest.mark.requires_gam,
+    pytest.mark.requires_server,  # tox -e integration excludes; only runs with explicit -m
     pytest.mark.asyncio,
 ]
 

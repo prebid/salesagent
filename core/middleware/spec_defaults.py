@@ -127,21 +127,56 @@ def _normalise_format_id(creative: dict[str, Any]) -> None:
         }
 
 
-def _demote_image_without_dims(value: dict[str, Any]) -> None:
-    """If asset_type is ``image`` but width/height are missing, fall back to
-    ``url`` — the URL-only variant has no dim requirement and accepts the
-    same payload.
+def _backfill_brief_name(value: dict[str, Any]) -> None:
+    """Default brief.name to ``"brief"`` when missing.
 
-    Pre-4.4 buyer payloads frequently declare ``asset_type="image"`` for
-    any image-like URL without supplying dimensions; the strict 4.4
-    image variant rejects them.
+    adcp 4.4 made ``name`` required on brief assets. Pre-v3 buyers send the
+    brief without a name; default it so the discriminated-union validator
+    accepts the payload.
     """
-    if value.get("asset_type") != "image":
+    if value.get("asset_type") != "brief":
+        return
+    if not value.get("name"):
+        value["name"] = "brief"
+
+
+def _demote_image_without_dims(value: dict[str, Any]) -> None:
+    """If asset_type is ``image``/``video`` but width/height are missing, fall
+    back to ``url`` — the URL-only variant has no dim requirement and accepts
+    the same payload.
+
+    Pre-4.4 buyer payloads frequently declare ``asset_type="image"`` (or
+    ``video``) for any media URL without supplying dimensions; the strict
+    4.4 variants reject them.
+    """
+    if value.get("asset_type") not in ("image", "video"):
         return
     if "width" in value and "height" in value:
         return
     if "url" in value:
         value["asset_type"] = "url"
+
+
+def _normalise_assignments(arguments: dict[str, Any]) -> None:
+    """Convert legacy ``{creative_id: [package_ids]}`` to the spec list form.
+
+    adcp 3.12 requires ``assignments`` to be ``list[Assignment]`` with one
+    ``{creative_id, package_id}`` entry per pair. Many existing buyers and
+    tests still send the dict-of-lists form — expand it before the framework
+    runs schema validation against the spec shape.
+    """
+    assignments = arguments.get("assignments")
+    if not isinstance(assignments, dict):
+        return
+    expanded: list[dict[str, Any]] = []
+    for creative_id, packages in assignments.items():
+        if isinstance(packages, str):
+            packages = [packages]
+        if not isinstance(packages, list):
+            continue
+        for package_id in packages:
+            expanded.append({"creative_id": creative_id, "package_id": package_id})
+    arguments["assignments"] = expanded if expanded else None
 
 
 def _backfill_asset_types(creatives: Any) -> None:
@@ -169,6 +204,7 @@ def _backfill_asset_types(creatives: Any) -> None:
             if inferred is not None:
                 value["asset_type"] = inferred
             _demote_image_without_dims(value)
+            _backfill_brief_name(value)
 
 
 def _patch_mcp_tools_call(payload: dict[str, Any]) -> dict[str, Any]:
@@ -188,6 +224,7 @@ def _patch_mcp_tools_call(payload: dict[str, Any]) -> dict[str, Any]:
         _apply_auth_filled_defaults(arguments)
     if name == "sync_creatives":
         _backfill_asset_types(arguments.get("creatives"))
+        _normalise_assignments(arguments)
     return payload
 
 
@@ -203,6 +240,7 @@ def _patch_a2a_skill(payload: dict[str, Any]) -> dict[str, Any]:
         _apply_auth_filled_defaults(params)
     if skill == "sync_creatives":
         _backfill_asset_types(params.get("creatives"))
+        _normalise_assignments(params)
     return payload
 
 

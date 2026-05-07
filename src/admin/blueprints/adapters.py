@@ -269,7 +269,7 @@ def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/test-connection", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def test_freewheel_connection(tenant_id, **kwargs):
     """Verify FreeWheel OAuth credentials by performing a client_credentials token fetch.
 
@@ -356,7 +356,7 @@ def test_freewheel_connection(tenant_id, **kwargs):
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/triton/test-connection", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def test_triton_connection(tenant_id, **kwargs):
     """Verify Triton TAP credentials by performing a JWT login.
 

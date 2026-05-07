@@ -353,6 +353,25 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
         description="Application-level webhook config (NOTE: Protocol-level push notifications via A2A/MCP transport take precedence)",
     )
 
+    @field_validator("assignments", mode="before")
+    @classmethod
+    def _coerce_legacy_assignment_dict(cls, v: Any) -> Any:
+        """Accept the legacy ``{creative_id: [package_ids]}`` mapping form.
+
+        adcp 3.12 changed assignments to ``list[Assignment]`` with a single
+        package_id per entry. Existing buyers (and many internal tests) still
+        send the dict-of-lists form; expand it to the spec shape on the way in.
+        """
+        if not isinstance(v, dict):
+            return v
+        expanded: list[dict[str, Any]] = []
+        for creative_id, packages in v.items():
+            if isinstance(packages, str):
+                packages = [packages]
+            for package_id in packages or []:
+                expanded.append({"creative_id": creative_id, "package_id": package_id})
+        return expanded or None
+
 
 class SyncSummary(SalesAgentBaseModel):
     """Summary of sync operation results."""
@@ -394,6 +413,28 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     errors: list[str] = Field(default_factory=list, description="Validation or processing errors (for 'failed' action)")  # type: ignore[assignment]
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
 
+    @field_validator("errors", mode="before")
+    @classmethod
+    def _coerce_errors_to_strings(cls, v: Any) -> Any:
+        """Accept both string errors and adcp Error/dict objects.
+
+        Internal storage is list[str] for ergonomic test assertions; the wire
+        format uses list[Error] (per adcp 3.12). When MCP roundtrips a response,
+        the structured_content carries Error dicts — coerce them back to strings
+        on the way in.
+        """
+        if not isinstance(v, list):
+            return v
+        out: list[str] = []
+        for item in v:
+            if isinstance(item, str):
+                out.append(item)
+            elif isinstance(item, dict):
+                out.append(str(item.get("message", "")))
+            else:
+                out.append(str(getattr(item, "message", item)))
+        return out
+
     def model_dump(self, **kwargs):
         """Override to exclude non-AdCP fields for spec compliance.
 
@@ -422,10 +463,19 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         # Per AdCP spec: changes, errors, warnings are optional, so omit if empty
         if "changes" in result and not result["changes"]:
             result.pop("changes", None)
-        if "errors" in result and not result["errors"]:
-            result.pop("errors", None)
         if "warnings" in result and not result["warnings"]:
             result.pop("warnings", None)
+
+        # adcp 3.12: errors must be list[Error] objects on the wire (not list[str]).
+        # Internal storage stays string-based; only translate at the boundary.
+        if "errors" in result:
+            if not result["errors"]:
+                result.pop("errors", None)
+            else:
+                result["errors"] = [
+                    e if isinstance(e, dict) else {"code": "PROCESSING_ERROR", "message": str(e)}
+                    for e in result["errors"]
+                ]
 
         return result
 
@@ -471,6 +521,11 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     Design decision (salesagent-g3c): error variant never constructed.
     """
+
+    creatives: list[SyncCreativeResult] = Field(  # type: ignore[assignment]
+        ...,
+        description="Results for each creative processed.",
+    )
 
     def model_dump(self, **kwargs):
         """Pattern #4 nested serialization — re-serialize each ``SyncCreativeResult``

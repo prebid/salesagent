@@ -37,9 +37,9 @@ def assert_field_type(data: dict, field: str, expected_type: type, *, allow_none
     assert field in data, f"Missing field '{field}' in {sorted(data.keys())}"
     if allow_none and data[field] is None:
         return
-    assert isinstance(data[field], expected_type), (
-        f"Field '{field}' expected {expected_type.__name__}, got {type(data[field]).__name__}: {data[field]!r}"
-    )
+    assert isinstance(
+        data[field], expected_type
+    ), f"Field '{field}' expected {expected_type.__name__}, got {type(data[field]).__name__}: {data[field]!r}"
 
 
 def assert_fields_present(data: dict, required_fields: list[str]) -> None:
@@ -273,7 +273,12 @@ class TestSyncCreativesResponseShape:
         assert "review_feedback" not in c, "Internal 'review_feedback' field should be excluded"
 
     def test_sync_response_failed_creative_has_errors(self):
-        """Failed creative includes errors list."""
+        """Failed creative includes errors list as adcp 3.12 Error objects.
+
+        Internal storage of errors is list[str] for ergonomic test assertions;
+        on the wire (model_dump output) each entry is an Error object with
+        ``code`` and ``message`` per the AdCP spec.
+        """
         from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -289,7 +294,8 @@ class TestSyncCreativesResponseShape:
         c = data["creatives"][0]
         assert_field_type(c, "errors", list)
         assert len(c["errors"]) == 2
-        assert all(isinstance(e, str) for e in c["errors"])
+        assert all(isinstance(e, dict) and "message" in e and "code" in e for e in c["errors"])
+        assert {e["message"] for e in c["errors"]} == {"Format not supported", "Missing required asset"}
 
 
 # ===========================================================================

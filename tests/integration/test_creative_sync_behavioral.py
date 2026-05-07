@@ -1463,10 +1463,9 @@ class TestSyncedCreativeVisibleInList:
             # below would mask the failure.
             assert len(sync_response.creatives) == 1
             result = sync_response.creatives[0]
-            assert result.action == CreativeAction.created, (
-                f"Sync did not create the creative — action={result.action}, "
-                f"errors={getattr(result, 'errors', None)}"
-            )
+            assert (
+                result.action == CreativeAction.created
+            ), f"Sync did not create the creative — action={result.action}, errors={getattr(result, 'errors', None)}"
             assert result.creative_id == creative_id
 
             # Now list under the same identity. Same session, same

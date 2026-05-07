@@ -69,9 +69,9 @@ CASES: list[tuple[str, bool, str]] = [
 @pytest.mark.parametrize("domain,expected_ok,label", CASES, ids=[c[2] for c in CASES])
 def test_validate_publisher_domain(domain, expected_ok, label):
     ok, err = _validate_publisher_domain(domain)
-    assert ok is expected_ok, (
-        f"{label}: _validate_publisher_domain({domain!r}) → " f"(ok={ok}, err={err!r}); expected ok={expected_ok}"
-    )
+    assert (
+        ok is expected_ok
+    ), f"{label}: _validate_publisher_domain({domain!r}) → (ok={ok}, err={err!r}); expected ok={expected_ok}"
     if expected_ok:
         assert err == "", f"{label}: accepted but error message non-empty: {err!r}"
     else:

@@ -30,7 +30,9 @@ from src.core.tools.accounts import (
 )
 
 
-def _identity(*, principal_id: str = "p1", tenant_id: str = "t1", supported: list[str] | None = None) -> ResolvedIdentity:
+def _identity(
+    *, principal_id: str = "p1", tenant_id: str = "t1", supported: list[str] | None = None
+) -> ResolvedIdentity:
     return ResolvedIdentity(
         principal_id=principal_id,
         tenant_id=tenant_id,

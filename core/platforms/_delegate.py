@@ -253,18 +253,28 @@ async def _delegate_sync_creatives(req: Any, ctx: RequestContext[Any]) -> dict[s
         body = dict(req)
     else:
         body = dict(req)
-    response = await asyncio.to_thread(
-        _sync_creatives_impl,
-        creatives=body.get("creatives") or [],
-        assignments=body.get("assignments"),
-        creative_ids=body.get("creative_ids"),
-        delete_missing=bool(body.get("delete_missing", False)),
-        dry_run=bool(body.get("dry_run", False)),
-        validation_mode=body.get("validation_mode") or "strict",
-        push_notification_config=body.get("push_notification_config"),
-        context=body.get("context"),
-        identity=identity,
-    )
+    raw_mode = body.get("validation_mode")
+    validation_mode = raw_mode.value if hasattr(raw_mode, "value") else (raw_mode or "strict")
+    try:
+        response = await asyncio.to_thread(
+            _sync_creatives_impl,
+            creatives=body.get("creatives") or [],
+            assignments=body.get("assignments"),
+            creative_ids=body.get("creative_ids"),
+            delete_missing=bool(body.get("delete_missing", False)),
+            dry_run=bool(body.get("dry_run", False)),
+            validation_mode=validation_mode,
+            push_notification_config=body.get("push_notification_config"),
+            context=body.get("context"),
+            identity=identity,
+        )
+    except AdCPError as exc:
+        raise AdcpError(
+            exc.error_code,
+            message=exc.message or str(exc),
+            recovery=exc.recovery,
+            details=exc.details,
+        ) from exc
     return _to_wire(response)
 
 

@@ -177,7 +177,9 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
         token=test_tenant_setup["token"],
     )
 
-    # media_buy_id that doesn't exist should raise ValueError
-    with pytest.raises(ValueError, match="not found"):
+    # media_buy_id that doesn't exist should raise AdCPMediaBuyNotFoundError
+    from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+    with pytest.raises(AdCPMediaBuyNotFoundError, match="not found"):
         req = UpdateMediaBuyRequest(media_buy_id="nonexistent_ref")
         _update_media_buy_impl(req=req, identity=identity)

@@ -142,6 +142,13 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
     if error_code != "TOOL_ERROR":
         return _adcp_error_from_code(error_code, message, recovery)
 
+    # Final fallback: framework-translated AdcpError surfaces as the single
+    # string "CODE: message" — recognise that shape so tenant-isolation tests
+    # see the typed AdCPError they assert against.
+    head, sep, tail = error_str.partition(": ")
+    if sep and tail and 1 <= len(head) <= 50 and head.isupper() and " " not in head and head.replace("_", "").isalnum():
+        return _adcp_error_from_code(head, tail, None)
+
     return exc
 
 

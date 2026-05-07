@@ -50,6 +50,42 @@ _KNOWN_ASSET_TYPES = frozenset(
 )
 
 
+#: Asset types that require width+height in adcp 4.4. When a caller declares
+#: one but omits dimensions, demote to ``url`` (which has no dim requirement)
+#: rather than letting the strict library validator reject the payload.
+_DIM_REQUIRED_TYPES = frozenset({"image", "video"})
+
+
+def _demote_dim_required_without_dims(value: dict[str, Any]) -> dict[str, Any]:
+    """Demote ``image``/``video`` asset to ``url`` when dimensions are missing.
+
+    Mirrors the wire-level fixup in ``core.middleware.spec_defaults`` so any
+    code path that constructs ``CreativeAsset`` directly (tests, internal
+    flows) gets the same backward-compat treatment as the MCP/A2A boundary.
+    """
+    asset_type = value.get("asset_type")
+    if asset_type not in _DIM_REQUIRED_TYPES:
+        return value
+    if "width" in value and "height" in value:
+        return value
+    if "url" not in value:
+        return value
+    return {**value, "asset_type": "url"}
+
+
+def _backfill_brief_name(value: dict[str, Any]) -> dict[str, Any]:
+    """adcp 4.4 made ``name`` required on brief assets. Pre-v3 buyers and
+    existing test fixtures pass ``{"role": ..., "content": ...}`` without
+    a name; default to ``"brief"`` so the discriminated-union validator
+    can pick the brief branch without rejecting the payload.
+    """
+    if value.get("asset_type") != "brief":
+        return value
+    if value.get("name"):
+        return value
+    return {**value, "name": "brief"}
+
+
 def infer_asset_types(assets: dict[str, Any]) -> dict[str, Any]:
     """Backfill ``asset_type`` discriminator on raw asset values.
 
@@ -59,11 +95,17 @@ def infer_asset_types(assets: dict[str, Any]) -> dict[str, Any]:
     """
     inferred: dict[str, Any] = {}
     for key, value in assets.items():
-        if not isinstance(value, dict) or "asset_type" in value:
+        if not isinstance(value, dict):
             inferred[key] = value
             continue
+        if "asset_type" in value:
+            normalised = _demote_dim_required_without_dims(value)
+            inferred[key] = _backfill_brief_name(normalised)
+            continue
         if key in _KNOWN_ASSET_TYPES:
-            inferred[key] = {"asset_type": key, **value}
+            with_type = {"asset_type": key, **value}
+            normalised = _demote_dim_required_without_dims(with_type)
+            inferred[key] = _backfill_brief_name(normalised)
             continue
         has_content = "content" in value
         has_url = "url" in value

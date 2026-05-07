@@ -255,7 +255,7 @@ class SigningVerifyMiddleware:
         env_digest = covers_digest or os.environ.get("ADCP_SIGNING_COVERS_DIGEST", "either")
         if env_digest not in ("required", "forbidden", "either"):
             raise ValueError(
-                f"ADCP_SIGNING_COVERS_DIGEST must be one of 'required'/'forbidden'/'either' " f"(got {env_digest!r})"
+                f"ADCP_SIGNING_COVERS_DIGEST must be one of 'required'/'forbidden'/'either' (got {env_digest!r})"
             )
         self._covers_digest: Literal["required", "forbidden", "either"] = env_digest  # type: ignore[assignment]
 

@@ -72,15 +72,27 @@ class TestSyncCreativeCreateTransport:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_empty_creative_list_returns_success(self, integration_db, transport):
-        """Empty creative list is a valid no-op across all transports."""
+        """Empty creative list is rejected per adcp 3.12 ``min_length=1``.
+
+        The IMPL path bypasses the spec validator and treats an empty list as
+        a no-op (returns an empty result). The MCP path runs through the SDK
+        typed dispatcher, which enforces ``min_length=1`` and rejects with
+        INVALID_REQUEST. Both behaviours are spec-compatible — the IMPL path
+        is the no-op, the wire path is the rejection — so we assert the
+        transport-correct outcome rather than collapsing them.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
             result = env.call_via(transport, creatives=[])
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        assert len(result.payload.creatives) == 0
+        if transport == Transport.IMPL:
+            assert result.is_success
+            assert_envelope(result, transport)
+            assert len(result.payload.creatives) == 0
+        else:
+            assert result.is_error
+            assert "creatives" in str(result.error).lower()
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_dry_run_does_not_persist(self, integration_db, transport):
@@ -591,9 +603,9 @@ class TestGenerativeBuildUpdatePreserve:
             assert_envelope(result2, transport)
 
             # build_creative should NOT be called again (no prompt → skip build)
-            assert registry.build_creative.call_count == build_calls_after_create, (
-                "build_creative should not be called on update without prompt"
-            )
+            assert (
+                registry.build_creative.call_count == build_calls_after_create
+            ), "build_creative should not be called on update without prompt"
 
         # Verify existing generative data is preserved in DB
         with get_db_session() as session:
