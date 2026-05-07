@@ -163,6 +163,21 @@ class AdCPBudgetExhaustedError(AdCPError):
     recovery: RecoveryHint = "correctable"
 
 
+class AdCPTermsRejectedError(AdCPError):
+    """Buyer-proposed measurement_terms or performance_standards cannot be honored (422).
+
+    Per AdCP spec, sellers receiving package-level measurement_terms or
+    performance_standards they cannot fulfill must reject with TERMS_REJECTED
+    rather than INTERNAL_ERROR. The error is correctable: buyer agents are
+    expected to relax the terms (e.g. wider variance tolerance, different
+    measurement window) and retry with a fresh idempotency_key.
+    """
+
+    status_code = 422
+    error_code = "TERMS_REJECTED"
+    recovery: RecoveryHint = "correctable"
+
+
 class AdCPRateLimitError(AdCPError):
     """Too many requests (429)."""
 

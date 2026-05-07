@@ -125,6 +125,45 @@ def _to_wire(response: Any) -> dict[str, Any]:
     return dict(response)  # last-ditch coerce
 
 
+# Map salesagent recovery hints to the framework's wire vocabulary. Both
+# strings exist in the AdcpError recovery enum, but framework callers default
+# to ``"terminal"`` when unrecognized — pin our values explicitly.
+_RECOVERY_HINT_MAP: dict[str, str] = {
+    "transient": "transient",
+    "correctable": "correctable",
+    "terminal": "terminal",
+}
+
+
+def _translate_adcp_error(exc: AdCPError) -> AdcpError:
+    """Translate a salesagent ``AdCPError`` into the framework's wire-shaped
+    :class:`AdcpError` so the dispatcher projects ``error_code`` onto the
+    AdCP error envelope's ``code`` field. Without this translation,
+    salesagent's ``AdCPError`` reaches the framework as a generic
+    ``Exception`` and gets coded as ``INTERNAL_ERROR``.
+    """
+    recovery = _RECOVERY_HINT_MAP.get(exc.recovery, "terminal")
+    field: str | None = None
+    details: dict[str, Any] | None = None
+    if isinstance(exc.details, dict):
+        details = dict(exc.details)
+        # Hoist a top-level ``field`` key when the impl tucked it into details
+        # — keeps the wire projection's ``field`` attribute populated without
+        # adding another constructor parameter to AdCPError.
+        candidate = details.pop("field", None)
+        if isinstance(candidate, str):
+            field = candidate
+        if not details:
+            details = None
+    return AdcpError(
+        exc.error_code,
+        message=exc.message or str(exc),
+        recovery=recovery,  # type: ignore[arg-type]
+        field=field,
+        details=details,
+    )
+
+
 async def _delegate_get_products(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/products.py:_get_products_impl``."""
     identity = _build_identity(ctx)
@@ -141,10 +180,18 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     None. The framework's idempotency wrap on the caller layer scopes
     retries; the impl's own transactional semantics handle the
     create-once invariant.
+
+    Salesagent ``AdCPError`` exceptions are translated to the framework's
+    :class:`AdcpError` so structured rejections (TERMS_REJECTED, etc.)
+    project to the correct wire ``code`` instead of leaking through as
+    generic ``INTERNAL_ERROR``.
     """
     identity = _build_identity(ctx)
     req_model = _coerce_to_request_model(req, CreateMediaBuyRequest)
-    response = await _create_media_buy_impl(req_model, identity=identity)
+    try:
+        response = await _create_media_buy_impl(req_model, identity=identity)
+    except AdCPError as exc:
+        raise _translate_adcp_error(exc) from exc
     return _to_wire(response)
 
 

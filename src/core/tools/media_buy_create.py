@@ -33,8 +33,62 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPError,
     AdCPNotFoundError,
+    AdCPTermsRejectedError,
     AdCPValidationError,
 )
+
+# Conservative seller policy for measurement_terms negotiation.
+# Buyers propose; sellers accept, reject, or adjust. The minimum variance the
+# salesagent will honor against any third-party measurement vendor — anything
+# tighter than this is unworkable in practice and surfaces as TERMS_REJECTED
+# (correctable). Buyer agents are expected to relax and retry. This floor is
+# deliberately conservative: real publishers tolerate 5–10% variance against
+# DV/MOAT/IAS depending on the metric, and 0% is mathematically impossible
+# across independent counting methodologies.
+_MIN_SUPPORTED_VARIANCE_PERCENT = 5.0
+
+
+def _validate_measurement_terms(req: "CreateMediaBuyRequest") -> None:
+    """Reject buyer-proposed measurement_terms the seller cannot honor.
+
+    Today's salesagent has no per-tenant measurement_terms_supported config,
+    so the policy is a fixed floor: any ``max_variance_percent`` below
+    :data:`_MIN_SUPPORTED_VARIANCE_PERCENT` is rejected. Sellers that want
+    to honor stricter terms can subclass this check or extend tenant config
+    later — the rejection branch must exist regardless so unworkable terms
+    surface as TERMS_REJECTED instead of leaking through to INTERNAL_ERROR
+    via an unhandled downstream exception.
+
+    Per AdCP spec the error is ``correctable``: buyer relaxes variance and
+    retries with a fresh idempotency_key.
+    """
+    if not req.packages:
+        return
+    for idx, package in enumerate(req.packages):
+        terms = getattr(package, "measurement_terms", None)
+        if terms is None:
+            continue
+        billing = getattr(terms, "billing_measurement", None)
+        if billing is None:
+            continue
+        variance = getattr(billing, "max_variance_percent", None)
+        if variance is None:
+            continue
+        if float(variance) < _MIN_SUPPORTED_VARIANCE_PERCENT:
+            raise AdCPTermsRejectedError(
+                (
+                    f"max_variance_percent={variance} is tighter than this seller's "
+                    f"minimum of {_MIN_SUPPORTED_VARIANCE_PERCENT}%. No third-party "
+                    "measurement vendor can guarantee a variance below this floor. "
+                    "Relax measurement_terms.billing_measurement.max_variance_percent "
+                    f"to >= {_MIN_SUPPORTED_VARIANCE_PERCENT} and retry with a fresh "
+                    "idempotency_key."
+                ),
+                details={
+                    "field": f"packages[{idx}].measurement_terms.billing_measurement.max_variance_percent",
+                    "min_supported_variance_percent": _MIN_SUPPORTED_VARIANCE_PERCENT,
+                },
+            )
 
 
 class PackageAssignmentDict(TypedDict):
@@ -1352,6 +1406,11 @@ async def _create_media_buy_impl(
     tenant = identity.tenant
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
+
+    # Reject buyer-proposed measurement_terms the seller cannot honor BEFORE any
+    # workflow / DB side effects. Surfaces as TERMS_REJECTED (correctable) on the
+    # wire so buyer agents relax terms and retry with a fresh idempotency_key.
+    _validate_measurement_terms(req)
 
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:

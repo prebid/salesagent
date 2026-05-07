@@ -38,7 +38,12 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPNotFoundError,
+    AdCPTermsRejectedError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -347,9 +352,9 @@ class TestMaxDailySpendExceeded:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
                     # Validation errors must NOT be about daily spend
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
-                        f"Daily spend validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
+                    ), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend validation are fine
 
@@ -721,9 +726,9 @@ class TestInlineCreativesProcessedBeforeApproval:
 
         # Verify creatives were processed before the adapter (approval check) was accessed
         assert "creatives_processed" in call_order, "process_and_upload_package_creatives was not called"
-        assert call_order.index("creatives_processed") < call_order.index("approval_check"), (
-            f"Creatives must be processed before approval check. Order: {call_order}"
-        )
+        assert call_order.index("creatives_processed") < call_order.index(
+            "approval_check"
+        ), f"Creatives must be processed before approval check. Order: {call_order}"
 
 
 class TestMultipleInvalidCreativesAccumulated:
@@ -1108,9 +1113,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "not found" not in str(e).lower() or "product" not in str(e).lower(), (
-                        f"Product validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "not found" not in str(e).lower() or "product" not in str(e).lower()
+                    ), f"Product validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to product validation are fine
 
@@ -1136,9 +1141,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "currency" not in str(e).lower() or "not supported" not in str(e).lower(), (
-                        f"Currency validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "currency" not in str(e).lower() or "not supported" not in str(e).lower()
+                    ), f"Currency validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to currency validation are fine
 
@@ -1408,9 +1413,9 @@ class TestAsapStartTimingObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
-                        f"Daily spend validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
+                    ), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend are fine
 
@@ -2382,3 +2387,137 @@ class TestUpgradeObligations:
             media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)], sandbox=True
         )
         assert resp.sandbox is True
+
+
+# ===========================================================================
+# Issue #72 — measurement_terms negotiation
+# ===========================================================================
+
+
+class TestMeasurementTermsRejection:
+    """Issue #72: Aggressive measurement_terms must surface as TERMS_REJECTED.
+
+    The AdCP storyboard ``media_buy_seller/measurement_terms_rejected`` sends
+    ``max_variance_percent: 0`` — a tolerance no third-party measurement
+    vendor can guarantee. The seller must respond with a typed error that
+    wire-projects to ``code: "TERMS_REJECTED"`` and ``recovery: "correctable"``
+    so the buyer agent relaxes the terms and retries with a fresh
+    idempotency_key. Without the validation branch the request leaks through
+    to a downstream exception and the framework defaults to INTERNAL_ERROR.
+
+    Closes: salesagent#72
+    """
+
+    @pytest.mark.asyncio
+    async def test_aggressive_max_variance_percent_raises_terms_rejected(self):
+        """``max_variance_percent: 0`` raises AdCPTermsRejectedError BEFORE
+        the workflow_step is created, so the wire envelope projects to
+        TERMS_REJECTED instead of INTERNAL_ERROR.
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 25000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "measurement_terms": {
+                        "billing_measurement": {
+                            "vendor": {"domain": "videoamp.example"},
+                            "measurement_window": "c30",
+                            "max_variance_percent": 0,
+                        },
+                        "makegood_policy": {
+                            "available_remedies": ["credit"],
+                        },
+                    },
+                }
+            ]
+        )
+
+        with _PatchContext() as pc:
+            with pytest.raises(AdCPTermsRejectedError) as exc_info:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
+
+        # Wire projection contract: error_code → wire ``code``,
+        # recovery → wire ``recovery``.
+        assert exc_info.value.error_code == "TERMS_REJECTED"
+        assert exc_info.value.recovery == "correctable"
+        # The error message must point the buyer at the offending field.
+        assert "max_variance_percent" in exc_info.value.message
+        # The details payload carries the field path so the wire envelope
+        # can project it to the AdCP error envelope's ``field`` attribute.
+        assert exc_info.value.details is not None
+        assert "packages[0]" in exc_info.value.details["field"]
+
+    @pytest.mark.asyncio
+    async def test_relaxed_max_variance_percent_passes_validation(self):
+        """``max_variance_percent: 10`` (the storyboard's relaxed retry
+        value) clears the measurement_terms gate. The request continues
+        through downstream validation — any later error is unrelated to
+        TERMS_REJECTED and proves the gate is not over-rejecting.
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 25000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "measurement_terms": {
+                        "billing_measurement": {
+                            "vendor": {"domain": "videoamp.example"},
+                            "measurement_window": "c7",
+                            "max_variance_percent": 10,
+                        },
+                        "makegood_policy": {
+                            "available_remedies": ["credit", "additional_delivery"],
+                        },
+                    },
+                }
+            ]
+        )
+
+        with _PatchContext() as pc:
+            with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
+                mock_adapter.return_value = MagicMock(
+                    manual_approval_required=False,
+                    manual_approval_operations=["create_media_buy"],
+                )
+                # Whatever happens after the measurement_terms gate, it must
+                # NOT be TERMS_REJECTED — that proves the gate accepted the
+                # relaxed proposal and the request is on the success path.
+                try:
+                    await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPTermsRejectedError:
+                    pytest.fail("Relaxed max_variance_percent=10 must clear the measurement_terms validation gate")
+                except Exception:
+                    # Downstream failures (DB mock incompleteness, adapter
+                    # stub missing fields) are expected — the gate is what
+                    # this test exercises.
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_no_measurement_terms_passes_validation(self):
+        """Requests that omit measurement_terms entirely (the common case)
+        must not be rejected — the validation gate is purely additive.
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request()  # no measurement_terms
+
+        with _PatchContext() as pc:
+            with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
+                mock_adapter.return_value = MagicMock(
+                    manual_approval_required=False,
+                    manual_approval_operations=["create_media_buy"],
+                )
+                try:
+                    await _create_media_buy_impl(req=req, identity=pc.identity)
+                except AdCPTermsRejectedError:
+                    pytest.fail("Absent measurement_terms must not trigger TERMS_REJECTED")
+                except Exception:
+                    # Downstream failures are unrelated to this gate.
+                    pass
