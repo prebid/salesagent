@@ -526,7 +526,7 @@ class GAMOrdersManager:
                             f"Audio format '{format_display}' is not supported. "
                             f"GAM does not support standalone audio line items. "
                             f"Audio can only be used as companion creatives to video ads. "
-                            f"To deliver audio ads, use a different ad server (e.g., Triton, Kevel) that supports audio."
+                            f"To deliver audio ads, use a different ad server (e.g., Triton) that supports audio."
                         )
                         log(f"[red]Error: {error_msg}[/red]")
                         raise ValueError(error_msg)

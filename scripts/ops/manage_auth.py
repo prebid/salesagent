@@ -58,7 +58,6 @@ def create_principal(principal_id: str, name: str, token: str = None):
     # Default platform mappings
     default_mappings = {
         "gam_advertiser_id": None,
-        "kevel_advertiser_id": None,
         "triton_advertiser_id": None,
         "mock_advertiser_id": f"mock-{principal_id}",
     }

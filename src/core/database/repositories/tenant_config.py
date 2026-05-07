@@ -94,9 +94,7 @@ class TenantConfigRepository:
         """
         valid = {"auto-approve", "require-human", "ai-powered"}
         if mode not in valid:
-            raise ValueError(
-                f"approval_mode must be one of {sorted(valid)!r}, got {mode!r}"
-            )
+            raise ValueError(f"approval_mode must be one of {sorted(valid)!r}, got {mode!r}")
         tenant = self.get_tenant()
         if tenant is None:
             return None

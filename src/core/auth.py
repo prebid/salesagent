@@ -313,7 +313,6 @@ def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | N
     # Map adapter names to their specific fields
     adapter_field_map = {
         "gam": "gam_advertiser_id",
-        "kevel": "kevel_advertiser_id",
         "triton": "triton_advertiser_id",
         "mock": "mock_advertiser_id",
     }

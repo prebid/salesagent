@@ -120,9 +120,7 @@ class Tenant(Base, JSONValidatorMixin):
     # for buys in pending_start (warm-up window) and paused — not just active
     # and completed. Lets buyers stop polling for "did my flight start yet?"
     # and "is the pause still in effect?". Default True. See issue #48.
-    report_pre_start_buys: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
-    )
+    report_pre_start_buys: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
     # Measurement providers configuration
     # Structure: {"providers": ["Provider 1", "Provider 2"], "default": "Provider 1"}
@@ -1324,7 +1322,7 @@ class AdapterConfig(Base):
     gam_line_item_name_template: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # AXE (Audience Exchange) custom targeting keys (AdCP spec requires separate keys for each purpose)
-    # These are adapter-agnostic and work with GAM, Kevel, Mock, or any other adapter
+    # These are adapter-agnostic and work with GAM, Mock, or any other adapter
     # Note: gam_axe_custom_targeting_key was removed - use the three separate keys below
     axe_include_key: Mapped[str | None] = mapped_column(
         String(100),
@@ -1354,11 +1352,6 @@ class AdapterConfig(Base):
     # short-circuits sandbox=true buys to this advertiser (don't bill,
     # don't pollute reports, don't count against inventory).
     gam_sandbox_advertiser_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-
-    # Kevel
-    kevel_network_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    kevel_api_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    kevel_manual_approval_required: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Mock
     mock_manual_approval_required: Mapped[bool] = mapped_column(Boolean, default=False)

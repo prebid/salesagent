@@ -181,7 +181,7 @@ def _generate_pending_configuration_page(tenant: dict, virtual_host: str | None 
                 <p><strong>This sales agent is not yet configured.</strong></p>
                 <p>To activate this agent, the owner needs to:</p>
                 <ul style="text-align: left; margin: 1rem 0;">
-                    <li>Connect an ad server (Google Ad Manager, Kevel, etc.)</li>
+                    <li>Connect an ad server (Google Ad Manager, etc.)</li>
                     <li>Configure inventory and products</li>
                     <li>Complete initial setup</li>
                 </ul>

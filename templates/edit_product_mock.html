@@ -138,10 +138,6 @@
             <a href="/adapters/gam/config/{{ tenant_id }}/{{ product.product_id }}" class="btn btn-sm"
                style="background: #1565c0; color: white; margin-left: 1rem;">Configure GAM Adapter →</a>
             <small style="display: block; margin-top: 0.5rem; color: var(--sa-text-muted);">Configure Google Ad Manager specific settings.</small>
-            {% elif tenant_adapter == 'kevel' %}
-            <a href="/adapters/kevel/config/{{ tenant_id }}/{{ product.product_id }}" class="btn btn-sm"
-               style="background: #1565c0; color: white; margin-left: 1rem;">Configure Kevel Adapter →</a>
-            <small style="display: block; margin-top: 0.5rem; color: var(--sa-text-muted);">Configure Kevel specific settings.</small>
             {% else %}
             <span style="color: var(--sa-text-muted);">Configure advanced settings through the adapter-specific interface.</span>
             {% endif %}

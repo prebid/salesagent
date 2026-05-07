@@ -4,7 +4,6 @@ Tests that verify the budget extraction helper is properly used throughout
 the codebase (main.py, naming.py, adapters).
 """
 
-from datetime import UTC, datetime
 from decimal import Decimal
 
 from src.core.schemas import (
@@ -204,27 +203,6 @@ class TestBudgetMigrationInAdapters:
         instruction = f"Set total budget to: ${total_budget_amount:,.2f}"
 
         assert instruction == "Set total budget to: $50,000.00"
-
-    def test_xandr_adapter_io_creation_with_float(self):
-        """Test Xandr adapter insertion order creation with float budget (v1.8.0)."""
-
-        # Simulate the logic from xandr.py lines 282-288
-        class MockRequest:
-            budget = 30000.0
-            currency = "USD"
-            flight_start_date = datetime(2025, 1, 1, tzinfo=UTC)
-            flight_end_date = datetime(2025, 1, 31, tzinfo=UTC)
-
-        request = MockRequest()
-
-        budget_amount = extract_budget_amount(request.budget, request.currency or "USD")[0]
-        flight_days = (request.flight_end_date - request.flight_start_date).days
-
-        daily_budget = float(budget_amount / flight_days)
-        lifetime_budget = float(budget_amount)
-
-        assert daily_budget == 1000.0  # 30000 / 30 days
-        assert lifetime_budget == 30000.0
 
 
 class TestBudgetFormatMixedScenarios:

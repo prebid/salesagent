@@ -14,7 +14,7 @@ DESIGN DECISION (2025-10-27):
 - Auto-restart caused webhook loops in production (multiple containers + frequent restarts)
 - Simulators now only start when explicitly requested (e.g., media buy creation)
 - If server restarts, simulators for active media buys must be manually restarted via admin UI
-- For production use cases, use real ad server adapters (GAM, Kevel) instead of mock simulator
+- For production use cases, use real ad server adapters (GAM) instead of mock simulator
 """
 
 import atexit

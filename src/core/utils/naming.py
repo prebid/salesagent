@@ -1,6 +1,6 @@
 """Naming template utilities for orders and line items.
 
-Adapter-agnostic utilities that work across all ad servers (GAM, Mock, Kevel, etc.)
+Adapter-agnostic utilities that work across all ad servers (GAM, Mock, etc.)
 
 Supports variable substitution with fallback syntax:
 - {campaign_name} - Direct substitution

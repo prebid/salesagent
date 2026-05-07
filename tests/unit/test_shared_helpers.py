@@ -35,11 +35,6 @@ class TestResolveAdapterId:
         mappings = {"google_ad_manager": {"advertiser_id": "99"}}
         assert resolve_adapter_id(mappings, "google_ad_manager") == "99"
 
-    def test_kevel_nested_advertiser_id(self):
-        """Kevel adapter resolves advertiser_id from nested kevel dict."""
-        mappings = {"kevel": {"advertiser_id": "kv-001"}}
-        assert resolve_adapter_id(mappings, "kevel") == "kv-001"
-
     def test_triton_nested_advertiser_id(self):
         """Triton adapter resolves advertiser_id from nested triton dict."""
         mappings = {"triton": {"advertiser_id": "tri-100"}}
@@ -57,13 +52,13 @@ class TestResolveAdapterId:
 
     def test_nested_id_field_fallback(self):
         """When advertiser_id is absent, falls back to 'id' field."""
-        mappings = {"kevel": {"id": "fallback-id"}}
-        assert resolve_adapter_id(mappings, "kevel") == "fallback-id"
+        mappings = {"triton": {"id": "fallback-id"}}
+        assert resolve_adapter_id(mappings, "triton") == "fallback-id"
 
     def test_nested_company_id_field_fallback(self):
         """When advertiser_id and id are absent, falls back to 'company_id'."""
-        mappings = {"kevel": {"company_id": "comp-77"}}
-        assert resolve_adapter_id(mappings, "kevel") == "comp-77"
+        mappings = {"triton": {"company_id": "comp-77"}}
+        assert resolve_adapter_id(mappings, "triton") == "comp-77"
 
     def test_nested_field_priority_order(self):
         """advertiser_id takes priority over id and company_id."""
@@ -79,11 +74,6 @@ class TestResolveAdapterId:
         """Falls back to legacy gam_advertiser_id field."""
         mappings = {"gam_advertiser_id": "legacy-gam-99"}
         assert resolve_adapter_id(mappings, "gam") == "legacy-gam-99"
-
-    def test_old_field_name_fallback_kevel(self):
-        """Falls back to legacy kevel_advertiser_id field."""
-        mappings = {"kevel_advertiser_id": "legacy-kevel-1"}
-        assert resolve_adapter_id(mappings, "kevel") == "legacy-kevel-1"
 
     def test_old_field_name_fallback_triton(self):
         """Falls back to legacy triton_advertiser_id field."""
@@ -121,8 +111,8 @@ class TestResolveAdapterId:
 
     def test_none_advertiser_id_returns_none(self):
         """If advertiser_id is explicitly None, returns None."""
-        mappings = {"kevel": {"advertiser_id": None}}
-        assert resolve_adapter_id(mappings, "kevel") is None
+        mappings = {"triton": {"advertiser_id": None}}
+        assert resolve_adapter_id(mappings, "triton") is None
 
     def test_integer_advertiser_id_coerced_to_string(self):
         """Integer values are coerced to string."""
@@ -132,9 +122,9 @@ class TestResolveAdapterId:
     def test_adapter_platform_map_covers_all_old_field_map_keys(self):
         """Every adapter in _OLD_FIELD_MAP must also be in ADAPTER_PLATFORM_MAP."""
         for adapter_name in _OLD_FIELD_MAP:
-            assert adapter_name in ADAPTER_PLATFORM_MAP, (
-                f"Adapter '{adapter_name}' in _OLD_FIELD_MAP but missing from ADAPTER_PLATFORM_MAP"
-            )
+            assert (
+                adapter_name in ADAPTER_PLATFORM_MAP
+            ), f"Adapter '{adapter_name}' in _OLD_FIELD_MAP but missing from ADAPTER_PLATFORM_MAP"
 
 
 # ---------------------------------------------------------------------------

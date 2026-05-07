@@ -154,7 +154,7 @@ def _determine_media_buy_status(
 ) -> str:
     """Centralized media buy status determination logic.
 
-    This ensures consistent status across all adapters (GAM, Mock, Kevel, etc.).
+    This ensures consistent status across all adapters (GAM, Mock, etc.).
 
     Status Priority (highest to lowest) - ALL SPEC-COMPLIANT:
     1. pending_activation: Manual approval required OR needs creatives OR scheduled for future
@@ -396,7 +396,7 @@ def _execute_adapter_media_buy_creation(
     """Execute adapter's create_media_buy call.
 
     This function is shared between auto-approval and manual approval flows
-    to ensure consistent adapter behavior across all adapters (GAM, Mock, Kevel, etc.).
+    to ensure consistent adapter behavior across all adapters (GAM, Mock, etc.).
 
     Args:
         request: The CreateMediaBuyRequest with all campaign details
@@ -452,7 +452,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     This function is called after a media buy has been manually approved
     (either via media buy approval or creative approval). It reconstructs
     the original request from the database and calls the adapter to create
-    the order/line items in the external ad server (GAM, Kevel, etc.).
+    the order/line items in the external ad server (GAM, etc.).
 
     This ensures the same adapter logic runs for both auto-approved and
     manually approved media buys.
@@ -2720,9 +2720,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url

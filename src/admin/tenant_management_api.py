@@ -408,16 +408,6 @@ def create_tenant():
                     updated_at=datetime.now(UTC),
                 )
                 # NOTE: gam_company_id removed - advertiser_id is per-principal in platform_mappings
-            elif adapter_type == "kevel":
-                new_adapter = AdapterConfig(
-                    tenant_id=tenant_id,
-                    adapter_type=adapter_type,
-                    kevel_network_id=data.get("kevel_network_id"),
-                    kevel_api_key=data.get("kevel_api_key"),
-                    kevel_manual_approval_required=data.get("kevel_manual_approval_required", False),
-                    created_at=datetime.now(UTC),
-                    updated_at=datetime.now(UTC),
-                )
             elif adapter_type == "triton":
                 new_adapter = AdapterConfig(
                     tenant_id=tenant_id,
@@ -449,8 +439,6 @@ def create_tenant():
                 if adapter_type == "google_ad_manager":
                     # For GAM, add a placeholder advertiser ID
                     default_mappings = {"google_ad_manager": {"advertiser_id": "placeholder"}}
-                elif adapter_type == "kevel":
-                    default_mappings = {"kevel": {"advertiser_id": "placeholder"}}
                 elif adapter_type == "triton":
                     default_mappings = {"triton": {"advertiser_id": "placeholder"}}
                 else:
@@ -588,14 +576,6 @@ def update_tenant(tenant_id):
                             adapter.gam_trafficker_id = adapter_data["gam_trafficker_id"]
                         if "gam_manual_approval_required" in adapter_data:
                             adapter.gam_manual_approval_required = adapter_data["gam_manual_approval_required"]
-
-                    elif adapter.adapter_type == "kevel":
-                        if "kevel_network_id" in adapter_data:
-                            adapter.kevel_network_id = adapter_data["kevel_network_id"]
-                        if "kevel_api_key" in adapter_data:
-                            adapter.kevel_api_key = adapter_data["kevel_api_key"]
-                        if "kevel_manual_approval_required" in adapter_data:
-                            adapter.kevel_manual_approval_required = adapter_data["kevel_manual_approval_required"]
 
                     elif adapter.adapter_type == "triton":
                         if "triton_station_id" in adapter_data:
@@ -1135,7 +1115,7 @@ def _set_account_advertiser(
 ) -> None:
     """Set GAM advertiser id/name on ``Account.platform_mappings``.
 
-    Preserves any other adapter blocks (kevel, triton) and other GAM fields
+    Preserves any other adapter blocks (triton) and other GAM fields
     we don't manage from this endpoint. Re-assigns the dict so SQLAlchemy
     sees the JSONType column as dirty even with mutation-tracking off.
     """

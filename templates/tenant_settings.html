@@ -757,15 +757,6 @@
                         </div>
                     </div>
 
-                    <div class="adapter-card {% if active_adapter == 'kevel' %}current{% endif %}"
-                         onclick="selectAdapter('kevel')">
-                        {% if active_adapter == 'kevel' %}
-                        <span class="adapter-badge">Current</span>
-                        {% endif %}
-                        <h4>Kevel</h4>
-                        <p>API-first ad serving for developers</p>
-                    </div>
-
                     <div class="adapter-card {% if active_adapter == 'broadstreet' %}current{% endif %}"
                          onclick="selectAdapter('broadstreet')">
                         {% if active_adapter == 'broadstreet' %}
@@ -1293,15 +1284,14 @@
                 <div class="form-section">
                     <h3>Naming Conventions</h3>
                     <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
-                        Configure how orders and line items are named. <strong>Works across all ad servers</strong> (GAM, Mock, Kevel).
+                        Configure how orders and line items are named. <strong>Works across all ad servers</strong> (GAM, Mock).
                     </p>
 
                     <!-- Adapter Support Indicator -->
                     <div class="alert alert-info" style="font-size: 0.875rem; padding: 0.75rem; margin-bottom: 1.5rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;">
                         <strong>Adapter Support:</strong>
                         ✅ Google Ad Manager &nbsp;&nbsp;
-                        ✅ Mock Adapter &nbsp;&nbsp;
-                        ⏳ Kevel (coming soon)
+                        ✅ Mock Adapter
                     </div>
 
                     <!-- Quick Start Presets -->

@@ -139,11 +139,11 @@ class TestADCPSchemaCompatibility:
             "format_id": {"agent_url": "https://test.com", "id": "test_format"},
             "name": "Test Format",
             "type": "display",
-            "platform_config": {"gam": {"creative_template_id": "123"}, "kevel": {"template_id": "456"}},
+            "platform_config": {"gam": {"creative_template_id": "123"}, "triton": {"template_id": "456"}},
         }
 
         format_obj = Format(**format_data)
-        assert format_obj.platform_config == {"gam": {"creative_template_id": "123"}, "kevel": {"template_id": "456"}}
+        assert format_obj.platform_config == {"gam": {"creative_template_id": "123"}, "triton": {"template_id": "456"}}
 
     def test_signal_roundtrip_with_model_dump(self):
         """Test Signal can roundtrip through model_dump and reconstruction."""

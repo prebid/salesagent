@@ -133,14 +133,12 @@ class TestMinimumSpendValidation:
             )
             session.add(authorized_property)
 
-            # Create principal with both kevel and mock mappings
             principal = Principal(
                 tenant_id="test_minspend_tenant",
                 principal_id="test_principal",
                 name="Test Principal",
                 access_token="test_minspend_token",
                 platform_mappings={
-                    "kevel": {"advertiser_id": "test_advertiser_id"},
                     "mock": {"advertiser_id": "test_advertiser_id"},
                 },
                 created_at=now,

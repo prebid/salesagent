@@ -76,7 +76,6 @@ async def test_budget_update_response_echoes_buyer_context():
         pytest.fail(f"Update returned an error variant unexpectedly: {response.errors}")
 
     data = response.model_dump(mode="json", exclude_none=True)
-    assert data.get("context") == update_ctx, (
-        "AdCP requires response.context to echo the buyer-supplied request.context "
-        "unchanged."
-    )
+    assert (
+        data.get("context") == update_ctx
+    ), "AdCP requires response.context to echo the buyer-supplied request.context unchanged."

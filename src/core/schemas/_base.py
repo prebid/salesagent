@@ -619,7 +619,7 @@ class Format(LibraryFormat):
     platform_config: dict[str, Any] | None = Field(
         None,
         exclude=True,
-        description="Internal: Platform-specific configuration (e.g., gam, kevel) for creative mapping",
+        description="Internal: Platform-specific configuration (e.g., gam) for creative mapping",
     )
     category: Literal["standard", "custom", "generative"] | None = Field(
         None, exclude=True, description="Internal: Format category (not in AdCP spec)"

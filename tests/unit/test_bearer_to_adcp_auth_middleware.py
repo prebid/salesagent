@@ -225,10 +225,9 @@ async def test_dual_credential_mismatch_is_logged(caplog):
     adcp_auth_values = [v for n, v in inner.captured_scope["headers"] if n == b"x-adcp-auth"]
     assert adcp_auth_values == [b"canonical-token"]
     # Warning surfaced.
-    assert any("different tokens" in record.getMessage() for record in caplog.records), (
-        "Expected a warning log on dual-credential mismatch; got: "
-        f"{[r.getMessage() for r in caplog.records]}"
-    )
+    assert any(
+        "different tokens" in record.getMessage() for record in caplog.records
+    ), f"Expected a warning log on dual-credential mismatch; got: {[r.getMessage() for r in caplog.records]}"
     # Token values must NOT appear in the log message.
     for record in caplog.records:
         assert b"canonical-token".decode() not in record.getMessage()

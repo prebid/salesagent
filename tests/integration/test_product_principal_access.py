@@ -294,7 +294,7 @@ def test_principal_model_exists_for_access_control(integration_db):
         session.add(tenant)
 
         # Create principals (with required fields)
-        # platform_mappings must have at least one platform (google_ad_manager, kevel, or mock)
+        # platform_mappings must have at least one platform (google_ad_manager or mock)
         principal1 = Principal(
             principal_id="adv_001",
             tenant_id=tenant_id,

@@ -196,14 +196,12 @@ def test_tenant_with_data(integration_db):
         db_session.add(auth_property)
 
         # Principal (required for setup completion)
-        # Include both kevel and mock mappings to support ad_server="kevel" (which is production-ready)
         principal = Principal(
             tenant_id=tenant_id,
             principal_id=f"{tenant_id}_principal",
             name="Test Principal",
             access_token=f"{tenant_id}_token",
             platform_mappings={
-                "kevel": {"advertiser_id": f"kevel_adv_{tenant_id}"},
                 "mock": {"advertiser_id": f"mock_adv_{tenant_id}"},
             },
         )
@@ -393,9 +391,7 @@ def sample_principal(integration_db, sample_tenant):
             principal_id="test_principal",
             name="Test Advertiser",
             access_token="test_token_12345",
-            # Include both kevel and mock mappings for compatibility
             platform_mappings={
-                "kevel": {"advertiser_id": "test_advertiser"},
                 "mock": {"id": "test_advertiser"},
             },
             created_at=now,
@@ -1193,15 +1189,12 @@ def add_required_setup_data(session, tenant_id: str):
             name="Default Test Principal",
             access_token=f"{tenant_id}_default_token",
             platform_mappings={
-                "kevel": {"advertiser_id": f"kevel_adv_{tenant_id}"},
                 "mock": {"advertiser_id": f"mock_adv_{tenant_id}"},
             },
         )
         session.add(principal)
-    elif existing_principal.platform_mappings and "kevel" not in existing_principal.platform_mappings:
-        existing_principal.platform_mappings["kevel"] = {
-            "advertiser_id": f"kevel_adv_{existing_principal.principal_id}"
-        }
+    elif existing_principal.platform_mappings and "mock" not in existing_principal.platform_mappings:
+        existing_principal.platform_mappings["mock"] = {"advertiser_id": f"mock_adv_{existing_principal.principal_id}"}
         attributes.flag_modified(existing_principal, "platform_mappings")
 
     # GAMInventory

@@ -193,17 +193,6 @@ def provision_tenant():
                     # GAM will be configured later through settings
                     pass
 
-            elif adapter_type == "kevel":
-                # Get Kevel credentials from form
-                kevel_network_id = request.form.get("kevel_network_id", "").strip()
-                kevel_api_key = request.form.get("kevel_api_key", "").strip()
-
-                if kevel_network_id and kevel_api_key:
-                    adapter_config.kevel_network_id = kevel_network_id
-                    adapter_config.kevel_api_key = kevel_api_key
-                else:
-                    flash("Kevel configuration incomplete. You can configure it later in settings.", "warning")
-
             elif adapter_type == "mock":
                 # Mock adapter needs no additional configuration
                 adapter_config.mock_dry_run = False

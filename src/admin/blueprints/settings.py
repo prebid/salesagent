@@ -1202,8 +1202,6 @@ def update_business_rules(tenant_id):
                             tenant.adapter_config.gam_manual_approval_required = manual_approval_value
                         elif adapter_type == "mock":
                             tenant.adapter_config.mock_manual_approval_required = manual_approval_value
-                        elif adapter_type == "kevel":
-                            tenant.adapter_config.kevel_manual_approval_required = manual_approval_value
                 elif not request.is_json:
                     # Checkbox not present in form data means unchecked
                     tenant.human_review_required = False
@@ -1213,8 +1211,6 @@ def update_business_rules(tenant_id):
                             tenant.adapter_config.gam_manual_approval_required = False
                         elif adapter_type == "mock":
                             tenant.adapter_config.mock_manual_approval_required = False
-                        elif adapter_type == "kevel":
-                            tenant.adapter_config.kevel_manual_approval_required = False
 
                 db_session.commit()
 

@@ -35,49 +35,49 @@ class TestCheckBillingPolicy:
 
     def test_no_policy_configured_accepts_all(self):
         identity = _identity_with()  # no supported_billing key
-        assert _check_billing_policy("operator", identity) is None
-        assert _check_billing_policy("agent", identity) is None
+        assert _check_billing_policy("operator", identity, principal_billing_enabled=True) is None
+        assert _check_billing_policy("agent", identity, principal_billing_enabled=True) is None
 
     def test_supported_value_accepted(self):
         identity = _identity_with(supported_billing=["agent"])
-        assert _check_billing_policy("agent", identity) is None
+        assert _check_billing_policy("agent", identity, principal_billing_enabled=True) is None
 
     def test_unsupported_value_rejected(self):
         identity = _identity_with(supported_billing=["agent"])
-        errors = _check_billing_policy("operator", identity)
+        errors = _check_billing_policy("operator", identity, principal_billing_enabled=True)
         assert errors is not None
         assert len(errors) == 1
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
     def test_error_message_includes_supported_list(self):
         identity = _identity_with(supported_billing=["agent", "operator"])
-        errors = _check_billing_policy("prepaid", identity)
+        errors = _check_billing_policy("prepaid", identity, principal_billing_enabled=True)
         assert errors is not None
         assert "agent" in errors[0].message
         assert "operator" in errors[0].message
 
     def test_error_includes_suggestion_field(self):
         identity = _identity_with(supported_billing=["agent"])
-        errors = _check_billing_policy("operator", identity)
+        errors = _check_billing_policy("operator", identity, principal_billing_enabled=True)
         assert errors is not None
         assert errors[0].suggestion is not None
         assert "agent" in errors[0].suggestion
 
     def test_empty_supported_list_rejects_all(self):
         identity = _identity_with(supported_billing=[])
-        errors = _check_billing_policy("agent", identity)
+        errors = _check_billing_policy("agent", identity, principal_billing_enabled=True)
         assert errors is not None
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
     def test_tenant_none_accepts(self):
         identity = PrincipalFactory.make_identity(tenant_id="t1", tenant=None)
-        assert _check_billing_policy("operator", identity) is None
+        assert _check_billing_policy("operator", identity, principal_billing_enabled=True) is None
 
     def test_tenantcontext_access_works(self):
         """When identity.tenant is a TenantContext object, the same .get() contract applies."""
         identity = _identity_with_tenantcontext(supported_billing=["agent"])
-        assert _check_billing_policy("agent", identity) is None
-        errors = _check_billing_policy("operator", identity)
+        assert _check_billing_policy("agent", identity, principal_billing_enabled=True) is None
+        errors = _check_billing_policy("operator", identity, principal_billing_enabled=True)
         assert errors is not None
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
@@ -85,7 +85,7 @@ class TestCheckBillingPolicy:
         """When identity.tenant is a raw dict (IMPL transport), same behavior."""
         identity = _identity_with(supported_billing=["agent"])
         assert isinstance(identity.tenant, dict)
-        assert _check_billing_policy("agent", identity) is None
+        assert _check_billing_policy("agent", identity, principal_billing_enabled=True) is None
 
 
 class TestBuildSetupForApproval:

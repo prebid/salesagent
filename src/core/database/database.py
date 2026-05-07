@@ -216,7 +216,7 @@ def init_db(exit_on_error=False):
 ║  🌐 Admin UI: http://localhost:8001/admin/                       ║
 ║                                                                  ║
 ║  ⚡ Next Steps (use Setup Checklist in Admin UI):                ║
-║     1. Configure your ad server (GAM, Kevel, etc.)               ║
+║     1. Configure your ad server (GAM, etc.)                      ║
 ║     2. Set up currencies                                         ║
 ║     3. Create products                                           ║
 ║     4. Add advertisers (principals)                              ║

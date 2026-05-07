@@ -17,7 +17,6 @@ def test_no_import_collisions():
     files_to_check = [
         "main.py",
         "adapters/base.py",
-        "adapters/kevel.py",
         "adapters/triton_digital.py",
     ]
 
@@ -119,7 +118,6 @@ def test_wildcard_imports_documented():
     files_with_wildcards = [
         "main.py",
         "adapters/base.py",
-        "adapters/kevel.py",
         "adapters/triton_digital.py",
     ]
 

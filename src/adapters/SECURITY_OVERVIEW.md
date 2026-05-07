@@ -37,7 +37,6 @@ if not auth_result.is_valid:
     "name": "Company Name",
     "platform_mappings": {
         "gam": {"advertiser_id": "123456"},
-        "kevel": {"advertiser_id": "789"},
         "triton": {"advertiser_id": "ABC123"}
     }
 }
@@ -62,7 +61,6 @@ def _verify_principal(principal_id: str, media_buy_id: str):
 
 Each adapter enforces platform-specific security:
 - **Google Ad Manager**: Uses advertiser_id for all API calls
-- **Kevel**: Scopes campaigns to advertiser
 - **Triton Digital**: Enforces station-level permissions
 - **Mock**: Implements reference security model
 

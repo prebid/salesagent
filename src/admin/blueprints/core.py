@@ -492,7 +492,7 @@ def create_tenant():
             db_session.commit()
 
             # Note: No default principal created - principals must be added manually
-            # to map to real advertiser accounts in the ad server (GAM, Kevel, etc.)
+            # to map to real advertiser accounts in the ad server (GAM, etc.)
 
             flash(f"Tenant '{tenant_name}' created successfully!", "success")
             return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))

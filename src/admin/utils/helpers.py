@@ -97,14 +97,6 @@ def get_tenant_config_from_db(tenant_id):
                     )
                 elif adapter_type == "mock":
                     adapter_config[adapter_type]["dry_run"] = adapter_obj.mock_dry_run or False
-                elif adapter_type == "kevel":
-                    if adapter_obj.kevel_network_id:
-                        adapter_config[adapter_type]["network_id"] = adapter_obj.kevel_network_id
-                    if adapter_obj.kevel_api_key:
-                        adapter_config[adapter_type]["api_key"] = adapter_obj.kevel_api_key
-                    adapter_config[adapter_type]["manual_approval_required"] = (
-                        adapter_obj.kevel_manual_approval_required or False
-                    )
                 elif adapter_type == "triton":
                     if adapter_obj.triton_station_id:
                         adapter_config[adapter_type]["station_id"] = adapter_obj.triton_station_id

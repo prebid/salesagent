@@ -11,7 +11,6 @@ The mappings are pure data with no adapter logic.
 ADAPTER_PLATFORM_MAP: dict[str, str] = {
     "gam": "google_ad_manager",
     "google_ad_manager": "google_ad_manager",
-    "kevel": "kevel",
     "triton": "triton",
     "broadstreet": "broadstreet",
     "mock": "mock",
@@ -20,7 +19,6 @@ ADAPTER_PLATFORM_MAP: dict[str, str] = {
 # Legacy field names for backwards-compatible advertiser ID lookup
 _OLD_FIELD_MAP: dict[str, str] = {
     "gam": "gam_advertiser_id",
-    "kevel": "kevel_advertiser_id",
     "triton": "triton_advertiser_id",
     "broadstreet": "broadstreet_advertiser_id",
     "mock": "mock_advertiser_id",

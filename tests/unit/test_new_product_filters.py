@@ -21,12 +21,6 @@ class TestAdapterDefaultChannels:
         assert "olv" in channels  # V3: video → olv
         assert "social" in channels  # V3: native → social
 
-    def test_kevel_supports_social_retail_media(self):
-        """Test that Kevel adapter supports social and retail_media."""
-        channels = get_adapter_default_channels("kevel")
-        assert "social" in channels  # V3: native → social
-        assert "retail_media" in channels  # V3: retail → retail_media
-
     def test_triton_supports_streaming_audio_podcast(self):
         """Test that Triton adapter supports streaming_audio and podcast."""
         channels = get_adapter_default_channels("triton")

@@ -143,7 +143,7 @@ def test_provision_request_rejects_unknown_field():
 
 
 def test_provision_request_rejects_unknown_adapter_type():
-    payload = _provision_payload(adapter={"type": "kevel", "network_id": "x"})
+    payload = _provision_payload(adapter={"type": "unknown_adapter", "network_id": "x"})
     with pytest.raises(ValidationError):
         ProvisionTenantRequest.model_validate(payload)
 

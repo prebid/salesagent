@@ -10,7 +10,6 @@ import warnings
 from datetime import UTC, datetime
 from typing import Any
 
-
 _DEFAULT_BRAND: dict[str, Any] = {"domain": "testbrand.com"}
 
 
@@ -66,9 +65,7 @@ def _inject_wire_required_fields(
       ``"e2e"``, ``"e2e-update"``, ``"e2e-sync"``) for log-grepping.
     """
     actual_brand = brand if brand is not None else _DEFAULT_BRAND
-    operator = (
-        actual_brand.get("domain", "testbrand.com") if isinstance(actual_brand, dict) else "testbrand.com"
-    )
+    operator = actual_brand.get("domain", "testbrand.com") if isinstance(actual_brand, dict) else "testbrand.com"
     request["idempotency_key"] = f"{idempotency_prefix}-{uuid.uuid4()}"
     request["account"] = {"brand": actual_brand, "operator": operator}
 
@@ -177,9 +174,7 @@ def build_adcp_media_buy_request(
         request["packages"][0]["targeting_overlay"] = targeting_overlay
 
     if webhook_url:
-        request["reporting_webhook"] = _build_reporting_webhook(
-            webhook_url, reporting_frequency=reporting_frequency
-        )
+        request["reporting_webhook"] = _build_reporting_webhook(webhook_url, reporting_frequency=reporting_frequency)
 
     if context:
         request["context"] = context

@@ -45,7 +45,6 @@ def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
 
 
 from src.adapters.google_ad_manager import GoogleAdManager
-from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
 from src.core.database.database_session import get_db_session
@@ -54,7 +53,7 @@ from src.core.schemas import Principal
 
 def get_adapter(
     principal: Principal, dry_run: bool = False, testing_context: Any = None, tenant: Any = None
-) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
+) -> MockAdServerAdapter | GoogleAdManager | TritonDigital:
     """Get the appropriate adapter instance for the selected adapter type.
 
     Args:
@@ -135,15 +134,6 @@ def get_adapter(
                 else:
                     adapter_config["company_id"] = None
                     logger.info("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
-            elif adapter_type == "kevel":
-                adapter_config["network_id"] = config_row.kevel_network_id or ""
-                adapter_config["api_key"] = config_row.kevel_api_key or ""
-                # Default to True (require approval) for safety
-                adapter_config["manual_approval_required"] = (
-                    config_row.kevel_manual_approval_required
-                    if config_row.kevel_manual_approval_required is not None
-                    else True
-                )
             elif adapter_type == "triton":
                 adapter_config["station_id"] = config_row.triton_station_id or ""
                 adapter_config["api_key"] = config_row.triton_api_key or ""
@@ -182,8 +172,6 @@ def get_adapter(
             targeting_config=targeting_config,
             naming_templates=naming_templates,
         )
-    elif selected_adapter == "kevel":
-        return Kevel(adapter_config, principal, dry_run, tenant_id=tenant_id)
     elif selected_adapter in ["triton", "triton_digital"]:
         return TritonDigital(adapter_config, principal, dry_run, tenant_id=tenant_id)
     else:

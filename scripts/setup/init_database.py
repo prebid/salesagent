@@ -214,10 +214,6 @@ def init_db(exit_on_error=False):
                                 "advertiser_id": "67890",
                                 "enabled": True,
                             },
-                            "kevel": {
-                                "advertiser_id": "acme-corporation",
-                                "enabled": True,
-                            },
                             "mock": {
                                 "advertiser_id": "mock-acme",
                                 "enabled": True,
@@ -231,10 +227,6 @@ def init_db(exit_on_error=False):
                         "platform_mappings": {
                             "google_ad_manager": {
                                 "advertiser_id": "12345",
-                                "enabled": True,
-                            },
-                            "kevel": {
-                                "advertiser_id": "purina-pet-foods",
                                 "enabled": True,
                             },
                             "mock": {

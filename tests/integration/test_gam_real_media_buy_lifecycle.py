@@ -368,9 +368,9 @@ class TestGAMRealMediaBuyLifecycle:
                 assignments={creative_id: [first_package_id]},
                 identity=identity,
             )
-            assert any(c.creative_id == creative_id for c in (sync_resp.creatives or [])), (
-                f"Synced creative {creative_id} missing from response: {sync_resp}"
-            )
+            assert any(
+                c.creative_id == creative_id for c in (sync_resp.creatives or [])
+            ), f"Synced creative {creative_id} missing from response: {sync_resp}"
 
             with get_db_session() as session:
                 cr = session.scalars(
@@ -460,9 +460,9 @@ class TestGAMOrderProgressesPastDraft:
                 ),
                 identity=identity,
             )
-            assert create_result.status not in ("failed",), (
-                f"create_media_buy failed: errors={getattr(create_result.response, 'errors', None)}"
-            )
+            assert create_result.status not in (
+                "failed",
+            ), f"create_media_buy failed: errors={getattr(create_result.response, 'errors', None)}"
             order_id = create_result.response.media_buy_id
             assert order_id
             gam_order_archive_cleanup.append(order_id)
@@ -603,9 +603,9 @@ class TestGAMRealDeliveryWebhook:
                     ),
                     identity=identity,
                 )
-                assert create_result.status not in ("failed",), (
-                    f"create_media_buy failed: {getattr(create_result.response, 'errors', None)}"
-                )
+                assert create_result.status not in (
+                    "failed",
+                ), f"create_media_buy failed: {getattr(create_result.response, 'errors', None)}"
                 order_id = create_result.response.media_buy_id
                 assert order_id
                 gam_order_archive_cleanup.append(order_id)
@@ -795,14 +795,10 @@ class TestGAMRealCreativeApprovalAsync:
                     )
                 ).first()
                 assert cr is not None
-                assert cr.status == "pending_review", (
-                    f"expected pending_review, got {cr.status}"
-                )
+                assert cr.status == "pending_review", f"expected pending_review, got {cr.status}"
 
             # Admin approves the creative (mirrors the Flask route's write).
-            admin_mark_creative_approved(
-                GAM_TENANT_ID, creative_id, approved_by="test_admin"
-            )
+            admin_mark_creative_approved(GAM_TENANT_ID, creative_id, approved_by="test_admin")
 
             # Trigger the adapter execution path. This is what the Flask
             # creative-approval handler calls after marking the creative
@@ -822,9 +818,7 @@ class TestGAMRealCreativeApprovalAsync:
                 packages = session.scalars(
                     select(DBMediaPackage).where(DBMediaPackage.media_buy_id == media_buy_id)
                 ).all()
-                line_item_ids = [
-                    p.package_config.get("platform_line_item_id") for p in packages
-                ]
+                line_item_ids = [p.package_config.get("platform_line_item_id") for p in packages]
                 line_item_ids = [li for li in line_item_ids if li]
                 assert line_item_ids, (
                     f"expected at least one platform_line_item_id post-execute, "

@@ -114,7 +114,6 @@ class TestInlineCreativesInAdapters:
     # TODO: Re-add adapter-specific tests after adapter initialization patterns are updated
     # The following tests were removed because adapter initialization changed:
     # - test_gam_adapter_includes_creative_ids_manual_approval
-    # - test_kevel_adapter_includes_creative_ids
     # - test_triton_adapter_includes_creative_ids
 
     def test_mock_adapter_includes_creative_ids(self, mock_package_with_creatives, mock_request, mocker):

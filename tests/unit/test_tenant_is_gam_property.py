@@ -40,13 +40,13 @@ def test_is_not_gam_tenant_mock_adapter():
     assert tenant.is_gam_tenant is False
 
 
-def test_is_not_gam_tenant_kevel_adapter():
-    """Test is_gam_tenant returns False for Kevel adapter."""
+def test_is_not_gam_tenant_triton_adapter():
+    """Test is_gam_tenant returns False for Triton adapter."""
     tenant = Tenant(
         tenant_id="test_tenant",
         name="Test Tenant",
         subdomain="test",
-        ad_server="kevel",
+        ad_server="triton",
     )
     tenant.adapter_config = None
 

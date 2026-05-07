@@ -83,15 +83,6 @@ def create_tenant(args):
                 gam_manual_approval_required=args.manual_approval,
             )
             session.add(adapter_config)
-        elif args.adapter == "kevel":
-            adapter_config = AdapterConfig(
-                tenant_id=tenant_id,
-                adapter_type="kevel",
-                kevel_network_id=args.kevel_network_id,
-                kevel_api_key=args.kevel_api_key,
-                kevel_manual_approval_required=args.manual_approval,
-            )
-            session.add(adapter_config)
         elif args.adapter == "mock":
             adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="mock", mock_dry_run=False)
             session.add(adapter_config)
@@ -134,8 +125,6 @@ def create_tenant(args):
         elif args.adapter == "google_ad_manager":
             # GAM advertiser_id will need to be set via Admin UI
             platform_mappings = {"google_ad_manager": {"advertiser_id": ""}}
-        elif args.adapter == "kevel":
-            platform_mappings = {"kevel": {"advertiser_id": ""}}
         else:
             platform_mappings = {}
 
@@ -216,7 +205,7 @@ def main():
     parser.add_argument("--tenant-id", help="Tenant ID (default: generated from name)")
     parser.add_argument("--subdomain", help="Subdomain (default: same as tenant ID)")
     parser.add_argument(
-        "--adapter", choices=["mock", "google_ad_manager", "kevel"], default="mock", help="Primary ad server adapter"
+        "--adapter", choices=["mock", "google_ad_manager"], default="mock", help="Primary ad server adapter"
     )
 
     # Adapter-specific options
@@ -227,9 +216,6 @@ def main():
     parser.add_argument(
         "--gam-refresh-token", help="Google Ad Manager OAuth refresh token (advertisers are now selected per principal)"
     )
-    parser.add_argument("--kevel-network-id", help="Kevel network ID")
-    parser.add_argument("--kevel-api-key", help="Kevel API key")
-
     # Access control options
     parser.add_argument("--authorized-domain", action="append", help="Authorized domain (can be used multiple times)")
     parser.add_argument("--admin-email", help="Initial admin email address")
@@ -247,9 +233,6 @@ def main():
         if not args.gam_refresh_token:
             print("Warning: No refresh token provided for Google Ad Manager.")
             print("You'll need to configure GAM credentials through the Admin UI.")
-    if args.adapter == "kevel" and not args.kevel_network_id:
-        parser.error("--kevel-network-id required for Kevel")
-
     create_tenant(args)
 
 

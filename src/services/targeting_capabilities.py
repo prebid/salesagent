@@ -49,7 +49,7 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
     ),
     # ── Seller extensions ────────────────────────────────────────────────
     # Standard ad-server dimensions not yet in AdCP TargetingOverlay.
-    # Adapters (GAM, Kevel, Triton, Xandr) actively consume these.
+    # Adapters (GAM, Triton) actively consume these.
     # Candidates for upstream AdCP inclusion.
     "device_type": TargetingCapability(
         dimension="device_type",

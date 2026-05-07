@@ -132,52 +132,6 @@ class TestSelfServiceSignupFlow:
             db_session.delete(tenant)
             db_session.commit()
 
-    def test_provision_tenant_kevel_adapter_with_credentials(self, integration_db, client):
-        """Test tenant provisioning with Kevel adapter and credentials."""
-        with client.session_transaction() as sess:
-            sess["signup_flow"] = True
-            sess["user"] = "admin@keveltest.com"
-            sess["user_name"] = "Kevel Admin"
-
-        form_data = {
-            "publisher_name": "Kevel Test Publisher",
-            # No subdomain - auto-generated from UUID
-            "adapter": "kevel",
-            "kevel_network_id": "12345",
-            "kevel_api_key": "test_api_key_12345",
-        }
-
-        response = client.post("/signup/provision", data=form_data, follow_redirects=False)
-
-        # Should redirect to completion page
-        assert response.status_code == 302
-        assert "/signup/complete" in response.headers["Location"]
-
-        # Extract tenant_id from redirect URL
-        redirect_url = response.headers["Location"]
-        tenant_id = redirect_url.split("tenant_id=")[1] if "tenant_id=" in redirect_url else None
-        assert tenant_id is not None
-
-        # Verify tenant and adapter config
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            assert tenant is not None
-            assert tenant.ad_server == "kevel"
-
-            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant.tenant_id)).first()
-            assert adapter_config is not None
-            assert adapter_config.adapter_type == "kevel"
-            assert adapter_config.kevel_network_id == "12345"
-            assert adapter_config.kevel_api_key == "test_api_key_12345"
-
-            # Cleanup
-            user = db_session.scalars(select(User).filter_by(tenant_id=tenant.tenant_id)).first()
-            if user:
-                db_session.delete(user)
-            db_session.delete(adapter_config)
-            db_session.delete(tenant)
-            db_session.commit()
-
     def test_provision_tenant_gam_adapter_without_oauth(self, integration_db, client):
         """Test tenant provisioning with GAM adapter (to be configured later)."""
         with client.session_transaction() as sess:

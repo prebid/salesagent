@@ -38,9 +38,7 @@ def test_request_has_required_idempotency_key():
     # Pattern allowed chars per spec: ^[A-Za-z0-9_.:-]{16,255}$
     import re
 
-    assert re.match(r"^[A-Za-z0-9_.:-]{16,255}$", key), (
-        f"idempotency_key '{key}' must match the spec's character set"
-    )
+    assert re.match(r"^[A-Za-z0-9_.:-]{16,255}$", key), f"idempotency_key '{key}' must match the spec's character set"
 
 
 def test_each_call_generates_a_fresh_idempotency_key():

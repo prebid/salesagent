@@ -4,10 +4,10 @@ After adcp 3.6.0, CreateMediaBuyRequest no longer has brand_manifest.
 It was replaced by brand (BrandReference with .domain and optional .brand_id).
 Since adcp 3.9, account (AccountReference) is also required.
 
-These tests demonstrate that the naming code in src/core/utils/naming.py,
-src/adapters/gam/utils/naming.py, and src/adapters/xandr.py fail to extract
-brand information from real adcp request objects because they still
-look for the removed brand_manifest attribute.
+These tests demonstrate that the naming code in src/core/utils/naming.py and
+src/adapters/gam/utils/naming.py fail to extract brand information from real
+adcp request objects because they still look for the removed brand_manifest
+attribute.
 """
 
 from datetime import UTC, datetime

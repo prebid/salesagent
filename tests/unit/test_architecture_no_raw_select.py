@@ -98,7 +98,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/mock_ad_server.py", "mock_product_config"),
     ("src/adapters/mock_ad_server.py", "register_ui_routes"),
     ("src/adapters/mock_ad_server.py", "wrapped_view"),
-    ("src/adapters/xandr.py", "_create_human_task"),
     # ── Admin app ──
     ("src/admin/app.py", "create_app"),
     ("src/admin/app.py", "inject_context"),

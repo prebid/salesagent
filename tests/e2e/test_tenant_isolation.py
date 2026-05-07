@@ -57,9 +57,9 @@ class TestMultiTenantIsolation:
             # Verify ALL returned products belong to ci-test (product IDs start with prod_)
             product_ids = [p["product_id"] for p in products]
             for pid in product_ids:
-                assert not pid.startswith("iso_"), (
-                    f"ci-test tenant received iso-test product: {pid}. Tenant isolation breach detected."
-                )
+                assert not pid.startswith(
+                    "iso_"
+                ), f"ci-test tenant received iso-test product: {pid}. Tenant isolation breach detected."
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -91,15 +91,13 @@ class TestMultiTenantIsolation:
             # Verify ALL returned products belong to iso-test (product IDs start with iso_)
             product_ids = [p["product_id"] for p in products]
             for pid in product_ids:
-                assert pid.startswith("iso_"), (
-                    f"iso-test tenant received non-iso product: {pid}. Tenant isolation breach detected."
-                )
+                assert pid.startswith(
+                    "iso_"
+                ), f"iso-test tenant received non-iso product: {pid}. Tenant isolation breach detected."
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_misleading_tenant_header_does_not_grant_cross_tenant_access(
-        self, docker_services_e2e, live_server
-    ):
+    async def test_misleading_tenant_header_does_not_grant_cross_tenant_access(self, docker_services_e2e, live_server):
         """Cross-tenant header injection must not grant access to another tenant.
 
         Contract: tenant scope is derived from ``Principal.access_token``
@@ -113,6 +111,7 @@ class TestMultiTenantIsolation:
         catches a regression that wires the header into tenant selection
         even if seed-data IDs change shape.
         """
+
         # First, fetch each tenant's authoritative catalog via the matching
         # token+header pair. These are the ground-truth product-ID sets
         # the cross-tenant call's response must be disjoint with.
