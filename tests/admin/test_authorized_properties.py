@@ -132,6 +132,8 @@ class TestPropertyCreate:
                 "property_type": "website",
                 "name": "Created Test Site",
                 "publisher_domain": "created-test.example.com",
+                "identifier_type_0": "domain",
+                "identifier_value_0": "created-test.example.com",
             },
             follow_redirects=False,
         )
