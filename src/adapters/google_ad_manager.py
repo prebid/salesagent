@@ -549,20 +549,11 @@ class GoogleAdManager(AdServerAdapter):
                     errors=[Error(code="product_not_configured", message=error_msg, details=None)],
                 )
 
-        # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
-        unsupported_features = []
-        for package in packages:
-            if package.targeting_overlay:
-                features = self._validate_targeting(package.targeting_overlay)
-                if features:
-                    unsupported_features.extend(features)
-
-        if unsupported_features:
-            error_msg = f"Unsupported targeting features: {', '.join(unsupported_features)}"
-            self.log(f"[red]Error: {error_msg}[/red]")
-            return CreateMediaBuyError(
-                errors=[Error(code="unsupported_targeting", message=error_msg, details=None)],
-            )
+        # Pre-flight targeting validation — uses the AdServerAdapter base helper
+        # so the audit + error shape stay consistent with Triton/FreeWheel.
+        targeting_error = self._validate_targeting_or_error(packages, self._validate_targeting, adapter_name="GAM")
+        if targeting_error is not None:
+            return targeting_error
 
         # Check if manual approval is required for media buy creation
         # Skip approval workflow if this media buy was already manually approved

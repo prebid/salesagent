@@ -64,6 +64,11 @@ def test_products_map_includes_delivery_type():
     mock_adapter.workflow_manager = Mock()
     mock_adapter._requires_manual_approval = Mock(return_value=False)
     mock_adapter._validate_targeting = Mock(return_value=[])
+    # _validate_targeting_or_error is the base-class helper that wraps
+    # _validate_targeting. Mock with return_value=None to mean "no error" —
+    # otherwise the spec-derived Mock returns a non-None Mock and the
+    # adapter's targeting-error early-return fires.
+    mock_adapter._validate_targeting_or_error = Mock(return_value=None)
     mock_adapter._check_order_has_guaranteed_items = Mock(return_value=(False, []))
     mock_adapter._placement_targeting_map = {}
     mock_adapter._order_name_template = None
