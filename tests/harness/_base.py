@@ -474,18 +474,51 @@ class BaseTestEnv:
 
             return _call()
 
+        # Watchdog: if the MCP request hangs (psycopg pool wait, dropped DB,
+        # FastMCP session deadlock, etc.), pytest-timeout's traceback only sees
+        # idle worker threads — the actual culprit is the asyncio task on the
+        # dedicated ASGI loop. faulthandler dumps every Python thread's stack,
+        # surfacing the real frame. Fires before the 30s httpx timeout so the
+        # dump precedes the eventual failure. MCP_HARNESS_HANG_DUMP_SECONDS=0
+        # disables the watchdog.
+        #
+        # Process-global: only one faulthandler watchdog can be armed per process,
+        # so sibling test infrastructure must not double-arm dump_traceback_later
+        # while an MCP call is in flight.
+        import os
+        import sys
+        import warnings
+
+        raw = os.environ.get("MCP_HARNESS_HANG_DUMP_SECONDS", "20")
         try:
-            if not auth_token:
-                # Unit mode: inject identity at the wrapper layer, since no
-                # real Principal row exists for the bearer middleware to find.
-                with patch(
-                    "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                    return_value=mcp_identity,
-                ):
-                    return run_on_app_loop(_factory)
-            return run_on_app_loop(_factory)
-        except Exception as exc:
-            raise _unwrap_mcp_tool_error(exc) from exc
+            hang_dump_after = float(raw)
+        except ValueError:
+            warnings.warn(
+                f"Invalid MCP_HARNESS_HANG_DUMP_SECONDS={raw!r}; using default 20s.",
+                stacklevel=2,
+            )
+            hang_dump_after = 20.0
+
+        if hang_dump_after > 0:
+            import faulthandler
+
+            faulthandler.dump_traceback_later(hang_dump_after, file=sys.stderr, repeat=False)
+        try:
+            try:
+                if not auth_token:
+                    # Unit mode: inject identity at the wrapper layer, since no
+                    # real Principal row exists for the bearer middleware to find.
+                    with patch(
+                        "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                        return_value=mcp_identity,
+                    ):
+                        return run_on_app_loop(_factory)
+                return run_on_app_loop(_factory)
+            except Exception as exc:
+                raise _unwrap_mcp_tool_error(exc) from exc
+        finally:
+            if hang_dump_after > 0:
+                faulthandler.cancel_dump_traceback_later()
 
     def _run_mcp_wrapper(
         self,
