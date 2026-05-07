@@ -153,6 +153,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     Error,
@@ -2490,14 +2491,18 @@ async def _create_media_buy_impl(
                             # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
-            # Return success response with packages awaiting approval
-            # The workflow_step_id in packages indicates approval is required
+            # Async-pending-approval path — emit the spec's submitted envelope.
+            # Per ``create_media_buy_response`` (variant-3), the async shape carries
+            # ``status='submitted'`` and a ``task_id`` handle, and does NOT carry
+            # ``media_buy_id`` or ``packages`` (those belong to variant-1, whose
+            # ``status`` is a ``MediaBuyStatus`` and excludes 'submitted'). The
+            # ``media_buy_id`` is issued on the completion artifact (post-approval),
+            # not here. Buyers poll via ``tasks/get`` using ``task_id``.
             return CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    creative_deadline=None,
-                    packages=pending_packages,
-                    workflow_step_id=step.step_id,  # Client can track approval via this ID
+                response=CreateMediaBuySubmitted(
+                    task_id=step.step_id,
+                    message=f"Media buy {media_buy_id} submitted; awaiting human review.",
+                    workflow_step_id=step.step_id,
                     context=req.context,
                 ),
                 status=AdcpTaskStatus.submitted.value,
@@ -2655,10 +2660,13 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
+            # Tenant- or product-config-driven approval requirement: emit the
+            # spec's submitted envelope (variant-3 of create_media_buy_response).
+            # See the manual-approval branch above for the contract rationale.
             return CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    packages=response_packages,
+                response=CreateMediaBuySubmitted(
+                    task_id=step.step_id,
+                    message=f"Media buy {media_buy_id} submitted; {reason.lower()} requires approval.",
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),

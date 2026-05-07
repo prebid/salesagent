@@ -309,15 +309,25 @@ class TestCreateMediaBuyResponseShapes:
         assert response.media_buy_id == "mb_1"
 
     def test_result_serializes_with_status_field(self):
-        """UC-002-R05: CreateMediaBuyResult.model_dump includes status at top level.
+        """UC-002-R05: CreateMediaBuyResult.model_dump preserves the inner MediaBuyStatus.
 
-        Spec: UNSPECIFIED (implementation-defined result wrapper serialization)
+        Spec: ``create_media_buy_response`` variant-1 carries ``status`` as a
+        ``MediaBuyStatus`` (pending_creatives | pending_start | active | ...).
+        The wrapper's TaskStatus must not overwrite this field on the wire,
+        because TaskStatus values like 'submitted' / 'failed' / 'working' are
+        not valid MediaBuyStatus members.
+
         Covers: UC-002-MAIN-21
         """
+        from adcp.types import MediaBuyStatus
+
         success = _make_success(media_buy_id="mb_1")
+        success.status = MediaBuyStatus.pending_start
         result = CreateMediaBuyResult(status="completed", response=success)
-        dumped = result.model_dump()
-        assert dumped["status"] == "completed"
+        dumped = result.model_dump(mode="json")
+        # Inner MediaBuyStatus survives serialization — wrapper's TaskStatus
+        # does NOT clobber it (would emit out-of-enum value for variant-1).
+        assert dumped["status"] == "pending_start"
         assert dumped["media_buy_id"] == "mb_1"
 
     def test_error_str_includes_error_count(self):

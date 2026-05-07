@@ -36,6 +36,9 @@ from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
 from adcp.types.aliases import (
+    CreateMediaBuySubmittedResponse as AdCPCreateMediaBuySubmitted,
+)
+from adcp.types.aliases import (
     CreateMediaBuySuccessResponse as AdCPCreateMediaBuySuccess,
 )
 from adcp.types.aliases import Package as AdCPPackage
@@ -247,26 +250,69 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
             return "Media buy creation failed."
 
 
-# Union type for create_media_buy operation
+class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
+    """Async-pending create_media_buy envelope extending the adcp library type.
+
+    Per the AdCP ``create_media_buy_response`` discriminated union, the
+    pending-approval shape carries a ``status='submitted'`` literal and a
+    ``task_id`` handle — it does NOT carry ``media_buy_id`` or ``packages``
+    (those belong to the sync-success variant whose ``status`` is a
+    ``MediaBuyStatus`` enum). Mixing the two shapes produces a wire payload
+    that the SDK validator at the buyer's edge rejects.
+
+    ``workflow_step_id`` is an internal handle excluded from wire output;
+    callers may use it server-side and surface ``task_id`` to buyers.
+    """
+
+    workflow_step_id: str | None = Field(
+        default=None,
+        description="Internal: workflow step id (mirrors task_id when no separate handle exists).",
+        exclude=True,
+    )
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for protocol envelope."""
+        return f"Media buy task {self.task_id} submitted; awaiting approval."
+
+
+# Adapter-level union for create_media_buy. Adapters always produce a sync
+# outcome (success or error); the async-pending envelope ``CreateMediaBuySubmitted``
+# is a protocol-level concept emitted by the orchestrator before any adapter
+# call, so it does not appear here. ``CreateMediaBuyResult.response`` widens
+# this with the submitted variant for the wrapper's serialization path.
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
 class CreateMediaBuyResult(SalesAgentBaseModel):
     """Wrapper combining create_media_buy domain response with protocol status.
 
-    Serializes to {"status": "...", ...response_fields}, allowing callers to
-    pass the model directly to ToolResult without calling model_dump().
+    Serializes to ``{"status": "...", ...response_fields}``, allowing callers
+    to pass the model directly to ToolResult without calling model_dump().
 
-    Supports tuple unpacking (response, status) for backward compatibility
+    Supports tuple unpacking ``(response, status)`` for backward compatibility
     with existing callers and tests.
+
+    The wrapper's top-level ``status`` is a ``TaskStatus``-style envelope
+    field. For the sync-success variant, the inner ``CreateMediaBuySuccess``
+    already carries a ``MediaBuyStatus`` in its ``status`` field; we MUST NOT
+    overwrite that with the wrapper's TaskStatus value, because a
+    ``MediaBuyStatus`` slot can only hold values like ``pending_start`` /
+    ``active`` (never ``submitted``). For the submitted/error variants there
+    is no inner status to preserve, so the wrapper's TaskStatus lands at the
+    top level — which matches the spec's async envelope shape.
     """
 
     status: str
-    response: CreateMediaBuySuccess | CreateMediaBuyError
+    response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
         result = self.response.model_dump(mode=info.mode)
+        # Sync-success carries an inner ``MediaBuyStatus`` in ``status`` — leave
+        # it intact rather than clobbering with the wrapper's TaskStatus, which
+        # would emit an out-of-enum value at the wire boundary.
+        if isinstance(self.response, CreateMediaBuySuccess):
+            return result
         result["status"] = self.status
         return result
 

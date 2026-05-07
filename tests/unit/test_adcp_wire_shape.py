@@ -287,11 +287,51 @@ def _build_get_products_response() -> tuple[Any, type]:
 
 
 def _build_create_media_buy_success() -> tuple[Any, type]:
-    from adcp.types import CreateMediaBuySuccessResponse as LibResponse
+    """Sync-success path: wrapper produces variant-1 of the create_media_buy union.
+
+    Validate against the discriminated union (not just the success variant)
+    so the wire shape is checked against the same contract the SDK enforces.
+    """
+    from adcp.types import CreateMediaBuyResponse as LibResponse
+    from adcp.types import MediaBuyStatus
 
     from src.core.schemas import CreateMediaBuySuccess
+    from src.core.schemas._base import CreateMediaBuyResult
 
-    return CreateMediaBuySuccess(media_buy_id="mb_test", packages=[]), LibResponse
+    inner = CreateMediaBuySuccess(media_buy_id="mb_test", packages=[], status=MediaBuyStatus.pending_start)
+    return CreateMediaBuyResult(response=inner, status="completed"), LibResponse
+
+
+def _build_create_media_buy_submitted() -> tuple[Any, type]:
+    """Async-pending-approval path: wrapper produces variant-3 (submitted envelope).
+
+    Per AdCP spec ``create_media_buy_response``, the async-submitted shape has
+    ``status='submitted'`` (a TaskStatus literal) plus ``task_id``, and does
+    NOT carry ``media_buy_id`` or ``packages`` — those belong to variant-1.
+
+    This builder exercises the wrapper's ``_serialize`` path that injects the
+    top-level ``status`` field; previously the test bypassed the wrapper and
+    missed a wire-shape regression where the bug emitted a hybrid (media_buy_id
+    + packages + status='submitted') that the discriminated union rejects.
+    """
+    from adcp.types import CreateMediaBuyResponse as LibResponse
+
+    from src.core.schemas._base import CreateMediaBuyResult, CreateMediaBuySubmitted
+
+    inner = CreateMediaBuySubmitted(task_id="task_test", message="Awaiting approval")
+    return CreateMediaBuyResult(response=inner, status="submitted"), LibResponse
+
+
+def _build_create_media_buy_error() -> tuple[Any, type]:
+    """Error path: wrapper produces variant-2 of the create_media_buy union."""
+    from adcp import Error
+    from adcp.types import CreateMediaBuyResponse as LibResponse
+
+    from src.core.schemas import CreateMediaBuyError
+    from src.core.schemas._base import CreateMediaBuyResult
+
+    inner = CreateMediaBuyError(errors=[Error(code="invalid_input", message="bad")])
+    return CreateMediaBuyResult(response=inner, status="failed"), LibResponse
 
 
 def _build_sync_creatives_response() -> tuple[Any, type]:
@@ -347,7 +387,13 @@ def _build_list_creative_formats_response() -> tuple[Any, type]:
 
 _WIRE_SHAPE_BUILDERS = [
     ("GetProductsResponse", _build_get_products_response),
-    ("CreateMediaBuySuccess", _build_create_media_buy_success),
+    # Cover all three variants of the create_media_buy_response union.
+    # The wrapper ``CreateMediaBuyResult`` is what the production wire path
+    # actually serializes — testing the inner ``CreateMediaBuySuccess`` alone
+    # bypasses the ``_serialize`` step that injects the top-level status.
+    ("CreateMediaBuyResult.success", _build_create_media_buy_success),
+    ("CreateMediaBuyResult.submitted", _build_create_media_buy_submitted),
+    ("CreateMediaBuyResult.error", _build_create_media_buy_error),
     ("SyncCreativesResponse", _build_sync_creatives_response),
     ("GetMediaBuyDeliveryResponse", _build_get_media_buy_delivery_response),
     ("ListCreativesResponse", _build_list_creatives_response),
@@ -374,11 +420,38 @@ class TestWireShapeValidatesAgainstLibrary:
         ids=[name for name, _ in _WIRE_SHAPE_BUILDERS],
     )
     def test_wire_shape_validates(self, name: str, builder) -> None:
+        from pydantic import TypeAdapter
+
         response, library_cls = builder()
         wire = response.model_dump(mode="json", exclude_none=True)
         # Raises ValidationError if our wire output is missing a required
         # field, has wrong types, or otherwise fails the library's contract.
-        library_cls.model_validate(wire)
+        # ``TypeAdapter`` handles both concrete BaseModel classes and
+        # PEP-604 union types (``A | B | C``) — the create_media_buy_response
+        # is a discriminated union of success / error / submitted variants.
+        TypeAdapter(library_cls).validate_python(wire)
+
+    def test_create_media_buy_hybrid_shape_is_rejected_by_spec(self) -> None:
+        """The async-pending shape must not be a sync-success body with status='submitted'.
+
+        Regression guard: a previous bug emitted ``{media_buy_id, packages,
+        status: 'submitted'}`` from the manual-approval path. The spec's
+        ``create_media_buy_response`` is a discriminated union — sync-success
+        carries a ``MediaBuyStatus`` (no 'submitted'), while the async
+        envelope carries a TaskStatus literal ``'submitted'`` and identifies
+        the work via ``task_id`` (no ``media_buy_id``/``packages``).
+
+        This test pins the spec contract independent of our implementation,
+        so future code that reaches for ``CreateMediaBuySuccess(...)`` paired
+        with ``status='submitted'`` will be caught at the wire boundary.
+        """
+        import pytest as _pytest
+        from adcp.types import CreateMediaBuyResponse as LibResponse
+        from pydantic import TypeAdapter, ValidationError
+
+        hybrid = {"media_buy_id": "mb_test", "packages": [], "status": "submitted"}
+        with _pytest.raises(ValidationError):
+            TypeAdapter(LibResponse).validate_python(hybrid)
 
 
 # ---------------------------------------------------------------------------
