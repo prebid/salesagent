@@ -176,6 +176,7 @@ def get_mock_gam_reporting_delivery_data(base_date=None) -> ReportingData:
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
+@freeze_time("2026-06-15 12:00:00", tz_offset=0)
 async def test_delivery_webhook_sends_for_fresh_data(integration_db):
     """Scheduler should call get_media_buy_delivery for the correct period and send webhook when data is fresh."""
 
@@ -306,11 +307,23 @@ async def test_delivery_webhook_sends_gam_based_reporting_data_only_on_gam_avail
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
+@freeze_time("2026-06-15 12:00:00", tz_offset=0)
 async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date_passed(integration_db):
-    """Test that we handle media buys with future start dates gracefully (empty delivery)."""
+    """Pre-start buys appear in delivery reports as heartbeats (post-#48).
+
+    Before #48 the scheduler skipped buys whose start_date was in the future,
+    so this test asserted ``len(media_buy_deliveries) == 0``. #48 changed
+    that contract: buyers who configure ``reporting_webhook`` get a
+    heartbeat report for warm-up (pre-start) and paused buys too, so they
+    can stop polling. Heartbeat deliveries carry ``status='ready'`` and the
+    response sets ``partial_data=True``.
+
+    This test now locks in the heartbeat contract: a buy starting tomorrow
+    yields one delivery with status='ready' and partial_data=True.
+    """
     tenant_id, principal_id = _create_test_tenant_and_principal()
 
-    # Start date is tomorrow
+    # Start date is tomorrow (relative to the frozen clock above).
     start_date = datetime.now(UTC).date() + timedelta(days=1)
     end_date = start_date + timedelta(days=7)
 
@@ -321,19 +334,28 @@ async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date
     async def fake_send_notification(*args, **kwargs):
         return True
 
-    with patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send:
+    with patch.object(
+        scheduler.webhook_service,
+        "send_notification",
+        new_callable=AsyncMock,
+        side_effect=fake_send_notification,
+    ) as mock_send:
         await scheduler._send_reports()
 
-        # Should send a webhook (since status=active in DB) but with empty deliveries (since dynamic status=ready)
-        if mock_send.call_count > 0:
-            args, kwargs = mock_send.call_args
-            payload = kwargs.get("payload")
-            result = payload.result
-            assert len(result.get("media_buy_deliveries", [])) == 0
+        assert mock_send.call_count == 1, "Pre-start buy should still get a heartbeat webhook"
+        args, kwargs = mock_send.call_args
+        payload = kwargs.get("payload")
+        result = payload.result
+
+        deliveries = result.get("media_buy_deliveries", [])
+        assert len(deliveries) == 1, "Heartbeat report carries one delivery for the buy"
+        assert deliveries[0].get("status") == "ready", "Pre-start buy reports dynamic status='ready'"
+        assert result.get("partial_data") is True, "Heartbeat reports flag partial_data=True"
 
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
+@freeze_time("2026-06-15 12:00:00", tz_offset=0)
 async def test_call_get_media_buy_delivery_for_ended_campaign(integration_db):
     """Test webhook behavior for ended campaigns."""
     tenant_id, principal_id = _create_test_tenant_and_principal()
@@ -365,6 +387,7 @@ async def test_call_get_media_buy_delivery_for_ended_campaign(integration_db):
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
+@freeze_time("2026-06-15 12:00:00", tz_offset=0)
 async def test_scheduler_status_filter_includes_completed_campaigns(integration_db):
     """Regression: scheduler delivery query must include ended (completed) campaigns.
 

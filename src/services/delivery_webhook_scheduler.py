@@ -83,9 +83,20 @@ class DeliveryWebhookScheduler:
                 # Wait before next batch
                 await asyncio.sleep(SLEEP_INTERVAL_SECONDS)
 
-    async def _send_reports(self) -> None:
-        """Send reports for all active media buys with configured webhooks."""
+    async def _send_reports(self, *, now: datetime | None = None) -> None:
+        """Send reports for all active media buys with configured webhooks.
+
+        Takes a single wall-clock snapshot at entry and threads it through
+        every downstream call. Without this, the function read
+        ``datetime.now(UTC)`` four separate times — a buy whose start_date
+        equals "tomorrow" at the first read could equal "today" at the
+        last (UTC midnight rollover), flipping its dynamic status from
+        ``ready`` → ``active`` mid-batch and producing flaky behaviour.
+
+        Tests can pin time via ``now=`` to make assertions deterministic.
+        """
         logger.info("Starting scheduled delivery report webhook batch")
+        now_snapshot = now if now is not None else datetime.now(UTC)
 
         try:
             with get_db_session() as session:
@@ -105,7 +116,7 @@ class DeliveryWebhookScheduler:
                             continue
 
                         # Send delivery report
-                        await self._send_report_for_media_buy(media_buy, reporting_webhook, session)
+                        await self._send_report_for_media_buy(media_buy, reporting_webhook, session, now=now_snapshot)
                         reports_sent += 1
 
                     except Exception as e:
@@ -145,7 +156,9 @@ class DeliveryWebhookScheduler:
                     logger.warning(f"Cannot trigger report: No reporting_webhook configured for {media_buy_id}")
                     return False
 
-                # Force sending even if already sent today (for testing)
+                # Force sending even if already sent today (for testing).
+                # _send_report_for_media_buy snapshots ``now`` itself when
+                # not given one, which is fine for this single-buy path.
                 await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
                 return True
         except Exception as e:
@@ -153,7 +166,13 @@ class DeliveryWebhookScheduler:
             return False
 
     async def _send_report_for_media_buy(
-        self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
+        self,
+        media_buy: Any,
+        reporting_webhook: dict,
+        session: Any,
+        force: bool = False,
+        *,
+        now: datetime | None = None,
     ) -> None:
         """Send a delivery report for a single media buy.
 
@@ -162,6 +181,10 @@ class DeliveryWebhookScheduler:
             reporting_webhook: Webhook configuration dict
             session: Database session
             force: If True, bypass frequency checks and duplicate checks
+            now: Optional wall-clock snapshot. Defaults to ``datetime.now(UTC)``.
+                Passing the same snapshot for an entire batch keeps every
+                date computation internally consistent across the UTC midnight
+                boundary.
         """
         try:
             # Determine reporting frequency from AdCP config (hourly, daily, monthly)
@@ -176,15 +199,17 @@ class DeliveryWebhookScheduler:
                 )
                 return
 
+            now_snapshot = now if now is not None else datetime.now(UTC)
+
             # Calculate reporting period for daily frequency: yesterday (full day)
-            start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
-            end_date_obj = datetime.now(UTC)
+            start_date_obj = now_snapshot.date() - timedelta(days=1)
+            end_date_obj = now_snapshot
 
             # Check if we've already sent a scheduled delivery_report webhook for this media buy
             # and reporting date. We use created_at::date as the period key.
             if not force:
                 # Look back 24 hours to find recent successful webhooks
-                one_day_ago = datetime.now(UTC) - timedelta(hours=24)
+                one_day_ago = now_snapshot - timedelta(hours=24)
                 existing_stmt = select(WebhookDeliveryLog).where(
                     WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
                     WebhookDeliveryLog.task_type == "media_buy_delivery",
@@ -280,7 +305,7 @@ class DeliveryWebhookScheduler:
                 logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
 
             # Calculate next_expected_at for daily frequency: start of next day (UTC)
-            next_day = datetime.now(UTC).date() + timedelta(days=1)
+            next_day = now_snapshot.date() + timedelta(days=1)
             next_expected_at = datetime.combine(next_day, datetime.min.time(), tzinfo=UTC)
 
             # Set webhook-specific metadata directly on the response model
