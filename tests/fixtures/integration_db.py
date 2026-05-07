@@ -59,6 +59,25 @@ def _reset_idempotency_store() -> None:
     mod.reset_for_tests()
 
 
+def _reset_replay_store() -> None:
+    """Reset the process-wide replay-store singleton + psycopg pool.
+
+    Same shape as ``_reset_idempotency_store``: ``src/core/signing/replay_store.py``
+    caches a ``psycopg_pool.ConnectionPool`` bound to whatever DSN ``DatabaseConfig``
+    resolved at first use. Without a reset between tests, signing-path requests in
+    a later test would acquire connections to a previous test's per-test database
+    (now dropped) and hit a 30s ``PoolTimeout``. Preventive — no current
+    integration test exercises the signing path, but the bug is identical to the
+    one fixed in PR #134 and the helper already exists.
+    """
+    import sys
+
+    mod = sys.modules.get("src.core.signing.replay_store")
+    if mod is None:
+        return
+    mod.reset_for_tests()
+
+
 def _import_all_models() -> None:
     """Import all ORM models so Base.metadata knows about every table.
 
@@ -151,11 +170,13 @@ def make_integration_db(
 
     src.core.context_manager._context_manager_instance = None
 
-    # Reset the process-wide idempotency store so its psycopg AsyncConnectionPool
-    # rebinds to the per-test DATABASE_URL on next use. Without this, the pool
-    # caches a connection to a previous test's database (now dropped) and every
-    # subsequent MCP call hits psycopg's 30s PoolTimeout.
+    # Reset every process-wide cache that holds a psycopg pool — idempotency
+    # store and replay store both bind their pool to whatever DATABASE_URL was
+    # live on first use. Without a reset between tests, the pool keeps trying
+    # to connect to a previous test's database (now dropped) and every later
+    # request that needs the cache hits psycopg's 30s PoolTimeout.
     _reset_idempotency_store()
+    _reset_replay_store()
 
     # ── Yield ───────────────────────────────────────────────────────────
     try:
@@ -165,6 +186,7 @@ def make_integration_db(
         reset_engine()
         src.core.context_manager._context_manager_instance = None
         _reset_idempotency_store()
+        _reset_replay_store()
         engine.dispose()
 
         # Restore environment
