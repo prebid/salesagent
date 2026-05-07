@@ -106,36 +106,12 @@ class Product(LibraryProduct):
         exclude=True,  # Exclude from serialization by default
     )
 
-    @model_validator(mode="after")
-    def validate_pricing_fields(self) -> "Product":
-        """Validate pricing_options per AdCP spec.
-
-        Per AdCP PR #88: All products must use pricing_options in the database.
-        However, pricing_options may be empty in API responses for anonymous/unauthenticated
-        users to hide pricing information.
-        """
-        # pricing_options defaults to empty list if not provided
-        # This allows filtering pricing info for anonymous users
-        return self
-
-    @model_validator(mode="after")
-    def validate_publisher_properties(self) -> "Product":
-        """Validate publisher_properties per AdCP spec.
-
-        Per AdCP spec, products must have at least one publisher property.
-        """
-        if not self.publisher_properties or len(self.publisher_properties) == 0:
-            raise ValueError(
-                "Product must have at least one publisher_property per AdCP spec. "
-                "Properties identify the inventory covered by this product."
-            )
-
-        return self
-
-    # Note: In AdCP V3, pricing is determined by field presence:
-    # - fixed_price present = fixed pricing
-    # - floor_price present = auction pricing with floor
-    # The consolidated CpmPricingOption/VcpmPricingOption types handle this automatically.
+    # Pricing rules (AdCP V3): ``fixed_price`` present = fixed pricing,
+    # ``floor_price`` present = auction with floor. The consolidated
+    # CpmPricingOption/VcpmPricingOption types enforce this.
+    #
+    # ``publisher_properties`` non-emptiness is enforced by the library
+    # ``Product`` itself via ``MinLen(1)`` — no local validator needed.
 
     # No model_dump override: internal-only fields are marked ``exclude=True`` on
     # the field declaration (Pydantic strips them automatically), and the
