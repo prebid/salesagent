@@ -649,9 +649,22 @@ def _detect_uc011_harness(marker_names: set[str]) -> str:
 
 
 def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
-    """Detect which delivery harness a UC-004 scenario needs."""
+    """Detect which delivery harness a UC-004 scenario needs.
+
+    The ``circuit-breaker`` env wraps :class:`WebhookDeliveryService`, the
+    real production code path, which emits ``X-ADCP-Signature`` /
+    ``Authorization: Bearer`` headers and implements proper retry/backoff
+    timing. Scenarios that exercise webhook authentication or retry/backoff
+    MUST go through this env — ``WebhookEnv`` routes through the legacy
+    ``deliver_webhook_with_retry`` function which emits the wrong header
+    name (``X-Webhook-Signature``) and has different retry timing.
+    """
     marker_names = {m.name for m in request.node.iter_markers()}
     if "webhook-reliability" in marker_names:
+        return "circuit-breaker"
+    # Auth-scheme scenarios (HMAC, Bearer) verify production-emitted headers
+    # and must use the real WebhookDeliveryService path, not WebhookEnv.
+    if "T-UC-004-webhook-hmac" in marker_names or "T-UC-004-webhook-bearer" in marker_names:
         return "circuit-breaker"
     if "webhook" in marker_names:
         return "webhook"
