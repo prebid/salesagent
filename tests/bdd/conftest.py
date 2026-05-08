@@ -157,11 +157,6 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {"single position", "all 8 positions", "format has no"},
         "disclosure_positions filter not implemented",
     ),
-    (
-        "T-UC-005-boundary-asset-types",
-        {"brief", "catalog"},
-        "brief/catalog asset types not in adcp enum",
-    ),
 ]
 
 
@@ -278,7 +273,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         _UC005_PARTIAL_TAGS = {
             "T-UC-005-partition-disclosure",
             "T-UC-005-boundary-disclosure",
-            "T-UC-005-boundary-asset-types",
             "T-UC-005-inv-049-8-violated",
             "T-UC-005-inv-049-8-nofield",
         }
@@ -440,21 +434,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"pending_activation", "rejected", "canceled", "paused", "completed"},
                 "status_filter for non-active statuses not mapped in _impl",
             ),
-            (
-                "T-UC-004-filter-default",
-                set(),  # all examples
-                "default status_filter=active not applied when no explicit IDs",
-            ),
-            (
-                "T-UC-004-filter-empty",
-                set(),
-                "status_filter empty result not returned as empty array",
-            ),
-            (
-                "T-UC-004-filter-array",
-                set(),
-                "status_filter with array not correctly applied",
-            ),
         ]
         if any(t.startswith("T-UC-004-filter") for t in marker_names):
             for tag, substrings, reason in _UC004_FILTER_SELECTIVE:
@@ -465,8 +444,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # UC-004 date range: custom dates partially work
         _UC004_DATE_SELECTIVE: list[tuple[str, set[str], str]] = [
-            ("T-UC-004-daterange", set(), "custom date range partially applied"),
-            ("T-UC-004-daterange-start-only", set(), "start-only date range partially applied"),
             ("T-UC-004-daterange-end-only", set(), "end-only date range not applied"),
         ]
         if any(t.startswith("T-UC-004-daterange") for t in marker_names):
@@ -476,12 +453,51 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
 
+        # Per-row strict xfails for the partition/boundary scenarios whose
+        # blanket markers were removed. Each entry corresponds to a row in
+        # the Examples table that genuinely xfails because of a real
+        # production gap. strict=True ensures we are forced to remove the
+        # marker the moment the gap is closed (e.g., when ValidationError
+        # gets translated into AdCPError(INVALID_REQUEST) at the transport
+        # boundary, the partition tests will start xpassing → fail-strict
+        # → marker removal). Tracked centrally in
+        # docs/test-debt-bdd-strict-markers.md.
+        _UC004_GENUINE_XFAIL_ROWS: list[tuple[str, set[str], str]] = [
+            (
+                "T-UC-004-partition-reporting-dims",
+                {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
+                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-partition-attribution",
+                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
+                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-reporting-dims",
+                {"geo with geo_level=metro but no system"},
+                "AdCP spec defines metro/postal_area system requirement only in field description; no validator. See docs/test-debt-bdd-strict-markers.md item C10.",
+            ),
+            (
+                "T-UC-004-boundary-attribution",
+                {"unit=campaign with interval=2"},
+                "AdCP Duration spec defines 'interval=1 when unit=campaign' only in description; no validator. Same gap as T-UC-004-attr-campaign-invalid. See docs/test-debt-bdd-strict-markers.md item C10.",
+            ),
+            (
+                "T-UC-004-daterange",
+                set(),  # all examples
+                "Production ignores buyer-supplied start_date in response.reporting_period.start (returns today-30d). See docs/test-debt-bdd-strict-markers.md item C11.",
+            ),
+        ]
+        for tag, substrings, reason in _UC004_GENUINE_XFAIL_ROWS:
+            if tag in marker_names and (not substrings or any(s in nodeid for s in substrings)):
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                break
+
         # UC-004 boundary scenarios: strict=False because some examples pass.
         # Invalid boundary values SHOULD fail validation but production doesn't validate.
         # Valid boundary values pass through fine.
         _UC004_BOUNDARY_TAGS = {
-            "T-UC-004-boundary-reporting-dims",
-            "T-UC-004-boundary-attribution",
             "T-UC-004-boundary-daily-breakdown",
             "T-UC-004-boundary-account",
             "T-UC-004-boundary-sampling",
@@ -498,8 +514,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Partition tests exercise valid/invalid value ranges per field.
         # strict=False: some partition values pass, others fail depending on schema version.
         _UC004_PARTITION_TAGS = {
-            "T-UC-004-partition-reporting-dims",
-            "T-UC-004-partition-attribution",
             "T-UC-004-partition-daily-breakdown",
             "T-UC-004-partition-account",
             "T-UC-004-partition-sampling",
