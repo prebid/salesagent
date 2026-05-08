@@ -499,8 +499,7 @@ def _update_media_buy_impl(
                         Error(
                             code="NOT_CANCELLABLE",
                             message=(
-                                f"media_buy_id={req.media_buy_id!r} is already canceled — "
-                                "cannot cancel a terminal buy"
+                                f"media_buy_id={req.media_buy_id!r} is already canceled — cannot cancel a terminal buy"
                             ),
                         )
                     ],
@@ -589,6 +588,19 @@ def _update_media_buy_impl(
         # Handle package-level updates
         if req.packages:
             for pkg_update in req.packages:
+                # Pre-validate package existence at the impl boundary so the
+                # spec-compliant PACKAGE_NOT_FOUND wire code surfaces uniformly
+                # regardless of which adapter handles the dispatch. Without
+                # this gate the adapter returns its own lowercase
+                # ``package_not_found`` error which the delegate cannot
+                # translate to AdCPPackageNotFoundError -> PACKAGE_NOT_FOUND
+                # on the wire (issue #73 invalid_transitions storyboard).
+                if pkg_update.package_id and (pkg_update.paused is not None or pkg_update.budget is not None):
+                    if uow.media_buys.get_package(req.media_buy_id, pkg_update.package_id) is None:
+                        raise AdCPPackageNotFoundError(
+                            f"Package '{pkg_update.package_id}' not found for media buy '{req.media_buy_id}'."
+                        )
+
                 # Handle paused state
                 if pkg_update.paused is not None:
                     # adcp 2.12.0+: paused=True means pause, paused=False means resume

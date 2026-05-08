@@ -105,6 +105,48 @@ class TestImplRaisesTypedNotFoundErrors:
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg_does_not_exist" in str(exc_info.value)
 
+    def test_unknown_package_with_paused_raises_package_not_found(self) -> None:
+        """Pausing a package_id that doesn't exist on this media buy raises
+        AdCPPackageNotFoundError (wire code PACKAGE_NOT_FOUND).
+
+        This is the live-storyboard scenario: ``packages=[{"package_id":
+        "does-not-exist", "paused": true}]`` against a real media buy.
+        Without impl-level validation, the adapter returns a non-AdCP code
+        like ``package_not_found`` (lowercase) which surfaces as opaque
+        INTERNAL_ERROR after delegate translation.
+        """
+        with self._stub_uow() as uow:
+            uow.media_buys.get_package.return_value = None
+
+            req = UpdateMediaBuyRequest(
+                media_buy_id="mb_exists",
+                packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
+            )
+            with pytest.raises(AdCPPackageNotFoundError) as exc_info:
+                _update_media_buy_impl(req=req, identity=_identity())
+
+        assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
+        assert "pkg_does_not_exist" in str(exc_info.value)
+
+    def test_unknown_package_with_budget_raises_package_not_found(self) -> None:
+        """Budget update on a package_id that doesn't exist on this media buy
+        raises AdCPPackageNotFoundError."""
+        with self._stub_uow() as uow:
+            uow.media_buys.get_package.return_value = None
+            existing_mb = MagicMock()
+            existing_mb.currency = "USD"
+            uow.media_buys.get_by_id.return_value = existing_mb
+
+            req = UpdateMediaBuyRequest(
+                media_buy_id="mb_exists",
+                packages=[{"package_id": "pkg_does_not_exist", "budget": 1000.0}],
+            )
+            with pytest.raises(AdCPPackageNotFoundError) as exc_info:
+                _update_media_buy_impl(req=req, identity=_identity())
+
+        assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
+        assert "pkg_does_not_exist" in str(exc_info.value)
+
     def _stub_uow(self) -> Any:
         """Compose the patches that bypass DB / approval / audit."""
         return _NotFoundFixture()
