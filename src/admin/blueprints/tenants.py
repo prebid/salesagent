@@ -466,7 +466,7 @@ def update(tenant_id):
         if not is_valid:
             for error in errors:
                 flash(error, "error")
-            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -487,7 +487,7 @@ def update(tenant_id):
         logger.error(f"Error updating tenant: {e}", exc_info=True)
         flash("Error updating tenant", "error")
 
-    return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
 
 @tenants_bp.route("/<tenant_id>/update_slack", methods=["POST"])
@@ -507,7 +507,7 @@ def update_slack(tenant_id):
             is_valid, error_msg = WebhookURLValidator.validate_webhook_url(webhook_url)
             if not is_valid:
                 flash(f"Invalid Slack webhook URL: {error_msg}", "error")
-                return redirect(url_for("tenants.settings", tenant_id=tenant_id, section="slack"))
+                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="slack"))
 
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -526,7 +526,7 @@ def update_slack(tenant_id):
         logger.error(f"Error updating Slack settings: {e}", exc_info=True)
         flash("Error updating Slack settings", "error")
 
-    return redirect(url_for("tenants.settings", tenant_id=tenant_id, section="slack"))
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="slack"))
 
 
 @tenants_bp.route("/<tenant_id>/test_slack", methods=["POST"])

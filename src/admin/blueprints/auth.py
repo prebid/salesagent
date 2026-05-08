@@ -901,7 +901,7 @@ def gam_authorize(tenant_id):
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
         flash("OAuth not configured. Please contact your administrator.", "error")
-        return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
     try:
         # Get GAM OAuth configuration
@@ -953,7 +953,7 @@ def gam_authorize(tenant_id):
     except Exception as e:
         logger.error(f"Error initiating GAM OAuth for tenant {tenant_id}: {e}")
         flash(f"Error starting OAuth flow: {str(e)}", "error")
-        return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
 
 @auth_bp.route("/auth/gam/callback")
@@ -1045,7 +1045,7 @@ def gam_callback():
         if not refresh_token:
             logger.error("No refresh token in OAuth response")
             flash("No refresh token received. Please try again or contact support.", "error")
-            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         # Store refresh token in tenant's adapter config
         with get_db_session() as db_session:
