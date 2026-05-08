@@ -92,6 +92,174 @@ class TestMaterializeProjectedBuy:
                 "gam_does_not_exist",
             )
 
+    def test_first_update_writes_materialization_audit_log(self, factory_session):
+        """First update_media_buy on a projected id writes an audit entry.
+
+        Direct ``materialize_projected_buy`` calls don't audit (caller
+        decides) — the audit fires from ``_update_media_buy_impl`` after
+        its UoW commits.
+        """
+        from src.core.database.models import AuditLog
+
+        sc = build_assigned_order_scenario()
+        GAMLineItemFactory(tenant=sc.tenant, order_id=sc.order.order_id)
+        factory_session.commit()
+
+        # No-op update triggers materialization without rejecting.
+        _update_media_buy_impl(
+            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}"),
+            identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
+        )
+
+        with get_db_session() as session:
+            entries = session.scalars(
+                select(AuditLog)
+                .where(AuditLog.tenant_id == sc.tenant.tenant_id)
+                .where(AuditLog.operation == "AdCP.materialize_imported_buy")
+            ).all()
+
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.principal_id == sc.principal.principal_id
+        assert entry.success is True
+        assert entry.details["gam_order_id"] == sc.order.order_id
+        assert entry.details["media_buy_id"] == f"gam_{sc.order.order_id}"
+        assert entry.details["source"] == "gam_import"
+
+    def test_audit_log_fires_even_on_mutation_rejection(self, factory_session):
+        """Materialization audit fires even when the update mutation is rejected.
+
+        Materialization happens read-side; the rejection just blocks the
+        adapter writeback. The audit record of "agent X claimed order Y"
+        stands either way.
+        """
+        from src.core.database.models import AuditLog
+
+        sc = build_assigned_order_scenario()
+        GAMLineItemFactory(tenant=sc.tenant, order_id=sc.order.order_id)
+        factory_session.commit()
+
+        result = _update_media_buy_impl(
+            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}", paused=True),
+            identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
+        )
+        assert isinstance(result, UpdateMediaBuyError)
+
+        with get_db_session() as session:
+            entries = session.scalars(
+                select(AuditLog)
+                .where(AuditLog.tenant_id == sc.tenant.tenant_id)
+                .where(AuditLog.operation == "AdCP.materialize_imported_buy")
+            ).all()
+        assert len(entries) == 1
+
+    def test_audit_log_does_not_fire_on_subsequent_updates(self, factory_session):
+        """Once materialized, subsequent update_media_buy calls don't re-audit."""
+        from src.core.database.models import AuditLog
+
+        sc = build_assigned_order_scenario()
+        GAMLineItemFactory(tenant=sc.tenant, order_id=sc.order.order_id)
+        factory_session.commit()
+
+        # First call materializes + audits
+        _update_media_buy_impl(
+            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}"),
+            identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
+        )
+        # Second call hits the existing row — should not audit again
+        _update_media_buy_impl(
+            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}"),
+            identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
+        )
+
+        with get_db_session() as session:
+            entries = session.scalars(
+                select(AuditLog)
+                .where(AuditLog.tenant_id == sc.tenant.tenant_id)
+                .where(AuditLog.operation == "AdCP.materialize_imported_buy")
+            ).all()
+        assert len(entries) == 1
+
+
+class TestMaterializedBuyExtGam:
+    """A materialized buy continues to surface ext.gam on subsequent reads."""
+
+    def test_ext_gam_survives_materialization(self, factory_session):
+        sc = build_assigned_order_scenario(line_item_count=1)
+
+        materialize_projected_buy(
+            factory_session,
+            sc.tenant.tenant_id,
+            sc.principal.principal_id,
+            f"gam_{sc.order.order_id}",
+        )
+        factory_session.commit()
+
+        result = _get_media_buys_impl(
+            req=GetMediaBuysRequest(),
+            identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
+        )
+
+        materialized = next(mb for mb in result.media_buys if mb.media_buy_id == f"gam_{sc.order.order_id}")
+        assert materialized.ext == {
+            "gam": {
+                "imported": True,
+                "order_id": sc.order.order_id,
+                "advertiser_id": sc.advertiser.advertiser_id,
+            }
+        }
+
+
+class TestMaterializeRaceResolution:
+    """Concurrent materializations of the same gam_<order_id> resolve cleanly.
+
+    The PK ``media_buy_id`` collision triggers IntegrityError on the
+    losing inserter; ``materialize_projected_buy`` rolls back and re-
+    fetches the winner's row. Both callers end up with the same
+    materialized buy, no duplicates.
+    """
+
+    def test_pk_collision_returns_existing_row(self, factory_session):
+        from src.core.database.database_session import get_engine
+
+        sc = build_assigned_order_scenario(line_item_count=1)
+        factory_session.commit()
+
+        # Simulate a winning concurrent transaction by writing the row
+        # ourselves on a separate session, mid-call.
+        engine = get_engine()
+        from sqlalchemy.orm import Session as SASession
+
+        with SASession(bind=engine) as winner_session:
+            materialize_projected_buy(
+                winner_session,
+                sc.tenant.tenant_id,
+                sc.principal.principal_id,
+                f"gam_{sc.order.order_id}",
+            )
+            winner_session.commit()
+
+        # Loser tries to materialize the same order on a fresh session.
+        # IntegrityError fires on flush; the function rolls back and
+        # returns the existing winner row.
+        with SASession(bind=engine) as loser_session:
+            result = materialize_projected_buy(
+                loser_session,
+                sc.tenant.tenant_id,
+                sc.principal.principal_id,
+                f"gam_{sc.order.order_id}",
+            )
+
+            assert result is not None
+            assert result.media_buy_id == f"gam_{sc.order.order_id}"
+            assert result.principal_id == sc.principal.principal_id
+            assert result.source == "gam_import"
+
+        # Exactly one row exists.
+        with get_db_session() as session:
+            rows = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == f"gam_{sc.order.order_id}")).all()
+            assert len(rows) == 1
+
 
 class TestProjectionSkipsMaterialized:
     """Once an order is materialized, the projection should not double-count it."""

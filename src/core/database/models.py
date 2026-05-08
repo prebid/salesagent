@@ -1132,6 +1132,7 @@ class MediaBuy(Base):
             "idx_media_buys_external_id",
             "tenant_id",
             "external_id",
+            unique=True,
             postgresql_where=text("external_id IS NOT NULL"),
         ),
     )

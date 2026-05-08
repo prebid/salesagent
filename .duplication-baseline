@@ -19,7 +19,6 @@
     "src.core.creative_agent_registry,src.core.signals_agent_registry",
     "src.core.schemas._base,src.core.schemas.account",
     "src.core.tools.creatives._assignments,src.core.tools.media_buy_update",
-    "src.core.tools.creatives._processing,src.core.tools.creatives._sync",
     "src.services.delivery_webhook_scheduler,src.services.media_buy_status_scheduler"
   ],
   "tests": [

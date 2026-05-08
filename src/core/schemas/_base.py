@@ -2327,6 +2327,14 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
     snapshot_unavailable_reason: SnapshotUnavailableReason | None = Field(
         default=None, description="Reason snapshot is unavailable (present when include_snapshot=true but no snapshot)"
     )
+    ext: dict | None = Field(
+        default=None,
+        description=(
+            "Vendor-namespaced extension object (AdCP convention). For projected/imported "
+            "GAM packages, populated as ``{'gam': {'imported': true, 'line_item_id': ...}}`` "
+            "so buyers can distinguish them from native AdCP packages."
+        ),
+    )
 
 
 class GetMediaBuysMediaBuy(SalesAgentBaseModel):
@@ -2340,6 +2348,14 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
     created_at: datetime | None = Field(default=None, description="When this media buy was created")
     updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
+    ext: dict | None = Field(
+        default=None,
+        description=(
+            "Vendor-namespaced extension object (AdCP convention). For projected/imported "
+            "GAM orders, populated as ``{'gam': {'imported': true, 'order_id': ..., 'advertiser_id': ...}}`` "
+            "so buyers can distinguish them from native AdCP buys."
+        ),
+    )
 
     def model_dump(self, **kwargs):
         result = super().model_dump(**kwargs)
