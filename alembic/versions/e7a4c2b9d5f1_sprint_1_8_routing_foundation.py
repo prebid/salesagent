@@ -74,8 +74,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_accounts_resolved_via",
         "accounts",
-        "resolved_via IS NULL OR resolved_via IN "
-        "('account', 'sandbox', 'exact', 'house', 'operator', 'default')",
+        "resolved_via IS NULL OR resolved_via IN " "('account', 'sandbox', 'exact', 'house', 'operator', 'default')",
     )
 
     # 5. advertiser_routing_rules table

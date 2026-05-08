@@ -842,4 +842,3 @@ Feature: BR-UC-011 Manage Accounts
     Then the response is a success variant
     And the response includes dry_run true
     And the account for brand domain "steady.com" has action "unchanged"
-

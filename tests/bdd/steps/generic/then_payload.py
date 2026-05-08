@@ -131,9 +131,9 @@ def then_format_assets(ctx: dict) -> None:
         for a in f.assets:
             # ImageFormatAsset are typed (ImageFormatAsset, VideoFormatAsset=video, etc.) — check the asset_id value, not just presence
             asset_id = getattr(a, "asset_id", None)
-            assert asset_id is not None and str(asset_id), (
-                f"Asset in format '{_fmt_name(f)}' has empty/missing asset_id"
-            )
+            assert asset_id is not None and str(
+                asset_id
+            ), f"Asset in format '{_fmt_name(f)}' has empty/missing asset_id"
     # Check renders have dimensions
     formats_with_renders = [f for f in formats if hasattr(f, "renders") and f.renders]
     for f in formats_with_renders:

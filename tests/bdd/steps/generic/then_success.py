@@ -70,9 +70,9 @@ def then_no_sandbox_field(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     dumped = resp.model_dump()
-    assert "sandbox" not in dumped, (
-        f"Expected no sandbox field in serialized response, got sandbox={dumped.get('sandbox')}"
-    )
+    assert (
+        "sandbox" not in dumped
+    ), f"Expected no sandbox field in serialized response, got sandbox={dumped.get('sandbox')}"
 
 
 # ── No real API calls assertion ──────────────────────────────────────
@@ -94,6 +94,6 @@ def then_no_real_api_calls(ctx: dict) -> None:
     if "response" in ctx:
         mock_registry = registry_mock.return_value
         formats_called = mock_registry.list_all_formats.called or mock_registry.list_all_formats_with_errors.called
-        assert formats_called, (
-            "Production code returned a response but did not call the mock registry — real API calls may have been made"
-        )
+        assert (
+            formats_called
+        ), "Production code returned a response but did not call the mock registry — real API calls may have been made"

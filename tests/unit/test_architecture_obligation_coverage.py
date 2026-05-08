@@ -252,9 +252,10 @@ class TestObligationCoverage:
         covered = _get_covered_obligations()
 
         invalid = covered - all_ids
-        assert not invalid, (
-            f"Found {len(invalid)} Covers: tag(s) referencing non-existent obligation IDs:\n"
-            + "\n".join(f"  {oid}" for oid in sorted(invalid))
+        assert (
+            not invalid
+        ), f"Found {len(invalid)} Covers: tag(s) referencing non-existent obligation IDs:\n" + "\n".join(
+            f"  {oid}" for oid in sorted(invalid)
         )
 
     def test_obligation_count_documented(self):

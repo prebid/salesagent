@@ -78,9 +78,10 @@ class TestBddStepTextAlignment:
                     f"{py_file.relative_to(Path.cwd())}:{func.lineno} {func.name} — step mentions account_id"
                 )
 
-        assert not violations, (
-            f"Found {len(violations)} Then step(s) mentioning account_id without referencing it in code:\n"
-            + "\n".join(f"  {v}" for v in violations)
+        assert (
+            not violations
+        ), f"Found {len(violations)} Then step(s) mentioning account_id without referencing it in code:\n" + "\n".join(
+            f"  {v}" for v in violations
         )
 
     def test_literal_response_field_steps_reference_the_named_field(self):
@@ -98,7 +99,8 @@ class TestBddStepTextAlignment:
                     f"{py_file.relative_to(Path.cwd())}:{func.lineno} {func.name} — step claims response field '{field_name}'"
                 )
 
-        assert not violations, (
-            f"Found {len(violations)} response-field Then step(s) that do not reference the named field:\n"
-            + "\n".join(f"  {v}" for v in violations)
+        assert (
+            not violations
+        ), f"Found {len(violations)} response-field Then step(s) that do not reference the named field:\n" + "\n".join(
+            f"  {v}" for v in violations
         )

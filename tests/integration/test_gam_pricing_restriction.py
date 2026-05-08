@@ -366,9 +366,9 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
 
@@ -442,7 +442,7 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None

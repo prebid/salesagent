@@ -28,9 +28,9 @@ class TestUnifiedAuthMiddlewareExists:
 
         from src.core.auth_middleware import UnifiedAuthMiddleware
 
-        assert not issubclass(UnifiedAuthMiddleware, BaseHTTPMiddleware), (
-            "UnifiedAuthMiddleware must be a pure ASGI class, not inherit from BaseHTTPMiddleware (ContextVar bug)"
-        )
+        assert not issubclass(
+            UnifiedAuthMiddleware, BaseHTTPMiddleware
+        ), "UnifiedAuthMiddleware must be a pure ASGI class, not inherit from BaseHTTPMiddleware (ContextVar bug)"
 
     def test_middleware_has_call_method(self):
         """UnifiedAuthMiddleware must implement __call__(scope, receive, send)."""

@@ -408,9 +408,9 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
     # In dry-run mode, the response should succeed
@@ -455,9 +455,9 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -503,9 +503,9 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -552,9 +552,9 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -610,9 +610,9 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
     assert response.media_buy_id is not None
 
     # Each package should create a line item with correct pricing:
@@ -673,9 +673,9 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Auction CPC media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-    )
+    assert (
+        not hasattr(response, "errors") or response.errors is None or response.errors == []
+    ), f"Auction CPC media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
     assert response.media_buy_id is not None
 
     # Cleanup auction pricing option

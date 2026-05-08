@@ -167,9 +167,9 @@ class TestMultiFieldValidationErrors:
         # At least two distinct fields must be reported
         field_paths = {".".join(str(loc) for loc in e["loc"]) for e in errors}
         invalid_fields_found = {p for p in field_paths if any(f in p for f in ("max_width", "min_height", "type"))}
-        assert len(invalid_fields_found) >= 2, (
-            f"Expected at least 2 distinct invalid fields, got: {invalid_fields_found}"
-        )
+        assert (
+            len(invalid_fields_found) >= 2
+        ), f"Expected at least 2 distinct invalid fields, got: {invalid_fields_found}"
 
     def test_multi_field_errors_formatted_with_per_field_messages(self, integration_db):
         """Covers: UC-005-EXT-B-05 — format_validation_error produces per-field messages.
@@ -246,7 +246,7 @@ class TestMultiFieldValidationErrors:
             error_str = str(result.error)
             assert "INVALID_REQUEST" in error_str, f"Expected INVALID_REQUEST code in error; got {error_str[:300]!r}"
             # First-field surfaced via SDK.
-            assert "max_width" in error_str, (
-                f"Expected the first invalid field 'max_width' in error; got {error_str[:300]!r}"
-            )
+            assert (
+                "max_width" in error_str
+            ), f"Expected the first invalid field 'max_width' in error; got {error_str[:300]!r}"
             assert "valid integer" in error_str, f"Expected reason 'valid integer' in error; got {error_str[:300]!r}"

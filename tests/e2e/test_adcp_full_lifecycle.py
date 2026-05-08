@@ -99,9 +99,9 @@ class TestAdCPFullLifecycle:
             media_buy_id = media_buy_data.get("media_buy_id")
             if not media_buy_id:
                 task_id = media_buy_data.get("task_id")
-                assert task_id, (
-                    f"create_media_buy returned neither media_buy_id nor task_id: {list(media_buy_data.keys())}"
-                )
+                assert (
+                    task_id
+                ), f"create_media_buy returned neither media_buy_id nor task_id: {list(media_buy_data.keys())}"
                 media_buy_id = resolve_media_buy_id_from_task_id(live_server, task_id)
 
             # Force-approve the media buy so delivery works
@@ -137,9 +137,9 @@ class TestAdCPFullLifecycle:
             )
             delivery_data = parse_tool_result(delivery_result)
 
-            assert "deliveries" in delivery_data or "media_buy_deliveries" in delivery_data, (
-                f"Response must contain deliveries, got: {list(delivery_data.keys())}"
-            )
+            assert (
+                "deliveries" in delivery_data or "media_buy_deliveries" in delivery_data
+            ), f"Response must contain deliveries, got: {list(delivery_data.keys())}"
 
             # Delivery may be empty for freshly created media buys (mock adapter
             # delivery simulator needs a cycle to generate metrics). Verify structure only.

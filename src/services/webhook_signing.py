@@ -112,16 +112,79 @@ _credential_cache_lock = threading.Lock()
 def invalidate_credential_cache(tenant_id: str | None = None) -> None:
     """Drop a tenant's cached snapshot (or the whole cache).
 
-    Call after rotating a tenant's ``TenantSigningCredential`` so the
-    next webhook delivery picks up the new kid immediately rather than
-    waiting for TTL expiry. ``tenant_id=None`` clears the whole cache —
-    useful in tests.
+    Normally fired automatically by the SQLAlchemy session listener
+    registered below — when a ``TenantSigningCredential`` row is
+    inserted, updated, or deleted with ``purpose='webhook-signing'``,
+    the affected tenant's snapshot is evicted on ``after_commit``.
+    Call directly only when bypassing the ORM (raw SQL writes) or in
+    tests. ``tenant_id=None`` clears the whole cache.
+
+    Per-process: only invalidates the local-worker cache. Other
+    workers / replicas converge within :data:`_CACHE_TTL_SECONDS`
+    (5 min). Cross-process invalidation is out of scope for this
+    slice — see issue #46.
     """
     with _credential_cache_lock:
         if tenant_id is None:
             _credential_cache.clear()
         else:
             _credential_cache.pop(tenant_id, None)
+
+
+_LISTENER_REGISTERED = False
+
+
+def _register_session_invalidator() -> None:
+    """Wire SQLAlchemy session events that evict the cache after commit.
+
+    Captures affected tenant_ids during ``before_flush`` (when ORM
+    objects are still attached) and evicts on ``after_commit`` (when
+    the new state is durable). ``after_rollback`` drops the captured
+    set so a rolled-back rotation doesn't evict the still-active
+    cached kid.
+
+    Filters to ``purpose='webhook-signing'`` so unrelated
+    ``request-signing-as-buyer`` writes don't burn webhook cache
+    entries. Idempotent — guards against duplicate registration when
+    the module is reloaded under pytest's import-fixup or during
+    development reloads.
+    """
+    global _LISTENER_REGISTERED
+    if _LISTENER_REGISTERED:
+        return
+
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    # Importing the model here keeps the layering clean: webhook_signing
+    # depends on database.models, never the other way round.
+    from src.core.database.models import TenantSigningCredential
+
+    _PENDING_KEY = "_webhook_signing_invalidate"
+
+    def _capture(session: Session, *_args: Any) -> None:
+        pending: set[str] = session.info.setdefault(_PENDING_KEY, set())
+        for obj in (*session.new, *session.dirty, *session.deleted):
+            if isinstance(obj, TenantSigningCredential) and obj.purpose == WEBHOOK_SIGNING_PURPOSE:
+                pending.add(obj.tenant_id)
+
+    def _flush(session: Session) -> None:
+        pending: set[str] | None = session.info.pop(_PENDING_KEY, None)
+        if not pending:
+            return
+        for tenant_id in pending:
+            invalidate_credential_cache(tenant_id)
+
+    def _drop(session: Session) -> None:
+        session.info.pop(_PENDING_KEY, None)
+
+    event.listen(Session, "before_flush", _capture)
+    event.listen(Session, "after_commit", _flush)
+    event.listen(Session, "after_rollback", _drop)
+    _LISTENER_REGISTERED = True
+
+
+_register_session_invalidator()
 
 
 class SigningConfigurationError(RuntimeError):

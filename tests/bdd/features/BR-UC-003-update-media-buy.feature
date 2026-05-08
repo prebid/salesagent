@@ -2163,4 +2163,3 @@ Feature: BR-UC-003 Update Media Buy
       | package with only updatable fields              | budget and targeting updates only         | success                                      |
       | product_id in update payload (schema rejects)   | product_id=prod_new (immutable)          | error "SCHEMA_VALIDATION_ERROR" — rejected   |
       | format_ids in update payload (schema rejects)   | format_ids=[fmt_new] (immutable)         | error "SCHEMA_VALIDATION_ERROR" — rejected   |
-

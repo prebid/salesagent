@@ -60,6 +60,10 @@ from adcp.server import (
 )
 from sqlalchemy import select
 
+# Import for side-effect: registers the SQLAlchemy session listener that
+# evicts the webhook-signing credential cache on commit. Must run before
+# any session opens so rotations observed via the ORM trigger eviction.
+import src.services.webhook_signing  # noqa: F401
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware

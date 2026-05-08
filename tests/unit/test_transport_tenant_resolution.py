@@ -310,9 +310,9 @@ class TestImplFunctionsDoNotResolveTenant:
         with open(mod.__file__) as f:
             source = f.read()
 
-        assert "get_current_tenant" not in source, (
-            f"{module_path} still calls get_current_tenant(). Use identity.tenant instead of reading from ContextVar."
-        )
+        assert (
+            "get_current_tenant" not in source
+        ), f"{module_path} still calls get_current_tenant(). Use identity.tenant instead of reading from ContextVar."
         assert "set_current_tenant" not in source, (
             f"{module_path} still calls set_current_tenant(). "
             f"Tenant ContextVar is managed by the transport boundary, not _impl."
@@ -336,9 +336,9 @@ class TestImplFunctionsDoNotResolveTenant:
         assert match, "_create_media_buy_impl not found"
         impl_body = match.group(1)
 
-        assert "get_current_tenant" not in impl_body, (
-            "_create_media_buy_impl still calls get_current_tenant(). Use identity.tenant."
-        )
+        assert (
+            "get_current_tenant" not in impl_body
+        ), "_create_media_buy_impl still calls get_current_tenant(). Use identity.tenant."
         assert "set_current_tenant" not in impl_body, (
             "_create_media_buy_impl still calls set_current_tenant(). "
             "Tenant ContextVar is managed by the transport boundary."
@@ -362,9 +362,9 @@ class TestImplFunctionsDoNotResolveTenant:
         assert match, "_get_products_impl not found"
         impl_body = match.group(1)
 
-        assert "get_current_tenant" not in impl_body, (
-            "_get_products_impl still calls get_current_tenant(). Use identity.tenant."
-        )
+        assert (
+            "get_current_tenant" not in impl_body
+        ), "_get_products_impl still calls get_current_tenant(). Use identity.tenant."
         assert "set_current_tenant" not in impl_body, (
             "_get_products_impl still calls set_current_tenant(). "
             "Tenant ContextVar is managed by the transport boundary."

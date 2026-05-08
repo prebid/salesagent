@@ -24,9 +24,9 @@ class TestProductChannelsType:
         args = typing.get_args(field_info.annotation)
         list_type = args[0]  # list[MediaChannel]
         inner_args = typing.get_args(list_type)
-        assert inner_args[0] is MediaChannel, (
-            f"Product.channels should be list[MediaChannel], got list[{inner_args[0]}]"
-        )
+        assert (
+            inner_args[0] is MediaChannel
+        ), f"Product.channels should be list[MediaChannel], got list[{inner_args[0]}]"
 
     def test_channels_not_excluded(self):
         """Product.channels should NOT have exclude=True (public field per AdCP spec)."""

@@ -122,9 +122,9 @@ class TestResolveAdapterId:
     def test_adapter_platform_map_covers_all_old_field_map_keys(self):
         """Every adapter in _OLD_FIELD_MAP must also be in ADAPTER_PLATFORM_MAP."""
         for adapter_name in _OLD_FIELD_MAP:
-            assert adapter_name in ADAPTER_PLATFORM_MAP, (
-                f"Adapter '{adapter_name}' in _OLD_FIELD_MAP but missing from ADAPTER_PLATFORM_MAP"
-            )
+            assert (
+                adapter_name in ADAPTER_PLATFORM_MAP
+            ), f"Adapter '{adapter_name}' in _OLD_FIELD_MAP but missing from ADAPTER_PLATFORM_MAP"
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from src.core.schemas.creative import CreativeApproval as _CreativeApproval
 # Side-effect import: installs the ``asset_type`` backfill on
 # CreativeAsset.__init__ (see module docstring for the why).
 import src.core.schemas._asset_type_compat  # noqa: F401, E402
+
 # isort: on
 
 _PackageRequest.model_rebuild(_types_namespace={"Creative": _Creative})

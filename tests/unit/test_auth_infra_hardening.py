@@ -32,9 +32,9 @@ class TestAuthContextStateKey:
         """AUTH_CONTEXT_STATE_KEY must be defined in auth_context module."""
         from src.core import auth_context
 
-        assert hasattr(auth_context, "AUTH_CONTEXT_STATE_KEY"), (
-            "AUTH_CONTEXT_STATE_KEY constant must be defined in src.core.auth_context"
-        )
+        assert hasattr(
+            auth_context, "AUTH_CONTEXT_STATE_KEY"
+        ), "AUTH_CONTEXT_STATE_KEY constant must be defined in src.core.auth_context"
 
 
 class TestNoRelativePathOpens:

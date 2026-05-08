@@ -1019,4 +1019,3 @@ Feature: BR-UC-008 Manage Audience Signals
       | destinations_only    | ["dv360"]    | omitted   | signals filtered by platform only  |
       | countries_only       | omitted      | ["US"]    | signals filtered by country only   |
       | neither_provided     | omitted      | omitted   | all signals returned               |
-

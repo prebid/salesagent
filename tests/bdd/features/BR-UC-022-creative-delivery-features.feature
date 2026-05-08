@@ -867,4 +867,3 @@ Feature: BR-UC-022 Creative Delivery & Features
       | format_id with width=1, height=1 (minimum dimensions) | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 1, "height": 1}, "assets": {"img": {}}}             | success                                                         |
       | format_id with width=0 (below minimum)              | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 0, "height": 0}, "assets": {"img": {}}}               | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
       | format_id with width but no height                  | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 300}, "assets": {"img": {}}}                          | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
-

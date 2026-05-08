@@ -122,9 +122,9 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         response, task_status = await _create_media_buy_impl(req=req, identity=ctx)
 
         # Verify success
-        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-        )
+        assert (
+            not hasattr(response, "errors") or response.errors is None or response.errors == []
+        ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
         assert response.media_buy_id is not None
         assert response.packages is not None
         assert len(response.packages) >= 1
@@ -298,9 +298,9 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
         )
         response, _ = await _create_media_buy_impl(req=req, identity=ctx)
 
-        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-        )
+        assert (
+            not hasattr(response, "errors") or response.errors is None or response.errors == []
+        ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
         assert response.media_buy_id is not None
         assert response.packages is not None
         assert len(response.packages) == 3
@@ -403,7 +403,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         )
         response, _ = await _create_media_buy_impl(req=req, identity=ctx)
 
-        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-        )
+        assert (
+            not hasattr(response, "errors") or response.errors is None or response.errors == []
+        ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
         assert response.media_buy_id is not None

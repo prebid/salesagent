@@ -35,9 +35,9 @@ def factory_session(integration_db):  # noqa: F811 — fixture parameter, not a 
     from tests.factories import ALL_FACTORIES
 
     for f in ALL_FACTORIES:
-        assert f._meta.sqlalchemy_session is None, (
-            f"Factory {f.__name__} session already bound — nested factory_session fixtures are not supported"
-        )
+        assert (
+            f._meta.sqlalchemy_session is None
+        ), f"Factory {f.__name__} session already bound — nested factory_session fixtures are not supported"
 
     session = SASession(bind=get_engine())
     for f in ALL_FACTORIES:

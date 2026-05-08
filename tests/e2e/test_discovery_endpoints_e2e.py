@@ -91,9 +91,9 @@ class TestListCreativeFormatsE2E:
             data = parse_tool_result(result)
 
             assert "formats" in data, "Response must contain formats"
-            assert data.get("context") == test_context, (
-                f"Context should be echoed back. Expected {test_context}, got {data.get('context')}"
-            )
+            assert (
+                data.get("context") == test_context
+            ), f"Context should be echoed back. Expected {test_context}, got {data.get('context')}"
 
 
 # list_authorized_properties was removed from the AdCP spec in 4.4.x; the

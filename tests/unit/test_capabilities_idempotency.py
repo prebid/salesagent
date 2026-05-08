@@ -40,9 +40,9 @@ def test_router_capabilities_declare_idempotency_supported() -> None:
         "response. See issue #41."
     )
     # We dedupe via PgBackend, so we declare supported.
-    assert isinstance(adcp_block.idempotency, IdempotencySupported), (
-        f"Expected IdempotencySupported, got {type(adcp_block.idempotency).__name__}"
-    )
+    assert isinstance(
+        adcp_block.idempotency, IdempotencySupported
+    ), f"Expected IdempotencySupported, got {type(adcp_block.idempotency).__name__}"
     assert adcp_block.idempotency.replay_ttl_seconds >= 3600, "AdCP spec requires replay_ttl_seconds >= 3600 (1h)"
 
 
@@ -51,6 +51,6 @@ def test_idempotency_replay_ttl_constant_matches_pgbackend_window() -> None:
     Must stay >= the spec floor (1h) and stay aligned with the dedupe window."""
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
 
-    assert 3600 <= IDEMPOTENCY_REPLAY_TTL_SECONDS <= 604800, (
-        f"replay_ttl_seconds must be 3600-604800 per spec, got {IDEMPOTENCY_REPLAY_TTL_SECONDS}"
-    )
+    assert (
+        3600 <= IDEMPOTENCY_REPLAY_TTL_SECONDS <= 604800
+    ), f"replay_ttl_seconds must be 3600-604800 per spec, got {IDEMPOTENCY_REPLAY_TTL_SECONDS}"

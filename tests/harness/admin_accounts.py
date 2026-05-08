@@ -64,9 +64,9 @@ class _AdminResponse:
             status_code=response.status_code,
             data=response.content,
             headers=dict(response.headers),
-            json_data=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else None,
+            json_data=(
+                response.json() if response.headers.get("content-type", "").startswith("application/json") else None
+            ),
         )
 
 

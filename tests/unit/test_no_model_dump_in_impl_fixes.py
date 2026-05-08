@@ -76,9 +76,9 @@ class TestMediaBuyRepositoryCreateFromRequest:
         )
 
         # raw_request must be a dict, not a Pydantic model
-        assert isinstance(result.raw_request, dict), (
-            f"raw_request should be dict, got {type(result.raw_request).__name__}"
-        )
+        assert isinstance(
+            result.raw_request, dict
+        ), f"raw_request should be dict, got {type(result.raw_request).__name__}"
         # buyer_ref removed from CreateMediaBuyRequest in adcp 3.12
         assert "brand" in result.raw_request
 

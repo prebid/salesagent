@@ -595,4 +595,3 @@ Feature: BR-UC-018 List Creatives
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
-

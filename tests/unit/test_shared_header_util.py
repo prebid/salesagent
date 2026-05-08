@@ -19,9 +19,9 @@ class TestSharedHeaderUtil:
 
         tree = ast.parse(source)
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
-        assert "get_header_case_insensitive" in func_names, (
-            "src/core/http_utils.py should define get_header_case_insensitive"
-        )
+        assert (
+            "get_header_case_insensitive" in func_names
+        ), "src/core/http_utils.py should define get_header_case_insensitive"
 
     def test_auth_py_imports_from_http_utils(self):
         """auth.py should import from http_utils, not define its own copy."""
@@ -31,9 +31,9 @@ class TestSharedHeaderUtil:
 
         # Should NOT define _get_header_case_insensitive locally
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
-        assert "_get_header_case_insensitive" not in func_names, (
-            "auth.py still defines its own _get_header_case_insensitive — should import from http_utils"
-        )
+        assert (
+            "_get_header_case_insensitive" not in func_names
+        ), "auth.py still defines its own _get_header_case_insensitive — should import from http_utils"
 
     def test_resolved_identity_imports_from_http_utils(self):
         """resolved_identity.py should import from http_utils, not define its own copy."""
@@ -42,9 +42,9 @@ class TestSharedHeaderUtil:
         tree = ast.parse(source)
 
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
-        assert "_get_header_case_insensitive" not in func_names, (
-            "resolved_identity.py still defines its own _get_header_case_insensitive — should import from http_utils"
-        )
+        assert (
+            "_get_header_case_insensitive" not in func_names
+        ), "resolved_identity.py still defines its own _get_header_case_insensitive — should import from http_utils"
 
     def test_main_py_imports_from_http_utils(self):
         """``core/main.py`` should import from http_utils, not define its own copy."""
@@ -53,6 +53,6 @@ class TestSharedHeaderUtil:
         tree = ast.parse(source)
 
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
-        assert "_get_header_case_insensitive" not in func_names, (
-            "core/main.py still defines its own _get_header_case_insensitive — should import from http_utils"
-        )
+        assert (
+            "_get_header_case_insensitive" not in func_names
+        ), "core/main.py still defines its own _get_header_case_insensitive — should import from http_utils"

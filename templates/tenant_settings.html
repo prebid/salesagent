@@ -2766,7 +2766,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
                 </p>
                 <ol class="small text-muted" style="margin: 0.25rem 0 0 1.25rem;">
                     <li>Publish the JWK below as a JWKS document (<code>{"keys": [&hellip;]}</code>) at a URL you control —
-                        typically <code>https://{{ tenant.house_domain or '&lt;your-house-domain&gt;' }}/.well-known/jwks.json</code>.
+                        typically <code>https://&lt;your-house-domain&gt;/.well-known/jwks.json</code>.
                         <strong>Preserve the <code>adcp_use</code> field</strong> on each key — the AdCP webhook verifier
                         rejects keys without <code>adcp_use="webhook-signing"</code>, and mixing webhook-signing keys with
                         request-signing keys in the same JWKS only works if every key keeps its own <code>adcp_use</code>.</li>

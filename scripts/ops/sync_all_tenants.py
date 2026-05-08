@@ -137,9 +137,7 @@ def sync_all_gam_tenants():
         tenant_name = tenant.name
 
         if not should_run:
-            next_eligible = (
-                latest_completed + timedelta(minutes=effective_cadence) if latest_completed else "n/a"
-            )
+            next_eligible = latest_completed + timedelta(minutes=effective_cadence) if latest_completed else "n/a"
             logger.info(
                 "Skipping tenant %s (%s): synced %s, cadence=%dm, next eligible %s",
                 tenant_name,

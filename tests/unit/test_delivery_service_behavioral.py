@@ -579,6 +579,7 @@ class TestDeliverWithBackoffGenericException:
     """
 
     def test_generic_exception_breaks_retry_loop(self):
+        import json
         from unittest.mock import MagicMock
 
         from src.services.webhook_delivery_service import (
@@ -591,16 +592,28 @@ class TestDeliverWithBackoffGenericException:
         cb = CircuitBreaker()
         queue = WebhookQueue()
 
+        # Mirror the production enqueue shape from
+        # ``WebhookDeliveryService._send_webhook_enhanced``: snapshot dict
+        # carries ``tenant_id`` (needed for the misconfig metric label),
+        # ``signing_mode`` is one of the DB-CHECK-pinned values
+        # (``hmac``/``rfc9421``/``both``), and body bytes are produced
+        # via the same ``json.dumps`` call so the wire bytes match the
+        # signature input. The previous shape used ``signing_mode='none'``
+        # which only "passed" because ``build_auth_headers`` raises on
+        # unknown modes — exercising a different code path than the
+        # generic-exception retry-loop the test name describes.
+        body_bytes = json.dumps({"test": "data"}, sort_keys=True, separators=(",", ":")).encode("utf-8")
         queue.enqueue(
             {
                 "snapshot": {
+                    "tenant_id": "t1",
                     "url": "https://example.com/hook",
-                    "signing_mode": "none",
+                    "signing_mode": "hmac",
                     "webhook_secret": None,
                     "authentication_type": None,
                     "authentication_token": None,
                 },
-                "body_bytes": b'{"test":"data"}',
+                "body_bytes": body_bytes,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "active_credential": None,
             }

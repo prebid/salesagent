@@ -1366,9 +1366,9 @@ class TestUC003UpdateCreativeIds:
 
         from src.core.schemas import Creative
 
-        assert issubclass(Creative, (LibraryDeliveryCreative, LibraryListCreative)), (
-            f"Creative should extend an adcp library Creative, but MRO is: {[c.__name__ for c in Creative.__mro__]}"
-        )
+        assert issubclass(
+            Creative, (LibraryDeliveryCreative, LibraryListCreative)
+        ), f"Creative should extend an adcp library Creative, but MRO is: {[c.__name__ for c in Creative.__mro__]}"
 
 
 # ---------------------------------------------------------------------------

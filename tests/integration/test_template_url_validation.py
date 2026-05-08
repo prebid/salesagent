@@ -72,6 +72,10 @@ class TestTemplateUrlValidation:
                             test_params["media_buy_id"] = "test_buy"
                         if "task_id" in params:
                             test_params["task_id"] = "test_task"
+                        if "step_id" in params:
+                            test_params["step_id"] = "test_step"
+                        if "workflow_id" in params:
+                            test_params["workflow_id"] = "test_workflow"
                         if "property_id" in params:
                             test_params["property_id"] = "test_property"
                         if "config_id" in params:

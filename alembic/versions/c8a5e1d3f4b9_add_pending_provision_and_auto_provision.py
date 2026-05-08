@@ -65,6 +65,5 @@ def downgrade() -> None:
     op.create_check_constraint(
         "ck_accounts_status",
         "accounts",
-        "status IN ('active', 'pending_approval', 'rejected', "
-        "'payment_required', 'suspended', 'closed')",
+        "status IN ('active', 'pending_approval', 'rejected', " "'payment_required', 'suspended', 'closed')",
     )

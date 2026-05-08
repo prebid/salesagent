@@ -21,9 +21,9 @@ from tests.harness.transport import Transport, TransportResult
 
 def assert_envelope(result: TransportResult, transport: Transport) -> None:
     """Assert transport-specific envelope shape is correct."""
-    assert result.envelope.get("transport") == transport.value, (
-        f"Expected envelope transport={transport.value}, got {result.envelope}"
-    )
+    assert (
+        result.envelope.get("transport") == transport.value
+    ), f"Expected envelope transport={transport.value}, got {result.envelope}"
 
 
 def assert_error_result(
@@ -33,13 +33,13 @@ def assert_error_result(
 ) -> None:
     """Assert result is an error of the expected type, optionally matching message."""
     assert result.is_error, f"Expected error but got success: {result.payload}"
-    assert isinstance(result.error, expected_type), (
-        f"Expected {expected_type.__name__}, got {type(result.error).__name__}: {result.error}"
-    )
+    assert isinstance(
+        result.error, expected_type
+    ), f"Expected {expected_type.__name__}, got {type(result.error).__name__}: {result.error}"
     if match is not None:
-        assert re.search(match, str(result.error)), (
-            f"Error message {str(result.error)!r} does not match pattern {match!r}"
-        )
+        assert re.search(
+            match, str(result.error)
+        ), f"Error message {str(result.error)!r} does not match pattern {match!r}"
 
 
 def assert_rejected(
@@ -71,16 +71,16 @@ def assert_rejected(
 
     if code is not None:
         error_code = getattr(error, "error_code", None)
-        assert error_code == code or code in error_str, (
-            f"Expected error code '{code}', got {error_code!r}. Full error: {error_str[:200]}"
-        )
+        assert (
+            error_code == code or code in error_str
+        ), f"Expected error code '{code}', got {error_code!r}. Full error: {error_str[:200]}"
 
     if field is not None:
         details = getattr(error, "details", None) or {}
         details_str = str(details)
-        assert field in error_str or field in details_str, (
-            f"Expected field '{field}' in error. Error: {error_str[:200]}"
-        )
+        assert (
+            field in error_str or field in details_str
+        ), f"Expected field '{field}' in error. Error: {error_str[:200]}"
 
     if reason is not None:
         assert reason in error_str, f"Expected reason '{reason}' in error. Got: {error_str[:200]}"
@@ -118,9 +118,9 @@ def assert_rejected_with_suggestion(
             f"Error: {error_str[:200]}, Details: {details_str[:200]}"
         )
     else:
-        assert has_suggestion, (
-            f"Expected suggestion in error with code '{code}'. Error: {error_str[:200]}, Details: {details}"
-        )
+        assert (
+            has_suggestion
+        ), f"Expected suggestion in error with code '{code}'. Error: {error_str[:200]}, Details: {details}"
 
 
 def assert_payload_field(

@@ -250,9 +250,9 @@ class TestSyncStrictModeAbortTransport:
         if transport == Transport.IMPL:
             assert isinstance(result.error, AdCPNotFoundError)
         else:
-            assert "NOT_FOUND" in str(result.error), (
-                f"MCP error should carry structured NOT_FOUND code; got {result.error!r}"
-            )
+            assert "NOT_FOUND" in str(
+                result.error
+            ), f"MCP error should carry structured NOT_FOUND code; got {result.error!r}"
 
 
 @pytest.mark.requires_db
@@ -607,9 +607,9 @@ class TestGenerativeBuildUpdatePreserve:
             assert_envelope(result2, transport)
 
             # build_creative should NOT be called again (no prompt → skip build)
-            assert registry.build_creative.call_count == build_calls_after_create, (
-                "build_creative should not be called on update without prompt"
-            )
+            assert (
+                registry.build_creative.call_count == build_calls_after_create
+            ), "build_creative should not be called on update without prompt"
 
         # Verify existing generative data is preserved in DB
         with get_db_session() as session:

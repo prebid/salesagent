@@ -100,9 +100,7 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
     identity = _make_identity(principal_id="principal_123", tenant=mock_tenant)
 
     # Mock dependencies - need get_principal_object since it's called before brand_manifest check
-    with (
-        patch("src.core.tools.products.get_principal_object", return_value=None),
-    ):
+    with (patch("src.core.tools.products.get_principal_object", return_value=None),):
         # Call implementation - should raise AdCPAuthorizationError (transport-agnostic)
         with pytest.raises(AdCPAuthorizationError) as exc_info:
             await _get_products_impl(mock_request, identity)

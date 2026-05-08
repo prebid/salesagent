@@ -247,9 +247,7 @@ def _build_advertiser_name(account: Account) -> str:
     domain = (
         brand.get("domain")
         if isinstance(brand, dict)
-        else getattr(brand, "domain", None)
-        if brand is not None
-        else None
+        else getattr(brand, "domain", None) if brand is not None else None
     )
     domain = domain or "unknown"
     if account.billing == "agent" and account.principal_id:

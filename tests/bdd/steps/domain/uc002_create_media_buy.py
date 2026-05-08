@@ -433,9 +433,9 @@ def then_error_has_setup_details(ctx: dict) -> None:
     if isinstance(error, AdCPError):
         assert error.details, f"Expected details on error: {error}"
         details_str = str(error.details).lower()
-        assert "setup" in details_str or "billing" in details_str or "configure" in details_str, (
-            f"Expected setup instructions in details: {error.details}"
-        )
+        assert (
+            "setup" in details_str or "billing" in details_str or "configure" in details_str
+        ), f"Expected setup instructions in details: {error.details}"
     else:
         raise AssertionError(f"Cannot check details on non-AdCPError: {type(error).__name__}")
 
@@ -725,9 +725,9 @@ def then_response_equals_remembered(ctx: dict, field: str, alias: str) -> None:
         dumped = response.model_dump() if hasattr(response, "model_dump") else {}
         actual = dumped.get(field)
 
-    assert actual == remembered[alias], (
-        f"Response {field}={actual!r} does not equal remembered {alias}={remembered[alias]!r}"
-    )
+    assert (
+        actual == remembered[alias]
+    ), f"Response {field}={actual!r} does not equal remembered {alias}={remembered[alias]!r}"
 
 
 @then(parsers.parse('the response "{field}" should NOT equal the remembered "{alias}"'))
@@ -746,9 +746,9 @@ def then_response_not_equals_remembered(ctx: dict, field: str, alias: str) -> No
         dumped = response.model_dump() if hasattr(response, "model_dump") else {}
         actual = dumped.get(field)
 
-    assert actual != remembered[alias], (
-        f"Response {field}={actual!r} should NOT equal remembered {alias}={remembered[alias]!r}"
-    )
+    assert (
+        actual != remembered[alias]
+    ), f"Response {field}={actual!r} should NOT equal remembered {alias}={remembered[alias]!r}"
 
 
 @then("no duplicate ad server booking should be created")

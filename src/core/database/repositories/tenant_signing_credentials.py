@@ -4,6 +4,13 @@ PR 1 of [signing-non-embedded](../../../../docs/design/signing-non-embedded.md).
 Stores KMS references + cached public JWKs for the salesagent's own outbound
 signing. Private bytes never live here for KMS-backed credentials; ``backend_ref``
 is the lookup key the SigningProvider uses to talk to the backend.
+
+Cache coherence: the per-process snapshot cache in
+``src.services.webhook_signing`` is evicted automatically on commit via a
+SQLAlchemy session listener registered at module load there. The repo
+itself does not couple to the cache — invalidation is the listener's
+job, fired post-commit so a concurrent reader can't re-cache the
+about-to-be-rotated kid.
 """
 
 from __future__ import annotations

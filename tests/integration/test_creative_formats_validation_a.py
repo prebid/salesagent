@@ -76,9 +76,9 @@ class TestAdapterFormatsViaA2A:
 
         # All 8 real Broadstreet formats should be present with assets
         broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
-        assert len(broadstreet_formats) == len(BROADSTREET_TEMPLATES), (
-            f"Expected {len(BROADSTREET_TEMPLATES)} Broadstreet formats, got {len(broadstreet_formats)}"
-        )
+        assert len(broadstreet_formats) == len(
+            BROADSTREET_TEMPLATES
+        ), f"Expected {len(BROADSTREET_TEMPLATES)} Broadstreet formats, got {len(broadstreet_formats)}"
 
         # Each Broadstreet format must have assets (regression guard for _make_asset fix)
         for fmt in broadstreet_formats:
@@ -86,9 +86,9 @@ class TestAdapterFormatsViaA2A:
             tmpl = BROADSTREET_TEMPLATES[tmpl_id]
             expected_assets = len(tmpl.get("required_assets", [])) + len(tmpl.get("optional_assets", []))
             assert fmt.assets is not None, f"Template {tmpl_id} must have assets"
-            assert len(fmt.assets) == expected_assets, (
-                f"Template {tmpl_id}: expected {expected_assets} assets, got {len(fmt.assets)}"
-            )
+            assert (
+                len(fmt.assets) == expected_assets
+            ), f"Template {tmpl_id}: expected {expected_assets} assets, got {len(fmt.assets)}"
 
     def test_broadstreet_formats_have_correct_structure(self, integration_db):
         """UC-005-MAIN-REST-02: Broadstreet adapter formats have valid Format structure.
