@@ -46,6 +46,7 @@ from core.platforms._delegate import (
     _delegate_update_media_buy,
 )
 from core.stores.accounts import SalesagentAccountStore
+from src.core.schemas import GetProductsRequest
 
 # Process-singleton idempotency store wired through ``core.idempotency``.
 # Defaults to :class:`PgBackend` for cross-worker durable replay; tests
@@ -75,7 +76,7 @@ class MockSellerPlatform(DecisioningPlatform):
 
     async def get_products(
         self,
-        req: Any,
+        req: GetProductsRequest,
         ctx: RequestContext[Any],
     ) -> dict[str, Any]:
         return await _delegate_get_products(req, ctx)

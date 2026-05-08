@@ -282,9 +282,9 @@ class TestMediaBuyApprovalAsync:
         # ``MediaBuyStatus`` describing what's blocking activation. Without
         # creatives in the request that's ``pending_creatives``. The wrapper
         # ``status`` reports the seller's task as ``completed`` (sync work done).
-        assert (
-            result.status == "completed"
-        ), f"Expected completed, got status={result.status}, errors={getattr(result.response, 'errors', None)}"
+        assert result.status == "completed", (
+            f"Expected completed, got status={result.status}, errors={getattr(result.response, 'errors', None)}"
+        )
         media_buy_id = result.response.media_buy_id
         assert media_buy_id
         assert result.response.status == MediaBuyStatus.pending_creatives
@@ -292,9 +292,9 @@ class TestMediaBuyApprovalAsync:
         with get_db_session() as session:
             steps = session.scalars(select(WorkflowStep).where(WorkflowStep.step_type == "media_buy_creation")).all()
             approval_steps = [s for s in steps if s.status == "requires_approval"]
-            assert (
-                approval_steps
-            ), f"Expected requires_approval workflow_step, got {[(s.step_id, s.status) for s in steps]}"
+            assert approval_steps, (
+                f"Expected requires_approval workflow_step, got {[(s.step_id, s.status) for s in steps]}"
+            )
 
         # Execute approval.
         success, error = execute_approved_media_buy(

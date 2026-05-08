@@ -28,7 +28,6 @@ from typing import Any
 
 from adcp.decisioning import AdcpError, RequestContext
 from adcp.server.auth import current_principal
-from adcp.types import GetProductsRequest
 
 from src.core.config_loader import get_tenant_by_id
 from src.core.exceptions import AdCPError
@@ -37,6 +36,7 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     GetMediaBuyDeliveryRequest,
     GetMediaBuysRequest,
+    GetProductsRequest,
     ListCreativeFormatsRequest,
     UpdateMediaBuyRequest,
 )
@@ -164,8 +164,18 @@ def _translate_adcp_error(exc: AdCPError) -> AdcpError:
     )
 
 
-async def _delegate_get_products(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
-    """Forward to ``src/core/tools/products.py:_get_products_impl``."""
+async def _delegate_get_products(req: GetProductsRequest, ctx: RequestContext[Any]) -> dict[str, Any]:
+    """Forward to ``src/core/tools/products.py:_get_products_impl``.
+
+    Note: typed ``req: GetProductsRequest`` here documents intent but
+    the SDK resolves ``params_model`` from the platform router's base
+    class advertisement, not from this delegate or the platform
+    subclass override. Unknown-field rejection (dev-mode strict-extra)
+    is therefore not enforced at the wire boundary today —
+    ``tests/integration/test_mcp_unknown_field_handling.py``'s
+    ``test_unknown_field_rejected`` is xfailed pending an upstream
+    SDK change.
+    """
     identity = _build_identity(ctx)
     req_model = _coerce_to_request_model(req, GetProductsRequest)
     response = await _get_products_impl(req_model, identity)
@@ -253,18 +263,34 @@ async def _delegate_sync_creatives(req: Any, ctx: RequestContext[Any]) -> dict[s
         body = dict(req)
     else:
         body = dict(req)
-    response = await asyncio.to_thread(
-        _sync_creatives_impl,
-        creatives=body.get("creatives") or [],
-        assignments=body.get("assignments"),
-        creative_ids=body.get("creative_ids"),
-        delete_missing=bool(body.get("delete_missing", False)),
-        dry_run=bool(body.get("dry_run", False)),
-        validation_mode=body.get("validation_mode") or "strict",
-        push_notification_config=body.get("push_notification_config"),
-        context=body.get("context"),
-        identity=identity,
-    )
+    # ``validation_mode`` arrives as a ``ValidationMode`` enum on the wire
+    # path (the spec schema is an enum; pydantic preserves it through
+    # ``model_dump(exclude_unset=True)``). Normalize to the underlying
+    # string value so the impl's ``validation_mode == "strict"`` checks
+    # work — without this, strict mode silently degrades to lenient and
+    # the assignment loop never raises ``AdCPNotFoundError``.
+    raw_mode = body.get("validation_mode")
+    validation_mode_str = getattr(raw_mode, "value", raw_mode) or "strict"
+    try:
+        response = await asyncio.to_thread(
+            _sync_creatives_impl,
+            creatives=body.get("creatives") or [],
+            assignments=body.get("assignments"),
+            creative_ids=body.get("creative_ids"),
+            delete_missing=bool(body.get("delete_missing", False)),
+            dry_run=bool(body.get("dry_run", False)),
+            validation_mode=validation_mode_str,
+            push_notification_config=body.get("push_notification_config"),
+            context=body.get("context"),
+            identity=identity,
+        )
+    except AdCPError as exc:
+        # Strict-mode validation failures (AdCPNotFoundError /
+        # AdCPValidationError raised by the assignment loop) need
+        # structured wire codes — without translation the framework
+        # surfaces an opaque INTERNAL_ERROR and buyers can't tell
+        # missing-package from internal failure.
+        raise _translate_adcp_error(exc) from exc
     return _to_wire(response)
 
 

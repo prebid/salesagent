@@ -242,7 +242,17 @@ class TestSyncStrictModeAbortTransport:
             )
 
         assert result.is_error, "Strict mode should error on missing package"
-        assert isinstance(result.error, AdCPNotFoundError)
+        # Each transport surfaces the typed error in its own envelope:
+        # ``IMPL`` re-raises the impl's ``AdCPNotFoundError`` verbatim,
+        # while ``MCP`` translates it into a ``NOT_FOUND``-coded
+        # ``ToolError`` on the JSON-RPC wire (per
+        # ``core/platforms/_delegate.py:_translate_adcp_error``).
+        if transport == Transport.IMPL:
+            assert isinstance(result.error, AdCPNotFoundError)
+        else:
+            assert "NOT_FOUND" in str(result.error), (
+                f"MCP error should carry structured NOT_FOUND code; got {result.error!r}"
+            )
 
 
 @pytest.mark.requires_db
@@ -437,7 +447,7 @@ class TestGenerativeBuildPromptBrief:
                         "creative_id": "c_gen_03",
                         "name": "Brief Test",
                         "format_id": fmt,
-                        "assets": {"brief": {"content": "Promote summer sale"}},
+                        "assets": {"brief": {"name": "summer-sale", "content": "Promote summer sale"}},
                     }
                 ],
             )

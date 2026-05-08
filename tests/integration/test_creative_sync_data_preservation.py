@@ -368,7 +368,7 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "preserve-gen-url-001",
                         "name": "User Video Creative",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "video_generative"},
-                        "assets": {"video": {"url": user_url, "duration": 30}},
+                        "assets": {"video": {"url": user_url, "width": 1920, "height": 1080, "duration": 30}},
                     }
                 ],
             )

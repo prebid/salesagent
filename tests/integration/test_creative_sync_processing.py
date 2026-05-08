@@ -124,7 +124,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_brief",
                         format_id=fmt,
-                        assets={"brief": {"content": "Promote summer sale"}},
+                        assets={"brief": {"name": "summer-sale", "content": "Promote summer sale"}},
                     )
                 ]
             )
@@ -253,7 +253,7 @@ class TestGenerativeUpdateUserAssets:
                         format_id=fmt,
                         assets={
                             "message": {"content": "Refine it"},
-                            "hero_image": {"url": "https://user-provided.com/img.png"},
+                            "hero_image": {"url": "https://user-provided.com/img.png", "width": 300, "height": 250},
                         },
                     )
                 ]
