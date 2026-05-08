@@ -237,7 +237,7 @@ class TestSyncStrictModeAbortTransport:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_strict", name="Strict Test")],
-                assignments={"c_strict": ["PKG-NONEXISTENT"]},
+                assignments=[{"creative_id": "c_strict", "package_id": "PKG-NONEXISTENT"}],
                 validation_mode="strict",
             )
 
@@ -261,7 +261,7 @@ class TestSyncLenientModeContinuesTransport:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_lenient", name="Lenient Test")],
-                assignments={"c_lenient": ["PKG-MISSING"]},
+                assignments=[{"creative_id": "c_lenient", "package_id": "PKG-MISSING"}],
                 validation_mode="lenient",
             )
 
@@ -780,7 +780,7 @@ class TestAssignmentPackageTenantFilter:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_cross", name="Cross Tenant")],
-                assignments={"c_cross": [pkg_id]},
+                assignments=[{"creative_id": "c_cross", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -833,7 +833,7 @@ class TestAssignmentFormatCompatibility:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_fmt_mismatch", name="Format Mismatch")],
-                assignments={"c_fmt_mismatch": [pkg_id]},
+                assignments=[{"creative_id": "c_fmt_mismatch", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -887,7 +887,7 @@ class TestAssignmentResultFields:
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_assign", name="Assignment Test")],
-                assignments={"c_assign": [pkg_id]},
+                assignments=[{"creative_id": "c_assign", "package_id": pkg_id}],
             )
 
         assert result.is_success
