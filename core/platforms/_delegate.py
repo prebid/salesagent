@@ -24,6 +24,7 @@ proposal manager. Until then this is the right shape: reuse
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from adcp.decisioning import AdcpError, RequestContext
@@ -50,6 +51,15 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from src.core.tools.products import _get_products_impl
+
+logger = logging.getLogger(__name__)
+
+# Process-singleton guard so the misconfig WARNING (see _build_identity)
+# fires once per process rather than once per request — repeated logs
+# add noise without adding signal once the operator has seen it. One
+# warning per worker is a feature for multi-proc deploys: each worker
+# independently confirms its own middleware chain.
+_TRANSPORT_FALLBACK_WARNED: bool = False
 
 
 def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
@@ -97,7 +107,30 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
     # ContextVar is unset (lifespan events, unit-test harness paths,
     # admin requests that somehow reach here).
     detected_transport = current_transport.get()
-    protocol: str = detected_transport if detected_transport in ("mcp", "a2a") else "mcp"
+    if detected_transport in ("mcp", "a2a"):
+        protocol: str = detected_transport
+    else:
+        protocol = "mcp"
+        # Forward-compat guard: if the auth chain populated
+        # ``current_principal`` (only set inside HTTP requests by
+        # ``BearerTokenAuthMiddleware``) but transport detection didn't,
+        # the middleware chain is misconfigured — A2A buyers will silently
+        # receive MCP-shaped webhooks. Surface once per process so the
+        # operator gets a clear signal before the next #64-style
+        # silent-drop bug. Lifespan / unit-test / admin paths don't
+        # populate ``current_principal``, so they skip this branch.
+        # See #221 for the rationale.
+        global _TRANSPORT_FALLBACK_WARNED
+        if not _TRANSPORT_FALLBACK_WARNED and current_principal.get() is not None:
+            _TRANSPORT_FALLBACK_WARNED = True
+            logger.warning(
+                "_build_identity falling back to protocol='mcp' inside an "
+                "authenticated request scope — TransportDetectMiddleware may "
+                "not be wired or has been reordered after the auth chain. "
+                "A2A buyers will silently receive MCP-shaped webhooks. "
+                "Check core.main:_serve_kwargs middleware order. "
+                "See salesagent issue #221."
+            )
 
     return ResolvedIdentity(
         principal_id=principal_id,
