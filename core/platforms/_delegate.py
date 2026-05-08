@@ -29,6 +29,7 @@ from typing import Any
 from adcp.decisioning import AdcpError, RequestContext
 from adcp.server.auth import current_principal
 
+from core.middleware.transport_detect import current_transport
 from src.core.config_loader import get_tenant_by_id
 from src.core.exceptions import AdCPError
 from src.core.resolved_identity import ResolvedIdentity
@@ -87,14 +88,22 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
     # can read it from the dispatched _impl without any threading.
     principal_id = current_principal.get() or getattr(ctx, "auth_principal", None)
 
+    # Inbound transport drives webhook payload shape: A2A buyers receive
+    # ``Task``/``TaskStatusUpdateEvent``, MCP buyers receive
+    # ``McpWebhookPayload``. ``TransportDetectMiddleware`` (added per #202)
+    # populates the ``current_transport`` ContextVar based on URL path;
+    # we read it here and stamp ``identity.protocol`` so every downstream
+    # impl sees the actual transport. Falls back to "mcp" when the
+    # ContextVar is unset (lifespan events, unit-test harness paths,
+    # admin requests that somehow reach here).
+    detected_transport = current_transport.get()
+    protocol: str = detected_transport if detected_transport in ("mcp", "a2a") else "mcp"
+
     return ResolvedIdentity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant_dict,
-        # protocol is informational on _impl — defaults to "mcp" since
-        # the framework's transport context isn't passed through ctx;
-        # impls don't branch on it for any business logic today.
-        protocol="mcp",
+        protocol=protocol,
         testing_context=AdCPTestContext(),
     )
 

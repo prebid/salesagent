@@ -694,9 +694,19 @@ class ContextManager(DatabaseManager):
                         f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
                     )
 
-                    # Build webhook payload based on protocol type
+                    # Build webhook payload based on protocol type. Source of
+                    # truth is ``step.request_data["protocol"]`` —
+                    # ``create_workflow_step`` merges the caller's
+                    # ``request_metadata={"protocol": ...}`` into
+                    # ``request_data`` at persist time (see line 182).
+                    # ``_create_media_buy_impl`` writes ``identity.protocol``
+                    # there, which now carries the actual inbound transport
+                    # via :class:`TransportDetectMiddleware`. Defaults to
+                    # ``"mcp"`` only when the step pre-dates the middleware
+                    # (legacy data) or was created outside an HTTP request
+                    # (admin / lifespan paths). See #202.
                     task_type_str = step.tool_name or mapping.action or "unknown"
-                    protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
+                    protocol = (step.request_data or {}).get("protocol", "mcp")
                     try:
                         status_enum = GeneratedTaskStatus(new_status)
                     except ValueError:

@@ -25,6 +25,7 @@ import requests
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
 from adcp.types import McpWebhookPayload
+from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
@@ -108,12 +109,31 @@ class ProtocolWebhookService:
         }
         logger.info(f"push_notification_config (sanitized): {safe_config}")
 
-        # Serialize payload to dict at the delivery boundary (for HMAC signing and JSON send)
+        # Serialize payload to dict at the delivery boundary (for HMAC signing and JSON send).
+        # Dispatch by concrete type rather than ``hasattr(model_dump)`` so a
+        # future protobuf release that ships a Pydantic façade can't silently
+        # change which path runs:
+        #
+        # * ``a2a.types.Task`` / ``TaskStatusUpdateEvent`` — protobuf messages
+        #   (a2a-sdk 1.0+ switched to ``a2a_pb2``). ``MessageToDict`` with
+        #   ``preserving_proto_field_name=False`` emits the JSON names from
+        #   the proto, which a2a-sdk defines as camelCase (``id``,
+        #   ``taskId``, ``contextId``) — exactly what the A2A wire spec
+        #   requires.
+        # * ``McpWebhookPayload`` — Pydantic; uses ``model_dump``.
+        # * raw dict — legacy callers pass an already-shaped payload.
         payload_dict: dict[str, Any]
-        if isinstance(payload, (Task, TaskStatusUpdateEvent, McpWebhookPayload)):
-            payload_dict = payload.model_dump(mode="json", exclude_none=True)  # type: ignore[union-attr]
-        else:
+        if isinstance(payload, (Task, TaskStatusUpdateEvent)):
+            payload_dict = MessageToDict(payload, preserving_proto_field_name=False)
+        elif isinstance(payload, McpWebhookPayload):
+            payload_dict = payload.model_dump(mode="json", exclude_none=True)
+        elif isinstance(payload, dict):
             payload_dict = payload
+        else:
+            raise TypeError(
+                f"Unsupported webhook payload type {type(payload).__name__}: expected "
+                "Task / TaskStatusUpdateEvent (protobuf), McpWebhookPayload (pydantic), or dict"
+            )
 
         # Apply authentication based on schemes
         if (
