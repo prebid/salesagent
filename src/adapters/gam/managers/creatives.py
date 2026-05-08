@@ -8,6 +8,7 @@ for Google Ad Manager campaigns.
 import base64
 import logging
 import random
+import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -17,6 +18,26 @@ from src.core.schemas import AssetStatus
 from ..utils.validation import GAMValidator
 
 logger = logging.getLogger(__name__)
+
+# Package IDs are emitted by media_buy_create as
+#   f"pkg_{product_id}_{secrets.token_hex(4)}_{idx}"
+# where token_hex(4) is exactly 8 lowercase hex chars and idx is an int.
+# The product_id portion is publisher-controlled and may contain
+# underscores or hyphens (e.g. "prod_topbanner_300x250"), so the parser
+# anchors on the trailing 8-hex-and-index suffix and treats everything
+# between "pkg_" and that suffix as the product_id.
+_PACKAGE_ID_RE = re.compile(r"^pkg_(?P<product_id>.+)_(?P<rand>[0-9a-f]{8})_(?P<idx>\d+)$")
+
+
+def _extract_product_id_from_package_id(package_id: str) -> str | None:
+    """Recover the originating product_id from a generated package_id.
+
+    Returns ``None`` for ids that don't match the expected shape (e.g.
+    legacy line-item-name fallbacks). Callers are expected to fall
+    back to the direct ``creative_placeholders[package_id]`` lookup.
+    """
+    m = _PACKAGE_ID_RE.match(package_id)
+    return m.group("product_id") if m else None
 
 
 def _extract_package_info(package_assignments: list) -> list[tuple[str, int]]:
@@ -57,25 +78,23 @@ def _get_package_ids(package_assignments: list) -> list[str]:
 def _extract_product_id_from_package(package_id: str) -> str | None:
     """Extract product ID from a package ID string.
 
-    Package IDs follow the format: pkg_prod_XXXXXX_YYYYYYYY_N
-    where XXXXXX is the product ID suffix.
+    Package IDs follow the format: pkg_<product_id>_<8hex>_<idx>.
+    Product IDs are publisher-controlled and may contain underscores
+    or hyphens, so we anchor on the trailing 8-hex-and-index suffix
+    rather than splitting blindly.
 
     Args:
         package_id: Package ID string (e.g., "pkg_prod_2215c038_63e4864a_1")
 
     Returns:
-        Product ID (e.g., "prod_2215c038") or None if format doesn't match.
+        Product ID or None if the package_id doesn't match the format.
     """
-    if not package_id.startswith("pkg_prod_"):
+    if not package_id.startswith("pkg_"):
         return None
-
-    parts = package_id.split("_")
-    # Expected: ["pkg", "prod", "XXXXXX", "YYYYYYYY", "N"]
-    if len(parts) >= 3:
-        return f"prod_{parts[2]}"
-
-    logger.warning(f"Package ID '{package_id}' has unexpected format - cannot extract product ID")
-    return None
+    product_id = _extract_product_id_from_package_id(package_id)
+    if product_id is None:
+        logger.warning(f"Package ID '{package_id}' has unexpected format - cannot extract product ID")
+    return product_id
 
 
 class GAMCreativesManager:
@@ -506,13 +525,12 @@ class GAMCreativesManager:
             # Try direct lookup first (for backward compatibility with line item names)
             placeholders = creative_placeholders.get(package_id, [])
 
-            # If not found, try matching by product ID extracted from package_id
-            # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N", extract "prod_XXXXXX"
-            if not placeholders and package_id.startswith("pkg_prod_"):
-                # Extract product ID: "pkg_prod_2215c038_63e4864a_1" -> "prod_2215c038"
-                parts = package_id.split("_")
-                if len(parts) >= 3:  # pkg_prod_XXXXXX_...
-                    product_id = f"prod_{parts[2]}"
+            # If not found, try matching by product ID extracted from package_id.
+            # Anchored regex parse handles publisher-controlled product_ids
+            # that contain underscores or hyphens (#153).
+            if not placeholders and package_id.startswith("pkg_"):
+                product_id = _extract_product_id_from_package_id(package_id)
+                if product_id:
                     placeholders = creative_placeholders.get(product_id, [])
                     if placeholders:
                         logger.info(f"[DEBUG] Matched package {package_id} to product ID {product_id}")
@@ -555,11 +573,10 @@ class GAMCreativesManager:
                 # Try direct lookup first
                 placeholders = creative_placeholders.get(package_id, [])
 
-                # If not found, try matching by product ID extracted from package_id
-                if not placeholders and package_id.startswith("pkg_prod_"):
-                    parts = package_id.split("_")
-                    if len(parts) >= 3:
-                        product_id = f"prod_{parts[2]}"
+                # If not found, try matching by product ID extracted from package_id.
+                if not placeholders and package_id.startswith("pkg_"):
+                    product_id = _extract_product_id_from_package_id(package_id)
+                    if product_id:
                         placeholders = creative_placeholders.get(product_id, [])
                 for placeholder in placeholders:
                     # Placeholder can be a Zeep object or dict (in tests)

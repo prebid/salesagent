@@ -33,38 +33,38 @@ class TestPackageInfoExtraction:
 
     def test_string_format_defaults_weight(self):
         """String-only format defaults weight to 100."""
-        assignments = ["pkg_prod_abc_123_1", "pkg_prod_def_456_2"]
+        assignments = ["pkg_prod_abc_a3f9b2c1_1", "pkg_prod_def_b7e2d3a4_2"]
         result = _extract_package_info(assignments)
 
         assert result == [
-            ("pkg_prod_abc_123_1", 100),  # Default weight
-            ("pkg_prod_def_456_2", 100),
+            ("pkg_prod_abc_a3f9b2c1_1", 100),  # Default weight
+            ("pkg_prod_def_b7e2d3a4_2", 100),
         ]
 
     def test_dict_format_with_weights(self):
         """Dict format with explicit weights."""
         assignments = [
-            {"package_id": "pkg_prod_abc_123_1", "weight": 70},
-            {"package_id": "pkg_prod_def_456_2", "weight": 30},
+            {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 70},
+            {"package_id": "pkg_prod_def_b7e2d3a4_2", "weight": 30},
         ]
         result = _extract_package_info(assignments)
 
         assert result == [
-            ("pkg_prod_abc_123_1", 70),
-            ("pkg_prod_def_456_2", 30),
+            ("pkg_prod_abc_a3f9b2c1_1", 70),
+            ("pkg_prod_def_b7e2d3a4_2", 30),
         ]
 
     def test_dict_format_missing_weight_defaults(self):
         """Dict format with missing weight defaults to 100."""
         assignments = [
-            {"package_id": "pkg_prod_abc_123_1"},  # No weight
-            {"package_id": "pkg_prod_def_456_2", "weight": 50},
+            {"package_id": "pkg_prod_abc_a3f9b2c1_1"},  # No weight
+            {"package_id": "pkg_prod_def_b7e2d3a4_2", "weight": 50},
         ]
         result = _extract_package_info(assignments)
 
         assert result == [
-            ("pkg_prod_abc_123_1", 100),  # Default
-            ("pkg_prod_def_456_2", 50),
+            ("pkg_prod_abc_a3f9b2c1_1", 100),  # Default
+            ("pkg_prod_def_b7e2d3a4_2", 50),
         ]
 
     def test_empty_assignments(self):
@@ -124,14 +124,14 @@ class TestCreativeRotationLogic:
             {
                 "creative_id": "cr_1",
                 "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 100},
+                    {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 100},
                     {"package_id": "pkg_prod_abc_456_2", "weight": 100},
                 ],
             },
             {
                 "creative_id": "cr_2",
                 "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 100},
+                    {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 100},
                 ],
             },
         ]
@@ -148,13 +148,13 @@ class TestCreativeRotationLogic:
             {
                 "creative_id": "cr_1",
                 "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 70},
+                    {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 70},
                 ],
             },
             {
                 "creative_id": "cr_2",
                 "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 30},
+                    {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 30},
                 ],
             },
         ]
@@ -172,7 +172,7 @@ class TestCreativeRotationLogic:
             {
                 "creative_id": "cr_1",
                 "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 50},  # Non-default
+                    {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 50},  # Non-default
                 ],
             },
         ]
@@ -190,13 +190,13 @@ class TestCreativeRotationLogic:
             {
                 "creative_id": "cr_1",
                 "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 50},
+                    {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 50},
                 ],
             },
             {
                 "creative_id": "cr_2",
                 "package_assignments": [
-                    {"package_id": "pkg_prod_abc_123_1", "weight": 50},
+                    {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 50},
                 ],
             },
         ]
@@ -233,7 +233,7 @@ class TestLICACreationWithWeights:
         asset = {
             "creative_id": "cr_1",
             "package_assignments": [
-                {"package_id": "pkg_prod_abc_123_1", "weight": 70},
+                {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 70},
             ],
         }
 
@@ -253,7 +253,7 @@ class TestLICACreationWithWeights:
         asset = {
             "creative_id": "cr_1",
             "package_assignments": [
-                {"package_id": "pkg_prod_abc_123_1", "weight": 100},
+                {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 100},
             ],
         }
 
@@ -299,7 +299,7 @@ class TestLICACreationActualPayload:
         asset = {
             "creative_id": "cr_1",
             "package_assignments": [
-                {"package_id": "pkg_prod_abc_123_1", "weight": 70},
+                {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 70},
             ],
         }
 
@@ -327,7 +327,7 @@ class TestLICACreationActualPayload:
         asset = {
             "creative_id": "cr_1",
             "package_assignments": [
-                {"package_id": "pkg_prod_abc_123_1", "weight": 100},
+                {"package_id": "pkg_prod_abc_a3f9b2c1_1", "weight": 100},
             ],
         }
 
@@ -375,7 +375,7 @@ class TestBackwardCompatibility:
         asset = {
             "creative_id": "cr_1",
             # String format: just package IDs
-            "package_assignments": ["pkg_prod_abc_123_1"],
+            "package_assignments": ["pkg_prod_abc_a3f9b2c1_1"],
         }
 
         line_item_map = {"Campaign - prod_abc": "li_123"}

@@ -1573,6 +1573,10 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
     creative_ids: list[str] | None = None
+    # Same library default-injection bug as on the parent UpdateMediaBuyRequest
+    # (Literal[True]=True). Force default to None so omitted fields don't
+    # silently mark the package canceled. (#155)
+    canceled: Literal[True] | None = Field(default=None)  # type: ignore[assignment]
 
 
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
@@ -1587,6 +1591,10 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     - packages: use our AdCPPackageUpdate (adds creative_ids)
     - budget: campaign-level budget (not in library — convenience field)
     - today: internal testing field
+    - canceled: force default to None (library declares Literal[True]=True
+      which silently injects canceled=True into every validated payload —
+      latent data-loss vector once any code reads the field as a
+      cancellation signal). See #155.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1595,6 +1603,11 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
     packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
+    # Override library default of `canceled: Literal[True] = True`. Buyer
+    # must explicitly send `canceled: true` to request cancellation;
+    # omission must mean "not a cancellation request", not "default to
+    # canceled". (#155)
+    canceled: Literal[True] | None = Field(default=None)  # type: ignore[assignment]
     # Campaign-level budget (not in library spec — convenience field)
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.

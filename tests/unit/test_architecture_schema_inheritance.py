@@ -218,6 +218,12 @@ class TestSchemaInheritance:
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
             ("UpdateMediaBuyRequest", "packages"),  # list[AdCPPackageUpdate] (local subclass type)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
+            # Library declares `canceled: Literal[True] = True` which silently
+            # injects canceled=True into every validated payload — latent
+            # data-loss vector. Override default to None so omission means
+            # "not a cancellation request". (#155)
+            ("UpdateMediaBuyRequest", "canceled"),
+            ("AdCPPackageUpdate", "canceled"),
             # adcp 4.4 made these fields required at the library level. Salesagent
             # resolves identity at the transport boundary (ResolvedIdentity) and
             # the impl is idempotent at the DB layer regardless of caller key, so
