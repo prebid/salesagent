@@ -1,18 +1,26 @@
 """Tests for `GAMOrdersManager.update_order_dates`.
 
-Covers tescoboy issue #157: `_update_media_buy_impl` previously wrote new
-flight bounds to Postgres only and emitted a TODO instead of pushing the
-change to GAM. Approved updates left the DB and ad server permanently
-out of sync. The fix adds `update_order_dates` to the GAM adapter and
-wires it into the impl after the DB write.
+Covers tescoboy issues #157 and #150:
+
+- #157: `_update_media_buy_impl` previously wrote new flight bounds to
+  Postgres only. Approved updates left the DB and ad server out of sync.
+  The fix adds `update_order_dates` to the GAM adapter and wires it
+  into the impl after the DB write.
+
+- #150: GAM rejects LineItem mutations with `ForecastingError.NO_FORECAST_YET`
+  during the ~60 min forecast warmup. The fix wraps the
+  `LineItemService.updateLineItems` call in `update_order_dates` with a
+  bounded retry loop matching the existing pattern in
+  `update_line_item_budget` and `approve_order`.
 
 These tests target the adapter helper directly using a mocked GAM
 client. Wire-shape assertions live in `test_gam_payload_shape.py`; here
-we focus on the call surface and partial-failure semantics.
+we focus on the call surface, partial-failure semantics, and retry
+behavior.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.adapters.gam.managers.orders import GAMOrdersManager
 
@@ -227,3 +235,111 @@ class TestUpdateOrderDatesFailure:
             end_time=None,
         )
         assert ok is False
+
+
+class TestUpdateOrderDatesNoForecastRetry:
+    """Issue #150 — retry on ForecastingError.NO_FORECAST_YET."""
+
+    def _build_client_with_intermittent_lis(self, lis_responses):
+        """Return a client whose LineItemService.updateLineItems plays a
+        scripted sequence of side effects in order. Each entry is either
+        an exception class to raise or a return value.
+        """
+        order = {"id": 123}
+        order_service = MagicMock()
+        order_service.getOrdersByStatement.return_value = {"results": [order]}
+        order_service.updateOrders.return_value = [order]
+
+        lis_service = MagicMock()
+        lis_service.getLineItemsByStatement.return_value = {"results": [{"id": 1}]}
+        lis_service.updateLineItems.side_effect = lis_responses
+
+        client_manager = MagicMock()
+        client_manager.get_service.side_effect = lambda name: {
+            "OrderService": order_service,
+            "LineItemService": lis_service,
+        }[name]
+        return client_manager, lis_service
+
+    def test_retries_then_succeeds(self):
+        # Two NO_FORECAST_YET faults, then success on the third attempt.
+        client_manager, lis_service = self._build_client_with_intermittent_lis(
+            [
+                Exception("ForecastingError.NO_FORECAST_YET"),
+                Exception("[ForecastingError.NO_FORECAST_YET @ id; trigger:'1']"),
+                [{"id": 1}],
+            ]
+        )
+        manager = _make_manager(client_manager=client_manager)
+
+        with patch("time.sleep") as mock_sleep:
+            ok = manager.update_order_dates(
+                order_id="123",
+                start_time=datetime(2026, 5, 7, 12, 0, tzinfo=UTC),
+                end_time=None,
+            )
+
+        assert ok is True
+        assert lis_service.updateLineItems.call_count == 3
+        # First two attempts slept 5s + 10s per the documented backoff
+        assert [c.args[0] for c in mock_sleep.call_args_list] == [5, 10]
+
+    def test_retries_exhausted_returns_false(self):
+        # Eight NO_FORECAST_YET faults — exceeds the bounded retry budget.
+        from src.adapters.gam.managers.orders import NO_FORECAST_RETRY_BACKOFF
+
+        client_manager, lis_service = self._build_client_with_intermittent_lis(
+            [Exception("NO_FORECAST_YET")] * len(NO_FORECAST_RETRY_BACKOFF)
+        )
+        manager = _make_manager(client_manager=client_manager)
+
+        with patch("time.sleep") as mock_sleep:
+            ok = manager.update_order_dates(
+                order_id="123",
+                start_time=datetime(2026, 5, 7, 12, 0, tzinfo=UTC),
+                end_time=None,
+            )
+
+        assert ok is False
+        # All 8 attempts ran; last attempt did not sleep (no further retry).
+        assert lis_service.updateLineItems.call_count == len(NO_FORECAST_RETRY_BACKOFF)
+        assert mock_sleep.call_count == len(NO_FORECAST_RETRY_BACKOFF) - 1
+
+    def test_non_forecast_error_does_not_retry(self):
+        # UPDATE_RESERVATION_NOT_ALLOWED is not transient; surface immediately.
+        client_manager, lis_service = self._build_client_with_intermittent_lis(
+            [Exception("UPDATE_RESERVATION_NOT_ALLOWED")]
+        )
+        manager = _make_manager(client_manager=client_manager)
+
+        with patch("time.sleep") as mock_sleep:
+            ok = manager.update_order_dates(
+                order_id="123",
+                start_time=datetime(2026, 5, 7, 12, 0, tzinfo=UTC),
+                end_time=None,
+            )
+
+        assert ok is False
+        assert lis_service.updateLineItems.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_backoff_pattern_matches_documented_sequence(self):
+        # When all 8 attempts fail with NO_FORECAST_YET, the sleeps
+        # between them must match the documented [5, 10, 20, 30, 30, 30, 30].
+        # Note: the LAST attempt has no follow-up sleep (no further retry).
+        from src.adapters.gam.managers.orders import NO_FORECAST_RETRY_BACKOFF
+
+        client_manager, _ = self._build_client_with_intermittent_lis(
+            [Exception("NO_FORECAST_YET")] * len(NO_FORECAST_RETRY_BACKOFF)
+        )
+        manager = _make_manager(client_manager=client_manager)
+
+        with patch("time.sleep") as mock_sleep:
+            manager.update_order_dates(
+                order_id="123",
+                start_time=datetime(2026, 5, 7, 12, 0, tzinfo=UTC),
+                end_time=None,
+            )
+
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        assert sleeps == list(NO_FORECAST_RETRY_BACKOFF[:-1])

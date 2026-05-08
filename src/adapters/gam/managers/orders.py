@@ -26,6 +26,12 @@ NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
 # default unless overridden via impl_config.time_zone.
 DEFAULT_GAM_TIME_ZONE = "America/New_York"
 
+# LineItem forecast warmup is typically ~60 min after create or any
+# targeting change. GAM rejects mutations during this window with
+# ForecastingError.NO_FORECAST_YET. Backoff sleeps between retries
+# total ~3 min over 8 attempts (mirrors `update_line_item_budget`).
+NO_FORECAST_RETRY_BACKOFF: tuple[int, ...] = (5, 10, 20, 30, 30, 30, 30, 30)
+
 
 def _gam_datetime(dt: datetime, tz_id: str) -> dict[str, Any]:
     """Build a GAM DateTime payload for ``dt`` expressed in ``tz_id``.
@@ -1303,7 +1309,37 @@ class GAMOrdersManager:
                     if new_li_end is not None:
                         li.endDateTime = new_li_end
 
-            updated_line_items = line_item_service.updateLineItems(line_items)
+            # Forecast warmup: GAM rejects LineItem mutations with
+            # ForecastingError.NO_FORECAST_YET for ~60min after creation
+            # or any targeting change. Mirror the retry pattern in
+            # `update_line_item_budget` and `approve_order`. Order's
+            # updateOrders above is not subject to forecasting and was
+            # already applied; if every retry exhausts, the caller sees
+            # Order new + LineItem stale and can re-trigger this lane.
+            import time
+
+            updated_line_items = None
+            for attempt, delay in enumerate(NO_FORECAST_RETRY_BACKOFF, start=1):
+                try:
+                    updated_line_items = line_item_service.updateLineItems(line_items)
+                    break
+                except Exception as e:
+                    err = str(e)
+                    is_warmup = "NO_FORECAST_YET" in err or "ForecastingError" in err
+                    if is_warmup and attempt < len(NO_FORECAST_RETRY_BACKOFF):
+                        logger.info(
+                            f"NO_FORECAST_YET on Order {order_id} LineItems "
+                            f"(attempt {attempt}/{len(NO_FORECAST_RETRY_BACKOFF)}); sleeping {delay}s"
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise
+            else:
+                logger.error(
+                    f"LineItem update gave up after {len(NO_FORECAST_RETRY_BACKOFF)} attempts on Order {order_id}"
+                )
+                return False
+
             if not updated_line_items or len(updated_line_items) != len(line_items):
                 logger.error(
                     f"GAM updateLineItems returned {len(updated_line_items) if updated_line_items else 0}"
