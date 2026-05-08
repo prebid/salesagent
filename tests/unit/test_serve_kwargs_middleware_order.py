@@ -1,16 +1,10 @@
 """Lock the ASGI middleware ordering in ``core.main._serve_kwargs``.
 
-The middleware list is order-sensitive in three places:
+The middleware list is order-sensitive in two places:
 
 1. ``AdminWSGIMount`` MUST run first so admin paths short-circuit to
    Flask without entering buyer-protocol middlewares.
-2. ``BearerToAdcpAuthMiddleware`` MUST run before the SDK's
-   :class:`BearerTokenAuth` wrap-around so the SDK sees the canonical
-   ``x-adcp-auth`` header it's configured to read. (The SDK applies
-   bearer auth INSIDE the ``asgi_middleware`` list, so anything in the
-   list runs outside the auth wrap.) Reordering breaks A2A buyers
-   sending ``Authorization: Bearer`` per RFC 6750.
-3. ``SigningVerifyMiddleware`` MUST run last so it only inspects
+2. ``SigningVerifyMiddleware`` MUST run last so it only inspects
    buyer-protocol traffic that survived the earlier filters.
 
 If a future contributor reorders the list, this test fails loudly with
@@ -26,7 +20,6 @@ import pytest
 
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
-from core.middleware.bearer_to_adcp_auth import BearerToAdcpAuthMiddleware
 from core.middleware.spec_defaults import SpecDefaultsMiddleware
 from src.core.signing import SigningVerifyMiddleware
 
@@ -59,33 +52,11 @@ def test_admin_wsgi_mount_runs_first(middleware_classes):
     )
 
 
-def test_bearer_translation_runs_before_spec_defaults(middleware_classes):
-    """``BearerToAdcpAuthMiddleware`` must precede ``SpecDefaultsMiddleware``
-    so the SDK auth chain (applied inside the list by serve()) sees the
-    canonical ``x-adcp-auth`` header."""
-    assert BearerToAdcpAuthMiddleware in middleware_classes, (
-        "BearerToAdcpAuthMiddleware missing from asgi_middleware — A2A "
-        "buyers sending Authorization: Bearer will get 401 invalid_token."
-    )
-    assert SpecDefaultsMiddleware in middleware_classes, "SpecDefaultsMiddleware missing from asgi_middleware."
-    bearer_idx = middleware_classes.index(BearerToAdcpAuthMiddleware)
-    spec_idx = middleware_classes.index(SpecDefaultsMiddleware)
-    assert bearer_idx < spec_idx, (
-        f"BearerToAdcpAuthMiddleware (idx={bearer_idx}) must run before "
-        f"SpecDefaultsMiddleware (idx={spec_idx}). Reordering breaks A2A "
-        f"buyers using RFC 6750 Authorization: Bearer headers."
-    )
-
-
-def test_bearer_translation_runs_after_admin_mount(middleware_classes):
-    """``BearerToAdcpAuthMiddleware`` must run AFTER ``AdminWSGIMount`` so
-    admin paths never enter the bearer translation path."""
-    admin_idx = middleware_classes.index(AdminWSGIMount)
-    bearer_idx = middleware_classes.index(BearerToAdcpAuthMiddleware)
-    assert admin_idx < bearer_idx, (
-        f"AdminWSGIMount (idx={admin_idx}) must run before "
-        f"BearerToAdcpAuthMiddleware (idx={bearer_idx}) so admin paths "
-        f"short-circuit to Flask without entering buyer-protocol middlewares."
+def test_spec_defaults_present(middleware_classes):
+    """``SpecDefaultsMiddleware`` must be in the chain — it backfills
+    pre-v3 wire defaults outside the SDK validation boundary."""
+    assert SpecDefaultsMiddleware in middleware_classes, (
+        "SpecDefaultsMiddleware missing from asgi_middleware — pre-v3 clients will fail strict-mode validation."
     )
 
 
