@@ -2760,13 +2760,27 @@ result = await client.tools.get_products(brief="video ads")</pre>
         <div id="signing-keys" class="settings-section{% if default_section == 'signing-keys' %} active{% endif %}">
             <div class="settings-header">
                 <h2>🔑 Signing keys</h2>
-                <p>Salesagent's outbound signing keys (RFC 9421). Buyers verify our webhook signatures against the public JWK published at <code>{{ tenant.brand_json_url or '<your brand.json URL>' }}</code>.</p>
+                <p>
+                    Salesagent's outbound signing keys (RFC 9421). Buyers verify our webhook signatures against
+                    a public JWKS you publish on <strong>your own domain</strong>. Two steps:
+                </p>
+                <ol class="small text-muted" style="margin: 0.25rem 0 0 1.25rem;">
+                    <li>Publish the JWK below as a JWKS document (<code>{"keys": [&hellip;]}</code>) at a URL you control —
+                        typically <code>https://{{ tenant.house_domain or '&lt;your-house-domain&gt;' }}/.well-known/jwks.json</code>.
+                        <strong>Preserve the <code>adcp_use</code> field</strong> on each key — the AdCP webhook verifier
+                        rejects keys without <code>adcp_use="webhook-signing"</code>, and mixing webhook-signing keys with
+                        request-signing keys in the same JWKS only works if every key keeps its own <code>adcp_use</code>.</li>
+                    <li>Reference that URL from your <code>brand.json</code>'s <code>agents[].jwks_uri</code> entry at
+                        <code>{{ tenant.brand_json_url or 'https://&lt;your-house-domain&gt;/.well-known/brand.json' }}</code>.
+                        <strong>Set <code>jwks_uri</code> explicitly</strong> when the salesagent runs on a different domain
+                        than your brand.json (e.g. a SaaS subdomain) — the well-known fallback only resolves when origins match.</li>
+                </ol>
             </div>
 
             {% if not signing_credentials %}
             <div class="status-card">
                 <strong>No outbound signing credentials configured.</strong>
-                <p>Webhooks fall back to HMAC. Rotation / upload UI lands in PR 3C.</p>
+                <p>Webhooks fall back to HMAC. Rotation / upload UI tracked in #29.</p>
             </div>
             {% else %}
             <div class="table-responsive">

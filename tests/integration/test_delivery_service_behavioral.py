@@ -432,7 +432,12 @@ class TestSendWebhookEnhancedHappyPath:
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
             post_mock.assert_called_once()
             assert post_mock.call_args.args[0] == "https://happy.example.com/webhook"
-            assert post_mock.call_args.kwargs["json"] == payload
+            # Slice 3 of signing-non-embedded: body sent via ``content=``
+            # (not ``json=``) so wire bytes are byte-identical to signature
+            # input. Decode here for the equality assertion.
+            import json as _json
+
+            assert _json.loads(post_mock.call_args.kwargs["content"]) == payload
 
     def test_no_configs_returns_false(self, integration_db):
         """When no PushNotificationConfig exists, _send_webhook_enhanced returns False.
@@ -682,7 +687,10 @@ class TestIsAdjustedNotificationType:
 
             assert result is True
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_payload = post_mock.call_args.kwargs["json"]
+            # Body now arrives via ``content=`` bytes; decode for inspection.
+            import json as _json
+
+            sent_payload = _json.loads(post_mock.call_args.kwargs["content"])
             assert sent_payload["notification_type"] == "adjusted"
             assert sent_payload["is_adjusted"] is True
 

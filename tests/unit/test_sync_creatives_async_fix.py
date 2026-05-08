@@ -205,7 +205,7 @@ class TestSyncCreativesErrorHandling:
                     assert len(result.creatives) == 1
                     assert result.creatives[0].creative_id == "test_creative_456"
                     assert result.creatives[0].action == CreativeAction.failed
-                    assert any("preview" in err.lower() for err in result.creatives[0].errors)
+                    assert any("preview" in err.message.lower() for err in result.creatives[0].errors)
 
 
 class TestSyncCreativesAsyncScenario:

@@ -4139,11 +4139,10 @@ class TestGetMediaBuysImplAuth:
         assert resp.errors is not None
         assert any("principal" in str(e).lower() for e in resp.errors)
 
-    def test_account_id_not_supported(self):
-        """GMB-A03: account_id parameter raises 'not yet supported' error.
+    def test_account_not_supported(self):
+        """GMB-A03: account parameter raises 'not yet supported' error.
 
-        Spec: CONFIRMED -- account_id exists in spec (media-buy.json has account field)
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/media-buy.json
+        Spec: CONFIRMED -- account exists in spec (media-buy.json has account field).
         Priority: P1
         Type: unit
         Source: get_media_buys
@@ -4152,7 +4151,7 @@ class TestGetMediaBuysImplAuth:
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
-        req = GetMediaBuysRequest(account_id="acc_123")
+        req = GetMediaBuysRequest(account={"account_id": "acc_123"})
         identity = ResolvedIdentity(
             principal_id="principal_1",
             tenant_id="tenant_1",
@@ -4164,8 +4163,8 @@ class TestGetMediaBuysImplAuth:
         with pytest.raises(AdCPValidationError, match="(?i)account.*not.*supported"):
             _get_media_buys_impl(req, identity=identity)
 
-    def test_account_id_unsupported_recovery_is_correctable(self):
-        """Unsupported account_id should be correctable — buyer removes the param.
+    def test_account_unsupported_recovery_is_correctable(self):
+        """Unsupported account should be correctable — buyer removes the param.
 
         Covers: salesagent-bmlk (PR #1083 review)
         """
@@ -4173,7 +4172,7 @@ class TestGetMediaBuysImplAuth:
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
-        req = GetMediaBuysRequest(account_id="acc_123")
+        req = GetMediaBuysRequest(account={"account_id": "acc_123"})
         identity = ResolvedIdentity(
             principal_id="principal_1",
             tenant_id="tenant_1",

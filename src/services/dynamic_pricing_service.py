@@ -28,11 +28,11 @@ class DynamicPricingService:
 
     def enrich_products_with_pricing(
         self,
-        products: list[Product],
+        products: list,
         tenant_id: str,
         country_code: str | None = None,
         min_exposures: int | None = None,
-    ) -> list[Product]:
+    ) -> list:
         """
         Enrich products with dynamically calculated pricing from performance metrics.
 

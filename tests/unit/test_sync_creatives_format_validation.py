@@ -156,7 +156,7 @@ class TestSyncCreativesFormatValidation:
             assert response.creatives[0].creative_id == "creative_123"
             assert len(response.creatives[0].errors) == 1
 
-            error_msg = response.creatives[0].errors[0]
+            error_msg = response.creatives[0].errors[0].message
             assert "Unknown format 'display_300x250_image'" in error_msg
             assert "https://creative.adcontextprotocol.org" in error_msg
             assert "list_creative_formats" in error_msg  # Helpful suggestion
@@ -194,7 +194,7 @@ class TestSyncCreativesFormatValidation:
             assert response.creatives[0].action == CreativeAction.failed
             assert len(response.creatives[0].errors) == 1
 
-            error_msg = response.creatives[0].errors[0]
+            error_msg = response.creatives[0].errors[0].message
             assert "Cannot validate format" in error_msg
             assert "unreachable or returned an error" in error_msg
             assert "Connection refused" in error_msg  # Original error included
@@ -336,7 +336,7 @@ class TestSyncCreativesFormatValidation:
             # Second creative: failed (unknown format)
             assert response.creatives[1].creative_id == "creative_2"
             assert response.creatives[1].action == CreativeAction.failed
-            assert "Unknown format 'unknown_format'" in response.creatives[1].errors[0]
+            assert "Unknown format 'unknown_format'" in response.creatives[1].errors[0].message
 
             # Third creative: success
             assert response.creatives[2].creative_id == "creative_3"
@@ -424,7 +424,7 @@ class TestSyncCreativesFormatValidation:
             assert len(response.creatives) == 1
             assert response.creatives[0].action == CreativeAction.failed
             # Error message comes from Pydantic schema validation
-            assert "format_id" in response.creatives[0].errors[0]
+            assert "format_id" in response.creatives[0].errors[0].message
 
     def test_error_messages_distinguish_scenarios(self, identity, mock_tenant):
         """Test that error messages clearly distinguish between different failure scenarios."""
@@ -475,7 +475,7 @@ class TestSyncCreativesFormatValidation:
             # Test unknown format error
             response1 = _sync_creatives_impl(creatives=[creative_unknown_format], identity=identity)
 
-            error1 = response1.creatives[0].errors[0]
+            error1 = response1.creatives[0].errors[0].message
             assert "Unknown format" in error1
             assert "list_creative_formats" in error1
             assert "unreachable" not in error1  # Should NOT mention unreachability
@@ -483,7 +483,7 @@ class TestSyncCreativesFormatValidation:
             # Test agent unreachable error
             response2 = _sync_creatives_impl(creatives=[creative_unreachable], identity=identity)
 
-            error2 = response2.creatives[0].errors[0]
+            error2 = response2.creatives[0].errors[0].message
             assert "Cannot validate format" in error2
             assert "unreachable or returned an error" in error2
             assert "Connection refused" in error2

@@ -123,7 +123,6 @@ class TestSchemaInheritance:
             "AdCPBaseModel",  # Used as base for SalesAgentBaseModel (different naming)
             "BrandManifest",  # TypeAlias
             "GetSignalsRequest",  # Direct alias
-            "PackageUpdate",  # Local PackageUpdate is a simplified model; AdCPPackageUpdate extends library
             "Property",  # TypeAlias
             "PromotedProducts",  # Imported but unused (cleanup candidate)
             "ResponsePagination",  # Named differently in local code (Pagination)
@@ -164,7 +163,6 @@ class TestSchemaInheritance:
             "AdCPBaseModel",
             "BrandManifest",
             "GetSignalsRequest",
-            "PackageUpdate",
             "Property",
             "PromotedProducts",
             "ResponsePagination",

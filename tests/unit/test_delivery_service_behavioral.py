@@ -591,17 +591,18 @@ class TestDeliverWithBackoffGenericException:
         cb = CircuitBreaker()
         queue = WebhookQueue()
 
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/hook"
-        mock_config.webhook_secret = None
-        mock_config.authentication_type = None
-        mock_config.authentication_token = None
-
         queue.enqueue(
             {
-                "config": mock_config,
-                "payload": {"test": "data"},
-                "timestamp": datetime.now(UTC),
+                "snapshot": {
+                    "url": "https://example.com/hook",
+                    "signing_mode": "none",
+                    "webhook_secret": None,
+                    "authentication_type": None,
+                    "authentication_token": None,
+                },
+                "body_bytes": b'{"test":"data"}',
+                "timestamp": datetime.now(UTC).isoformat(),
+                "active_credential": None,
             }
         )
 

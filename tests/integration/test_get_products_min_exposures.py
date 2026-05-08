@@ -36,7 +36,10 @@ def _make_enrichment_mock(exposures_by_product_id: dict[str, int | None]):
     def enrich_side_effect(products, **kwargs):
         for product in products:
             if product.product_id in exposures_by_product_id:
-                product.estimated_exposures = exposures_by_product_id[product.product_id]
+                # Phase 2 slice 3: products are ResolvedProduct (frozen).
+                # Set estimated_exposures on the wire LibraryProduct (mutable).
+                target = product.wire if hasattr(product, "wire") else product
+                target.estimated_exposures = exposures_by_product_id[product.product_id]
         return products
 
     mock_instance.enrich_products_with_pricing.side_effect = enrich_side_effect

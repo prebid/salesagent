@@ -3,11 +3,11 @@
 import logging
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Any
 
 from adcp.types.generated_poc.brand import Brand
 from pydantic import BaseModel, Field
 
-from src.core.schemas import Product
 from src.services.ai import AIServiceFactory, TenantAIConfig
 from src.services.ai.agents.policy_agent import (
     check_policy_compliance,
@@ -163,12 +163,12 @@ class PolicyCheckService:
         # Return allowed by default
         return PolicyCheckResult(status=PolicyStatus.ALLOWED, warnings=[])
 
-    def check_product_eligibility(self, policy_result: PolicyCheckResult, product: Product) -> tuple[bool, str | None]:
+    def check_product_eligibility(self, policy_result: PolicyCheckResult, product: Any) -> tuple[bool, str | None]:
         """Check if a product is eligible based on policy result.
 
         Args:
             policy_result: Result from brief compliance check
-            product: Product model instance
+            product: Product schema or ResolvedProduct (wire-side reads only)
 
         Returns:
             Tuple of (is_eligible, reason_if_not)

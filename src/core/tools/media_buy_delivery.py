@@ -21,6 +21,32 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 logger = logging.getLogger(__name__)
 console = Console()
 
+DEFAULT_DELIVERY_WINDOW_DAYS = 30
+
+
+def _normalize_reporting_window(start_date: str | None, end_date: str | None) -> tuple[datetime, datetime, bool]:
+    """Resolve AdCP date-only inputs to an inclusive UTC reporting window.
+
+    Same-day input (``start_date == end_date``) maps to the full 24-hour
+    UTC day. When neither date is supplied, returns the trailing-30-day
+    default ending at "now". Buyer-supplied dates are honored verbatim --
+    never replaced by ``now()``.
+
+    Returns ``(start_dt, end_dt, is_valid)``. ``is_valid`` is False when
+    ``start_date`` is strictly after ``end_date``; the caller surfaces that
+    as ``invalid_date_range`` while still echoing the buyer-requested
+    window in the response so the error is interpretable.
+    """
+    if start_date and end_date:
+        sd = datetime.strptime(start_date, "%Y-%m-%d").date()
+        ed = datetime.strptime(end_date, "%Y-%m-%d").date()
+        start_dt = datetime.combine(sd, datetime.min.time(), tzinfo=UTC)
+        end_dt = datetime.combine(ed, datetime.max.time(), tzinfo=UTC)
+        return start_dt, end_dt, sd <= ed
+    end_dt = datetime.now(UTC)
+    return end_dt - timedelta(days=DEFAULT_DELIVERY_WINDOW_DAYS), end_dt, True
+
+
 from adcp.types import Error, MediaBuyStatus
 
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
@@ -127,32 +153,24 @@ def _get_media_buy_delivery_impl(
         principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx, tenant=tenant
     )
 
-    # Determine reporting period
-    if req.start_date and req.end_date:
-        # Use provided date range (make timezone-aware for AwareDatetime)
-        start_dt = datetime.strptime(req.start_date, "%Y-%m-%d").replace(tzinfo=UTC)
-        end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=UTC)
-
-        if start_dt >= end_dt:
-            context_val = req.context
-            return GetMediaBuyDeliveryResponse(
-                reporting_period={"start": datetime.now(UTC), "end": datetime.now(UTC)},
-                currency="USD",
-                aggregated_totals=AggregatedTotals(
-                    impressions=0.0,
-                    spend=0.0,
-                    clicks=None,
-                    video_completions=None,
-                    media_buy_count=0,
-                ),
-                media_buy_deliveries=[],
-                errors=[Error(code="invalid_date_range", message="Start date must be before end date")],
-                context=context_val,
-            )
-    else:
-        # Default to last 30 days
-        end_dt = datetime.now(UTC)
-        start_dt = end_dt - timedelta(days=30)
+    # Determine reporting period. AdCP defines start_date/end_date as
+    # inclusive date-only inputs; same-day expands to a full 24h UTC day.
+    start_dt, end_dt, window_valid = _normalize_reporting_window(req.start_date, req.end_date)
+    if not window_valid:
+        return GetMediaBuyDeliveryResponse(
+            reporting_period={"start": start_dt, "end": end_dt},
+            currency="USD",
+            aggregated_totals=AggregatedTotals(
+                impressions=0.0,
+                spend=0.0,
+                clicks=None,
+                video_completions=None,
+                media_buy_count=0,
+            ),
+            media_buy_deliveries=[],
+            errors=[Error(code="invalid_date_range", message="start_date must be on or before end_date")],
+            context=req.context,
+        )
 
     reporting_period = MediaBuyReportingPeriod(start=start_dt, end=end_dt)
 
@@ -477,7 +495,13 @@ def _get_media_buy_delivery_impl(
 
                 ctr = (clicks / impressions) if clicks is not None and impressions > 0 else None
 
-                # Cast status to match Literal type requirement
+                # ``status`` is in the schema's internal vocab (``ready``,
+                # ``active``, ``paused``, ``completed``, ``failed``,
+                # ``reporting_delayed``). MediaBuyDeliveryData.status's
+                # @field_serializer maps ``ready`` → wire ``pending_start``
+                # at serialisation time so the AdCP wire validator stays
+                # happy without forcing every internal call site (filters,
+                # status comparisons, except blocks) to learn wire vocab.
                 from typing import Literal as LiteralType
                 from typing import cast
 

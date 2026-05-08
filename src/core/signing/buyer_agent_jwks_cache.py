@@ -32,7 +32,7 @@ import os
 from typing import TYPE_CHECKING
 
 from adcp.signing.brand_jwks import BrandJsonJwksResolver
-from cachetools import LRUCache  # type: ignore[import-untyped]
+from cachetools import LRUCache
 
 if TYPE_CHECKING:
     pass

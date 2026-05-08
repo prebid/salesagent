@@ -128,47 +128,52 @@ def get_aee_signal_dimensions() -> list[str]:
 
 # Explicit mapping from Targeting field names to capability dimension names.
 # Used by validate_overlay_targeting() to check access control (managed-only
-# vs overlay) on known fields.  Both inclusion and exclusion variants map to
+# vs overlay) on known fields. Both inclusion and exclusion variants map to
 # the same capability dimension.
 #
-# AdCP TargetingOverlay defines only the geo fields, frequency_cap, axe
-# segments, and property_list.  The device/OS/browser/media/audience fields
-# are seller extensions carried forward from the original seller engine —
-# standard ad-server dimensions that adapters actively support but AdCP has
-# not yet adopted.  See module docstring for details.
+# AdCP TargetingOverlay covers geo (with exclude variants), frequency_cap,
+# axe segments, property_list, daypart_targets, age_restriction,
+# device_platform, device_type (+ exclude), audience_include/exclude,
+# keyword_targets, negative_keywords, language, and a few more.
+# The os/browser/media_type/custom/key_value_pairs entries below are
+# salesagent-only — adapters consume them but no spec field exists.
+# See module docstring for details.
 FIELD_TO_DIMENSION: dict[str, str] = {
-    # ── AdCP-defined fields (from adcp.types.TargetingOverlay) ───────────
+    # ── AdCP-defined fields (mirror adcp.types.TargetingOverlay) ─────────
     "geo_countries": "geo_country",
     "geo_regions": "geo_region",
     "geo_metros": "geo_metro",
     "geo_postal_areas": "geo_zip",
-    "frequency_cap": "frequency_cap",
-    # ── Geo exclusion extensions (PR #1006, not yet in AdCP) ─────────────
     "geo_countries_exclude": "geo_country",
     "geo_regions_exclude": "geo_region",
     "geo_metros_exclude": "geo_metro",
     "geo_postal_areas_exclude": "geo_zip",
-    # ── AdCP device_platform (OS-level, converted to device_type internally) ──
+    "frequency_cap": "frequency_cap",
     "device_platform": "device_platform",
-    # ── Seller extensions (not in AdCP, consumed by adapters) ────────────
+    # ── Local field names that map to AdCP dimensions ────────────────────
+    # device_type/audience/keyword field NAMES below are salesagent-shape
+    # (any_of/none_of) but the underlying *dimensions* are spec-defined.
+    # The fields themselves should be renamed to the spec shape
+    # (device_type/device_type_exclude, audience_include/exclude,
+    # keyword_targets/negative_keywords) in the targeting cleanup pass.
     "device_type_any_of": "device_type",
     "device_type_none_of": "device_type",
+    "audiences_any_of": "audience_segment",
+    "audiences_none_of": "audience_segment",
+    "content_cat_any_of": "content_category",
+    "content_cat_none_of": "content_category",
+    # ── Salesagent-only dimensions (no AdCP spec field) ──────────────────
     "os_any_of": "os",
     "os_none_of": "os",
     "browser_any_of": "browser",
     "browser_none_of": "browser",
-    "content_cat_any_of": "content_category",
-    "content_cat_none_of": "content_category",
     "media_type_any_of": "media_type",
     "media_type_none_of": "media_type",
-    "audiences_any_of": "audience_segment",
-    "audiences_none_of": "audience_segment",
     "custom": "custom",
+    "key_value_pairs": "key_value_pairs",
     # ── Removed dimensions ───────────────────────────────────────────────
     "geo_city_any_of": "geo_city",
     "geo_city_none_of": "geo_city",
-    # ── Managed-only (not exposed via overlay) ───────────────────────────
-    "key_value_pairs": "key_value_pairs",
 }
 
 

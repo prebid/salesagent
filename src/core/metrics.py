@@ -63,6 +63,17 @@ webhook_queue_size = Gauge(
     ["tenant_id"],
 )
 
+# Distinct from ``webhook_delivery_total{status='failure'}`` so operators
+# can page on credential errors without drowning in transient buyer-endpoint
+# failures. Slice 3 of signing-non-embedded.
+webhook_signing_misconfigured_total = Counter(
+    "webhook_signing_misconfigured_total",
+    "Outbound webhook signing failures caused by tenant credential config "
+    "(missing key, KMS-backed, unreadable PEM, weak/missing HMAC secret) — "
+    "NOT buyer-endpoint failures.",
+    ["tenant_id", "signing_mode"],
+)
+
 
 def get_metrics_text() -> str:
     """Return current metrics in Prometheus text format."""

@@ -546,13 +546,13 @@ Source: BR-UC-004-ext-d.md
 ### Extension *e: Invalid Date Range
 Source: BR-UC-004-ext-e.md
 
-#### Scenario: start_date equals end_date
+#### Scenario: start_date equals end_date (single-day window)
 **Obligation ID** UC-004-EXT-E-01
 **Layer** behavioral
 **Given** an authenticated buyer with valid media buys
 **When** the buyer sends `start_date: "2026-03-15"` and `end_date: "2026-03-15"`
-**Then** the system returns error `invalid_date_range`
-**Business Rule** BR-RULE-013 (start_date >= end_date is invalid)
+**Then** the request is accepted and reported window is `[2026-03-15T00:00:00Z, 2026-03-15T23:59:59.999999Z]`
+**Business Rule** AdCP `get_media_buy_delivery` defines `start_date`/`end_date` as inclusive date-only inputs; same-day input is the full 24-hour UTC day
 **Priority** P1
 
 #### Scenario: start_date after end_date
@@ -561,7 +561,7 @@ Source: BR-UC-004-ext-e.md
 **Given** an authenticated buyer
 **When** the buyer sends `start_date: "2026-03-20"` and `end_date: "2026-03-10"`
 **Then** the system returns error `invalid_date_range`
-**Business Rule** BR-RULE-013
+**Business Rule** start_date must be on or before end_date
 **Priority** P1
 
 #### Scenario: State unchanged on date range error

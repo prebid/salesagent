@@ -758,7 +758,8 @@ class CreativeAgentRegistry:
                 }]
             }
         """
-        # Use custom MCP client for non-standard tools (preview_creative not in AdCP spec)
+        # preview_creative is an AdCP creative-protocol tool; we use a thin custom MCP
+        # client here because the request shape is creative-agent-specific.
         async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
             result = await client.call_tool(
                 "preview_creative", {"format_id": format_id, "creative_manifest": creative_manifest}
@@ -810,7 +811,8 @@ class CreativeAgentRegistry:
             - status: "draft" or "finalized"
             - creative_output: Generated creative manifest with output_format
         """
-        # Use custom MCP client for non-standard tools (build_creative not in AdCP spec)
+        # build_creative is an AdCP creative-protocol tool; we use a thin custom MCP
+        # client here because the request shape is creative-agent-specific.
         async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
             params = {
                 "message": message,

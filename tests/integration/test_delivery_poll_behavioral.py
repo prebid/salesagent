@@ -270,11 +270,14 @@ class TestEqualDateRangeReturnsInvalidDateRangeError:
 
     Covers: UC-004-EXT-E-01
 
-    BR-RULE-013: start_date >= end_date is invalid.
+    AdCP `get_media_buy_delivery` defines start_date/end_date as inclusive
+    date-only inputs; same-day is the full 24-hour UTC day, not invalid.
     """
 
-    def test_equal_dates_returns_invalid_date_range(self, integration_db):
+    def test_equal_dates_returns_full_day_window(self, integration_db):
         """Covers: UC-004-EXT-E-01"""
+        from datetime import UTC, datetime
+
         from tests.factories import PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -289,9 +292,9 @@ class TestEqualDateRangeReturnsInvalidDateRangeError:
             )
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            assert response.media_buy_deliveries == []
-            assert len(response.errors) == 1
-            assert response.errors[0].code == "invalid_date_range"
+            assert not [e for e in response.errors if e.code == "invalid_date_range"]
+            assert response.reporting_period.start == datetime(2026, 3, 15, 0, 0, 0, tzinfo=UTC)
+            assert response.reporting_period.end == datetime(2026, 3, 15, 23, 59, 59, 999999, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

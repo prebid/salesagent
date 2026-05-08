@@ -942,7 +942,7 @@ class GAMTargetingManager:
         Returns:
             Updated targeting configuration with inventory targeting
         """
-        inventory_targeting = {}
+        inventory_targeting: dict[str, Any] = {}
 
         if targeted_ad_unit_ids:
             inventory_targeting["targetedAdUnits"] = [
@@ -951,9 +951,7 @@ class GAMTargetingManager:
             ]
 
         if targeted_placement_ids:
-            inventory_targeting["targetedPlacements"] = [
-                {"placementId": placement_id} for placement_id in targeted_placement_ids
-            ]
+            inventory_targeting["targetedPlacementIds"] = [str(placement_id) for placement_id in targeted_placement_ids]
 
         if inventory_targeting:
             targeting["inventoryTargeting"] = inventory_targeting

@@ -16,6 +16,7 @@ from adcp.types import (
     CreativeStatus,
     Error,
 )
+from adcp.types import CreativeApproval as LibraryCreativeApproval
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
     ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
@@ -130,7 +131,12 @@ class Provenance(SalesAgentBaseModel):
 
 
 class CreativeStatusEnum(Enum):
-    """Creative status enum (not in adcp library, local definition)."""
+    """Local creative status enum.
+
+    The library exposes ``adcp.types.CreativeStatus`` with the same values plus
+    ``archived``. Switch to the library enum when the archived state is wired
+    into the creative workflow.
+    """
 
     processing = "processing"
     approved = "approved"
@@ -380,7 +386,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Internal-only fields (not in AdCP spec)
+    # Internal-only fields — excluded from API responses.
     status: str | None = Field(  # type: ignore[assignment]
         None, exclude=True, description="Current approval status of the creative (INTERNAL - excluded from responses)"
     )
@@ -731,9 +737,5 @@ class ApproveCreativeResponse(SalesAgentBaseModel):
     detail: str
 
 
-class CreativeApproval(SalesAgentBaseModel):
-    """Creative approval record for a package."""
-
-    creative_id: str = Field(..., description="Creative identifier")
-    approval_status: ApprovalStatus = Field(..., description="Current approval status")
-    rejection_reason: str | None = Field(default=None, description="Reason for rejection (when rejected)")
+class CreativeApproval(LibraryCreativeApproval):
+    """Creative approval record — extends library type per Pattern #1."""

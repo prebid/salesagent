@@ -18,6 +18,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from adcp.types import MediaBuyStatus
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.core.database.models import GAMLineItem, GAMOrder, MediaBuy
@@ -147,7 +148,11 @@ def order_to_media_buy_fields(order: GAMOrder) -> dict:
         "end_date": end_date_val,
         "start_time": order.start_date if isinstance(order.start_date, datetime) else None,
         "end_time": order.end_date if isinstance(order.end_date, datetime) else None,
-        "raw_request": {"gam_order_id": order.order_id, "imported": True},
+        "raw_request": {
+            "gam_order_id": order.order_id,
+            "gam_advertiser_id": order.advertiser_id,
+            "imported": True,
+        },
         "created_at": order.created_at,
         "updated_at": order.last_modified_date or order.updated_at,
     }
@@ -159,10 +164,14 @@ def line_item_to_package_fields(line_item: GAMLineItem) -> dict:
     package_id = projected_package_id(line_item.line_item_id)
     bid_price = Decimal(str(line_item.cost_per_unit)) if line_item.cost_per_unit is not None else None
 
+    # ``gam_order_id`` is included so a flattened/cached package row can
+    # be cross-referenced back to its parent GAM order without walking
+    # the response tree (build_package_ext surfaces it on the wire).
     package_config: dict = {
         "platform_line_item_id": line_item.line_item_id,
         "imported": True,
         "gam_line_item_status": line_item.status,
+        "gam_order_id": line_item.order_id,
     }
 
     return {
@@ -177,6 +186,50 @@ def line_item_to_package_fields(line_item: GAMLineItem) -> dict:
 def is_projected_media_buy_id(media_buy_id: str) -> bool:
     """True if ``media_buy_id`` follows the projected GAM order convention."""
     return media_buy_id.startswith("gam_") and not media_buy_id.startswith("gam_li_")
+
+
+def build_buy_ext(raw_request: dict | None) -> dict | None:
+    """Build the ``ext.gam`` payload for a projected/imported MediaBuy response.
+
+    Returns ``None`` for native AdCP buys (so the field stays absent from
+    the wire). Returns ``{"gam": {"imported": True, "order_id": ..., "advertiser_id": ...}}``
+    for projected and materialized GAM imports — both store the GAM ids in
+    ``raw_request`` under the ``gam_order_id`` / ``gam_advertiser_id`` keys.
+    """
+    if not raw_request or not raw_request.get("imported"):
+        return None
+    payload: dict = {"imported": True}
+    order_id = raw_request.get("gam_order_id")
+    if order_id is not None:
+        payload["order_id"] = order_id
+    advertiser_id = raw_request.get("gam_advertiser_id")
+    if advertiser_id is not None:
+        payload["advertiser_id"] = advertiser_id
+    return {"gam": payload}
+
+
+def build_package_ext(package_config: dict | None) -> dict | None:
+    """Build the ``ext.gam`` payload for a projected/imported Package response.
+
+    Returns ``None`` for native AdCP packages. Returns
+    ``{"gam": {"imported": True, "line_item_id": ..., "order_id": ...}}`` for
+    GAM-imported packages. ``order_id`` lets buyers cross-reference a flat
+    package row back to its parent GAM order without walking the response
+    tree.
+    """
+    if not package_config or not package_config.get("imported"):
+        return None
+    payload: dict = {"imported": True}
+    line_item_id = package_config.get("platform_line_item_id")
+    if line_item_id is not None:
+        payload["line_item_id"] = line_item_id
+    order_id = package_config.get("gam_order_id")
+    if order_id is not None:
+        payload["order_id"] = order_id
+    status = package_config.get("gam_line_item_status")
+    if status is not None:
+        payload["line_item_status"] = status
+    return {"gam": payload}
 
 
 def order_id_from_projected(media_buy_id: str) -> str:
@@ -234,21 +287,42 @@ def materialize_projected_buy(
 
     today = date.today()
     mb_repo = MediaBuyRepository(session, tenant_id)
-    media_buy = mb_repo.create_from_gam_import(
-        media_buy_id=media_buy_id,
-        principal_id=principal_id,
-        order_name=order.name,
-        advertiser_name=advertiser_name,
-        budget=fields["budget"],
-        currency=fields["currency"] or "USD",
-        start_date=fields["start_date"] or today,
-        end_date=fields["end_date"] or today,
-        start_time=fields["start_time"],
-        end_time=fields["end_time"],
-        status=project_gam_status(order.status, fields["start_date"], fields["end_date"], today).value,
-        external_id=order.order_id,
-        raw_request=fields["raw_request"],
-    )
+    try:
+        # Wrap the insert in a SAVEPOINT so a unique-index / PK collision
+        # on a concurrent materialization rolls back ONLY our failed
+        # insert — the caller's outer UoW transaction stays intact.
+        # Without nested(), session.rollback() would discard everything
+        # the caller has written before reaching this function.
+        with session.begin_nested():
+            media_buy = mb_repo.create_from_gam_import(
+                media_buy_id=media_buy_id,
+                principal_id=principal_id,
+                order_name=order.name,
+                advertiser_name=advertiser_name,
+                budget=fields["budget"],
+                currency=fields["currency"] or "USD",
+                start_date=fields["start_date"] or today,
+                end_date=fields["end_date"] or today,
+                start_time=fields["start_time"],
+                end_time=fields["end_time"],
+                status=project_gam_status(order.status, fields["start_date"], fields["end_date"], today).value,
+                external_id=order.order_id,
+                raw_request=fields["raw_request"],
+            )
+    except IntegrityError:
+        # Concurrent materialization won the race. The savepoint already
+        # rolled back our failed insert; pick up the row the other
+        # transaction wrote. Both the PK (media_buy_id) and the
+        # ``(tenant_id, external_id) WHERE external_id IS NOT NULL``
+        # unique index can fire this; either way the resolution is the
+        # same — return the existing row, packages and all.
+        existing = mb_repo.get_by_id(media_buy_id)
+        if existing is None:
+            # Extremely unlikely: the racing transaction was rolled back
+            # AFTER we hit IntegrityError. Re-raise so the caller surfaces
+            # a real failure rather than silently returning None.
+            raise
+        return existing
 
     for li in gam_repo.list_line_items_for_orders([order.order_id]):
         pkg_fields = line_item_to_package_fields(li)
@@ -261,6 +335,43 @@ def materialize_projected_buy(
         )
 
     return media_buy
+
+
+def log_materialization_audit(
+    *,
+    tenant_id: str,
+    principal_id: str,
+    advertiser_name: str,
+    advertiser_id: str | None,
+    order_id: str,
+    media_buy_id: str,
+) -> None:
+    """Emit an audit-log entry for an imported-buy materialization.
+
+    Call this AFTER the parent UoW has committed. Audit logging opens its
+    own DB session for the write; doing it inside the UoW that just
+    flushed the new MediaBuy expires the freshly-added instance and
+    breaks downstream session reads.
+
+    Operators querying "when did agent X first claim our GAM order Y?"
+    filter on ``operation = 'AdCP.materialize_imported_buy'`` plus
+    ``principal_id`` and ``details->>'gam_order_id'``.
+    """
+    from src.core.audit_logger import get_audit_logger
+
+    get_audit_logger("AdCP", tenant_id).log_operation(
+        operation="materialize_imported_buy",
+        principal_name=advertiser_name,
+        principal_id=principal_id,
+        adapter_id=advertiser_id or "",
+        success=True,
+        details={
+            "media_buy_id": media_buy_id,
+            "gam_order_id": order_id,
+            "gam_advertiser_id": advertiser_id,
+            "source": "gam_import",
+        },
+    )
 
 
 def get_or_materialize_media_buy(

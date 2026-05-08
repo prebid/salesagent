@@ -51,7 +51,6 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
-    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     PricingOption,
 )
@@ -355,9 +354,9 @@ class TestMaxDailySpendExceeded:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
                     # Validation errors must NOT be about daily spend
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
-                        f"Daily spend validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
+                    ), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend validation are fine
 
@@ -729,9 +728,9 @@ class TestInlineCreativesProcessedBeforeApproval:
 
         # Verify creatives were processed before the adapter (approval check) was accessed
         assert "creatives_processed" in call_order, "process_and_upload_package_creatives was not called"
-        assert call_order.index("creatives_processed") < call_order.index("approval_check"), (
-            f"Creatives must be processed before approval check. Order: {call_order}"
-        )
+        assert call_order.index("creatives_processed") < call_order.index(
+            "approval_check"
+        ), f"Creatives must be processed before approval check. Order: {call_order}"
 
 
 class TestMultipleInvalidCreativesAccumulated:
@@ -1116,9 +1115,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "not found" not in str(e).lower() or "product" not in str(e).lower(), (
-                        f"Product validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "not found" not in str(e).lower() or "product" not in str(e).lower()
+                    ), f"Product validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to product validation are fine
 
@@ -1144,9 +1143,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "currency" not in str(e).lower() or "not supported" not in str(e).lower(), (
-                        f"Currency validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "currency" not in str(e).lower() or "not supported" not in str(e).lower()
+                    ), f"Currency validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to currency validation are fine
 
@@ -1416,9 +1415,9 @@ class TestAsapStartTimingObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
-                        f"Daily spend validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
+                    ), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend are fine
 
@@ -1453,11 +1452,19 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Spec ``create_media_buy_response`` (variant-3): async pending shape is
-        # the submitted envelope (task_id + status='submitted'), NOT the sync
-        # success body with media_buy_id/packages.
-        assert isinstance(result.response, CreateMediaBuySubmitted)
-        assert result.status == "submitted"  # Not "completed"
+        # Spec ``create_media_buy_response`` variant-1 (sync-success): when the
+        # seller has minted a buy id synchronously, the response carries
+        # ``media_buy_id`` + ``packages`` + a ``MediaBuyStatus`` describing
+        # what's blocking activation. Without creatives in the request that
+        # status is ``pending_creatives`` (buyer's next call is ``sync_creatives``).
+        # Variant-3 (``status='submitted'``, no ``media_buy_id``) is reserved
+        # for cases where no buy was minted.
+        from adcp.types import MediaBuyStatus
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id is not None
+        assert result.response.status == MediaBuyStatus.pending_creatives
+        assert result.status == "completed"
 
     @pytest.mark.asyncio
     async def test_adapter_requires_review_enters_manual_path(self):
@@ -1486,8 +1493,12 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuySubmitted)
-        assert result.status == "submitted"
+        from adcp.types import MediaBuyStatus
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id is not None
+        assert result.response.status == MediaBuyStatus.pending_creatives
+        assert result.status == "completed"
 
     @pytest.mark.asyncio
     async def test_seller_notification_sent_on_manual_approval(self):
@@ -1519,7 +1530,7 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert result.status == "submitted"
+        assert result.status == "completed"
         mock_notifier.notify_media_buy_event.assert_called_once_with(
             event_type="approval_required",
             media_buy_id=ANY,
@@ -1531,10 +1542,17 @@ class TestManualApprovalObligations:
         )
 
     @pytest.mark.asyncio
-    async def test_response_envelope_status_is_submitted(self):
-        """Manual approval response has status 'submitted', not 'completed'.
+    async def test_response_envelope_carries_media_buy_with_pending_creatives(self):
+        """Manual approval response is variant-1 with ``MediaBuyStatus.pending_creatives``.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-06
+
+        When the seller mints a buy synchronously (manual-approval workflow
+        included), the response carries ``media_buy_id`` + ``packages`` per
+        the spec sync-success variant. Without creatives in the request, the
+        ``MediaBuyStatus`` reports ``pending_creatives`` so the buyer's next
+        call (``sync_creatives``) is unambiguous. ``workflow_step_id`` is
+        preserved as an internal handle excluded from the wire output.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -1557,11 +1575,12 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert result.status == "submitted"
-        # Spec variant-3: submitted envelope carries task_id (not media_buy_id).
-        # ``workflow_step_id`` is preserved as an internal handle (excluded from wire).
-        assert isinstance(result.response, CreateMediaBuySubmitted)
-        assert result.response.task_id is not None
+        from adcp.types import MediaBuyStatus
+
+        assert result.status == "completed"
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id is not None
+        assert result.response.status == MediaBuyStatus.pending_creatives
         assert result.response.workflow_step_id is not None
 
     @pytest.mark.asyncio
@@ -1592,7 +1611,8 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert result.status == "submitted"
+        assert result.status == "completed"
+        assert isinstance(result.response, CreateMediaBuySuccess)
         mock_exec.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1626,8 +1646,10 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Pending approval means it's ready for accept/reject
-        assert result.status == "submitted"
+        # Sync-success envelope: buy minted, pending governance review.
+        # ``workflow_step_id`` is the internal handle for the rejection workflow.
+        assert result.status == "completed"
+        assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.workflow_step_id is not None
 
     @pytest.mark.asyncio
@@ -1660,11 +1682,180 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Spec variant-3: submitted envelope. ``task_id`` is the buyer-facing
-        # poll handle; ``workflow_step_id`` is preserved as an internal handle.
-        assert isinstance(result.response, CreateMediaBuySubmitted)
-        assert result.response.task_id == "step_1"
+        # Spec variant-1 (sync-success): buy was minted synchronously.
+        # ``workflow_step_id`` is preserved as the internal handle the buyer
+        # can use server-side (excluded from the wire). For polling at the
+        # protocol level, the buyer uses ``media_buy_id`` to query status.
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id is not None
         assert result.response.workflow_step_id == "step_1"
+
+
+class TestPendingCreativesVariantClassification:
+    """Pin the variant-1 vs variant-3 split for synchronously-minted buys.
+
+    Regression guard for the over-correction in PR #183. PR #183 routed every
+    workflow-step-pending path through the spec's variant-3 envelope
+    (``status='submitted'`` + ``task_id``, no ``media_buy_id``). That envelope
+    is for genuinely async cases where the seller hasn't decided whether to
+    mint a buy. When the seller has already minted a buy synchronously, the
+    response must use variant-1 (sync-success) carrying ``media_buy_id`` +
+    ``packages`` + a ``MediaBuyStatus`` describing what's blocking activation.
+
+    Without these tests the five storyboard scenarios that exercise
+    "buy without creatives" (pending_creatives_to_start/create_buy_no_creatives,
+    inventory_list_targeting/create_buy_with_lists,
+    inventory_list_no_match/create_buy_no_match,
+    invalid_transitions/create_buy,
+    creative_fate_after_cancellation/create_buy) regress on the wire shape.
+    """
+
+    @pytest.mark.asyncio
+    async def test_buy_without_creatives_emits_variant_one_with_pending_creatives(self):
+        """No creatives in request → variant-1 (sync-success) / pending_creatives.
+
+        The buyer's next step is ``sync_creatives``; ``MediaBuyStatus.pending_creatives``
+        names exactly that blocker.
+        """
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        # Default _make_request() builds a single package with no creatives.
+        req = _make_request()
+        # Sanity check the test setup: this scenario MUST send no creatives.
+        for pkg in req.packages or []:
+            assert not getattr(pkg, "creative_ids", None)
+            assert not getattr(pkg, "creatives", None)
+
+        product = _mock_product("prod_1")
+
+        with _PatchContext(products=[product], human_review_required=True) as pc:
+            with (
+                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
+                patch("src.core.tools.media_buy_create.get_slack_notifier"),
+                patch("src.core.tools.media_buy_create.activity_feed"),
+                patch("src.core.tools.media_buy_create.get_audit_logger"),
+            ):
+                mock_upload.return_value = (req.packages, {})
+                mock_adapter = MagicMock()
+                mock_adapter.manual_approval_required = False
+                mock_adapter.manual_approval_operations = ["create_media_buy"]
+                mock_adapter_fn.return_value = mock_adapter
+
+                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id is not None
+        assert result.response.packages is not None and len(result.response.packages) == 1
+        assert result.response.status == MediaBuyStatus.pending_creatives
+        # Wrapper-level TaskStatus is "completed" — the seller's sync work is done.
+        assert result.status == "completed"
+
+    def test_request_has_creatives_helper_classifies_status(self):
+        """Direct test of the variant-1 status classifier.
+
+        ``_request_has_creatives`` is the split criterion that drives the
+        ``MediaBuyStatus`` selection in the workflow-step-pending paths.
+        Pinning it independently of the full pipeline guards against the
+        next time someone reaches for variant-3 (``submitted``) when they
+        should pick a ``MediaBuyStatus`` from ``{pending_creatives,
+        pending_start}``.
+        """
+        from src.core.tools.media_buy_create import _request_has_creatives
+
+        # No creatives → False (drives MediaBuyStatus.pending_creatives).
+        no_creatives = _make_request(
+            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}]
+        )
+        assert _request_has_creatives(no_creatives) is False
+
+        # Pre-uploaded creative ids → True (drives MediaBuyStatus.pending_start).
+        with_ids = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["cr_existing"],
+                }
+            ]
+        )
+        assert _request_has_creatives(with_ids) is True
+
+        # Inline creative objects → True (also drives pending_start).
+        with_inline = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creatives": [
+                        {
+                            "creative_id": "inline_1",
+                            "name": "Inline",
+                            "format_id": {
+                                "agent_url": "https://creative.example.com/",
+                                "id": "display_300x250",
+                            },
+                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
+                            "variants": [],
+                        }
+                    ],
+                }
+            ]
+        )
+        assert _request_has_creatives(with_inline) is True
+
+    @pytest.mark.asyncio
+    async def test_config_disabled_auto_create_emits_variant_one(self):
+        """Tenant-config-disabled auto_create still mints a buy → variant-1.
+
+        Covers the second of the two PR #183 emit sites (config-driven approval
+        requirement). Like the manual-approval branch, the buy is minted
+        synchronously, so the response must carry ``media_buy_id`` (not the
+        variant-3 ``task_id``-only envelope).
+        """
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request()
+        product = _mock_product("prod_1")
+
+        with _PatchContext(
+            products=[product],
+            human_review_required=False,
+            auto_create_media_buys=False,
+        ) as pc:
+            with (
+                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
+                patch("src.core.tools.media_buy_create.get_slack_notifier"),
+                patch("src.core.tools.media_buy_create.activity_feed"),
+                patch("src.core.tools.media_buy_create.get_audit_logger"),
+                patch("src.core.tools.products.get_product_catalog") as mock_catalog,
+            ):
+                mock_upload.return_value = (req.packages, {})
+                mock_adapter = MagicMock()
+                mock_adapter.__class__.__name__ = "MockAdServer"
+                mock_adapter.manual_approval_required = False
+                mock_adapter.manual_approval_operations = []
+                mock_adapter_fn.return_value = mock_adapter
+
+                schema_product = MagicMock()
+                schema_product.product_id = "prod_1"
+                schema_product.name = "Test Product"
+                schema_product.implementation_config = {"auto_create_enabled": True}
+                mock_catalog.return_value = [schema_product]
+
+                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id is not None
+        assert result.response.status == MediaBuyStatus.pending_creatives
+        assert result.status == "completed"
 
 
 class TestInlineCreativeObligations:
@@ -1905,14 +2096,15 @@ class TestCrossCuttingObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Manual path: adapter was NOT called, but records were persisted.
-        # Spec variant-3: the submitted envelope identifies the work via
-        # ``task_id`` — ``media_buy_id`` is issued on the completion artifact
-        # post-approval, not on the pending response.
-        assert result.status == "submitted"
+        # Manual path: adapter was NOT called, but records were persisted and
+        # a media_buy_id was minted synchronously. Spec variant-1 (sync-success):
+        # the response identifies the buy via ``media_buy_id``; ``workflow_step_id``
+        # is the internal handle for governance state. ``MediaBuyStatus`` reports
+        # what's blocking activation.
+        assert result.status == "completed"
         mock_exec.assert_not_called()
-        assert isinstance(result.response, CreateMediaBuySubmitted)
-        assert result.response.task_id is not None
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id is not None
 
     @pytest.mark.asyncio
     async def test_creative_in_valid_state_assigned_successfully(self):

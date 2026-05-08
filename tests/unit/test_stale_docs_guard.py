@@ -15,25 +15,45 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class TestNoStaleContextVarComments:
-    """``core/main.py`` comments must not reference ContextVar (removed from auth path).
+    """``core/main.py`` comments must not reference *stale* ContextVars from the
+    deleted auth-path design.
 
-    The legacy ``src/app.py`` was deleted with the rest of the legacy stack;
-    the modern entrypoint is ``core/main.py``.
+    The legacy ``src/app.py`` propagated auth identity via a ``ContextVar`` —
+    that path was removed when the unified ASGI middleware stack landed, so
+    leftover comments mentioning it would mislead readers about how identity
+    flows today.
+
+    Legitimate ContextVars live in ``core/main.py`` (e.g.
+    ``core.middleware.transport_detect.current_transport``, set per-request to
+    let platform delegates know whether the inbound transport was A2A or MCP);
+    those are allowlisted by name. Add to ``_ALLOWED_CONTEXTVAR_NAMES`` only
+    when a new contextvar is genuinely needed and documented.
     """
 
+    _ALLOWED_CONTEXTVAR_NAMES: frozenset[str] = frozenset({"current_transport"})
+
+    def _line_references_only_allowlisted_contextvar(self, line: str) -> bool:
+        return any(name in line for name in self._ALLOWED_CONTEXTVAR_NAMES)
+
     def test_main_no_contextvar_in_a2a_comment(self):
-        """A2A integration comment must not mention ContextVar propagation."""
+        """A2A integration comment must not mention stale ContextVar propagation."""
         source = (PROJECT_ROOT / "core" / "main.py").read_text()
         for lineno, line in enumerate(source.splitlines(), 1):
-            if "ContextVar" in line and line.lstrip().startswith("#"):
-                pytest.fail(f"core/main.py:{lineno} has stale ContextVar comment: {line.strip()}")
+            if "ContextVar" not in line or not line.lstrip().startswith("#"):
+                continue
+            if self._line_references_only_allowlisted_contextvar(line):
+                continue
+            pytest.fail(f"core/main.py:{lineno} has stale ContextVar comment: {line.strip()}")
 
     def test_middleware_comment_no_contextvar(self):
-        """Middleware stack comment must not reference ContextVar."""
+        """Middleware stack comment must not reference stale scope-keyed ContextVars."""
         source = (PROJECT_ROOT / "core" / "main.py").read_text()
         for lineno, line in enumerate(source.splitlines(), 1):
-            if "ContextVar" in line and "scope" in line.lower():
-                pytest.fail(f"core/main.py:{lineno} references ContextVar in middleware comment: {line.strip()}")
+            if "ContextVar" not in line or "scope" not in line.lower():
+                continue
+            if self._line_references_only_allowlisted_contextvar(line):
+                continue
+            pytest.fail(f"core/main.py:{lineno} references ContextVar in middleware comment: {line.strip()}")
 
 
 class TestNoSQLiteReferences:

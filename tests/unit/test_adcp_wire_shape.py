@@ -302,6 +302,33 @@ def _build_create_media_buy_success() -> tuple[Any, type]:
     return CreateMediaBuyResult(response=inner, status="completed"), LibResponse
 
 
+def _build_create_media_buy_success_pending_creatives() -> tuple[Any, type]:
+    """Sync-success / pending_creatives path: variant-1 with the buy minted
+    but creatives still owed. Pins the wire shape for the storyboard scenarios
+    where the buyer creates a media buy without including creatives and is
+    expected to call ``sync_creatives`` next.
+
+    This is the inverse of the over-correction in PR #183 — the seller has
+    minted ``media_buy_id`` synchronously, so withholding it via variant-3
+    (``status='submitted'``, no ``media_buy_id``) is wrong. The buyer expects
+    the buy id and ``MediaBuyStatus.pending_creatives`` so the next call is
+    unambiguous.
+    """
+    from adcp.types import CreateMediaBuyResponse as LibResponse
+    from adcp.types import MediaBuyStatus
+
+    from src.core.schemas import CreateMediaBuySuccess, Package
+    from src.core.schemas._base import CreateMediaBuyResult
+
+    inner = CreateMediaBuySuccess(
+        media_buy_id="mb_pending_creatives",
+        packages=[Package(package_id="pkg_test")],
+        status=MediaBuyStatus.pending_creatives,
+        workflow_step_id="step_internal_only",
+    )
+    return CreateMediaBuyResult(response=inner, status="completed"), LibResponse
+
+
 def _build_create_media_buy_submitted() -> tuple[Any, type]:
     """Async-pending-approval path: wrapper produces variant-3 (submitted envelope).
 
@@ -392,6 +419,7 @@ _WIRE_SHAPE_BUILDERS = [
     # actually serializes — testing the inner ``CreateMediaBuySuccess`` alone
     # bypasses the ``_serialize`` step that injects the top-level status.
     ("CreateMediaBuyResult.success", _build_create_media_buy_success),
+    ("CreateMediaBuyResult.success_pending_creatives", _build_create_media_buy_success_pending_creatives),
     ("CreateMediaBuyResult.submitted", _build_create_media_buy_submitted),
     ("CreateMediaBuyResult.error", _build_create_media_buy_error),
     ("SyncCreativesResponse", _build_sync_creatives_response),
@@ -430,6 +458,40 @@ class TestWireShapeValidatesAgainstLibrary:
         # PEP-604 union types (``A | B | C``) — the create_media_buy_response
         # is a discriminated union of success / error / submitted variants.
         TypeAdapter(library_cls).validate_python(wire)
+
+    def test_create_media_buy_variant1_pending_creatives_validates_per_spec(self) -> None:
+        """Spec contract: variant-1 with ``status='pending_creatives'`` is valid.
+
+        Independent of our implementation, the discriminated union must accept
+        ``{media_buy_id, packages, status: 'pending_creatives'}`` as the
+        sync-success shape for "buy minted, awaiting creatives sync." This is
+        the storyboard contract that PR #183 inadvertently broke by routing
+        the case through variant-3 (``submitted``).
+        """
+        from adcp.types import CreateMediaBuyResponse as LibResponse
+        from pydantic import TypeAdapter
+
+        wire = {
+            "media_buy_id": "mb_test",
+            "packages": [{"package_id": "pkg_test", "paused": False}],
+            "status": "pending_creatives",
+        }
+        # Raises ValidationError on spec drift; success means the discriminated
+        # union resolves cleanly to the sync-success variant.
+        TypeAdapter(LibResponse).validate_python(wire)
+
+    def test_create_media_buy_variant3_without_media_buy_id_validates_per_spec(self) -> None:
+        """Spec contract: variant-3 (no ``media_buy_id``) is still valid.
+
+        Counterpart to the variant-1 test: the submitted envelope is reserved
+        for cases where the seller hasn't minted a buy. ``media_buy_id`` is
+        absent by design — the buyer polls via ``task_id``.
+        """
+        from adcp.types import CreateMediaBuyResponse as LibResponse
+        from pydantic import TypeAdapter
+
+        wire = {"task_id": "task_test", "status": "submitted"}
+        TypeAdapter(LibResponse).validate_python(wire)
 
     def test_create_media_buy_hybrid_shape_is_rejected_by_spec(self) -> None:
         """The async-pending shape must not be a sync-success body with status='submitted'.

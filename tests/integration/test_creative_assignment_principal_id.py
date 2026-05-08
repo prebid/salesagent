@@ -24,6 +24,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.database.models import MediaBuy as DBMediaBuy
 from src.core.database.models import Tenant as TenantModel
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -228,9 +229,22 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
         assert result.status in ("submitted", "completed"), f"Unexpected status: {result.status}"
         assert result.response is not None
 
-        # Extract media_buy_id from the response
+        # Submitted envelope (PR #183) drops ``media_buy_id`` in favor of
+        # ``task_id``. The DB row exists either way — look it up by
+        # tenant + principal (this test creates exactly one media buy).
         media_buy_id = getattr(result.response, "media_buy_id", None)
-        assert media_buy_id is not None, "Response should contain media_buy_id"
+        if media_buy_id is None:
+            with get_db_session() as session:
+                row = session.scalars(
+                    select(DBMediaBuy)
+                    .where(
+                        DBMediaBuy.tenant_id == ca_tenant_with_approval["tenant_id"],
+                        DBMediaBuy.principal_id == ca_principal["principal_id"],
+                    )
+                    .order_by(DBMediaBuy.created_at.desc())
+                ).first()
+                assert row is not None, "Manual-approval path created no MediaBuy row"
+                media_buy_id = row.media_buy_id
 
         # Verify creative_assignment rows have principal_id populated
         assignments = _query_assignments(ca_tenant_with_approval["tenant_id"], media_buy_id)

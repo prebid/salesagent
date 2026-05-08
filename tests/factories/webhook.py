@@ -30,6 +30,7 @@ class PushNotificationConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     principal_id = LazyAttribute(lambda o: o.principal.principal_id)
     url = factory.LazyFunction(lambda: "https://example.com/webhook")
     is_active = True
+    signing_mode = "hmac"
 
 
 class WebhookSubscriptionFactory(factory.alchemy.SQLAlchemyModelFactory):

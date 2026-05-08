@@ -7,8 +7,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from src.core.schemas import Product
-
 logger = logging.getLogger(__name__)
 
 
@@ -64,7 +62,7 @@ def create_ranking_agent(model: Any) -> Agent[None, ProductRankingResult]:
 def build_ranking_prompt(
     custom_prompt: str,
     brief: str,
-    products: list[Product],
+    products: list,
 ) -> str:
     """Build the user prompt for product ranking.
 
@@ -107,7 +105,7 @@ async def rank_products_async(
     agent: Agent[None, ProductRankingResult],
     custom_prompt: str,
     brief: str,
-    products: list[Product],
+    products: list,
 ) -> ProductRankingResult:
     """Rank products using the agent.
 

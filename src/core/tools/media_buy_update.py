@@ -53,7 +53,33 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._gam_projection import (
     get_or_materialize_media_buy,
     is_projected_media_buy_id,
+    log_materialization_audit,
 )
+
+
+class _MaterializationAuditCtx:
+    """Fires ``log_materialization_audit`` on context exit when a payload is set.
+
+    Wraps the outer UoW so the audit fires guaranteed-once on every exit
+    path — success, mutation rejection, validation early-return, or
+    unexpected exception — without forcing a try/finally indent shift on
+    the entire ``_update_media_buy_impl`` body. Exits the audit context
+    AFTER the UoW commits, so the audit logger's separate session/commit
+    can't expire the freshly-flushed MediaBuy on the parent session.
+    """
+
+    def __init__(self) -> None:
+        self.payload: dict | None = None
+
+    def __enter__(self) -> "_MaterializationAuditCtx":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        # Return None (== falsy) so exceptions are never suppressed.
+        if self.payload is not None:
+            log_materialization_audit(**self.payload)
+
+
 from src.core.tools.financial_validation import (
     validate_max_campaign_budget,
     validate_max_daily_package_spend,
@@ -151,8 +177,12 @@ def _update_media_buy_impl(
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
 
-    # Single UoW for entire update operation — one session, one transaction
-    with MediaBuyUoW(tenant["tenant_id"]) as uow:
+    # Single UoW for entire update operation — one session, one transaction.
+    # The audit context wraps the UoW so the materialization audit fires
+    # exactly once per first-time materialization, regardless of which
+    # exit path the function takes. Audit fires AFTER the UoW commits.
+    audit_ctx = _MaterializationAuditCtx()
+    with audit_ctx, MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
         # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
         assert uow.session is not None
@@ -183,6 +213,18 @@ def _update_media_buy_impl(
                     principal_id=principal_id,
                     media_buy_id=media_buy_id_to_use,
                 )
+                # Capture audit fields by value so the audit log call
+                # (which opens its own DB session and commits) doesn't
+                # need to re-read from the freshly-flushed instance.
+                # Setting on audit_ctx — fires from __exit__ after UoW commit.
+                audit_ctx.payload = {
+                    "tenant_id": tenant["tenant_id"],
+                    "principal_id": principal_id,
+                    "advertiser_name": imported_buy.advertiser_name,
+                    "advertiser_id": (imported_buy.raw_request or {}).get("gam_advertiser_id"),
+                    "order_id": imported_buy.external_id,
+                    "media_buy_id": imported_buy.media_buy_id,
+                }
 
         # Verify principal owns this media buy
         _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
@@ -203,6 +245,10 @@ def _update_media_buy_impl(
                 or bool(req.new_packages)
             )
             if mutating:
+                # Materialization persisted even though we're rejecting
+                # the mutation — the wrapping ``_MaterializationAuditCtx``
+                # fires the audit on context exit, so we can return
+                # immediately without re-emitting here.
                 return UpdateMediaBuyError(
                     media_buy_id=media_buy_id_to_use,
                     errors=[
@@ -430,6 +476,61 @@ def _update_media_buy_impl(
                                     error_message=package_daily_spend_error,
                                 )
                                 return response_data
+
+        # Cancel: terminal transition. Double-cancel raises NOT_CANCELLABLE.
+        # Wired to the DB row directly (no adapter dispatch yet — the mock
+        # adapter only had an in-memory state change for this; GAM order
+        # archive on cancel is a follow-up). ``cancellation_reason`` is
+        # echoed back on the response.
+        #
+        # IMPORTANT: ``UpdateMediaBuyRequest.canceled`` is the AdCP-generated
+        # ``Literal[True] = True`` field — the Pydantic default is True
+        # whenever the buyer didn't include it in the wire payload. A
+        # naive ``req.canceled is True`` check would therefore fire on
+        # EVERY update (pause, budget, packages, etc.), preempting their
+        # branches. Gate on ``model_fields_set`` so only an explicit
+        # ``canceled=True`` from the buyer triggers cancellation.
+        canceled_in_request = "canceled" in getattr(req, "model_fields_set", set())
+        if canceled_in_request and req.canceled is True:
+            current_mb = uow.media_buys.get_by_id(req.media_buy_id)
+            if current_mb and str(current_mb.status) == "canceled":
+                error_response = UpdateMediaBuyError(
+                    errors=[
+                        Error(
+                            code="NOT_CANCELLABLE",
+                            message=(
+                                f"media_buy_id={req.media_buy_id!r} is already canceled — "
+                                "cannot cancel a terminal buy"
+                            ),
+                        )
+                    ],
+                    context=req.context,
+                )
+                ctx_manager.update_workflow_step(
+                    step.step_id,
+                    status="failed",
+                    response_data=error_response.model_dump(mode="json"),
+                    error_message="already canceled",
+                )
+                return error_response
+
+            # MediaBuy ORM has no cancellation_reason column today —
+            # echoing the reason back on the response (via the SDK's
+            # response context) is the spec-compliant minimum. Persisting
+            # it would need a schema migration; tracked separately.
+            uow.media_buys.update_fields(req.media_buy_id, status="canceled")
+
+            cancel_response = UpdateMediaBuySuccess(
+                media_buy_id=req.media_buy_id or "",
+                affected_packages=[],
+                context=req.context,
+            )
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="completed",
+                response_data=cancel_response.model_dump(mode="json"),
+            )
+            return cancel_response
 
         # Handle campaign-level updates
         if req.paused is not None:

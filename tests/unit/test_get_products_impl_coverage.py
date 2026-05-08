@@ -30,6 +30,20 @@ from src.core.resolved_identity import ResolvedIdentity
 from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_product
 
 
+def _phase2_wrap_resolved(product_obj, **_kw):
+    """Phase 2 slice 3: wrap schema-shape Product as ResolvedProduct for
+    tests that inject schema instances directly into the UoW mock."""
+    from src.core.resolved_product import ResolvedProduct
+
+    return ResolvedProduct(
+        wire=product_obj,
+        implementation_config=getattr(product_obj, "implementation_config", None),
+        countries=getattr(product_obj, "countries", None),
+        device_types=getattr(product_obj, "device_types", None),
+        allowed_principal_ids=getattr(product_obj, "allowed_principal_ids", None),
+    )
+
+
 def _make_identity(principal_id=None, tenant=None, tenant_id=None):
     """Create a ResolvedIdentity for testing."""
     return ResolvedIdentity(
@@ -86,6 +100,7 @@ def _standard_patches(mock_uow, principal=None, convert_fn=None):
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
         patch("src.core.tools.products.get_principal_object", return_value=principal),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
+        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
         patch(
             "src.services.dynamic_products.generate_variants_for_brief",
             new_callable=AsyncMock,
@@ -154,7 +169,7 @@ class TestProductConversionError:
 
     @pytest.mark.asyncio
     async def test_convert_failure_raises_valueerror_with_product_id(self):
-        """convert_product_model_to_schema raises → ValueError with product_id."""
+        """convert_product_model_to_resolved raises → ValueError with product_id."""
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
         req = _make_request()
@@ -168,7 +183,7 @@ class TestProductConversionError:
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=None),
             patch(
-                "src.core.tools.products.convert_product_model_to_schema",
+                "src.core.tools.products.convert_product_model_to_resolved",
                 side_effect=Exception("missing required field 'delivery_type'"),
             ),
         ):
@@ -202,7 +217,7 @@ class TestProductConversionError:
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=None),
             patch(
-                "src.core.tools.products.convert_product_model_to_schema",
+                "src.core.tools.products.convert_product_model_to_resolved",
                 side_effect=convert_with_error,
             ),
         ):
@@ -613,6 +628,7 @@ class TestGetProductCatalogConversionError:
         with (
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=mock_convert),
+            patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
         ):
             from src.core.tools.products import get_product_catalog
 

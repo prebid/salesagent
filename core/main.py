@@ -62,9 +62,10 @@ from sqlalchemy import select
 
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
-from core.middleware.bearer_to_adcp_auth import BearerToAdcpAuthMiddleware
+from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.middleware.spec_defaults import SpecDefaultsMiddleware
+from core.middleware.transport_detect import TransportDetectMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -406,21 +407,23 @@ def _serve_kwargs(
 
     asgi_middleware: list = [
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
-        # BearerToAdcpAuthMiddleware maps ``Authorization: Bearer <token>``
-        # (RFC 6750, what a2a-sdk's official client emits) to the
-        # ``x-adcp-auth`` header that ``BearerTokenAuth`` is configured to
-        # read. Sits before the auth middlewares so they see the canonical
-        # header on inbound A2A traffic from real buyers. No-op when
-        # ``x-adcp-auth`` is already present, so MCP traffic is untouched.
-        #
-        # ORDERING — MUST run before the SDK's BearerTokenAuth /
-        # A2ABearerAuth wrap-around (which serve() applies INSIDE this
-        # asgi_middleware list). MUST run after AdminWSGIMount so admin
-        # paths short-circuit before the bearer translation. Do not
-        # reorder without updating
-        # tests/unit/test_bearer_to_adcp_auth_middleware.py and
-        # tests/integration/test_serve_kwargs_middleware_order.py.
-        (BearerToAdcpAuthMiddleware, {}),
+        # TransportDetectMiddleware sets a ``current_transport`` ContextVar
+        # based on the URL path so platform methods know whether the
+        # inbound request was MCP or A2A. Webhook payload shape is
+        # transport-matched (A2A buyers expect ``Task``, MCP buyers expect
+        # ``McpWebhookPayload``); without this signal the platform
+        # defaults to MCP and A2A buyers get the wrong shape. Runs after
+        # ``AdminWSGIMount`` so admin paths short-circuit before this
+        # fires (admin traffic doesn't carry buyer transport semantics).
+        # See issue #202.
+        (TransportDetectMiddleware, {}),
+        # DualCredentialAuditMiddleware logs WARNING when an inbound
+        # request carries two different bearer tokens (one in
+        # ``Authorization: Bearer`` and one in ``x-adcp-auth``). Restores
+        # the audit signal the deleted bearer-translation shim used to
+        # emit (per #194 follow-up). Never logs token values; only
+        # SHA-256 fingerprints for log correlation.
+        (DualCredentialAuditMiddleware, {}),
         # SpecDefaultsMiddleware backfills wire fields the spec marks as
         # required but instructs sellers to default for pre-v3 clients
         # (e.g. GetProductsRequest.buying_mode → 'brief'). Sits *outside*
@@ -471,11 +474,15 @@ def _serve_kwargs(
         # path also covers signing for non-embedded tenants). Auto-emit on
         # the SDK side would double-fire.
         "auto_emit_completion_webhooks": False,
-        # Bearer-token auth wraps both MCP and A2A legs.
+        # Bearer-token auth wraps both MCP and A2A legs. Per-leg knobs
+        # (adcp>=4.5.0): MCP keeps the legacy ``x-adcp-auth: <raw>`` header
+        # baked into early adopters; A2A uses the spec-canonical RFC 6750
+        # ``Authorization: Bearer <token>`` (the SDK default), matching what
+        # a2a-sdk clients emit out of the box. No bearer-translation shim.
         "auth": BearerTokenAuth(
             validate_token=_validate_token,
-            header_name="x-adcp-auth",
-            bearer_prefix_required=False,
+            mcp_header_name="x-adcp-auth",
+            mcp_bearer_prefix_required=False,
         ),
         "asgi_middleware": asgi_middleware,
         "context_factory": auth_context_factory,

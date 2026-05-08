@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from adcp.types import CreativePolicy
+from adcp.types import CreativePolicy, Error
 
 from src.core.database.models import (
     Principal as PrincipalModel,
@@ -1498,7 +1498,7 @@ class TestAdCPContract:
                 SyncCreativeResult(
                     creative_id="creative_789",
                     action="failed",
-                    errors=["Invalid format"],
+                    errors=[Error(code="invalid_format", message="Invalid format")],
                 ),
             ],
         )

@@ -40,9 +40,44 @@ class TestCoreRoutes:
         assert response.status_code in [200, 501]  # May not be implemented
 
     def test_debug_headers(self, authenticated_admin_session):
-        """Test /debug/headers endpoint."""
+        """Test /debug/headers endpoint reflects headers (admins only)."""
         response = authenticated_admin_session.get("/debug/headers")
         assert response.status_code == 200
+
+    def test_debug_headers_requires_auth(self, admin_client):
+        """``/debug/headers`` reflects every header on the request, so it must
+        be gated to admins. An unauthenticated client must get a redirect to
+        login (not 200 with the body).
+
+        Regression for the unauthenticated-token-leak finding flagged in
+        the PR #194 security review: pre-fix this route exposed
+        ``Authorization: Bearer`` and ``x-adcp-auth`` tokens to anyone
+        who could land an HTTP request at ``/debug/headers``.
+        """
+        response = admin_client.get("/debug/headers", follow_redirects=False)
+        assert response.status_code in (302, 401, 403), (
+            f"Expected auth redirect/refusal on unauthenticated /debug/headers; got {response.status_code}"
+        )
+
+    def test_debug_headers_redacts_bearer_tokens(self, authenticated_admin_session):
+        """Even an authenticated admin must not see live bearer tokens
+        echoed back through ``/debug/headers``. Verifies
+        :func:`redact_headers` is wired on the route — without it a
+        shared admin session or browser DevTools could leak a buyer
+        token captured upstream.
+        """
+        response = authenticated_admin_session.get(
+            "/debug/headers",
+            headers={
+                "Authorization": "Bearer should-not-appear-in-body",
+                "X-Adcp-Auth": "secret-token-also-not-appearing",
+            },
+        )
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert "should-not-appear-in-body" not in body, "Bearer token leaked in /debug/headers response"
+        assert "secret-token-also-not-appearing" not in body, "x-adcp-auth token leaked in /debug/headers response"
+        assert "<redacted>" in body, "Expected '<redacted>' marker for masked auth headers"
 
     def test_create_tenant_page(self, authenticated_admin_session):
         """Test /create_tenant page renders."""

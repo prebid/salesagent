@@ -14,7 +14,7 @@ __all__ = [
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlalchemy.exc
@@ -63,6 +63,25 @@ from src.core.schemas import (
 
 # Set up logger
 logger = logging.getLogger(__name__)
+
+
+def _clamp_target_date_to_now(end_dt: datetime) -> datetime:
+    """Clamp a reporting-window ``end`` to "now" for freshness validation.
+
+    Ad-hoc ``get_media_buy_delivery`` queries may legitimately extend past
+    "now" (e.g. a buyer polling ``[today, tomorrow]``). GAM cannot have
+    produced data for a future boundary, so the freshness validator would
+    reject every such window as stale. Clamping to "now" lets the validator
+    apply its real check ("does the report cover up to now?") instead of an
+    impossible one ("does the report cover up to tomorrow?").
+
+    Naive datetimes are clamped against a naive ``now`` so the comparison
+    doesn't raise; aware datetimes against ``datetime.now(UTC)``.
+    """
+    now = datetime.now(UTC)
+    if end_dt.tzinfo is None:
+        now = now.replace(tzinfo=None)
+    return min(end_dt, now)
 
 
 class GoogleAdManager(AdServerAdapter):
@@ -1116,11 +1135,12 @@ class GoogleAdManager(AdServerAdapter):
             requested_timezone="America/New_York",
         )
 
-        # Validate data freshness
-        # The adapter decides whether to return data or raise error if data is stale
-        # Target date is the end of the reporting period
-        target_date = date_range.end
-
+        # Validate data freshness. See `_clamp_target_date_to_now`: ad-hoc
+        # buyer queries can extend past "now", and GAM cannot have produced
+        # data for a future boundary. The webhook delivery path is unaffected
+        # because it calls `is_data_fresh_for_webhook` directly with its own
+        # yesterday-anchored target.
+        target_date = _clamp_target_date_to_now(date_range.end)
         is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
 
         if not is_fresh:

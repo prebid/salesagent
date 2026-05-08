@@ -24,33 +24,35 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 21 violations remain.
+# FIXME(salesagent-hr8n): 23 violations remain.
 # Line numbers reflect the current state of media_buy_update.py.
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 19 violations (workflow step response_data).
+    # _update_media_buy_impl: 21 violations (workflow step response_data).
     # Line numbers shift on every edit to media_buy_update.py — regenerate via
     # the inline AST script in the parent test class on drift.
-    ("media_buy_update.py", 265),
-    ("media_buy_update.py", 317),
-    ("media_buy_update.py", 318),
-    ("media_buy_update.py", 372),
-    ("media_buy_update.py", 429),
-    ("media_buy_update.py", 452),
-    ("media_buy_update.py", 484),
-    ("media_buy_update.py", 511),
-    ("media_buy_update.py", 528),
-    ("media_buy_update.py", 582),
+    ("media_buy_update.py", 311),
+    ("media_buy_update.py", 363),
+    ("media_buy_update.py", 364),
+    ("media_buy_update.py", 418),
+    ("media_buy_update.py", 475),
+    ("media_buy_update.py", 512),
+    ("media_buy_update.py", 531),
+    ("media_buy_update.py", 553),
+    ("media_buy_update.py", 585),
     ("media_buy_update.py", 612),
-    ("media_buy_update.py", 653),
-    ("media_buy_update.py", 836),
-    ("media_buy_update.py", 866),
-    ("media_buy_update.py", 894),
-    ("media_buy_update.py", 1056),
-    ("media_buy_update.py", 1120),
-    ("media_buy_update.py", 1242),
-    ("media_buy_update.py", 1302),
+    ("media_buy_update.py", 629),
+    ("media_buy_update.py", 683),
+    ("media_buy_update.py", 713),
+    ("media_buy_update.py", 754),
+    ("media_buy_update.py", 937),
+    ("media_buy_update.py", 967),
+    ("media_buy_update.py", 995),
+    ("media_buy_update.py", 1157),
+    ("media_buy_update.py", 1221),
+    ("media_buy_update.py", 1343),
+    ("media_buy_update.py", 1403),
     # _get_products_impl: 1 violation (logging)
-    ("products.py", 610),
+    ("products.py", 600),
     # _list_creatives_impl: 1 violation (filter dict conversion)
     ("creatives/listing.py", 138),  # filters.model_dump(exclude_none=True)
 }

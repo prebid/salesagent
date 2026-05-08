@@ -28,6 +28,7 @@ _TRANSITIVE_INTEGRATION_DB_FIXTURES: frozenset[str] = frozenset(
         "admin_client",
         "authenticated_admin_client",
         "authenticated_admin_session",
+        "factory_session",
         "integration_db",
         "mcp_server",
         "migration_db",

@@ -12,6 +12,7 @@ This test validates that our A2A server sends the correct payload type based on 
 import json
 import socket
 import uuid
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from time import sleep
@@ -20,6 +21,8 @@ from typing import Any
 import httpx
 import psycopg2
 import pytest
+
+from tests.e2e.adcp_request_builder import build_adcp_media_buy_request
 
 
 class WebhookPayloadCapture(BaseHTTPRequestHandler):
@@ -201,26 +204,47 @@ class TestA2AWebhookPayloadTypes:
                         {
                             "data": {
                                 "skill": "create_media_buy",
+                                # Use the spec-compliant builder — handles
+                                # AdCP 4.4 wire requireds (account, idempotency_key),
+                                # the packages[].budget shape (vs deprecated
+                                # top-level total_budget), and the
+                                # push_notification_config field placement.
+                                # Manually patch in the webhook config from the
+                                # capture server so this remains a single-call test.
                                 "parameters": {
-                                    "product_ids": ["video_premium"],
-                                    "total_budget": 5000.0,
-                                    "start_time": "2025-03-01T00:00:00Z",
-                                    "end_time": "2025-03-31T23:59:59Z",
-                                    "brand": {"domain": "testbrand.com"},
-                                    "context": {"e2e": "webhook_completed_test"},
+                                    **build_adcp_media_buy_request(
+                                        # CI seeds product_ids with `prod_` prefix
+                                        # (init_database_ci.py); the bare suffix
+                                        # would 404 product validation.
+                                        product_ids=["prod_video_premium"],
+                                        total_budget=5000.0,
+                                        # Future-dated window so the impl's "start time cannot
+                                        # be in the past" guard doesn't fail the workflow step.
+                                        start_time="asap",
+                                        end_time=(datetime.now(UTC) + timedelta(days=30)).strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ"
+                                        ),
+                                        brand={"domain": "testbrand.com"},
+                                        context={"e2e": "webhook_completed_test"},
+                                        pricing_option_id="cpm_usd_fixed",
+                                    ),
+                                    # AdCP-spec placement: webhook config travels in the
+                                    # request body so it works identically across MCP and A2A
+                                    # transports. The A2A envelope's
+                                    # configuration.pushNotificationConfig requires an
+                                    # a2a-sdk push_config_store which serve() doesn't wire.
+                                    "push_notification_config": {
+                                        "url": webhook_capture_server["url"],
+                                        "authentication": {
+                                            "schemes": ["Bearer"],
+                                            # AdCP 4.4 requires credentials minLength=32
+                                            "credentials": "test-webhook-token-padded-to-meet-32char-min",
+                                        },
+                                    },
                                 },
                             }
                         }
                     ],
-                },
-                "configuration": {
-                    "pushNotificationConfig": {
-                        "url": webhook_capture_server["url"],
-                        "authentication": {
-                            "schemes": ["Bearer"],
-                            "credentials": "test-webhook-token",
-                        },
-                    }
                 },
             },
         }

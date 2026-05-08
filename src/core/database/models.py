@@ -1132,6 +1132,7 @@ class MediaBuy(Base):
             "idx_media_buys_external_id",
             "tenant_id",
             "external_id",
+            unique=True,
             postgresql_where=text("external_id IS NOT NULL"),
         ),
     )
@@ -2339,6 +2340,7 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auth_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    signing_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="hmac", server_default=text("'hmac'"))
 
     # Relationships
     tenant = relationship("Tenant", backref="push_notification_configs", overlaps="principal")

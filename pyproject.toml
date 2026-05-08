@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp",
+    "adcp>=4.5.0",
     "fastmcp>=3.2.0", # v3.2 fixes GHSA-m8x7-r2rg-vh5g, GHSA-rww4-4w9c-7733
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
@@ -42,6 +42,7 @@ dependencies = [
     "jinja2>=3.1.0",
     "prometheus-client>=0.23.1",
     "types-pytz>=2025.2.0.20250809",
+    "types-cachetools>=7.0.0.20260503",
     "markdown>=3.4.0",
     "types-Markdown>=3.4.2.10",
     "freezegun>=1.5.5",
@@ -245,10 +246,3 @@ ignore-docstrings = true
 ignore-comments = true
 ignore-signatures = true
 
-# ─── uv source overrides ──────────────────────────────────────────────────────
-# adcp is pinned to the v4.4.1 git tag — that release pins a2a-sdk to >=1.0.2
-# which fixes the protobuf 5.x incompat in proto_utils.py (field.is_repeated).
-# v4.4.2 regressed the pin back to <1.0.2; avoid it until v4.4.3+ ships with
-# the corrected pin.
-[tool.uv.sources]
-adcp = { git = "https://github.com/adcontextprotocol/adcp-client-python.git", tag = "v4.4.3" }

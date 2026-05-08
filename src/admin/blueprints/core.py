@@ -326,9 +326,23 @@ def admin_index():
 
 
 @core_bp.route("/debug/headers")
+@require_auth(admin_only=True)
 def debug_headers():
-    """Debug endpoint to inspect all incoming headers (for Approximated routing testing)."""
-    headers_dict = dict(request.headers)
+    """Inspect inbound headers for proxy / Approximated routing debugging.
+
+    Gated by ``@require_auth(admin_only=True)`` so the response — which
+    reflects every header on the request — never reaches an
+    unauthenticated caller. Token-bearing headers (``Authorization``,
+    ``x-adcp-auth``, ``Cookie``, ...) are masked via
+    :func:`redact_headers` even for authenticated admins, so a shared
+    debugging session can't leak a buyer's live bearer through the
+    response body. Routing-relevant fields (Host, X-Forwarded-Host,
+    Apx-Incoming-Host) pass through unchanged — the whole point of
+    this endpoint.
+    """
+    from src.admin.utils.audit_decorator import redact_headers
+
+    headers_dict = redact_headers(request.headers)
     detected_tenant = get_tenant_from_hostname()
 
     debug_info = {

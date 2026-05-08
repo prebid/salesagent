@@ -298,6 +298,27 @@ uv run python scripts/ops/migrate.py
 - Use scoped sessions for thread safety
 - Use SQLAlchemy 2.0 patterns: `select()` + `scalars()`, not `query()`
 
+### Online Migration Patterns
+
+Migrations run on app startup and serialize against application reads/writes for the duration of any DDL that holds `ACCESS EXCLUSIVE`. For tables under ~1M rows the simple form is fine; for larger tables, prefer the patterns below to keep p99 latency flat during a rolling deploy.
+
+**Adding a NOT NULL column with a default**: PostgreSQL 11+ makes `ADD COLUMN ... DEFAULT` metadata-only (no table rewrite). The simple `op.add_column(..., server_default=sa.text("'foo'"))` form is safe at any row count.
+
+**Adding a CHECK constraint**: by default `ALTER TABLE ... ADD CONSTRAINT ... CHECK` acquires `ACCESS EXCLUSIVE` and full-scans the table to validate. On a 1M+ row table this serializes the table for seconds. Split the validation into two statements:
+
+```python
+op.execute(
+    "ALTER TABLE my_table "
+    "ADD CONSTRAINT ck_my_table_my_column "
+    "CHECK (my_column IN ('a', 'b', 'c')) NOT VALID"
+)
+op.execute("ALTER TABLE my_table VALIDATE CONSTRAINT ck_my_table_my_column")
+```
+
+`NOT VALID` adds the constraint as metadata only — instant. `VALIDATE CONSTRAINT` does the full scan but takes only `SHARE UPDATE EXCLUSIVE`, which permits concurrent reads and writes.
+
+**Adding an index**: use `op.create_index(..., postgresql_concurrently=True)` for tables in the same size class. Concurrent index builds need their own transaction, so the migration must use `op.execute("COMMIT")` before and after, or split into multiple revisions.
+
 ## API Development
 
 ### MCP Tools

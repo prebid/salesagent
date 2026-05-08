@@ -351,7 +351,14 @@ async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date
 
         deliveries = result.get("media_buy_deliveries", [])
         assert len(deliveries) == 1, "Heartbeat report carries one delivery for the buy"
-        assert deliveries[0].get("status") == "ready", "Pre-start buy reports dynamic status='ready'"
+        # AdCP wire vocab uses ``pending_start`` for the pre-start state;
+        # salesagent's internal vocab calls the same state ``ready``. The
+        # ``MediaBuyDeliveryData.status`` field_serializer translates at
+        # the wire boundary, so the test asserts the wire-shape value (the
+        # webhook payload is what real buyers see).
+        assert deliveries[0].get("status") == "pending_start", (
+            "Pre-start buy reports dynamic status='pending_start' (wire vocab)"
+        )
         assert result.get("partial_data") is True, "Heartbeat reports flag partial_data=True"
 
 

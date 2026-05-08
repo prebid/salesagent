@@ -24,7 +24,7 @@ from tests.e2e.adcp_request_builder import (
     get_test_date_range,
     parse_tool_result,
 )
-from tests.e2e.utils import force_approve_media_buy_in_db
+from tests.e2e.utils import force_approve_media_buy_in_db, resolve_media_buy_id_from_task_id
 
 
 class TestAdCPFullLifecycle:
@@ -92,8 +92,17 @@ class TestAdCPFullLifecycle:
             media_buy_result = await client.call_tool("create_media_buy", media_buy_request)
             media_buy_data = parse_tool_result(media_buy_result)
 
+            # Per spec variant-3 (PR #183), async create returns the
+            # ``submitted`` envelope: ``{"status": "submitted", "task_id": ...}``
+            # and does NOT carry ``media_buy_id``. Resolve via the DB
+            # mapping the create path writes alongside the workflow step.
             media_buy_id = media_buy_data.get("media_buy_id")
-            assert media_buy_id, f"create_media_buy must return media_buy_id, got: {list(media_buy_data.keys())}"
+            if not media_buy_id:
+                task_id = media_buy_data.get("task_id")
+                assert task_id, (
+                    f"create_media_buy returned neither media_buy_id nor task_id: {list(media_buy_data.keys())}"
+                )
+                media_buy_id = resolve_media_buy_id_from_task_id(live_server, task_id)
 
             # Force-approve the media buy so delivery works
             force_approve_media_buy_in_db(live_server, media_buy_id)

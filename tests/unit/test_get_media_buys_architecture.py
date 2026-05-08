@@ -50,21 +50,8 @@ class TestGetMediaBuysImplRaisesAdCPError:
         with pytest.raises(AdCPAuthenticationError):
             _get_media_buys_impl(req, identity=None)
 
-    def test_unsupported_account_id_raises_adcp_error(self):
-        """Passing account_id should raise AdCPValidationError (not ToolError)."""
-        from src.core.tools.media_buy_list import _get_media_buys_impl
-
-        identity = ResolvedIdentity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-        )
-        req = GetMediaBuysRequest(account_id="some_account")
-        with pytest.raises(AdCPValidationError):
-            _get_media_buys_impl(req, identity=identity)
-
     def test_unsupported_account_raises_adcp_error(self):
-        """Passing account (nested, AdCP 3.x) should raise AdCPValidationError."""
+        """Passing account should raise AdCPValidationError (not ToolError)."""
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         identity = ResolvedIdentity(

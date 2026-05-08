@@ -108,6 +108,10 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         "uow": "src.core.database.repositories.uow.ProductUoW",
         "principal": f"{MODULE}.get_principal_object",
         "convert": f"{MODULE}.convert_product_model_to_schema",
+        # Phase 2 slice 3: get_products now converts via convert_product_model_to_resolved.
+        # Mock as a wrapper that builds a ResolvedProduct from the harness's
+        # schema-shape input (which is what add_product feeds into list_all).
+        "convert_resolved": f"{MODULE}.convert_product_model_to_resolved",
         "policy_service": f"{MODULE}.PolicyCheckService",
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
         "ranking_factory": "src.services.ai.factory.get_factory",
@@ -141,6 +145,24 @@ class ProductEnv(ProductMixin, BaseTestEnv):
 
         # Convert: identity function (return product as-is)
         self.mock["convert"].side_effect = lambda product_obj, **kw: product_obj
+
+        # convert_resolved: wrap the schema-shape ``product_obj`` into a
+        # ResolvedProduct, pulling internal fields off the schema's own
+        # exclude=True attributes (the harness puts schema instances into
+        # the UoW; production puts ORM instances and Phase 2 slice 2's
+        # convert_product_model_to_resolved consumes those).
+        from src.core.resolved_product import ResolvedProduct
+
+        def _wrap_as_resolved(product_obj: Any, **_kw: Any) -> ResolvedProduct:
+            return ResolvedProduct(
+                wire=product_obj,
+                implementation_config=getattr(product_obj, "implementation_config", None),
+                countries=getattr(product_obj, "countries", None),
+                device_types=getattr(product_obj, "device_types", None),
+                allowed_principal_ids=getattr(product_obj, "allowed_principal_ids", None),
+            )
+
+        self.mock["convert_resolved"].side_effect = _wrap_as_resolved
 
         # Adapter: mock with supported pricing models
         mock_adapter = MagicMock()

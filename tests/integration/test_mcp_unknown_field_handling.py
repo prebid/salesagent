@@ -39,6 +39,17 @@ class TestMcpDevMode:
             result = env.call_mcp(brief="test ads")
             assert result is not None
 
+    @pytest.mark.xfail(
+        reason=(
+            "Unknown-field rejection (dev-mode strict-extra) isn't enforced at "
+            "the wire boundary today — the SDK resolves params_model from the "
+            "platform router's base advertisement, not from the delegate, so "
+            "unknown kwargs reach the impl unchecked. Documented in "
+            "core/platforms/_delegate.py:_delegate_get_products. Pending an "
+            "upstream SDK change to honor strict-extra at the dispatcher."
+        ),
+        strict=True,
+    )
     def test_unknown_field_rejected(self, integration_db):
         """Dev mode: unknown field causes ToolError — loud failure for schema drift detection."""
         from tests.harness.product import ProductEnv

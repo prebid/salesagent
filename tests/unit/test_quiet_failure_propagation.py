@@ -16,6 +16,20 @@ import pytest
 from src.core.resolved_identity import ResolvedIdentity
 
 
+def _phase2_wrap_resolved(product_obj, **_kw):
+    """Phase 2 slice 3: wrap schema-shape Product as ResolvedProduct for
+    tests that inject schema instances directly into the UoW mock."""
+    from src.core.resolved_product import ResolvedProduct
+
+    return ResolvedProduct(
+        wire=product_obj,
+        implementation_config=getattr(product_obj, "implementation_config", None),
+        countries=getattr(product_obj, "countries", None),
+        device_types=getattr(product_obj, "device_types", None),
+        allowed_principal_ids=getattr(product_obj, "allowed_principal_ids", None),
+    )
+
+
 def _make_identity(tenant_id="test-tenant"):
     return ResolvedIdentity(
         principal_id="user-1",
@@ -46,13 +60,33 @@ def _mock_uow_with_products(products):
 
 
 def _base_patches(mock_uow, convert_fn=None):
-    """Patches for a minimal _get_products_impl call (no enrichment)."""
+    """Patches for a minimal _get_products_impl call (no enrichment).
+
+    Phase 2 slice 3: production code calls ``convert_product_model_to_resolved``
+    which builds a ``ResolvedProduct`` from an ORM model. These unit tests
+    inject schema-shape Products via ``add_product`` / ``list_all``, so we
+    wrap each test product in a ``ResolvedProduct`` here too.
+    """
+    from src.core.resolved_product import ResolvedProduct
+
     if convert_fn is None:
         convert_fn = lambda p, **kw: p  # noqa: E731
+
+    def _resolved_fn(product_obj, **_kw):
+        return ResolvedProduct(
+            wire=product_obj,
+            implementation_config=getattr(product_obj, "implementation_config", None),
+            countries=getattr(product_obj, "countries", None),
+            device_types=getattr(product_obj, "device_types", None),
+            allowed_principal_ids=getattr(product_obj, "allowed_principal_ids", None),
+        )
+
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
         patch("src.core.tools.products.get_principal_object", return_value=None),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
+        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
+        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_resolved_fn),
     ]
 
 
@@ -160,6 +194,7 @@ class TestDynamicPricingExceptionPropagation:
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
+            patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
                 new_callable=AsyncMock,
@@ -197,6 +232,7 @@ class TestDynamicPricingExceptionPropagation:
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
+            patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
                 new_callable=AsyncMock,
@@ -308,6 +344,7 @@ class TestAdapterAnnotationExceptionPropagation:
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=mock_principal),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
+            patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
                 new_callable=AsyncMock,

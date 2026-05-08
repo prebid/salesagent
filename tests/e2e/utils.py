@@ -34,6 +34,51 @@ def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
     pytest.fail(f"Server at {mcp_url} did not become ready within {timeout} seconds")
 
 
+def resolve_media_buy_id_from_task_id(live_server: dict, task_id: str) -> str:
+    """Resolve a submitted-envelope ``task_id`` to its media_buy_id.
+
+    Per AdCP spec variant-3 (PR #183), the async ``create_media_buy``
+    response carries ``task_id`` (= the workflow_step.step_id) and does
+    NOT carry ``media_buy_id``. Tests that need to drive the buy past
+    approval look up the id via the ``ObjectWorkflowMapping`` row the
+    create path writes alongside the workflow step.
+
+    Runs inside the adcp-server container so we use the same
+    DATABASE_URL the app uses (no port-mapping mismatch on host).
+    """
+    lookup_script = f"""
+import os
+import psycopg2
+
+try:
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    cursor = conn.cursor()
+    cursor.execute(
+        \"\"\"SELECT object_id FROM object_workflow_mapping
+            WHERE step_id = %s AND object_type = 'media_buy'
+            LIMIT 1\"\"\",
+        ('{task_id}',),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        print('NOT_FOUND')
+    else:
+        print(row[0])
+    cursor.close()
+    conn.close()
+except Exception as e:
+    print(f'ERROR: {{e}}')
+    exit(1)
+"""
+    cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", lookup_script]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    out = result.stdout.strip().splitlines()
+    media_buy_id = out[-1] if out else ""
+    if not media_buy_id or media_buy_id == "NOT_FOUND":
+        raise AssertionError(f"No media_buy mapping for task_id={task_id}; raw={result.stdout!r}")
+    return media_buy_id
+
+
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):
     """
     Force approve media buy in database to bypass approval workflow.

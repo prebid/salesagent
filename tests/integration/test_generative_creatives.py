@@ -121,7 +121,7 @@ class TestGenerativeCreatives:
                         creative_id="static-creative-001",
                         name="Test Static Creative",
                         format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        assets={"image": {"url": "https://example.com/banner.png"}},
+                        assets={"image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
                     )
                 ]
             )
@@ -171,7 +171,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-003",
                         format_id=fmt,
-                        assets={"brief": {"content": "Message from brief"}},
+                        assets={"brief": {"name": "test-brief", "content": "Message from brief"}},
                     )
                 ]
             )

@@ -11,7 +11,7 @@ This order ensures we only log actions by authorized users.
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import wraps
 from typing import Any
 
@@ -55,6 +55,44 @@ _SENSITIVE_PATTERNS = frozenset(
 )
 
 _SENSITIVE_SUFFIXES = ("_secret", "_token", "_key", "_password", "_credential", "_pwd")
+
+
+# Header names whose values must always be redacted in any reflective output.
+# Lower-case for case-insensitive comparison; Flask preserves header casing as
+# received from the client, so we lower the lookup side.
+_SENSITIVE_HEADER_NAMES = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-adcp-auth",
+        "x-api-key",
+        "x-auth-token",
+        "x-csrf-token",
+        "x-session-token",
+    }
+)
+
+
+def redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """Return a copy of ``headers`` with token-bearing values masked.
+
+    Used by debug/diagnostic endpoints that reflect request headers — the
+    canonical bearer carriers (``Authorization``, ``x-adcp-auth``,
+    ``Cookie``, etc.) become ``"<redacted>"`` so a misconfigured proxy
+    or shared admin session doesn't leak live tokens through the
+    response body. Empty values pass through as-is to preserve operator
+    visibility into "header present, value missing" cases.
+    """
+    redacted: dict[str, str] = {}
+    for name, value in headers.items():
+        lower = name.lower()
+        if lower in _SENSITIVE_HEADER_NAMES or _is_sensitive_field(name):
+            redacted[name] = "<redacted>" if value else ""
+        else:
+            redacted[name] = value
+    return redacted
 
 
 def _is_sensitive_field(field_name: str) -> bool:

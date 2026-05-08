@@ -70,6 +70,8 @@ from src.core.schemas import (
     SnapshotUnavailableReason,
 )
 from src.core.tools._gam_projection import (
+    build_buy_ext,
+    build_package_ext,
     line_item_to_package_fields,
     order_to_media_buy_fields,
     project_gam_status,
@@ -96,7 +98,7 @@ def _get_media_buys_impl(
     if identity is None:
         raise AdCPAuthenticationError("Identity is required")
 
-    if req.account is not None or req.account_id is not None:
+    if req.account is not None:
         raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
 
     testing_ctx = identity.testing_context
@@ -206,6 +208,7 @@ def _get_media_buys_impl(
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
                     snapshot_unavailable_reason=snapshot_unavailable if include_snapshot else None,
+                    ext=build_package_ext(pkg_config),
                 )
             )
 
@@ -222,6 +225,7 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
+                ext=build_buy_ext(buy.raw_request),
             )
         )
 

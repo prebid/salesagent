@@ -441,7 +441,9 @@ class TestGetMediaBuysResponseStructure:
         approval = pkg["creative_approvals"][0]
         assert isinstance(approval, dict), f"Expected dict, got {type(approval)}"
         assert approval["creative_id"] == "cr_1"
-        assert approval["approval_status"] == ApprovalStatus.approved
+        # CreativeApproval extends the library type per Pattern #1; approval_status
+        # comes back as the library's CreativeApprovalStatus enum, so compare on .value.
+        assert approval["approval_status"].value == ApprovalStatus.approved.value
 
         # Snapshot should be a dict
         snap = pkg["snapshot"]

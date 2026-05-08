@@ -74,8 +74,8 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "4.4.3"
-source = { git = "https://github.com/adcontextprotocol/adcp-client-python.git?tag=v4.4.3#8dc4670f6cfcb938be67f465027d4a3c222cc4c4" }
+version = "4.5.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },
@@ -89,6 +89,10 @@ dependencies = [
     { name = "rfc8785" },
     { name = "sse-starlette" },
     { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ba/a1/9d101735f8cdddfee90845f3e6ead235b888c3e418c76d326e3e4748819b/adcp-4.5.0.tar.gz", hash = "sha256:2b2586d182a06182a45672ddca9de37f83046250384b3b8afe451644278bc86a", size = 2205306, upload-time = "2026-05-08T02:56:55.291Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3d/10/05dae9cfc86004cc3a16ed3ccf77a119544ba6596a10680758fbd991515f/adcp-4.5.0-py3-none-any.whl", hash = "sha256:6fb1cac8418d2a2a02a09be1cb04867c3bf5fcb7f4246c56461256fbc4583cf9", size = 2173861, upload-time = "2026-05-08T02:56:53.426Z" },
 ]
 
 [[package]]
@@ -139,6 +143,7 @@ dependencies = [
     { name = "simple-websocket" },
     { name = "spectree" },
     { name = "sqlalchemy" },
+    { name = "types-cachetools" },
     { name = "types-markdown" },
     { name = "types-pytz" },
     { name = "urllib3" },
@@ -203,7 +208,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.3.19" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", git = "https://github.com/adcontextprotocol/adcp-client-python.git?tag=v4.4.3" },
+    { name = "adcp", specifier = ">=4.5.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.13.5" },
@@ -257,6 +262,7 @@ requires-dist = [
     { name = "simple-websocket", specifier = ">=1.1.0" },
     { name = "spectree", specifier = ">=1.4.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
+    { name = "types-cachetools", specifier = ">=7.0.0.20260503" },
     { name = "types-markdown", specifier = ">=3.4.2.10" },
     { name = "types-psycopg2", marker = "extra == 'dev'", specifier = ">=2.9.21.20251012" },
     { name = "types-pytz", specifier = ">=2025.2.0.20250809" },
@@ -4561,6 +4567,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/85/30/ff9ede605e3bd086b4dd842499814e128500621f7951ca1e5ce84bbf61b1/typer-0.21.0.tar.gz", hash = "sha256:c87c0d2b6eee3b49c5c64649ec92425492c14488096dfbc8a0c2799b2f6f9c53", size = 106781, upload-time = "2025-12-25T09:54:53.651Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/e4/5ebc1899d31d2b1601b32d21cfb4bba022ae6fce323d365f0448031b1660/typer-0.21.0-py3-none-any.whl", hash = "sha256:c79c01ca6b30af9fd48284058a7056ba0d3bf5cf10d0ff3d0c5b11b68c258ac6", size = 47109, upload-time = "2025-12-25T09:54:51.918Z" },
+]
+
+[[package]]
+name = "types-cachetools"
+version = "7.0.0.20260503"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/57/5d3b8b3e66b002911ec1274e87f904eeee1d843c8713d95476c25c29cf31/types_cachetools-7.0.0.20260503.tar.gz", hash = "sha256:dfa4dcdf453f397dfc6d69fc0a57423ac1f248393f70aa56b5d05fac2df7a96c", size = 10033, upload-time = "2026-05-03T05:19:54.128Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3d/a8/84562723d9a3572e0851d82bdea6bed5a7dc033c6bd648f492c76b8c4ac8/types_cachetools-7.0.0.20260503-py3-none-any.whl", hash = "sha256:011b4fe0e85ef05c4a2471a4fda40254a78746b501cc1727359233872bb3a4e9", size = 9493, upload-time = "2026-05-03T05:19:53.124Z" },
 ]
 
 [[package]]

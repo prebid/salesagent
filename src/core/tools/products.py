@@ -7,11 +7,10 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import os
 import time
-from typing import Any, cast
+from typing import Any
 
 from adcp import FormatId
 from adcp import GetProductsRequest as GetProductsRequestGenerated
-from adcp import Product as LibraryProduct
 from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
@@ -30,13 +29,14 @@ from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 logger = logging.getLogger(__name__)
 
 
-def get_recommended_cpm(product: Product) -> float | None:
+def get_recommended_cpm(product: Any) -> float | None:
     """Extract recommended CPM from product's pricing_options.
 
     Uses p75 (75th percentile) as the recommended value per AdCP price_guidance spec.
 
     Args:
-        product: Product schema object
+        product: Anything with a ``pricing_options`` attribute — Product
+            schema, ResolvedProduct, or duck-typed mock.
 
     Returns:
         Recommended CPM value (p75) from price_guidance, or None if not available
@@ -52,7 +52,8 @@ def get_recommended_cpm(product: Product) -> float | None:
 
 
 # Import conversion utilities from dedicated module to avoid circular imports
-from src.core.product_conversion import convert_product_model_to_schema
+from src.core.product_conversion import convert_product_model_to_resolved, convert_product_model_to_schema
+from src.core.resolved_product import ResolvedProduct
 
 
 def extract_product_property_ids(
@@ -343,12 +344,13 @@ async def _get_products_impl(
         assert uow.products is not None
         db_products = uow.products.list_all()
 
-        # Convert database Product models to AdCP Product schema
-        products = []
+        # Convert database Product models to ResolvedProduct (wire-shape +
+        # internal fields). Filter pipeline below operates on these; at the
+        # response boundary we project ``[r.wire for r in eligible]``.
+        products: list[ResolvedProduct] = []
         for product_obj in db_products:
             try:
-                validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
-                products.append(validated_product)
+                products.append(convert_product_model_to_resolved(product_obj, adapter_type=tenant_adapter_type))
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
             except Exception as e:
                 error_msg = (
@@ -428,11 +430,9 @@ async def _get_products_impl(
             # Convert Product models to Product schemas for response
 
             for variant_model in dynamic_variants:
-                # Convert database model to schema (returns library Product)
-                # Cast to our extended Product type for mypy compatibility
-                variant_schema = convert_product_model_to_schema(variant_model, adapter_type=tenant_adapter_type)
-                # Type: ignore - library Product is compatible with our extended Product at runtime
-                products.append(variant_schema)
+                # Convert database model to ResolvedProduct (matches the static-product
+                # path above so the filter pipeline sees a uniform list type).
+                products.append(convert_product_model_to_resolved(variant_model, adapter_type=tenant_adapter_type))
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
     except (ImportError, RuntimeError, OSError) as e:
@@ -593,16 +593,6 @@ async def _get_products_impl(
                     if adapter_channels and not request_channels.intersection(set(adapter_channels)):
                         continue
 
-            # Filter by device_types (local extension, not in AdCP spec)
-            requested_device_types = getattr(req.filters, "device_types", None)
-            if requested_device_types:
-                product_device_types = getattr(product, "device_types", None)
-                if product_device_types:
-                    # Product declares supported device types — must have intersection
-                    if not set(product_device_types).intersection(set(requested_device_types)):
-                        continue
-                # else: product has no device_types restriction — matches any filter
-
             # Product passed all filters
             filtered_products.append(product)
 
@@ -728,9 +718,9 @@ async def _get_products_impl(
                         # Add supported annotation (will be included in response)
                         # Dynamic attributes on discriminated union types
                         is_supported = pricing_model in supported_models
-                        inner.supported = is_supported  # type: ignore[union-attr]
+                        inner.supported = is_supported
                         if not is_supported:
-                            inner.unsupported_reason = (  # type: ignore[union-attr]
+                            inner.unsupported_reason = (
                                 f"Current adapter does not support {str(pricing_model).upper()} pricing"
                             )
         except (ImportError, RuntimeError, OSError, ValueError) as e:
@@ -740,20 +730,17 @@ async def _get_products_impl(
     # Do this BEFORE serialization to avoid reconstruction issues
     if principal_id is None:  # Anonymous user
         # Remove pricing data from products for anonymous users
-        # Set to empty list to hide pricing (will be excluded during serialization)
+        # Set to empty list to hide pricing (will be excluded during serialization).
+        # ResolvedProduct is frozen so we mutate the wire LibraryProduct directly.
         for product in eligible_products:
-            product.pricing_options = []
+            product.wire.pricing_options = []
 
-    # Our Product extends LibraryProduct - cast for type safety since list is invariant
-    # When serialized, Pydantic automatically uses library Product fields
-    # Internal-only fields (implementation_config) excluded by model_dump()
-    # Note: We use eligible_products (Product objects), not response_data (dicts)
-    # because Product objects have typed pricing_options (CpmFixedRatePricingOption, etc.)
-    # while dicts lose this type information during serialization
-    # adcp 2.16.0+ accepts subclass lists at runtime via BeforeValidator coercion,
-    # but mypy still needs cast() due to list invariance in static typing
+    # Project ResolvedProduct → LibraryProduct at the wire boundary. The
+    # internal fields (implementation_config, countries, device_types,
+    # allowed_principal_ids) live on the dataclass and don't reach the wire
+    # by construction.
     resp = GetProductsResponse(
-        products=cast(list[LibraryProduct], eligible_products),
+        products=[r.wire for r in eligible_products],
         errors=None,
         context=req.context,
     )

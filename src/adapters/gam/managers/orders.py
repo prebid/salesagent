@@ -9,6 +9,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from googleads import ad_manager
 
@@ -20,6 +21,53 @@ logger = logging.getLogger(__name__)
 # Line item type constants for GAM automation
 GUARANTEED_LINE_ITEM_TYPES = {"STANDARD", "SPONSORSHIP"}
 NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
+
+# GAM Order builder has no timeZoneId field; line items default to the network
+# default unless overridden via impl_config.time_zone.
+DEFAULT_GAM_TIME_ZONE = "America/New_York"
+
+
+def _gam_datetime(dt: datetime, tz_id: str) -> dict[str, Any]:
+    """Build a GAM DateTime payload for ``dt`` expressed in ``tz_id``.
+
+    GAM interprets the wall-clock fields under ``timeZoneId``, so a tz-aware
+    datetime must be converted to that zone before extraction or the emitted
+    instant shifts by the UTC offset. Naive datetimes pass through unchanged
+    on the assumption they are already in network-local time.
+    """
+    local = dt.astimezone(ZoneInfo(tz_id)) if dt.tzinfo is not None else dt
+    return {
+        "date": {"year": local.year, "month": local.month, "day": local.day},
+        "hour": local.hour,
+        "minute": local.minute,
+        "second": local.second,
+    }
+
+
+def _build_custom_criteria_set(custom_targeting_keys: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a GAM ``CustomCriteriaSet`` from ``{key_id: {values, operator}}``.
+
+    Returns ``None`` when no children would be produced (empty input,
+    non-dict specs, or missing ``values``).
+    """
+    children: list[dict[str, Any]] = []
+    for key_id, value_spec in custom_targeting_keys.items():
+        if not isinstance(value_spec, dict):
+            continue
+        raw_values = value_spec.get("values") or []
+        if not raw_values:
+            continue
+        children.append(
+            {
+                "xsi_type": "CustomCriteria",
+                "keyId": str(key_id),
+                "valueIds": [str(v) for v in raw_values],
+                "operator": value_spec.get("operator", "IS"),
+            }
+        )
+    if not children:
+        return None
+    return {"logicalOperator": "AND", "children": children}
 
 
 class GAMOrdersManager:
@@ -84,18 +132,8 @@ class GAMOrdersManager:
             "traffickerId": self.trafficker_id,
             "status": "DRAFT",  # Start as DRAFT - will approve after line items are created
             "totalBudget": {"currencyCode": currency, "microAmount": int(total_budget * 1_000_000)},
-            "startDateTime": {
-                "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
-                "hour": start_time.hour,
-                "minute": start_time.minute,
-                "second": start_time.second,
-            },
-            "endDateTime": {
-                "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
-                "hour": end_time.hour,
-                "minute": end_time.minute,
-                "second": end_time.second,
-            },
+            "startDateTime": _gam_datetime(start_time, DEFAULT_GAM_TIME_ZONE),
+            "endDateTime": _gam_datetime(end_time, DEFAULT_GAM_TIME_ZONE),
         }
 
         # Add PO number if provided
@@ -433,8 +471,8 @@ class GAMOrdersManager:
             if impl_config.get("targeted_placement_ids"):
                 if "inventoryTargeting" not in line_item_targeting:
                     line_item_targeting["inventoryTargeting"] = {}
-                line_item_targeting["inventoryTargeting"]["targetedPlacements"] = [
-                    {"placementId": placement_id} for placement_id in impl_config["targeted_placement_ids"]
+                line_item_targeting["inventoryTargeting"]["targetedPlacementIds"] = [
+                    str(placement_id) for placement_id in impl_config["targeted_placement_ids"]
                 ]
 
             # Require inventory targeting - no fallback
@@ -451,19 +489,13 @@ class GAMOrdersManager:
                 log(f"[red]Error: {error_msg}[/red]")
                 raise ValueError(error_msg)
 
-            # Add custom targeting from product config
-            # IMPORTANT: Merge without overwriting buyer's targeting (e.g., AEE signals from key_value_pairs)
-            if impl_config.get("custom_targeting_keys"):
-                if "customTargeting" not in line_item_targeting:
-                    line_item_targeting["customTargeting"] = {}
-                # Add product custom targeting, but don't overwrite existing keys from buyer
-                for key, value in impl_config["custom_targeting_keys"].items():
-                    if key not in line_item_targeting["customTargeting"]:
-                        line_item_targeting["customTargeting"][key] = value
-                    else:
-                        log(
-                            f"[yellow]Product config custom targeting key '{key}' conflicts with buyer targeting, keeping buyer value[/yellow]"
-                        )
+            # Add custom targeting from product config as a CustomCriteriaSet.
+            # Skip if the buyer already supplied customTargeting (e.g., AEE signals
+            # from key_value_pairs) so we don't clobber upstream merges.
+            if impl_config.get("custom_targeting_keys") and not line_item_targeting.get("customTargeting"):
+                criteria_set = _build_custom_criteria_set(impl_config["custom_targeting_keys"])
+                if criteria_set is not None:
+                    line_item_targeting["customTargeting"] = criteria_set
 
             # Build creative placeholders from format_ids
             # First try to get from package.format_ids (buyer-specified)
@@ -896,18 +928,12 @@ class GAMOrdersManager:
                 "creativeRotationType": impl_config.get("creative_rotation_type", "EVEN"),
                 "deliveryRateType": impl_config.get("delivery_rate_type", "EVENLY"),
                 "startDateTime": {
-                    "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
-                    "hour": start_time.hour,
-                    "minute": start_time.minute,
-                    "second": start_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
+                    **_gam_datetime(start_time, impl_config.get("time_zone", DEFAULT_GAM_TIME_ZONE)),
+                    "timeZoneId": impl_config.get("time_zone", DEFAULT_GAM_TIME_ZONE),
                 },
                 "endDateTime": {
-                    "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
-                    "hour": end_time.hour,
-                    "minute": end_time.minute,
-                    "second": end_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
+                    **_gam_datetime(end_time, impl_config.get("time_zone", DEFAULT_GAM_TIME_ZONE)),
+                    "timeZoneId": impl_config.get("time_zone", DEFAULT_GAM_TIME_ZONE),
                 },
                 # Set status based on whether manual approval is required
                 # DRAFT = needs manual approval, READY = ready to serve (when creatives added)

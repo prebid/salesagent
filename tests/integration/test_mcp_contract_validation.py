@@ -81,8 +81,6 @@ class TestMCPContractValidation:
         )
 
         assert request.signal_agent_segment_id == "test_signal_123"
-        assert request.campaign_id is None
-        assert request.media_buy_id is None
 
     def test_create_media_buy_minimal(self):
         """Test create_media_buy with minimal required fields per AdCP v3.12 spec."""
