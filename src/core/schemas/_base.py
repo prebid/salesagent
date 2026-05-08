@@ -671,9 +671,7 @@ class Format(LibraryFormat):
         exclude=True,
         description="Internal: Legacy technical specifications (use renders instead)",
     )
-    iab_specification: str | None = Field(
-        None, exclude=True, description="Internal: Name of IAB specification"
-    )
+    iab_specification: str | None = Field(None, exclude=True, description="Internal: Name of IAB specification")
     accepts_3p_tags: bool | None = Field(
         None, exclude=True, description="Internal: Whether format accepts third-party tags"
     )
@@ -2277,6 +2275,15 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
     start_time: str | None = Field(default=None, description="Package start time (ISO 8601)")
     end_time: str | None = Field(default=None, description="Package end time (ISO 8601)")
     paused: bool | None = Field(default=None, description="Whether this package is paused")
+    targeting_overlay: TargetingOverlay | None = Field(
+        default=None,
+        description=(
+            "Targeting overlay echoed from the most recent create_media_buy or "
+            "update_media_buy. Sellers claiming the property-lists or collection-lists "
+            "specialisms include the persisted PropertyListReference / "
+            "CollectionListReference here so buyers can verify what was stored."
+        ),
+    )
     creative_approvals: list["CreativeApproval"] | None = Field(
         default=None, description="Creative approval state for creatives assigned to this package"
     )

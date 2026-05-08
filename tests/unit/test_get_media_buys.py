@@ -371,6 +371,97 @@ class TestGetMediaBuysImpl:
         with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             _get_media_buys_impl(req, None)
 
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list.get_principal_object")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_account_in_request_does_not_raise(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_principal_obj,
+        mock_uow_cls,
+    ):
+        """A request with ``account`` set MUST NOT raise.
+
+        Per AdCP spec, ``account`` on GetMediaBuysRequest is an optional scoping
+        hint, not a hostile field. The principal already scopes to a tenant, so
+        an explicit account reference (used by storyboards and buyer agents to
+        route requests) must be tolerated. Rejecting it caused the
+        media_buy_seller/inventory_list_targeting/get_after_create scenario to
+        surface ``Platform method 'get_media_buys' raised AdCPValidationError``.
+        """
+        from adcp.types import AccountReference
+
+        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+        mock_fetch_buys.return_value = []
+        mock_fetch_packages.return_value = {}
+        mock_fetch_approvals.return_value = {}
+
+        req = self._make_request(
+            account=AccountReference.model_validate(
+                {
+                    "brand": {"domain": "acmeoutdoor.example"},
+                    "operator": "pinnacle-agency.example",
+                    "sandbox": True,
+                }
+            ),
+        )
+        # Must not raise.
+        response = _get_media_buys_impl(req, identity=make_identity())
+        assert response.media_buys == []
+
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list.get_principal_object")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_targeting_overlay_with_property_list_echoed_back(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_principal_obj,
+        mock_uow_cls,
+    ):
+        """Per AdCP spec ``Package.targeting_overlay``: sellers MUST echo back
+        the persisted targeting on get_media_buys, including PropertyListReference
+        / CollectionListReference for sellers claiming the list-targeting
+        specialisms.
+        """
+        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
+        package_config = {
+            "targeting_overlay": {
+                "property_list": {
+                    "agent_url": "https://governance.pinnacle-agency.example",
+                    "list_id": "acme_outdoor_allowlist_v1",
+                },
+                "collection_list": {
+                    "agent_url": "https://governance.pinnacle-agency.example",
+                    "list_id": "acme_outdoor_collections_v1",
+                },
+            },
+        }
+        pkg = make_package(package_config=package_config)
+        mock_fetch_buys.return_value = [buy]
+        mock_fetch_packages.return_value = {"buy_1": [pkg]}
+        mock_fetch_approvals.return_value = {}
+
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=make_identity())
+
+        assert len(response.media_buys) == 1
+        package = response.media_buys[0].packages[0]
+        assert package.targeting_overlay is not None
+        assert package.targeting_overlay.property_list is not None
+        assert package.targeting_overlay.property_list.list_id == "acme_outdoor_allowlist_v1"
+        assert package.targeting_overlay.collection_list is not None
+        assert package.targeting_overlay.collection_list.list_id == "acme_outdoor_collections_v1"
+
 
 class TestGetMediaBuysResponseStructure:
     """Tests for response schema compliance."""

@@ -57,7 +57,7 @@ from adcp.types import MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -68,6 +68,7 @@ from src.core.schemas import (
     GetMediaBuysResponse,
     Snapshot,
     SnapshotUnavailableReason,
+    Targeting,
 )
 from src.core.tools._gam_projection import (
     build_buy_ext,
@@ -98,8 +99,10 @@ def _get_media_buys_impl(
     if identity is None:
         raise AdCPAuthenticationError("Identity is required")
 
-    if req.account is not None:
-        raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
+    # ``req.account`` is an optional spec-defined scoping hint. The principal
+    # already scopes to a tenant, so we tolerate the field rather than reject
+    # the request — buyer agents (and storyboards) routinely pass it for
+    # routing context, not as a hostile filter.
 
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id
@@ -205,6 +208,7 @@ def _get_media_buys_impl(
                     start_time=pkg_config.get("start_time"),
                     end_time=pkg_config.get("end_time"),
                     paused=pkg_config.get("paused"),
+                    targeting_overlay=_build_targeting_overlay(pkg_config),
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
                     snapshot_unavailable_reason=snapshot_unavailable if include_snapshot else None,
@@ -419,3 +423,23 @@ def _map_creative_status(status: str) -> ApprovalStatus:
     if status == "rejected":
         return ApprovalStatus.rejected
     return ApprovalStatus.pending_review
+
+
+def _build_targeting_overlay(pkg_config: dict) -> Targeting | None:
+    """Hydrate the persisted targeting_overlay from package_config.
+
+    Per AdCP spec (``Package.targeting_overlay`` on get_media_buys), sellers
+    must echo the persisted targeting back so buyers can verify what was
+    stored. For sellers claiming the property-lists / collection-lists
+    specialisms, this includes the ``PropertyListReference`` and
+    ``CollectionListReference`` provided on create / update.
+
+    Falls back to the legacy ``targeting`` key for media buys written before
+    the storage migration to ``targeting_overlay``.
+    """
+    raw = pkg_config.get("targeting_overlay") or pkg_config.get("targeting")
+    if not raw:
+        return None
+    if isinstance(raw, Targeting):
+        return raw
+    return Targeting.model_validate(raw)

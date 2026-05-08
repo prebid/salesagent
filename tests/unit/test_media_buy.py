@@ -4178,51 +4178,40 @@ class TestGetMediaBuysImplAuth:
         assert resp.errors is not None
         assert any("principal" in str(e).lower() for e in resp.errors)
 
-    def test_account_not_supported(self):
-        """GMB-A03: account parameter raises 'not yet supported' error.
+    def test_account_is_tolerated(self):
+        """GMB-A03: ``account`` is an optional spec-defined scoping hint and
+        MUST NOT cause the request to fail.
 
-        Spec: CONFIRMED -- account exists in spec (media-buy.json has account field).
-        Priority: P1
-        Type: unit
+        Per AdCP get-media-buys-request.json: "Account to retrieve media buys
+        for. When omitted, returns data across all accessible accounts." The
+        principal already scopes to a tenant, so an explicit account reference
+        used by buyer agents (and storyboards like
+        ``media_buy_seller/inventory_list_targeting``) for routing context is
+        tolerated rather than rejected.
+
+        Spec: CONFIRMED -- account is optional on get-media-buys-request.json.
         Source: get_media_buys
         """
-        from src.core.exceptions import AdCPValidationError
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         req = GetMediaBuysRequest(account={"account_id": "acc_123"})
         identity = ResolvedIdentity(
-            principal_id="principal_1",
+            # No principal short-circuits past the DB lookup so the test
+            # exercises the request-validation path without needing a tenant
+            # context fixture. The presence of ``account`` must not raise.
+            principal_id=None,
             tenant_id="tenant_1",
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
             protocol="mcp",
             testing_context=None,
         )
 
-        with pytest.raises(AdCPValidationError, match="(?i)account.*not.*supported"):
-            _get_media_buys_impl(req, identity=identity)
-
-    def test_account_unsupported_recovery_is_correctable(self):
-        """Unsupported account should be correctable — buyer removes the param.
-
-        Covers: salesagent-bmlk (PR #1083 review)
-        """
-        from src.core.exceptions import AdCPValidationError
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tools.media_buy_list import _get_media_buys_impl
-
-        req = GetMediaBuysRequest(account={"account_id": "acc_123"})
-        identity = ResolvedIdentity(
-            principal_id="principal_1",
-            tenant_id="tenant_1",
-            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
-            protocol="mcp",
-            testing_context=None,
-        )
-
-        with pytest.raises(AdCPValidationError) as exc_info:
-            _get_media_buys_impl(req, identity=identity)
-        assert exc_info.value.recovery == "correctable"
+        # Should not raise. We expect the principal-not-found path (empty list +
+        # error code), not an AdCPValidationError on account.
+        resp = _get_media_buys_impl(req, identity=identity)
+        assert isinstance(resp, GetMediaBuysResponse)
+        assert resp.media_buys == []
 
 
 # ===========================================================================

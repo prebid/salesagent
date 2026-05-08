@@ -412,6 +412,61 @@ def _build_list_creative_formats_response() -> tuple[Any, type]:
     return ListCreativeFormatsResponse(formats=[]), LibResponse
 
 
+def _build_get_media_buys_response_with_list_targeting() -> tuple[Any, type]:
+    """get_media_buys response carrying ``targeting_overlay`` with
+    ``PropertyListReference`` and ``CollectionListReference``.
+
+    Pins the wire shape that the
+    ``media_buy_seller/inventory_list_targeting/get_after_create`` storyboard
+    validates: per AdCP spec ``Package.targeting_overlay``, sellers claiming
+    the property-lists / collection-lists specialisms MUST echo back the
+    persisted list references. This case caused
+    ``Platform method 'get_media_buys' raised AdCPValidationError`` in
+    production before our fix.
+    """
+    from adcp.types import GetMediaBuysResponse as LibResponse
+    from adcp.types import MediaBuyStatus
+
+    from src.core.schemas import (
+        GetMediaBuysMediaBuy,
+        GetMediaBuysPackage,
+        GetMediaBuysResponse,
+        Targeting,
+    )
+
+    overlay = Targeting.model_validate(
+        {
+            "property_list": {
+                "agent_url": "https://governance.pinnacle-agency.example",
+                "list_id": "acme_outdoor_allowlist_v1",
+            },
+            "collection_list": {
+                "agent_url": "https://governance.pinnacle-agency.example",
+                "list_id": "acme_outdoor_collections_v1",
+            },
+        }
+    )
+    return (
+        GetMediaBuysResponse(
+            media_buys=[
+                GetMediaBuysMediaBuy(
+                    media_buy_id="mb_inventory_lists",
+                    status=MediaBuyStatus.active,
+                    currency="USD",
+                    total_budget=20000.0,
+                    packages=[
+                        GetMediaBuysPackage(
+                            package_id="pkg_inventory_lists",
+                            targeting_overlay=overlay,
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        LibResponse,
+    )
+
+
 _WIRE_SHAPE_BUILDERS = [
     ("GetProductsResponse", _build_get_products_response),
     # Cover all three variants of the create_media_buy_response union.
@@ -424,6 +479,7 @@ _WIRE_SHAPE_BUILDERS = [
     ("CreateMediaBuyResult.error", _build_create_media_buy_error),
     ("SyncCreativesResponse", _build_sync_creatives_response),
     ("GetMediaBuyDeliveryResponse", _build_get_media_buy_delivery_response),
+    ("GetMediaBuysResponse.with_list_targeting", _build_get_media_buys_response_with_list_targeting),
     ("ListCreativesResponse", _build_list_creatives_response),
     ("ListCreativeFormatsResponse", _build_list_creative_formats_response),
 ]
