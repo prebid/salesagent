@@ -232,6 +232,14 @@ class GAMTargetingManager:
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             with get_db_session() as session:
+                # GAMTargetingManager runs from the adapter layer, not from
+                # publisher UI — the cache it writes (`adapter_config.
+                # custom_targeting_keys`) is platform infrastructure read by
+                # `resolve_custom_targeting_key_id` at media-buy approval
+                # time. Mark the session so the embedded-tenant guard treats
+                # this the same as the background inventory-sync path that
+                # writes the same field.
+                session.info["platform_background_worker"] = True
                 repo = AdapterConfigRepository(session, self.tenant_id)
                 repo.update_custom_targeting_keys(key_name_to_id)
                 session.commit()
