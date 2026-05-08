@@ -133,9 +133,15 @@ def _list_creatives_impl(
     if effective_media_buy_ids:
         filters_dict["media_buy_ids"] = effective_media_buy_ids
 
-    # Merge structured filters with flat params (flat params take precedence)
+    # Merge structured filters with flat params (flat params take precedence).
+    # The MCP delegate forwards ``filters`` after ``req.model_dump(exclude_unset=True)``,
+    # so it can arrive either as a CreativeFilters model or as a plain dict.
     if filters:
-        filters_dict = {**filters.model_dump(exclude_none=True), **filters_dict}
+        if hasattr(filters, "model_dump"):
+            structured_dict = filters.model_dump(exclude_none=True)
+        else:
+            structured_dict = {k: v for k, v in dict(filters).items() if v is not None}
+        filters_dict = {**structured_dict, **filters_dict}
 
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None

@@ -54,7 +54,7 @@ KNOWN_VIOLATIONS = {
     # _get_products_impl: 1 violation (logging)
     ("products.py", 599),
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 138),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 141),  # filters.model_dump(exclude_none=True)
 }
 
 
