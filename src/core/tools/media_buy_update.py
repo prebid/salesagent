@@ -86,6 +86,80 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 
+# GAM enforces immutability of reservation-affecting fields on guaranteed
+# line items after approval. Without a pre-flight check, the seller
+# discovers the constraint only after Order has been mutated and ~3 min
+# of NO_FORECAST_YET retries have run on the LineItem leg, leaving
+# Order new + LineItem stale + DB new (three-way drift).
+_GUARANTEED_LINE_ITEM_TYPES: set[str] = {"STANDARD", "SPONSORSHIP"}
+_RESERVATION_FIELDS: set[str] = {"start_time", "end_time", "budget"}
+
+
+def _check_guaranteed_immutable(
+    req: UpdateMediaBuyRequest,
+    media_buy_id: str,
+    uow: MediaBuyUoW,
+    session,
+    tenant_id: str,
+) -> UpdateMediaBuyError | None:
+    """Refuse reservation-affecting updates against guaranteed line items.
+
+    Returns ``None`` when the request is safe to proceed. Returns a
+    prepared ``UpdateMediaBuyError`` (code ``guaranteed_line_item_immutable``)
+    when at least one package's product is configured as a guaranteed
+    GAM line item (``STANDARD`` or ``SPONSORSHIP``) and the request
+    touches any reservation field (``start_time``, ``end_time``,
+    ``budget``).
+
+    Default-allow on unknown ``line_item_type`` so this never blocks new
+    GAM types Google introduces later.
+    """
+    requested = set(req.model_dump(exclude_unset=True).keys()) & _RESERVATION_FIELDS
+    if not requested:
+        return None
+
+    from src.core.database.models import Product as ModelProduct
+
+    assert uow.media_buys is not None
+    packages = uow.media_buys.get_packages(media_buy_id)
+    if not packages:
+        return None
+
+    product_ids = {pkg.package_config.get("product_id") for pkg in packages if pkg.package_config}
+    product_ids.discard(None)
+    if not product_ids:
+        return None
+
+    products = session.scalars(
+        select(ModelProduct).where(
+            ModelProduct.tenant_id == tenant_id,
+            ModelProduct.product_id.in_(product_ids),
+        )
+    ).all()
+
+    for product in products:
+        impl_config = product.implementation_config or {}
+        li_type = impl_config.get("line_item_type")
+        if li_type in _GUARANTEED_LINE_ITEM_TYPES:
+            blocked_fields = sorted(requested)
+            return UpdateMediaBuyError(
+                errors=[
+                    Error(
+                        code="guaranteed_line_item_immutable",
+                        message=(
+                            f"Media buy {media_buy_id} is a guaranteed line item "
+                            f"({li_type}); reservation-affecting fields "
+                            f"({', '.join(blocked_fields)}) cannot be modified after "
+                            f"approval. Pause and recreate, or contact the publisher."
+                        ),
+                        details={"line_item_type": li_type, "blocked_fields": blocked_fields},
+                    )
+                ],
+                context=req.context,
+            )
+
+    return None
+
 
 def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: MediaBuyRepository) -> None:
     """Verify that the principal from context owns the media buy.
@@ -352,6 +426,20 @@ def _update_media_buy_impl(
         # Type narrowing: after dry_run early return, step and persistent_ctx are guaranteed to exist
         assert step is not None, "step should be created when not in dry_run mode"
         assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
+
+        # Pre-flight: GAM rejects reservation-affecting mutations on guaranteed
+        # line items after approval. Refusing here avoids ~3min of doomed
+        # NO_FORECAST_YET retries and the half-mutated Order they leave behind.
+        guaranteed_block = _check_guaranteed_immutable(req, media_buy_id_to_use, uow, session, tenant["tenant_id"])
+        if guaranteed_block is not None:
+            err_msg = guaranteed_block.errors[0].message
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="failed",
+                response_data=guaranteed_block.model_dump(mode="json"),
+                error_message=err_msg,
+            )
+            return guaranteed_block
 
         # Check if manual approval is required
         manual_approval_required = adapter.manual_approval_required

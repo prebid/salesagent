@@ -473,7 +473,10 @@ class TestCampaignBudgetValidationAndPersistence:
 
         # Budget should have been persisted via repository
         standard_mocks["uow_instance"].media_buys.update_fields.assert_called()
-        standard_mocks["uow_instance"].media_buys.get_packages.assert_called_once_with("mb_budget")
+        # get_packages is called twice: once by the guaranteed-line-item
+        # pre-flight (#156), once for affected-package tracking. Both
+        # against the same media_buy_id.
+        standard_mocks["uow_instance"].media_buys.get_packages.assert_any_call("mb_budget")
 
     def test_zero_budget_returns_error(self, standard_mocks):
         """When total_budget == 0, rejected at schema level (gt=0) per BR-RULE-008."""
