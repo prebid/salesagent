@@ -288,6 +288,14 @@ class GAMReportingService:
                     "AD_SERVER_IMPRESSIONS",
                     "AD_SERVER_CLICKS",
                     "AD_SERVER_CPM_AND_CPC_REVENUE",  # Revenue/spend - this is always available
+                    # Video VAST events. Returns real values for in-stream
+                    # VIDEO_PLAYER line items; returns zero for outstream
+                    # since VAST events don't fire there. The full classifier-
+                    # plus-merge pattern that handles outstream correctly is
+                    # tracked in #225's Phase 2 (needs a new gam_line_items
+                    # repository). This phase closes the in-stream gap, the
+                    # most common case.
+                    "AD_SERVER_VIDEO_COMPLETIONS",
                 ],
                 "dateRangeType": "CUSTOM_DATE",
                 "startDate": {"year": start_date.year, "month": start_date.month, "day": start_date.day},
@@ -425,6 +433,7 @@ class GAMReportingService:
             "Column.AD_SERVER_IMPRESSIONS": "AD_SERVER_IMPRESSIONS",
             "Column.AD_SERVER_CLICKS": "AD_SERVER_CLICKS",
             "Column.AD_SERVER_CPM_AND_CPC_REVENUE": "AD_SERVER_CPM_AND_CPC_REVENUE",
+            "Column.AD_SERVER_VIDEO_COMPLETIONS": "AD_SERVER_VIDEO_COMPLETIONS",
         }
 
         # Dictionary to store aggregated data
@@ -445,10 +454,14 @@ class GAMReportingService:
             # Skip rows where ALL metrics are zero to reduce data volume.
             # Do NOT skip zero-impression rows that have clicks or revenue —
             # FLAT_RATE/SPONSORSHIP line items accrue spend without impressions.
+            # Video completions also count as a non-zero signal (in-stream
+            # VAST inventory may have completions on rows where the
+            # impression count is non-zero anyway, but be defensive).
             impressions = int(normalized_row.get("AD_SERVER_IMPRESSIONS", 0) or 0)
             clicks = int(normalized_row.get("AD_SERVER_CLICKS", 0) or 0)
             revenue = float(normalized_row.get("AD_SERVER_CPM_AND_CPC_REVENUE", 0) or 0)
-            if impressions == 0 and clicks == 0 and revenue == 0:
+            video_completions = int(normalized_row.get("AD_SERVER_VIDEO_COMPLETIONS", 0) or 0)
+            if impressions == 0 and clicks == 0 and revenue == 0 and video_completions == 0:
                 continue
 
             # Build aggregation key from dimensions
@@ -480,6 +493,7 @@ class GAMReportingService:
                     "impressions": 0,
                     "clicks": 0,
                     "revenue_micros": 0,  # Keep in micros for accurate summing
+                    "video_completions": 0,
                     "row_count": 0,  # Track number of rows aggregated
                 }
 
@@ -488,6 +502,7 @@ class GAMReportingService:
             agg["impressions"] += int(normalized_row.get("AD_SERVER_IMPRESSIONS", 0) or 0)
             agg["clicks"] += int(normalized_row.get("AD_SERVER_CLICKS", 0) or 0)
             agg["revenue_micros"] += float(normalized_row.get("AD_SERVER_CPM_AND_CPC_REVENUE", 0) or 0)
+            agg["video_completions"] += int(normalized_row.get("AD_SERVER_VIDEO_COMPLETIONS", 0) or 0)
             agg["row_count"] += 1
 
         # Convert aggregated data to list and calculate derived metrics
@@ -522,6 +537,7 @@ class GAMReportingService:
                 "ctr": round(ctr, 4),
                 "spend": round(spend, 2),
                 "cpm": round(cpm, 2),  # Changed from ecpm to cpm for clarity
+                "video_completions": agg_data.get("video_completions", 0),
                 "aggregated_rows": agg_data["row_count"],  # Useful for debugging
             }
 
@@ -613,6 +629,7 @@ class GAMReportingService:
         total_impressions = sum(row["impressions"] for row in data)
         total_clicks = sum(row["clicks"] for row in data)
         total_spend = sum(row["spend"] for row in data)
+        total_video_completions = sum(row.get("video_completions", 0) for row in data)
 
         # Calculate averages
         avg_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0.0
@@ -629,6 +646,7 @@ class GAMReportingService:
             "total_spend": round(total_spend, 2),
             "average_ctr": round(avg_ctr, 4),
             "average_ecpm": round(avg_ecpm, 2),
+            "total_video_completions": total_video_completions,
             "unique_advertisers": unique_advertisers,
             "unique_orders": unique_orders,
             "unique_line_items": unique_line_items,

@@ -316,7 +316,15 @@ class TestGetMediaBuyDeliveryResponseMethods:
 
 class TestAdapterPackageDelivery:
     def test_fields(self):
-        assert set(AdapterPackageDelivery.model_fields.keys()) == {"package_id", "impressions", "spend", "by_placement"}
+        # video_completions added in #225 Phase 1 — surfaces in-stream
+        # VAST completions to the impl layer.
+        assert set(AdapterPackageDelivery.model_fields.keys()) == {
+            "package_id",
+            "impressions",
+            "spend",
+            "video_completions",
+            "by_placement",
+        }
 
     def test_construction(self):
         obj = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=5.0)

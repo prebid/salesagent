@@ -346,6 +346,10 @@ class AdapterPackageDelivery(SalesAgentBaseModel):
     package_id: str
     impressions: int
     spend: float
+    # Video completions surfaced from in-stream VAST inventory.
+    # Outstream returns zero (VAST events don't fire) — addressed by the
+    # full classifier-plus-merge in #225 Phase 2.
+    video_completions: int | None = None
     by_placement: list[dict[str, Any]] | None = None
 
 
