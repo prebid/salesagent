@@ -43,9 +43,10 @@ class TestCreativeListingBoundary:
         assert c.name == "Test Creative"
         assert c.format_id.id == "display_300x250"
 
-    def test_creative_variants_accepted_post_v44(self):
-        """adcp 4.4 added ``variants`` as a public Creative field on the
-        delivery-response shape; salesagent's Creative now accepts it.
+    def test_creative_variants_silently_stripped(self):
+        """``variants`` belongs to the delivery-response Creative variant, not
+        the listing variant we extend. The before-validator drops it on input
+        rather than rejecting — preserves backward-compat with old callers.
         """
         from src.core.schemas import Creative, FormatId
 
@@ -56,7 +57,7 @@ class TestCreativeListingBoundary:
             variants=[],
         )
         assert c.creative_id == "c1"
-        assert c.variants == [] or c.variants is None
+        assert not hasattr(c, "variants")
 
     def test_creative_without_creative_id_is_rejected(self):
         """creative_id is REQUIRED — missing it must raise ValidationError."""

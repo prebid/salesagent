@@ -167,14 +167,12 @@ class Creative(LibraryCreative):
     updated_date: datetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Update timestamp")
     # Override assets to untyped dict (our DB stores arbitrary asset dicts, not typed models)
     assets: dict[str, Any] | None = Field(default=None, description="Creative assets")
-    # Library v4.4.0 made variants required and dropped tags. Salesagent's
-    # creative ORM column is variants-less and predates the change; default
-    # to empty list so legacy creatives still serialize without a forced
-    # backfill. Tests asserting AdCP compliance now need to expect either an
-    # empty list or omit the field — the override makes both work.
-    variants: list[Any] | None = Field(default=None, description="AdCP creative variants (v4.4.0+)")
 
     # === AI Provenance (EU AI Act Article 50) ===
+    # Library 4.5.0 ships provenance on CreativeAsset (sync shape) but not on
+    # the listing Creative we extend. Salesagent surfaces it on listings too
+    # because sellers need to see disclosure metadata when reviewing — track
+    # spec inclusion in adcp issue (TBD).
     provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
 
     # === Internal Fields (excluded from AdCP responses) ===
