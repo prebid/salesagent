@@ -22,6 +22,8 @@ from adcp.types import (
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 from adcp.types import Format as LibraryFormat
 from adcp.types import FormatId as LibraryFormatId
+from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
+from adcp.types import GetMediaBuysResponse as LibraryGetMediaBuysResponse
 from adcp.types import PackageRequest as LibraryPackageRequest
 from adcp.types import PackageUpdate as LibraryPackageUpdate
 from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
@@ -2370,21 +2372,23 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
         return result
 
 
-class GetMediaBuysRequest(SalesAgentBaseModel):
-    """Request to retrieve media buys.
+class GetMediaBuysRequest(LibraryGetMediaBuysRequest):
+    """Request to retrieve media buys (extends library GetMediaBuysRequest).
 
-    NOTE: standalone class (does not extend library GetMediaBuysRequest) because
-    salesagent treats ``include_snapshot``/``include_history`` as transport-only
-    flags, not buyer-facing fields. The library exposes them as request fields
-    per spec; we deliberately reject them at the schema layer to enforce the
-    policy. Track salesagent issue before moving to Pattern #1.
+    Inherits all spec fields from the library: ``media_buy_ids``,
+    ``status_filter``, ``account``, ``context``, ``include_snapshot``,
+    ``include_history``, ``pagination``, ``ext``.
+
+    Overrides ``ext`` to document the salesagent-specific ``psa.*`` keys
+    (webhook activity opt-in).
+
+    ``include_history`` is accepted per spec but not yet honored by the impl;
+    revisions are surfaced via separate audit-log tooling.
     """
 
-    media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
-    status_filter: Any | None = Field(default=None, description="Filter by status (MediaBuyStatus or list)")
-    account: LibraryAccountReference | None = Field(default=None, description="Account reference (AdCP 3.x)")
-    context: ContextObject | None = Field(default=None, description="Application-level context")
-    ext: dict | None = Field(
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    ext: dict | None = Field(  # type: ignore[assignment]
         default=None,
         description=(
             "Vendor-namespaced extension object. Recognized keys: "
@@ -2397,16 +2401,19 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
     )
 
 
-class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
-    """Response from get_media_buys.
+class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse):
+    """Response from get_media_buys (extends library GetMediaBuysResponse).
 
-    NOTE: standalone class (does not extend library GetMediaBuysResponse).
-    Track salesagent issue before moving to Pattern #1 alongside the request.
+    Redeclares ``media_buys`` to use the salesagent ``GetMediaBuysMediaBuy``
+    variant, which carries ``ext`` for GAM-projection provenance and per-package
+    ``snapshot_unavailable_reason`` reporting.
     """
 
-    media_buys: list[GetMediaBuysMediaBuy] = Field(..., description="List of matching media buys")
-    errors: list[Any] | None = Field(default=None, description="Errors encountered during retrieval")
-    context: ContextObject | None = Field(default=None, description="Application-level context from the request")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    media_buys: list[GetMediaBuysMediaBuy] = Field(  # type: ignore[assignment]
+        ..., description="List of matching media buys"
+    )
 
     def model_dump(self, **kwargs):
         result = super().model_dump(**kwargs)

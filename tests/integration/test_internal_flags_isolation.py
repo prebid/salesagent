@@ -1,8 +1,12 @@
 """Integration tests: internal behavior flags must not be controllable by external callers.
 
-Security regression tests for salesagent-1dj and salesagent-su1.
-Proves that include_performance, include_sub_assets, and include_snapshot
-cannot be injected by buyers through request objects.
+Security regression tests for salesagent-1dj.
+Proves that include_performance and include_sub_assets — flags removed from
+the AdCP spec but still meaningful to salesagent — cannot be injected by
+buyers through ``ListCreativesRequest``.
+
+GetMediaBuysRequest's ``include_snapshot`` is intentionally NOT covered here:
+it is a buyer-facing spec field per AdCP and is honored from the request.
 
 Uses the CreativeListEnv harness for real DB integration testing.
 """
@@ -54,15 +58,3 @@ class TestListCreativesInternalFlagsIsolation:
 
             response = env.call_mcp()
             assert response is not None
-
-
-@pytest.mark.requires_db
-class TestGetMediaBuysInternalFlagsIsolation:
-    """Verify include_snapshot cannot be injected via request object."""
-
-    def test_request_object_rejects_include_snapshot(self, integration_db):
-        """GetMediaBuysRequest schema must reject include_snapshot (not in AdCP spec)."""
-        from src.core.schemas import GetMediaBuysRequest
-
-        with pytest.raises(ValidationError, match="include_snapshot"):
-            GetMediaBuysRequest(include_snapshot=True)

@@ -87,19 +87,19 @@ from src.core.tools._gam_projection import (
 def _get_media_buys_impl(
     req: GetMediaBuysRequest,
     identity: ResolvedIdentity | None = None,
-    include_snapshot: bool = False,
 ) -> GetMediaBuysResponse:
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 
     Args:
-        req: Validated GetMediaBuysRequest with all protocol fields
+        req: Validated GetMediaBuysRequest with all protocol fields, including
+            ``include_snapshot`` (per AdCP spec) which when true causes each
+            package to carry a near-real-time delivery snapshot.
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
-        include_snapshot: When True, include near-real-time delivery stats per package.
-            This is an internal flag controlled by transport wrappers, not by the request object.
 
     Returns:
         GetMediaBuysResponse with matching media buys
     """
+    include_snapshot = bool(req.include_snapshot)
     if identity is None:
         raise AdCPAuthenticationError("Identity is required")
 

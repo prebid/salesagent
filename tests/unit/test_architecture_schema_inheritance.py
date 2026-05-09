@@ -248,6 +248,12 @@ class TestSchemaInheritance:
             ("TargetingOverlay", "geo_regions_exclude"),
             ("TargetingOverlay", "geo_metros_exclude"),
             ("TargetingOverlay", "geo_postal_areas_exclude"),
+            # GetMediaBuysRequest.ext — custom description documenting psa.* keys
+            # (include_webhook_activity, webhook_activity_limit) used by salesagent.
+            ("GetMediaBuysRequest", "ext"),
+            # GetMediaBuysResponse.media_buys — local GetMediaBuysMediaBuy carries
+            # snapshot_unavailable_reason and ext for GAM-projection provenance.
+            ("GetMediaBuysResponse", "media_buys"),
         }
 
         violations = []

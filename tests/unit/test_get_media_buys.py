@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
-from pydantic import RootModel, ValidationError
+from pydantic import RootModel
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -416,8 +416,8 @@ class TestGetMediaBuysImpl:
         mock_adapter.get_packages_snapshot = MagicMock()
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
-            req = self._make_request()
-            _get_media_buys_impl(req, identity=make_identity(), include_snapshot=False)
+            req = self._make_request(include_snapshot=False)
+            _get_media_buys_impl(req, identity=make_identity())
 
         mock_adapter.get_packages_snapshot.assert_not_called()
 
@@ -455,8 +455,8 @@ class TestGetMediaBuysImpl:
         mock_adapter.get_packages_snapshot.return_value = {"buy_1": {"pkg_1": snapshot}}
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
-            req = self._make_request()
-            response = _get_media_buys_impl(req, identity=make_identity(), include_snapshot=True)
+            req = self._make_request(include_snapshot=True)
+            response = _get_media_buys_impl(req, identity=make_identity())
 
         mock_adapter.get_packages_snapshot.assert_called_once()
         # The package_refs passed should include the platform_line_item_id
@@ -492,8 +492,8 @@ class TestGetMediaBuysImpl:
         mock_adapter.capabilities.supports_realtime_reporting = False
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
-            req = self._make_request()
-            response = _get_media_buys_impl(req, identity=make_identity(), include_snapshot=True)
+            req = self._make_request(include_snapshot=True)
+            response = _get_media_buys_impl(req, identity=make_identity())
 
         pkg_response = response.media_buys[0].packages[0]
         assert pkg_response.snapshot is None
@@ -741,24 +741,6 @@ class TestGetMediaBuysResponseStructure:
 
 
 # ---------------------------------------------------------------------------
-# Security regression: internal flags must not be in request objects
+# include_snapshot is buyer-facing per AdCP spec — extends LibraryGetMediaBuysRequest.
+# Snapshot semantics are exercised in TestGetMediaBuysImpl above.
 # ---------------------------------------------------------------------------
-
-
-class TestGetMediaBuysRequestRejectsInternalFlags:
-    """Regression: internal behavior flags must NOT be accepted by GetMediaBuysRequest.
-
-    External callers must never control _impl behavior through the request object.
-    Flags like include_snapshot are passed as explicit _impl parameters by transport
-    wrappers, not embedded in the request.
-    """
-
-    def test_include_snapshot_rejected(self):
-        """include_snapshot must NOT be accepted by GetMediaBuysRequest."""
-        with pytest.raises(ValidationError):
-            GetMediaBuysRequest(include_snapshot=True)
-
-    def test_include_snapshot_false_also_rejected(self):
-        """Even include_snapshot=False must be rejected — the field doesn't belong here."""
-        with pytest.raises(ValidationError):
-            GetMediaBuysRequest(include_snapshot=False)

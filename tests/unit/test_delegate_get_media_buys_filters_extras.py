@@ -1,20 +1,19 @@
-"""Regression test: ``_coerce_to_request_model`` must filter framework-injected
-fields not declared on the impl-local schema.
+"""Regression test: ``_coerce_to_request_model`` round-trips library-shape
+requests into the impl-local schema without raising.
 
-Issue #273: ``get_media_buys`` raises ``INTERNAL_ERROR: ... raised
-ValidationError; see details for cause`` when invoked from the AdCP
-storyboard (or any spec-compliant client). The framework's
-``GetMediaBuysRequest`` carries ``adcp_major_version=3``,
-``include_snapshot=False``, ``include_history=0`` (defaults from the
-library schema). Our impl-local ``GetMediaBuysRequest`` deliberately
-doesn't expose these fields (transport-only flags policy, see
-``src/core/schemas/_base.py`` docstring), so dev-mode ``extra='forbid'``
-rejects them and the request never reaches the impl.
+Original context (#273): ``get_media_buys`` returned ``INTERNAL_ERROR`` when the
+framework handed the delegate a library ``GetMediaBuysRequest`` carrying
+default-populated fields the impl-local schema didn't declare
+(``include_snapshot``, ``include_history``, ``adcp_major_version``). The
+filter in ``_coerce_to_request_model`` makes the framework→impl hop robust.
 
-The fix filters the dumped dict to keys the target ``model_cls``
-actually declares. This preserves the explicit-rejection semantics for
-genuinely unknown buyer-supplied fields while making the framework→impl
-hop robust to upstream schema growth.
+Issue #262 collapsed the impl-local schema onto the library type — the local
+``GetMediaBuysRequest`` now extends ``LibraryGetMediaBuysRequest`` and honors
+``include_snapshot``/``include_history`` per AdCP spec — so the framework
+fields are no longer "extras" relative to the local schema. The filter still
+exists because other request types may need it, and the framework round-trip
+must remain robust to future spec growth on any request model. Dict input
+remains strict so internal typos still surface.
 """
 
 from __future__ import annotations
@@ -22,25 +21,26 @@ from __future__ import annotations
 import pytest
 
 
-def test_coerce_filters_framework_extras_for_get_media_buys() -> None:
-    """Framework-injected fields must be filtered, not raise ValidationError."""
+def test_coerce_propagates_framework_fields_for_get_media_buys() -> None:
+    """Framework-injected library fields round-trip to the impl-local schema.
+
+    With #262, the local schema extends the library, so ``include_snapshot``
+    and ``include_history`` now propagate verbatim.
+    """
     from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
 
     from core.platforms._delegate import _coerce_to_request_model
     from src.core.schemas import GetMediaBuysRequest as LocalGetMediaBuysRequest
 
-    # Build a library-shape request the way the framework hands it to the
-    # delegate — defaults populate the transport-only flags.
-    lib_req = LibraryGetMediaBuysRequest(media_buy_ids=["mb_1"])
-    assert lib_req.include_snapshot is False, "library schema must populate the default we filter"
+    lib_req = LibraryGetMediaBuysRequest(media_buy_ids=["mb_1"], include_snapshot=True)
+    assert lib_req.include_snapshot is True
 
-    # Coerce to our local schema — must NOT raise on extra fields.
     local_req = _coerce_to_request_model(lib_req, LocalGetMediaBuysRequest)
 
     assert isinstance(local_req, LocalGetMediaBuysRequest)
     assert local_req.media_buy_ids == ["mb_1"]
-    assert not hasattr(local_req, "include_snapshot"), (
-        "include_snapshot is transport-only — must not propagate to local schema"
+    assert local_req.include_snapshot is True, (
+        "include_snapshot is a buyer-facing AdCP spec field — must propagate"
     )
 
 
