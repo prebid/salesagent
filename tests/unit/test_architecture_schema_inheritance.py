@@ -237,6 +237,12 @@ class TestSchemaInheritance:
             # Schema overrides for partial-construction tolerance / wider types
             ("Creative", "variants"),
             ("SyncCreativeResult", "status"),
+            # GetMediaBuysRequest.ext — custom description documenting psa.* keys
+            # (include_webhook_activity, webhook_activity_limit) used by salesagent.
+            ("GetMediaBuysRequest", "ext"),
+            # GetMediaBuysResponse.media_buys — local GetMediaBuysMediaBuy carries
+            # snapshot_unavailable_reason and ext for GAM-projection provenance.
+            ("GetMediaBuysResponse", "media_buys"),
         }
 
         violations = []
