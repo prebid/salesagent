@@ -12,10 +12,12 @@ Design principles:
 """
 
 import json
+import logging
 from pathlib import Path
 
 from adcp.types import FormatId as LibraryFormatId
 
+from src.core._deprecations import LEGACY_FORMAT_ID_SUNSET, warn_deprecated
 from src.core.schemas import FormatId, url
 
 # Default agent URL for AdCP reference implementation
@@ -110,10 +112,6 @@ def upgrade_legacy_format_id(format_id_value: str | dict | FormatId) -> FormatId
 
     # Legacy string format - upgrade to namespaced format (DEPRECATED)
     if isinstance(format_id_value, str):
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         # Check cache for agent_url
         cache = load_format_cache()
 
@@ -127,11 +125,17 @@ def upgrade_legacy_format_id(format_id_value: str | dict | FormatId) -> FormatId
 
         agent_url = cache[format_id_value]
 
-        # Log deprecation warning
-        logger.warning(
-            f"⚠️  DEPRECATED: String format_id '{format_id_value}' received. "
-            f"Use structured format: {{'agent_url': '{agent_url}', 'id': '{format_id_value}'}}. "
-            f"String format_ids will be removed in a future version."
+        # DeprecationWarning surfaces in caller's test runner / log stream
+        # (audience: buyer); log line surfaces in our server logs (audience:
+        # operators). Different audiences, both worth keeping.
+        warn_deprecated(
+            f"String format_id '{format_id_value}' is deprecated; send the structured shape "
+            f"{{'agent_url': '{agent_url}', 'id': '{format_id_value}'}}. "
+            f"String format_ids will be removed in {LEGACY_FORMAT_ID_SUNSET}."
+        )
+        logging.getLogger(__name__).warning(
+            f"DEPRECATED string format_id '{format_id_value}' (sunset {LEGACY_FORMAT_ID_SUNSET}); "
+            f"buyer should send {{'agent_url': '{agent_url}', 'id': '{format_id_value}'}}"
         )
 
         return FormatId(agent_url=url(agent_url), id=format_id_value)

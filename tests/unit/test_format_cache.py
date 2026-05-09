@@ -69,6 +69,24 @@ def test_upgrade_unknown_string_format_fails():
         upgrade_legacy_format_id("unknown_custom_format_xyz")
 
 
+def test_upgrade_legacy_string_emits_deprecation_warning():
+    """String format_id upgrade emits DeprecationWarning naming the sunset target.
+
+    Buyers still on the legacy wire shape need a migration signal in their own
+    test runs / log streams, not just a server-side log line. Issue #289.
+    """
+    from src.core._deprecations import LEGACY_FORMAT_ID_SUNSET
+
+    with pytest.warns(DeprecationWarning, match=r"display_300x250") as captured:
+        result = upgrade_legacy_format_id("display_300x250")
+
+    assert isinstance(result, FormatId)
+    assert result.id == "display_300x250"
+    assert any(LEGACY_FORMAT_ID_SUNSET in str(w.message) for w in captured), (
+        f"sunset version {LEGACY_FORMAT_ID_SUNSET} should appear in the warning"
+    )
+
+
 def test_common_formats_in_cache():
     """Test common IAB formats are in the cache."""
     common_formats = [

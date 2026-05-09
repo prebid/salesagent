@@ -61,6 +61,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.core._deprecations import LEGACY_FORMAT_ID_SUNSET, warn_deprecated
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
     FormatId,
@@ -150,6 +151,13 @@ def _upgrade_format_id_in_values(values: Any) -> Any:
     Used by both ``Creative`` (listing shape) and ``CreativeAsset`` (sync shape) so
     string format_ids, the legacy ``format`` key, and library-typed ``FormatReferenceStructuredObject``
     instances are all normalized to the local ``FormatId`` subclass.
+
+    Buyer-facing legacy shapes emit ``DeprecationWarning`` (sunset target
+    ``LEGACY_FORMAT_ID_SUNSET``):
+    - String ``format_id`` (warns inside ``upgrade_legacy_format_id``)
+    - Legacy ``format`` key in place of ``format_id`` (warned here)
+    Library-typed ``FormatReferenceStructuredObject`` conversion is silent because
+    it is internal plumbing, not buyer-facing.
     """
     from pydantic import BaseModel
 
@@ -162,6 +170,12 @@ def _upgrade_format_id_in_values(values: Any) -> Any:
 
     if not isinstance(values, dict):
         return values
+
+    if "format" in values and "format_id" not in values:
+        warn_deprecated(
+            f"Legacy creative key 'format' is deprecated; use 'format_id'. "
+            f"Will be removed in {LEGACY_FORMAT_ID_SUNSET}."
+        )
 
     format_val = values.get("format_id") or values.get("format")
     if format_val is not None:
@@ -224,8 +238,18 @@ class Creative(LibraryCreative):
     # Library 4.5.0 ships provenance on CreativeAsset (sync shape) but not on
     # the listing Creative we extend. Salesagent surfaces it on listings too
     # because sellers need to see disclosure metadata when reviewing — track
-    # spec inclusion in adcp issue (TBD).
-    provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
+    # spec inclusion in adcp RFC #4282.
+    provenance: Provenance | None = Field(
+        default=None,
+        description=(
+            "AI provenance metadata per EU AI Act Article 50. "
+            "On the listing wire (list_creatives) this is a salesagent extension "
+            "surfacing the sync-side provenance back to sellers for review; the "
+            "canonical write path is sync_creatives. Becomes spec-native once "
+            "AdCP RFC #4282 lands upstream — if the upstream shape is incompatible "
+            "with the local Provenance, this extension is removed (not migrated)."
+        ),
+    )
 
     # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(
