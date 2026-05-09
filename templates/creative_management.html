@@ -545,27 +545,34 @@ document.getElementById('previewModal')?.addEventListener('click', function(e) {
     }
 });
 
-// Scroll to and highlight creative if hash is present
+// Scroll to and highlight creative if it's referenced in the URL.
+// Accepts both `#creative_id` (anchor) and `?creative_id=X` (query
+// param) — the buy-detail page links use the query-param form so the
+// referrer parses cleanly server-side.
 document.addEventListener('DOMContentLoaded', function() {
-    if (window.location.hash) {
-        const creativeId = window.location.hash.substring(1);
+    const params = new URLSearchParams(window.location.search);
+    const creativeId =
+        (window.location.hash && window.location.hash.substring(1)) ||
+        params.get('creative_id');
+
+    if (creativeId) {
         const creativeCard = document.getElementById(creativeId);
 
         if (creativeCard) {
-            // Scroll to the creative with smooth behavior
             setTimeout(() => {
                 creativeCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-                // Highlight the creative briefly
+                // Pulse first to draw the eye, then settle into a
+                // persistent outline so the operator doesn't lose track
+                // of which creative they came in to review.
                 creativeCard.style.transition = 'all 0.3s ease';
-                creativeCard.style.boxShadow = '0 0 0 4px #3b82f6';
+                creativeCard.style.boxShadow = '0 0 0 6px #3b82f6';
                 creativeCard.style.transform = 'scale(1.02)';
 
-                // Remove highlight after 2 seconds
                 setTimeout(() => {
-                    creativeCard.style.boxShadow = '';
+                    creativeCard.style.boxShadow = '0 0 0 3px #3b82f6';
                     creativeCard.style.transform = '';
-                }, 2000);
+                }, 1500);
             }, 100);
         }
     }
