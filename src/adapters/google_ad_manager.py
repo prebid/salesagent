@@ -1043,7 +1043,7 @@ class GoogleAdManager(AdServerAdapter):
                 reporting_period=date_range,
                 by_package=[],
                 totals=DeliveryTotals(
-                    impressions=0, spend=0, clicks=None, ctr=None, video_completions=None, completion_rate=None
+                    impressions=0, spend=0, clicks=None, ctr=None, completed_views=None, completion_rate=None
                 ),
                 currency="USD",
             )
@@ -1056,7 +1056,7 @@ class GoogleAdManager(AdServerAdapter):
                 reporting_period=date_range,
                 by_package=[],
                 totals=DeliveryTotals(
-                    impressions=0, spend=0, clicks=None, ctr=None, video_completions=None, completion_rate=None
+                    impressions=0, spend=0, clicks=None, ctr=None, completed_views=None, completion_rate=None
                 ),
                 currency="USD",
             )
@@ -1080,7 +1080,7 @@ class GoogleAdManager(AdServerAdapter):
                         spend=0,
                         clicks=0,
                         ctr=0.0,
-                        video_completions=None,
+                        completed_views=None,
                         completion_rate=None,
                     ),
                     currency="USD",
@@ -1106,7 +1106,7 @@ class GoogleAdManager(AdServerAdapter):
                     spend=total_budget * progress,
                     clicks=int(total_budget * 1000 * progress * 0.01),  # 1% CTR
                     ctr=1.0,
-                    video_completions=None,
+                    completed_views=None,
                     completion_rate=None,
                 ),
                 currency=str(media_buy.currency or "USD"),
@@ -1232,7 +1232,7 @@ class GoogleAdManager(AdServerAdapter):
                             # is dropped via exclude_none. Zero would falsely
                             # claim "we measured zero VAST events" on a
                             # display-only package.
-                            video_completions=pkg_video if pkg_video > 0 else None,
+                            completed_views=pkg_video if pkg_video > 0 else None,
                         )
                     )
 
@@ -1249,7 +1249,7 @@ class GoogleAdManager(AdServerAdapter):
                 # response doesn't claim "measured zero" on a display-only
                 # buy. Real values are surfaced when in-stream inventory
                 # delivered them.
-                video_completions=total_video_completions if total_video_completions > 0 else None,
+                completed_views=total_video_completions if total_video_completions > 0 else None,
                 completion_rate=(
                     round(total_video_completions / total_impressions, 4)
                     if total_video_completions > 0 and total_impressions > 0

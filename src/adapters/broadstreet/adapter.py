@@ -563,7 +563,7 @@ class BroadstreetAdapter(AdServerAdapter):
                     spend=spend,
                     clicks=int(impressions * 0.002),  # 0.2% CTR
                     ctr=0.2,
-                    video_completions=0,
+                    completed_views=0,
                     completion_rate=0.0,
                 ),
                 by_package=[],
@@ -575,7 +575,7 @@ class BroadstreetAdapter(AdServerAdapter):
         return AdapterGetMediaBuyDeliveryResponse(
             media_buy_id=media_buy_id,
             reporting_period=date_range,
-            totals=DeliveryTotals(impressions=0, spend=0, clicks=0, ctr=0.0, video_completions=0, completion_rate=0.0),
+            totals=DeliveryTotals(impressions=0, spend=0, clicks=0, ctr=0.0, completed_views=0, completion_rate=0.0),
             by_package=[],
             currency="USD",
         )

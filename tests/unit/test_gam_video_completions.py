@@ -1,10 +1,14 @@
-"""Tests for video-completion metric flow through GAM reporting.
+"""Tests for completed-view metric flow through GAM reporting.
 
 Covers tescoboy issue #225 (Phase 1): pre-fix `get_media_buy_delivery`
-emitted ``video_completions=None`` on every video buy because the GAM
+emitted ``completed_views=None`` on every video buy because the GAM
 report query never requested any video columns. The Phase 1 scope ships
 the ``AD_SERVER_VIDEO_COMPLETIONS`` column through the report pipeline
 and surfaces it on ``DeliveryTotals`` and ``AdapterPackageDelivery``.
+
+The GAM reporting service uses GAM-native key names internally
+(``video_completions``, ``total_video_completions``); the AdCP-facing
+schemas use ``completed_views`` per spec.
 
 This closes the in-stream VAST gap (the most common case). Outstream
 inventory still returns zero because VAST events don't fire on outstream
@@ -125,19 +129,19 @@ class TestCalculateMetricsTotalsVideoCompletions:
 class TestAdapterPackageDeliveryVideoField:
     def test_field_optional_and_defaults_to_none(self):
         pkg = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=12.5)
-        assert pkg.video_completions is None
+        assert pkg.completed_views is None
 
     def test_explicit_value_preserved(self):
-        pkg = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=12.5, video_completions=750)
-        assert pkg.video_completions == 750
+        pkg = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=12.5, completed_views=750)
+        assert pkg.completed_views == 750
 
-    def test_wire_dump_excludes_none_video_completions(self):
+    def test_wire_dump_excludes_none_completed_views(self):
         pkg = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=12.5)
         wire = pkg.model_dump(exclude_none=True)
-        assert "video_completions" not in wire
+        assert "completed_views" not in wire
 
-    def test_wire_dump_includes_zero_video_completions(self):
+    def test_wire_dump_includes_zero_completed_views(self):
         # Zero is a valid measurement (e.g. early in flight); preserved.
-        pkg = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=12.5, video_completions=0)
+        pkg = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=12.5, completed_views=0)
         wire = pkg.model_dump(exclude_none=True)
-        assert wire["video_completions"] == 0
+        assert wire["completed_views"] == 0

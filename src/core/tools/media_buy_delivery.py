@@ -113,7 +113,7 @@ def _get_media_buy_delivery_impl(
                 impressions=0.0,
                 spend=0.0,
                 clicks=None,
-                video_completions=None,
+                completed_views=None,
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
@@ -134,7 +134,7 @@ def _get_media_buy_delivery_impl(
                 impressions=0.0,
                 spend=0.0,
                 clicks=None,
-                video_completions=None,
+                completed_views=None,
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
@@ -164,7 +164,7 @@ def _get_media_buy_delivery_impl(
                 impressions=0.0,
                 spend=0.0,
                 clicks=None,
-                video_completions=None,
+                completed_views=None,
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
@@ -303,7 +303,7 @@ def _get_media_buy_delivery_impl(
                                 "impressions": float(adapter_pkg.impressions),
                                 "spend": float(adapter_pkg.spend),
                                 "clicks": None,  # AdapterPackageDelivery doesn't have clicks yet
-                                "video_completions": adapter_pkg.video_completions,
+                                "completed_views": adapter_pkg.completed_views,
                                 "by_placement": adapter_pkg.by_placement,
                             }
                             total_spend_from_adapter += float(adapter_pkg.spend)
@@ -359,7 +359,7 @@ def _get_media_buy_delivery_impl(
                                 impressions=0.0,
                                 spend=0.0,
                                 clicks=None,
-                                video_completions=None,
+                                completed_views=None,
                                 media_buy_count=0,
                             ),
                             media_buy_deliveries=[],
@@ -415,7 +415,7 @@ def _get_media_buy_delivery_impl(
 
                         # Get REAL per-package metrics from adapter if available, otherwise divide equally
                         raw_placements: list[dict[str, Any]] | None = None
-                        package_video_completions: int | None = None
+                        package_completed_views: int | None = None
                         if package_id in adapter_package_metrics:
                             # Use real metrics from adapter
                             pkg_metrics = adapter_package_metrics[package_id]
@@ -423,8 +423,8 @@ def _get_media_buy_delivery_impl(
                             package_impressions = pkg_metrics["impressions"]
                             _raw = pkg_metrics.get("by_placement")
                             raw_placements = _raw if isinstance(_raw, list) else None
-                            _vc = pkg_metrics.get("video_completions")
-                            package_video_completions = int(_vc) if isinstance(_vc, int | float) else None
+                            _vc = pkg_metrics.get("completed_views")
+                            package_completed_views = int(_vc) if isinstance(_vc, int | float) else None
                         else:
                             # Fallback: divide equally if adapter didn't return this package
                             package_spend = spend / len(packages)
@@ -467,7 +467,7 @@ def _get_media_buy_delivery_impl(
                                 # Sourced from adapter (in-stream VAST). None
                                 # for outstream/display since VAST events
                                 # don't fire there — see #225 Phase 2.
-                                video_completions=package_video_completions,
+                                completed_views=package_completed_views,
                                 pacing_index=1.0 if status == "active" else 0.0,
                                 # Add pricing fields from package_config
                                 pricing_model=pricing_info.get("pricing_model") if pricing_info else None,
@@ -527,7 +527,7 @@ def _get_media_buy_delivery_impl(
                         spend=spend,
                         clicks=clicks,  # Optional field
                         ctr=ctr,  # Optional field
-                        video_completions=None,  # Optional field
+                        completed_views=None,  # Optional field
                         completion_rate=None,  # Optional field
                         conversions=adapter_conversions,  # From adapter totals
                         viewability=adapter_viewability,  # From adapter totals
@@ -595,7 +595,7 @@ def _get_media_buy_delivery_impl(
                 impressions=float(total_impressions),
                 spend=total_spend,
                 clicks=float(total_clicks) if total_clicks else None,
-                video_completions=None,
+                completed_views=None,
                 media_buy_count=media_buy_count,
             ),
             media_buy_deliveries=deliveries,

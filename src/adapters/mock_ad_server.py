@@ -1245,7 +1245,7 @@ class MockAdServer(AdServerAdapter):
             media_buy_id=media_buy_id,
             reporting_period=date_range,
             totals=DeliveryTotals(
-                impressions=impressions, spend=spend, clicks=100, ctr=0.0, video_completions=5000, completion_rate=0.0
+                impressions=impressions, spend=spend, clicks=100, ctr=0.0, completed_views=5000, completion_rate=0.0
             ),
             by_package=by_package,
             currency="USD",

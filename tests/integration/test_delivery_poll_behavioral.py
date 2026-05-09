@@ -500,9 +500,9 @@ class TestAdapterFailureAuditTrail:
 
             with get_db_session() as session:
                 audit_records = session.scalars(select(AuditLog)).all()
-                assert (
-                    len(audit_records) > 0
-                ), "No AuditLog records written to DB. Adapter failure must be recorded in audit trail per NFR-003."
+                assert len(audit_records) > 0, (
+                    "No AuditLog records written to DB. Adapter failure must be recorded in audit trail per NFR-003."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -1427,7 +1427,7 @@ class TestUnpopulatedFieldsGraceful:
             spend=250.0,
             clicks=0,
             ctr=None,
-            video_completions=None,
+            completed_views=None,
             completion_rate=None,
         )
         assert not hasattr(totals, "effective_rate") or "effective_rate" not in DeliveryTotals.model_fields
@@ -1448,7 +1448,7 @@ class TestUnpopulatedFieldsGraceful:
             impressions=5000.0,
             spend=250.0,
             clicks=None,
-            video_completions=None,
+            completed_views=None,
             pacing_index=1.0,
             pricing_model=None,
             rate=None,
@@ -1663,8 +1663,8 @@ class TestDeliveryMetricsFieldPresence:
             assert totals.clicks is not None or hasattr(totals, "clicks")
             assert hasattr(totals, "ctr")
 
-    def test_totals_include_video_completions_field(self, integration_db):
-        """Delivery totals include video_completions field (where applicable).
+    def test_totals_include_completed_views_field(self, integration_db):
+        """Delivery totals include completed_views field (where applicable).
 
         Covers: UC-004-MAIN-19
         """
@@ -1684,8 +1684,8 @@ class TestDeliveryMetricsFieldPresence:
             )
 
             delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery.totals, "video_completions")
-            assert delivery.totals.video_completions is None
+            assert hasattr(delivery.totals, "completed_views")
+            assert delivery.totals.completed_views is None
 
     def test_totals_include_conversions_field(self, integration_db):
         """Delivery totals include conversions metric field.

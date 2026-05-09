@@ -71,7 +71,7 @@ class TestDeliveryTotalsFields:
         "spend",
         "clicks",
         "ctr",
-        "video_completions",
+        "completed_views",
         "completion_rate",
         "conversions",
         "viewability",
@@ -100,7 +100,7 @@ class TestPackageDeliveryFields:
         "impressions",
         "spend",
         "clicks",
-        "video_completions",
+        "completed_views",
         "pacing_index",
         "pricing_model",
         "rate",
@@ -316,13 +316,13 @@ class TestGetMediaBuyDeliveryResponseMethods:
 
 class TestAdapterPackageDelivery:
     def test_fields(self):
-        # video_completions added in #225 Phase 1 — surfaces in-stream
+        # completed_views added in #225 Phase 1 — surfaces in-stream
         # VAST completions to the impl layer.
         assert set(AdapterPackageDelivery.model_fields.keys()) == {
             "package_id",
             "impressions",
             "spend",
-            "video_completions",
+            "completed_views",
             "by_placement",
         }
 
