@@ -55,13 +55,6 @@
 </style>
 
 <div class="container-fluid">
-    {% set crumbs = [
-        {"label": tenant_name, "url": url_for('tenants.dashboard', tenant_id=tenant_id)},
-        {"label": "Policy Settings"}
-    ] %}
-    {% set crumbs = crumbs | with_embed_root %}
-    {% include "_breadcrumb.html" %}
-
     <div class="row">
         <div class="col-md-12 d-flex justify-content-between align-items-center">
             <div>

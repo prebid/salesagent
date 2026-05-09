@@ -27,8 +27,8 @@
     {# Embedded mode hides salesagent chrome — the upstream proxy (Scope3
        Storefront, etc.) wraps the iframe with its own nav. Triggered by
        either ?embedded=1 (explicit, per-load) or managed-mode auth bypass
-       (sprint 2 — managed tenants are always embedded). Per-page sub-nav
-       (breadcrumbs, action buttons, page titles) stays. #}
+       (sprint 2 — managed tenants are always embedded). The tenant subnav
+       and per-page action buttons / titles still render. #}
     {% if not embedded %}
     {% if g.test_mode %}
     <div class="sa-test-mode-banner" role="status">
@@ -38,8 +38,8 @@
     {% endif %}
 
     {# Ledger top bar — thin (44px) paper strip for publishers, ink-inverted
-       for super-admin (operator-of-platform). Workspace + mode pill act as
-       the breadcrumb root; nav is a quiet inline list at the right. #}
+       for super-admin (operator-of-platform). Workspace + mode pill anchor
+       the page; the inline list at the right is global cross-tenant nav. #}
     <div class="header{% if session.role == 'super_admin' %} header--admin{% endif %}">
         <div class="container">
             <h1>{% if session.role == 'super_admin' %}Sales Agent{% else %}Sales Agent{% endif %}</h1>
@@ -81,8 +81,8 @@
 
        Embedded host link: when ``embed_breadcrumb_root`` is set (header or
        tenant column, see src/admin/utils/breadcrumbs.py), the leftmost item
-       is a link back to the host's storefront — what the breadcrumb's first
-       crumb used to be before the IA cleanup. #}
+       is a link back to the host's storefront. The context key keeps its
+       legacy name — the upstream proxy contract is stable. #}
     {% if tenant %}
     <nav class="sa-tenant-nav" aria-label="Tenant navigation">
         <div class="sa-tenant-nav__inner">

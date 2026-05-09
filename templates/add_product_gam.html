@@ -3,14 +3,6 @@
 {% block title %}{{ 'Edit' if product else 'Create' }} Product - Google Ad Manager{% endblock %}
 
 {% block content %}
-{% set crumbs = [
-    {"label": tenant.name, "url": url_for('tenants.dashboard', tenant_id=tenant.tenant_id)},
-    {"label": "Products", "url": url_for('products.list_products', tenant_id=tenant.tenant_id)},
-    {"label": ('Edit' if product else 'Create')}
-] %}
-{% set crumbs = crumbs | with_embed_root %}
-{% include "_breadcrumb.html" %}
-
 <div class="sa-card">
     <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
         <h2 class="sa-page-header__title">{{ 'Edit' if product else 'Create' }} Product (Google Ad Manager)</h2>

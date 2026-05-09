@@ -10,12 +10,6 @@
 {% endblock %}
 
 {% block content %}
-{% set crumbs = [
-    {"label": tenant.name, "url": url_for('tenants.dashboard', tenant_id=tenant.tenant_id)},
-    {"label": "Settings"}
-] %}
-{% set crumbs = crumbs | with_embed_root %}
-{% include "_breadcrumb.html" %}
 <style>
     /* Spinning animation for sync button */
     @keyframes spin {

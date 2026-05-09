@@ -1,14 +1,16 @@
-"""Integration tests for the embed-mode breadcrumb root override.
+"""Integration tests for the embed-mode host-link override.
 
 Two surfaces:
 
 - Schema/storage: ``embed_breadcrumb_root`` round-trips through
   provision, GET, and PATCH on the Tenant Management API; bad input
   is rejected by the Pydantic validator (422).
-- Rendering: the shared ``_breadcrumb.html`` partial renders the
-  configured override on embedded tenants, ignores it on open-instance
-  tenants, and prefers the ``X-Embed-Breadcrumb-Root`` header over the
-  persisted column when both are set.
+- Rendering: the persistent tenant subnav (in ``base.html``) renders
+  the configured override as the leftmost link on embedded tenants,
+  ignores it on open-instance tenants, and prefers the
+  ``X-Embed-Breadcrumb-Root`` header over the persisted column when
+  both are set. The schema field name keeps ``breadcrumb`` in it for
+  backwards compatibility with the upstream proxy contract.
 """
 
 from __future__ import annotations
@@ -555,43 +557,3 @@ class TestSubnavHostLinkAcrossTenantPages:
             _assert_subnav_has_host_link(resp.get_data(as_text=True))
         finally:
             _cleanup_render_tenant(tid)
-
-
-class TestEmbedRootFilterUnit:
-    """Direct unit coverage for the 1-crumb prepend branch.
-
-    The dashboard page emits a single crumb (the tenant name as the
-    current page). The filter must prepend the host root rather than
-    replace it — otherwise the iframe loses the only navigation cue
-    back to the upstream chrome.
-    """
-
-    def test_filter_prepends_when_one_crumb(self):
-        from src.admin.utils.breadcrumbs import with_embed_root_filter
-
-        crumbs = [{"label": "Acme News"}]
-        result = with_embed_root_filter(crumbs, HOST_ROOT)
-        assert result == [
-            {"label": "Storefront", "url": "https://host.example/store"},
-            {"label": "Acme News"},
-        ]
-
-    def test_filter_replaces_first_crumb_when_two(self):
-        from src.admin.utils.breadcrumbs import with_embed_root_filter
-
-        crumbs = [
-            {"label": "Acme News", "url": "/tenant/acme/"},
-            {"label": "Products"},
-        ]
-        result = with_embed_root_filter(crumbs, HOST_ROOT)
-        assert result == [
-            {"label": "Storefront", "url": "https://host.example/store"},
-            {"label": "Products"},
-        ]
-
-    def test_filter_passthrough_when_no_root(self):
-        from src.admin.utils.breadcrumbs import with_embed_root_filter
-
-        crumbs = [{"label": "Acme News"}, {"label": "Products"}]
-        result = with_embed_root_filter(crumbs, None)
-        assert result == crumbs

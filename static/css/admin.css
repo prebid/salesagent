@@ -109,6 +109,10 @@
     --sa-header-accent: #1a1815;
     --sa-header-rule:   rgba(26, 24, 21, 0.13);
 
+    /* Editorial canvas — caps content + chrome inner widths so dashboards
+       and the tenant subnav share the same horizontal extent across pages. */
+    --sa-container-max: 1280px;
+
     /* Spacing scale (8pt grid with 4px finer step) */
     --sa-space-1: 0.25rem;   /* 4 */
     --sa-space-2: 0.5rem;    /* 8 */
@@ -357,19 +361,21 @@ pre {
 }
 
 /* sa-tenant-nav — persistent tenant subnav strip rendered by base.html
-   on every page with ``tenant`` in scope. Sits between the top header
-   (44px, sometimes hidden) and the breadcrumb sub-bar (when present).
+   on every page where ``tenant`` is in scope. Sits directly under the
+   header (44px, hidden in embedded mode). Background matches the page so
+   it reads as quiet chrome, not as a separate band — visual hierarchy is
+   carried by the bottom rule and the active-tab underline.
    Holds operational links (Media Buys/Products/Creatives/Workflows/Reports)
    on the left and the Configure dropdown on the right. */
 .sa-tenant-nav {
     height: 36px;
-    background: var(--sa-bg-surface);
+    background: var(--sa-bg-page);
     border-bottom: 1px solid var(--sa-rule);
     font-family: var(--sa-font-sans);
     font-size: 12px;
 }
 .sa-tenant-nav__inner {
-    max-width: var(--sa-container-max, 1280px);
+    max-width: var(--sa-container-max);
     margin: 0 auto;
     padding: 0 var(--sa-space-5);
     height: 100%;
@@ -379,6 +385,21 @@ pre {
 }
 /* Configure dropdown floats to the right edge of the strip. */
 .sa-tenant-nav__inner > .sa-menu { margin-left: auto; }
+
+/* Narrow viewports: the strip switches to horizontal scroll instead of
+   wrapping (which would push content down and break the 36px assumption
+   used by below-the-fold pages). Configure trails the local nav at the
+   end of the scroll content. */
+@media (max-width: 960px) {
+    .sa-tenant-nav__inner {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        scrollbar-width: thin;
+        gap: 14px;
+    }
+    .sa-tenant-nav__inner > .sa-menu { margin-left: 0; }
+    .sa-nav-action { flex-shrink: 0; }
+}
 
 .sa-nav-action {
     color: var(--sa-ink-70);
@@ -414,18 +435,20 @@ pre {
     color: var(--sa-ink);
 }
 /* Host-storefront link in embedded mode — separated from the local nav
-   by a thin divider so the host vs. salesagent boundary is visible. */
+   by a thin divider so the host vs. salesagent boundary is visible.
+   Padding equals the parent flex ``gap`` (18px) so spacing on either side
+   of the divider reads symmetric. */
 .sa-nav-action--host {
     padding-right: 18px;
-    margin-right: 4px;
     border-right: 1px solid var(--sa-rule);
     border-bottom: none;
 }
 .sa-nav-action--host.is-active { border-bottom: none; }
 
-/* sa-menu — Configure dropdown. Lives in the breadcrumb sub-bar so it
-   renders in both embedded mode (where .header is hidden) and standalone.
-   Quiet trigger; click toggles, outside-click + Escape close. */
+/* sa-menu — Configure dropdown. Anchored to the right edge of the tenant
+   subnav strip so it renders in both embedded mode (where .header is
+   hidden) and standalone. Quiet trigger; click toggles, outside-click +
+   Escape close. */
 .sa-menu {
     position: relative;
     display: inline-flex;
@@ -788,50 +811,6 @@ tr:hover {
 }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
-
-/* ---------- Breadcrumb (used by _breadcrumb.html) ------------------------- */
-
-/* Breadcrumb / sub-bar — matches Ledger LSubBar (paper-deep strip, 36px,
-   slash separators, current crumb in ink). Holds the Configure menu on
-   the right so it renders in both embedded and standalone chrome. */
-.breadcrumb {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    height: 36px;
-    margin: 0 calc(var(--sa-space-5) * -1) var(--sa-space-5);
-    padding: 0 var(--sa-space-5);
-    background: var(--sa-bg-muted);
-    border-top: 1px solid var(--sa-rule);
-    border-bottom: 1px solid var(--sa-rule);
-    font-family: var(--sa-font-sans);
-    font-size: 12px;
-    color: var(--sa-ink-70);
-}
-.breadcrumb__crumbs {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-.breadcrumb a {
-    color: var(--sa-ink-70);
-    text-decoration: none;
-    transition: color var(--sa-duration-fast) var(--sa-easing);
-}
-.breadcrumb a:hover {
-    color: var(--sa-ink);
-    text-decoration: none;
-}
-.breadcrumb .breadcrumb-sep {
-    color: var(--sa-ink-30);
-    margin: 0 2px;
-}
-.breadcrumb .breadcrumb-current {
-    color: var(--sa-ink);
-    font-weight: 500;
-}
 
 /* ---------- Back button container ----------------------------------------- */
 

@@ -3,13 +3,6 @@
 {% block title %}Products - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-{% set crumbs = [
-    {"label": tenant.name, "url": url_for('tenants.dashboard', tenant_id=tenant.tenant_id)},
-    {"label": "Products"}
-] %}
-{% set crumbs = crumbs | with_embed_root %}
-{% include "_breadcrumb.html" %}
-
 <!-- Product Design Guide -->
 <div class="sa-banner sa-banner--info" style="margin-bottom: var(--sa-space-4);">
     <div class="sa-banner__icon">📚</div>

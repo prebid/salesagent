@@ -4,14 +4,6 @@
 
 {% block content %}
 <div class="container-fluid">
-    {% set crumbs = [
-        {"label": tenant_name, "url": url_for('tenants.dashboard', tenant_id=tenant_id)},
-        {"label": "Policy Settings", "url": url_for('policy.index', tenant_id=tenant_id)},
-        {"label": "Review Task"}
-    ] %}
-    {% set crumbs = crumbs | with_embed_root %}
-    {% include "_breadcrumb.html" %}
-
     <div class="row">
         <div class="col-md-12">
             <h1>Policy Review Task</h1>

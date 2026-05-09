@@ -4,14 +4,6 @@
 
 {% block content %}
 <div class="container-fluid mt-4">
-    {% set crumbs = [
-        {"label": "Dashboard", "url": url_for('core.index')},
-        {"label": tenant.name, "url": url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id)},
-        {"label": "Sync Inventory"}
-    ] %}
-    {% set crumbs = crumbs | with_embed_root %}
-    {% include "_breadcrumb.html" %}
-
     <div class="row">
         <div class="col-12">
             <h2>Sync Inventory</h2>

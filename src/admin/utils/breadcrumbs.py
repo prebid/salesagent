@@ -1,8 +1,8 @@
-"""Embed-mode breadcrumb root resolution.
+"""Embed-mode host-link root resolution.
 
 Embedded tenants are rendered inside an upstream host's chrome (Scope3
-Storefront, etc.). The first crumb of the salesagent-rendered breadcrumb
-trail should point back at the host's storefront homepage, not at the
+Storefront, etc.). The leftmost item of the salesagent-rendered tenant
+subnav should point back at the host's storefront homepage, not at the
 salesagent's own dashboard, so navigation feels native.
 
 The override comes from one of two sources, in precedence order:
@@ -16,6 +16,10 @@ The override comes from one of two sources, in precedence order:
 Both inputs are validated through the same :class:`EmbedBreadcrumbRoot`
 Pydantic model, so a malformed header value falls through to the column
 rather than 500-ing the page.
+
+The header name and column name retain ``breadcrumb`` for backwards
+compatibility with the upstream proxy contract — the API surface is
+stable even though the salesagent's UI no longer renders breadcrumbs.
 """
 
 from __future__ import annotations
@@ -87,29 +91,3 @@ def resolve_embed_breadcrumb_root(tenant: Any | None) -> dict | None:
 
     column_value = getattr(tenant, "embed_breadcrumb_root", None)
     return _validate(column_value)
-
-
-def with_embed_root_filter(crumbs: list[dict[str, Any]] | None, root: dict | None) -> list[dict[str, Any]]:
-    """Inject the embed-mode root as the first crumb, if one is set.
-
-    Used as a Jinja filter — see :func:`src.admin.app.create_app` for the
-    registration. When ``root`` is ``None`` (no override active or
-    open-instance tenant), the crumbs pass through unchanged.
-
-    With 2+ crumbs, the first crumb (typically the tenant-dashboard link)
-    is replaced with the override — the salesagent's own dashboard is
-    redundant when the host's storefront already serves that role.
-
-    With exactly 1 crumb (e.g. the tenant dashboard itself, where the
-    only crumb is the current page), the override is prepended so the
-    host link still appears upstream of the page label. Replacing would
-    erase the only context the page has.
-    """
-    if not crumbs:
-        return []
-    if root is None:
-        return list(crumbs)
-    head = {"label": root["label"], "url": root["url"]}
-    if len(crumbs) == 1:
-        return [head, *list(crumbs)]
-    return [head, *list(crumbs[1:])]

@@ -16,14 +16,6 @@
     }
 </style>
 
-{% set crumbs = [
-    {"label": (tenant.name if tenant else tenant_id), "url": url_for('tenants.dashboard', tenant_id=tenant_id)},
-    {"label": "Media Buys", "url": url_for('tenants.media_buys_list', tenant_id=tenant_id)},
-    {"label": media_buy.media_buy_id or "Detail"}
-] %}
-{% set crumbs = crumbs | with_embed_root %}
-{% include "_breadcrumb.html" %}
-
 <div class="dashboard-header">
     <h1>Media Buy Details</h1>
 </div>

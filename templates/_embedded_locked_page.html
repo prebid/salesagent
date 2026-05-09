@@ -11,12 +11,6 @@
 
 {% block content %}
 <div class="container" style="max-width: 720px; margin: 2rem auto;">
-  {% set crumbs = [
-    {"label": tenant.name, "url": url_for('tenants.dashboard', tenant_id=tenant.tenant_id)},
-    {"label": "Managed by Platform"}
-  ] %}
-  {% set crumbs = crumbs | with_embed_root %}
-  {% include "_breadcrumb.html" %}
   {% include "_embedded_lock_banner.html" %}
 </div>
 {% endblock %}

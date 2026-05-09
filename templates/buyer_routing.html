@@ -288,12 +288,6 @@
     }
 </style>
 
-{% set crumbs = [
-    {"label": tenant.name, "url": url_for("tenants.dashboard", tenant_id=tenant.tenant_id)},
-    {"label": "Buyer Routing"}
-] %}
-{% set crumbs = crumbs | with_embed_root %}
-{% include "_breadcrumb.html" %}
 
 {% macro advertiser_label(adv_id) -%}
 {%- if not adv_id -%}—

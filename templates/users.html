@@ -395,14 +395,6 @@
 </style>
 
 <div class="users-container">
-    {% set crumbs = [
-        {"label": tenant_name, "url": url_for('tenants.dashboard', tenant_id=tenant_id)},
-        {"label": "Settings", "url": url_for('tenants.tenant_settings', tenant_id=tenant_id)},
-        {"label": "Users & Access"}
-    ] %}
-    {% set crumbs = crumbs | with_embed_root %}
-    {% include "_breadcrumb.html" %}
-
     <div class="page-header">
         <h1>Users & Access</h1>
         <p>Configure SSO and manage who can access {{ tenant_name }}</p>

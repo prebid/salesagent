@@ -4,14 +4,6 @@
 
 {% block content %}
 <div class="container-fluid mt-4">
-    {% set crumbs = [
-        {"label": "Dashboard", "url": url_for('core.index')},
-        {"label": tenant.name, "url": url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id)},
-        {"label": "Inventory Browser"}
-    ] %}
-    {% set crumbs = crumbs | with_embed_root %}
-    {% include "_breadcrumb.html" %}
-
     <header class="sa-page-header">
         <div>
             <h2 class="sa-page-header__title">GAM Inventory Browser</h2>
