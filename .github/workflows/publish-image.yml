@@ -68,3 +68,5 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             LOCKFILE_HASH=${{ steps.lockhash.outputs.value }}
+            GIT_SHA=${{ github.sha }}
+            GIT_BRANCH=${{ github.ref_name }}

@@ -96,6 +96,15 @@ WORKDIR /app
 ARG CACHE_BUST=2026-02-27-GAM-API-BUMP
 RUN echo "Cache bust: $CACHE_BUST"
 
+# Build provenance — surfaced in the admin UI footer so bug reports
+# can be traced back to the exact image build. ``unknown`` defaults
+# keep bare ``docker build`` working; Makefile / GitHub Actions /
+# docker-compose all pass real values.
+ARG GIT_SHA=unknown
+ARG GIT_BRANCH=unknown
+ENV APP_GIT_SHA=$GIT_SHA
+ENV APP_GIT_BRANCH=$GIT_BRANCH
+
 # Copy application code
 COPY . .
 

@@ -383,10 +383,15 @@ def create_app(config=None):
         from src.core.database.database_session import get_db_session
         from src.core.database.models import Tenant
         from src.core.domain_config import get_sales_agent_domain, get_support_email
+        from src.core.version import get_build_info
 
         context = {}
 
         context["script_name"] = request.script_root or request.environ.get("SCRIPT_NAME", "")
+
+        # Build/commit stamp surfaced in the base.html footer so bug
+        # reports can be traced back to the exact image build.
+        context["build_info"] = get_build_info()
 
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()

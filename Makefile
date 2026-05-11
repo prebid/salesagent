@@ -93,13 +93,18 @@ endif
 # the lockfile content hash as a build arg so the install step's
 # layer key changes whenever lockfile content changes. Use after any
 # dependency bump (``uv lock`` / ``uv add`` / ``uv sync``).
+# Build args passed to docker compose:
+#   LOCKFILE_HASH — invalidates uv install layer on uv.lock change
+#   GIT_SHA / GIT_BRANCH — baked into image, surfaced in admin UI footer
+COMPOSE_BUILD_ARGS = LOCKFILE_HASH=$$(shasum -a 256 uv.lock | awk '{print $$1}') \
+	GIT_SHA=$$(git rev-parse --short=7 HEAD 2>/dev/null || echo unknown) \
+	GIT_BRANCH=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+
 compose-build:
-	LOCKFILE_HASH=$$(shasum -a 256 uv.lock | awk '{print $$1}') \
-		docker compose build adcp-server
+	$(COMPOSE_BUILD_ARGS) docker compose build adcp-server
 
 compose-up: compose-build
-	LOCKFILE_HASH=$$(shasum -a 256 uv.lock | awk '{print $$1}') \
-		docker compose up -d --force-recreate adcp-server
+	$(COMPOSE_BUILD_ARGS) docker compose up -d --force-recreate adcp-server
 
 # ─── Entity-scoped test runs ────────────────────────────────────
 # Usage: make test-entity ENTITY=delivery

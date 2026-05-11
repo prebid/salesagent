@@ -240,6 +240,19 @@
             }
         });
     </script>
+    {# Build stamp — small, fixed bottom-right. Surfaces the deployed
+       version + git SHA so bug reports can be tied to a specific image
+       build. Only renders for authenticated sessions (or embedded
+       requests, which are always authenticated via X-Identity-*) so
+       commit SHA + branch don't leak from the public login page.
+       In embedded mode we drop the branch name — publishers in the
+       Storefront iframe don't need to see the operator's internal
+       branch labels. #}
+    {% if build_info and (session.authenticated or embedded) %}
+    <div class="sa-build-stamp" title="Sales Agent build">
+        {{ build_info.display_short if embedded else build_info.display }}
+    </div>
+    {% endif %}
     {# Toast container — sa-toast.js attaches to this on load. Lives
        outside the main container so position: fixed children don't
        clip on narrow viewports. Pointer events disabled on the root

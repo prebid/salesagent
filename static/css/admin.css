@@ -1353,3 +1353,23 @@ body.sa-embedded > .container {
 .sa-toast__close:hover { opacity: 1; }
 @keyframes sa-toast-in  { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes sa-toast-out { to   { transform: translateX(20px); opacity: 0; } }
+
+/* Build stamp — bottom-right corner, monospace, low-contrast so it
+   doesn't compete with content. Click-through (pointer-events: none)
+   so it never blocks UI underneath. Sized to be readable when copy-
+   pasted into a bug report but ignorable otherwise. */
+.sa-build-stamp {
+    position: fixed;
+    bottom: 6px;
+    right: 10px;
+    z-index: 50;
+    pointer-events: none;
+    font-family: var(--sa-font-mono);
+    font-size: 11px;
+    color: var(--sa-ink-50);
+    background: rgba(244, 241, 234, 0.7); /* --sa-gray-50 (paper) at 70% */
+    padding: 2px 6px;
+    border-radius: 3px;
+    user-select: text;
+}
+@media print { .sa-build-stamp { display: none; } }

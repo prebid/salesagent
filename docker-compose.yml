@@ -47,6 +47,8 @@ services:
       # — see the comment on adcp-server.build.args for the full why.
       args:
         LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
     entrypoint: []
     env_file:
       - path: .env
@@ -91,6 +93,8 @@ services:
       # regressing dependency bumps is worse than a build error.
       args:
         LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
     entrypoint: [] # Override image entrypoint for local dev
     env_file:
       - path: .env
