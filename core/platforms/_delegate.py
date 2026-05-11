@@ -32,7 +32,7 @@ from typing import Any, TypeVar
 from adcp.decisioning import AdcpError, RequestContext
 from adcp.server import current_transport
 from adcp.server.auth import current_principal
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from src.core.config_loader import get_tenant_by_id
 from src.core.exceptions import AdCPError
@@ -138,7 +138,7 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
     )
 
 
-def _coerce_to_request_model(req: Any, model_cls: type) -> Any:
+def _coerce_to_request_model(req: Any, model_cls: type[BaseModel]) -> Any:
     """Coerce ``req`` (dict OR Pydantic model OR generated model) into
     the Pydantic model class the impl expects.
 

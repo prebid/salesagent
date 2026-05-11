@@ -57,7 +57,6 @@ from adcp.server import (
     SubdomainTenantMiddleware,
     Tenant,
     auth_context_factory,
-    spec_compat_hooks,
 )
 from sqlalchemy import select
 
@@ -66,7 +65,6 @@ from sqlalchemy import select
 # any session opens so rotations observed via the ORM trigger eviction.
 import src.services.webhook_signing  # noqa: F401
 from core.middleware.admin_mount import AdminWSGIMount
-from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.platforms.gam import GamPlatform
@@ -282,7 +280,10 @@ def build_router() -> LazyPlatformRouter:
     # Setting the escape hatch tells the boot validator dedup IS wired,
     # just not on this object. Tracked upstream (LazyPlatformRouter +
     # validate_idempotency_wiring composition).
-    router._adcp_idempotency_external = True
+    # SDK reads this via ``getattr(platform, "_adcp_idempotency_external", False)``
+    # — a duck-typed escape hatch (no typed protocol surface). Use setattr to
+    # match the SDK's read-side ergonomics without adding ``type: ignore``.
+    setattr(router, "_adcp_idempotency_external", True)  # noqa: B010
     return router
 
 
@@ -382,6 +383,53 @@ def _allowed_hosts() -> list[str]:
     return base
 
 
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _resolve_public_url(request) -> str:
+    """Derive the A2A agent-card public URL from inbound request headers.
+
+    Fed to the SDK as a :data:`adcp.server.PublicUrlResolver` (adcp 5.1
+    #650). Called once per GET ``/.well-known/agent-card.json`` (and the
+    0.3 alias ``/agent.json``); the returned URL populates the card's
+    ``supportedInterfaces[].url`` so SDK clients can dial the public
+    A2A endpoint instead of the container's loopback socket.
+
+    Header precedence:
+
+    * Host: ``X-Forwarded-Host`` → ``Host``
+    * Scheme: ``X-Forwarded-Proto`` → ``https`` for non-loopback hosts,
+      request scheme for loopback (so local dev keeps working over http).
+
+    Non-loopback hosts always render https when ``X-Forwarded-Proto`` is
+    absent — production sits behind TLS termination and the SDK rejects
+    http://example.com URLs with HTTP 500. Loopback hosts preserve the
+    request's scheme so local-dev curl tests aren't forced through https.
+
+    When neither host header is present, falls back to the ``PUBLIC_URL``
+    env var, then to the bound socket.
+    """
+    headers = request.headers
+    forwarded_host = headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    host = forwarded_host or headers.get("host", "").split(",", 1)[0].strip()
+    if not host:
+        env_url = os.environ.get("PUBLIC_URL")
+        if env_url:
+            return env_url
+        port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
+        return f"http://localhost:{port}/"
+
+    is_loopback = host.split(":", 1)[0] in _LOOPBACK_HOSTS
+    forwarded_proto = headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    if forwarded_proto:
+        scheme = forwarded_proto
+    elif is_loopback:
+        scheme = request.url.scheme or "http"
+    else:
+        scheme = "https"
+    return f"{scheme}://{host}/"
+
+
 def _serve_kwargs(
     *,
     include_scheduler: bool,
@@ -422,17 +470,6 @@ def _serve_kwargs(
         # emit (per #194 follow-up). Never logs token values; only
         # SHA-256 fingerprints for log correlation.
         (DualCredentialAuditMiddleware, {}),
-        # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
-        # /.well-known/agent-card.json response with the request's public
-        # host (X-Forwarded-Host / Host). adcp 5.0 added a static
-        # ``public_url=`` kwarg (#621) we feed below from ``PUBLIC_URL``,
-        # which is sufficient for single-host deployments. The middleware
-        # is still required for multi-tenant subdomain deployments where
-        # each tenant has its own public host — the static kwarg can only
-        # advertise one. Loopback-only rewrite ensures the middleware
-        # no-ops cleanly when ``public_url`` is already set to a non-
-        # loopback value. (#103.)
-        (AgentCardPublicUrlMiddleware, {}),
     ]
     if include_subdomain_routing:
         subdomain_router = build_subdomain_router()
@@ -486,18 +523,12 @@ def _serve_kwargs(
         "streaming_responses": os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
         "enable_debug_endpoints": os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
         "enable_dns_rebinding_protection": (os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"),
-        # adcp 5.0 public_url kwarg (#621) — advertises the canonical A2A
-        # base URL on /.well-known/agent-card.json. When set, the SDK
-        # emits this URL directly instead of the bound localhost; our
-        # ``AgentCardPublicUrlMiddleware`` then no-ops for single-host
-        # deployments. Multi-tenant subdomain deployments leave this unset
-        # and rely on the middleware to rewrite per-request from
-        # ``X-Forwarded-Host``. Env: ``PUBLIC_URL``.
-        "public_url": os.environ.get("PUBLIC_URL") or None,
-        # adcp 5.1 ``spec_compat_hooks()`` (#648) — built-in registry that
-        # backfills pre-v3 buying_mode and normalises pre-4.4 format_id shape /
-        # asset_type discriminator / image→url dim demotion.
-        "pre_validation_hooks": spec_compat_hooks(),
+        # adcp 5.1 callable ``public_url`` (#650) — per-request resolver
+        # derives the agent-card URL from ``X-Forwarded-Host`` / ``Host``
+        # so multi-tenant subdomain deployments each advertise their own
+        # public host. Falls back to ``PUBLIC_URL`` env when no host
+        # headers are present (e.g. internal health probes).
+        "public_url": _resolve_public_url,
     }
 
 
@@ -540,7 +571,6 @@ def build_app():
     # A2A base URL into the agent-card response); tests neither read nor
     # assert on it, so drop it from the in-process app.
     kwargs.pop("public_url", None)
-    pre_validation_hooks = kwargs.pop("pre_validation_hooks", None)
 
     handler, _executor, _registry = create_adcp_server_from_platform(
         router,
@@ -564,7 +594,6 @@ def build_app():
         # rejected before the tool dispatcher runs.
         enable_dns_rebinding_protection=False,
         auth=kwargs["auth"],
-        pre_validation_hooks=pre_validation_hooks,
     )
     return _apply_asgi_middleware(app, asgi_middleware)
 

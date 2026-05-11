@@ -19,7 +19,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.middleware.admin_mount import AdminWSGIMount
-from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from src.core.signing import SigningVerifyMiddleware
 
 
@@ -51,11 +50,11 @@ def test_admin_wsgi_mount_runs_first(middleware_classes):
     )
 
 
-def test_pre_validation_hooks_wired():
-    """adcp 5.0 ``pre_validation_hooks`` (#629) carries the pre-v3 default
-    backfill we used to run via the bytes-rewriting ``SpecDefaultsMiddleware``.
-    The serve-kwargs must register the hooks dict so the SDK's typed
-    dispatcher runs them before validation."""
+def test_public_url_is_callable_resolver():
+    """adcp 5.1 callable ``public_url`` (#650) — multi-tenant subdomain
+    deployments need per-request resolution so each tenant's agent card
+    advertises its own public host. A static string can only advertise
+    one URL; a callable derives from ``X-Forwarded-Host`` per request."""
     from unittest.mock import patch
 
     from core import main as core_main
@@ -66,19 +65,10 @@ def test_pre_validation_hooks_wired():
         patch("core.main.build_subdomain_router", return_value=MagicMock()),
     ):
         kwargs = core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
-    hooks = kwargs.get("pre_validation_hooks")
-    assert hooks is not None, "pre_validation_hooks missing — pre-v3 buyer payloads will fail validation"
-    assert "get_products" in hooks
-    assert "sync_creatives" in hooks
-
-
-def test_agent_card_public_url_middleware_present(middleware_classes):
-    """``AgentCardPublicUrlMiddleware`` must be in the chain — without it,
-    ``/.well-known/agent-card.json`` advertises the container's localhost
-    URL and SDK clients can't discover the public A2A endpoint (#103)."""
-    assert AgentCardPublicUrlMiddleware in middleware_classes, (
-        "AgentCardPublicUrlMiddleware missing from asgi_middleware — A2A "
-        "agent card will leak the localhost URL and SDK discovery breaks."
+    public_url = kwargs.get("public_url")
+    assert callable(public_url), (
+        "public_url must be a callable PublicUrlResolver — static strings "
+        "leak one tenant's URL across all tenants in subdomain deployments."
     )
 
 

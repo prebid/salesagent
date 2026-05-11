@@ -29,31 +29,34 @@ shapes that don't match the actual proposal flow we want.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
-from adcp.decisioning import RequestContext
-from adcp.decisioning.proposal_manager import ProposalCapabilities, ProposalManager
+from adcp.decisioning import AdcpError, RequestContext
+from adcp.decisioning.proposal_manager import ProposalCapabilities
 from adcp.types import GetProductsRequest, GetProductsResponse
 
 from core.platforms._delegate import _build_identity, _coerce_to_request_model
 from src.core.tools.products import _get_products_impl
 
 
-class SalesAgentProposalManager(ProposalManager):
+class SalesAgentProposalManager:
     """Single-tenant proposal manager that subsumes ``get_products``
     via the existing ``_get_products_impl`` business logic.
+
+    Implements the :class:`adcp.decisioning.proposal_manager.ProposalManager`
+    Protocol structurally — the SDK's reference ``MockProposalManager``
+    follows the same no-inheritance pattern.
 
     The manager declares ``ProposalCapabilities(refine=False)`` for v1
     — the framework router falls through to :meth:`get_products` even
     when a buyer sends ``buying_mode='refine'``. v2 flips refine on,
     persists DRAFTs via ``ProposalStore.put_draft``, and loads prior
-    drafts in :meth:`refine_products` to support iterative
-    shortlisting.
+    drafts in :meth:`refine_products` to support iterative shortlisting.
     """
 
     # Match the platform's specialism declaration; v1 ships only the
     # non-guaranteed sales path (CPM auctions, no fixed-quantity holds).
-    capabilities = ProposalCapabilities(
+    capabilities: ClassVar[ProposalCapabilities] = ProposalCapabilities(
         sales_specialism="sales-non-guaranteed",
         refine=False,
     )
@@ -72,3 +75,27 @@ class SalesAgentProposalManager(ProposalManager):
         identity = _build_identity(ctx)
         req_model = _coerce_to_request_model(req, GetProductsRequest)
         return await _get_products_impl(req_model, identity)
+
+    async def refine_products(
+        self,
+        req: GetProductsRequest,
+        ctx: RequestContext[Any],
+    ) -> GetProductsResponse:
+        """Refine-mode stub.
+
+        Required by the :class:`ProposalManager` Protocol surface so
+        adopters declaring ``capabilities.refine=True`` have a typed
+        signature to override. v1 sets ``capabilities.refine=False`` —
+        the framework routes refine requests to :meth:`get_products`
+        instead and this method is never invoked. Raises
+        ``UNSUPPORTED_FEATURE`` defensively if reached.
+        """
+        del req, ctx
+        raise AdcpError(
+            "UNSUPPORTED_FEATURE",
+            message=(
+                "refine_products called on SalesAgentProposalManager; v1 "
+                "declares capabilities.refine=False. Buyers should rely on "
+                "get_products for product discovery."
+            ),
+        )

@@ -190,7 +190,7 @@ class _ReplayMarkingStore(IdempotencyStore):
     narrower window. Inlining the wrap closes that window.
     """
 
-    def wrap(self, handler):  # type: ignore[no-untyped-def]
+    def wrap(self, handler):
         # Private library symbols. The library deliberately exposes these as
         # underscore-prefixed module helpers, but they are the de-facto
         # extension surface for adopters who need to subclass the wrap path
@@ -366,15 +366,15 @@ class _LazyBootstrapPgBackend(PgBackend):
             self._bootstrapped = True
             logger.info("Idempotency: PgBackend pool opened, adcp_idempotency table ensured")
 
-    async def get(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+    async def get(self, *args: Any, **kwargs: Any):
         await self._ensure_bootstrap()
         return await super().get(*args, **kwargs)
 
-    async def put(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+    async def put(self, *args: Any, **kwargs: Any):
         await self._ensure_bootstrap()
         return await super().put(*args, **kwargs)
 
-    async def delete_expired(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+    async def delete_expired(self, *args: Any, **kwargs: Any):
         await self._ensure_bootstrap()
         return await super().delete_expired(*args, **kwargs)
 

@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any, Literal
+from typing import Any, ClassVar
 
 from adcp.decisioning import AdcpError
 from adcp.decisioning.context import AuthInfo
@@ -61,7 +61,7 @@ class SalesagentAccountStore:
     every resolved Account.
     """
 
-    resolution: Literal["explicit"] = "explicit"
+    resolution: ClassVar[str] = "explicit"
 
     def resolve(
         self,
@@ -69,9 +69,7 @@ class SalesagentAccountStore:
         auth_info: AuthInfo | None = None,
     ) -> Account[dict[str, Any]]:
         tenant_id = (
-            self._tenant_from_principal(auth_info)
-            or self._tenant_from_subdomain()
-            or self._tenant_from_ref(ref)
+            self._tenant_from_principal(auth_info) or self._tenant_from_subdomain() or self._tenant_from_ref(ref)
         )
         if tenant_id is None or not self._tenant_exists(tenant_id):
             raise AdcpError(
