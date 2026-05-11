@@ -51,11 +51,34 @@ def test_admin_wsgi_mount_runs_first(middleware_classes):
     )
 
 
+def test_agent_card_public_url_middleware_present(middleware_classes):
+    """``AgentCardPublicUrlMiddleware`` must be in the chain — without it,
+    ``/.well-known/agent-card.json`` advertises the container's localhost
+    URL and SDK clients can't discover the public A2A endpoint (#103).
+
+    The 5.1 callable ``public_url`` resolver (#650) is the eventual
+    replacement, but ``transport="both"`` in 5.2.0 has a bug where a
+    callable ``public_url`` breaks ``_composed_lifespan`` with
+    ``AttributeError: 'function' object has no attribute 'router'``."""
+    assert AgentCardPublicUrlMiddleware in middleware_classes, (
+        "AgentCardPublicUrlMiddleware missing from asgi_middleware — A2A "
+        "agent card will leak the localhost URL and SDK discovery breaks."
+    )
+
+
 def test_pre_validation_hooks_wired():
-    """adcp 5.0 ``pre_validation_hooks`` (#629) carries the pre-v3 default
-    backfill we used to run via the bytes-rewriting ``SpecDefaultsMiddleware``.
-    The serve-kwargs must register the hooks dict so the SDK's typed
-    dispatcher runs them before validation."""
+    """Heuristic backfills for pre-v3 / pre-4.4 buyers must stay wired.
+
+    The hook backfills ``get_products.buying_mode='brief'`` and infers
+    ``sync_creatives`` ``asset_type`` discriminators for buyers omitting
+    those fields. Removing it breaks tag-less buyers and our own
+    integration tests that send minimal requests. adcp 5.2 deprecated
+    the public ``spec_compat_hooks()`` symbol (#667) in favour of typed
+    AdapterPair adapters that only fire for buyers declaring
+    ``adcp_version='2.5'`` — but our test buyers don't declare a version,
+    so the unconditional hooks remain load-bearing. Use the private
+    ``_spec_compat_hooks_impl`` (same as SDK's own tests) to avoid the
+    DeprecationWarning."""
     from unittest.mock import patch
 
     from core import main as core_main
@@ -70,16 +93,6 @@ def test_pre_validation_hooks_wired():
     assert hooks is not None, "pre_validation_hooks missing — pre-v3 buyer payloads will fail validation"
     assert "get_products" in hooks
     assert "sync_creatives" in hooks
-
-
-def test_agent_card_public_url_middleware_present(middleware_classes):
-    """``AgentCardPublicUrlMiddleware`` must be in the chain — without it,
-    ``/.well-known/agent-card.json`` advertises the container's localhost
-    URL and SDK clients can't discover the public A2A endpoint (#103)."""
-    assert AgentCardPublicUrlMiddleware in middleware_classes, (
-        "AgentCardPublicUrlMiddleware missing from asgi_middleware — A2A "
-        "agent card will leak the localhost URL and SDK discovery breaks."
-    )
 
 
 def test_signing_verify_runs_last(middleware_classes):

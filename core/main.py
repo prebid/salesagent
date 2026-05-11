@@ -57,8 +57,8 @@ from adcp.server import (
     SubdomainTenantMiddleware,
     Tenant,
     auth_context_factory,
-    spec_compat_hooks,
 )
+from adcp.server.spec_compat import _spec_compat_hooks_impl
 from sqlalchemy import select
 
 # Import for side-effect: registers the SQLAlchemy session listener that
@@ -282,7 +282,10 @@ def build_router() -> LazyPlatformRouter:
     # Setting the escape hatch tells the boot validator dedup IS wired,
     # just not on this object. Tracked upstream (LazyPlatformRouter +
     # validate_idempotency_wiring composition).
-    router._adcp_idempotency_external = True
+    # SDK reads this via ``getattr(platform, "_adcp_idempotency_external", False)``
+    # — a duck-typed escape hatch (no typed protocol surface). Use setattr to
+    # match the SDK's read-side ergonomics without adding ``type: ignore``.
+    setattr(router, "_adcp_idempotency_external", True)  # noqa: B010
     return router
 
 
@@ -424,14 +427,17 @@ def _serve_kwargs(
         (DualCredentialAuditMiddleware, {}),
         # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
         # /.well-known/agent-card.json response with the request's public
-        # host (X-Forwarded-Host / Host). adcp 5.0 added a static
-        # ``public_url=`` kwarg (#621) we feed below from ``PUBLIC_URL``,
-        # which is sufficient for single-host deployments. The middleware
-        # is still required for multi-tenant subdomain deployments where
-        # each tenant has its own public host — the static kwarg can only
-        # advertise one. Loopback-only rewrite ensures the middleware
-        # no-ops cleanly when ``public_url`` is already set to a non-
-        # loopback value. (#103.)
+        # host (X-Forwarded-Host / Host). adcp 5.1 added a callable
+        # ``public_url=`` resolver (#650) intended to replace this, but
+        # 5.2.0's ``serve(transport="both")`` has a bug where a callable
+        # public_url makes the inner A2A app a function without ``.router``,
+        # breaking ``_composed_lifespan`` (AttributeError on startup).
+        # Until that's fixed upstream, we fall back to the static
+        # ``public_url=PUBLIC_URL`` env var for single-host deploys and
+        # rely on this middleware to rewrite per-request from
+        # ``X-Forwarded-Host`` for multi-tenant subdomain deploys.
+        # Loopback-only rewrite ensures the middleware no-ops cleanly
+        # when ``public_url`` is already set to a non-loopback value. (#103.)
         (AgentCardPublicUrlMiddleware, {}),
     ]
     if include_subdomain_routing:
@@ -486,18 +492,34 @@ def _serve_kwargs(
         "streaming_responses": os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
         "enable_debug_endpoints": os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
         "enable_dns_rebinding_protection": (os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"),
-        # adcp 5.0 public_url kwarg (#621) — advertises the canonical A2A
-        # base URL on /.well-known/agent-card.json. When set, the SDK
-        # emits this URL directly instead of the bound localhost; our
-        # ``AgentCardPublicUrlMiddleware`` then no-ops for single-host
-        # deployments. Multi-tenant subdomain deployments leave this unset
-        # and rely on the middleware to rewrite per-request from
-        # ``X-Forwarded-Host``. Env: ``PUBLIC_URL``.
+        # adcp 5.0 ``public_url`` kwarg (#621) — advertises the canonical
+        # A2A base URL on /.well-known/agent-card.json. Static string from
+        # ``PUBLIC_URL`` env when set; otherwise None and
+        # ``AgentCardPublicUrlMiddleware`` (above) does the per-request
+        # rewrite from ``X-Forwarded-Host`` for multi-tenant subdomain
+        # deploys. The 5.1 callable resolver (#650) would let us drop the
+        # middleware, but ``transport="both"`` in 5.2.0 has a bug —
+        # callable ``public_url`` makes the A2A inner app a function
+        # without ``.router``, breaking ``_composed_lifespan``. Filed
+        # upstream.
         "public_url": os.environ.get("PUBLIC_URL") or None,
-        # adcp 5.1 ``spec_compat_hooks()`` (#648) — built-in registry that
-        # backfills pre-v3 buying_mode and normalises pre-4.4 format_id shape /
-        # asset_type discriminator / image→url dim demotion.
-        "pre_validation_hooks": spec_compat_hooks(),
+        # Heuristic backfills for pre-v3 / pre-4.4 buyers — defaults
+        # ``get_products.buying_mode='brief'`` when omitted (spec says
+        # sellers SHOULD default this for pre-v3 clients) and infers
+        # ``sync_creatives`` ``asset_type`` discriminators / wraps bare
+        # ``format_id`` strings / demotes image→url when dims absent.
+        #
+        # ``spec_compat_hooks()`` is deprecated in adcp 5.2 (#667) — removal
+        # target 6.0. Migration path is the typed AdapterPair registry in
+        # ``adcp.compat.legacy.v2_5``, but that only fires when buyers
+        # **declare** ``adcp_version='2.5'`` / ``adcp_major_version=2``. The
+        # hook here is unconditional, which our integration tests rely on
+        # for tag-less buyers omitting these required fields. We use the
+        # private ``_spec_compat_hooks_impl`` (no DeprecationWarning) — same
+        # symbol the SDK's own test suite uses for the same reason. Drop
+        # this when 6.0 ships or when we update tests to declare
+        # ``adcp_version`` explicitly.
+        "pre_validation_hooks": _spec_compat_hooks_impl(),
     }
 
 

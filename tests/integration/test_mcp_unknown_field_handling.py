@@ -68,7 +68,7 @@ class TestMcpDevMode:
             # brand_manifest is translated to brand — this is a known field
             # after translation, so TypeAdapter accepts it
             result = env.call_mcp(
-                brand_manifest="https://acme.com/.well-known/brand.json",
+                brand_manifest="https://acme.com",
                 brief="test ads",
             )
             assert result is not None
@@ -95,7 +95,7 @@ class TestMcpProductionMode:
             _create_tenant_with_product()
             with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
                 result = env.call_mcp(
-                    brand_manifest="https://acme.com/.well-known/brand.json",
+                    brand_manifest="https://acme.com",
                     brief="test ads",
                     bogus_param=123,
                 )

@@ -497,9 +497,7 @@ class TestEmbeddedViewAllowsPublisherManagedWrites:
         # If the gate had still been in place we'd get 403 here.
         assert resp.status_code in (200, 302), resp.get_data(as_text=True)
         with get_db_session() as session:
-            created = session.scalars(
-                select(Principal).filter_by(tenant_id=tid, name="Test Buyer")
-            ).first()
+            created = session.scalars(select(Principal).filter_by(tenant_id=tid, name="Test Buyer")).first()
             assert created is not None, "Principal row was not persisted"
 
 
