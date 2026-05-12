@@ -2562,7 +2562,7 @@ Exclude any products that don't match the brand's tone.</pre>
                         } else {
                             resultDiv.style.background = '#fee2e2';
                             resultDiv.style.border = '1px solid #f87171';
-                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + data.error;
+                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + (data.message || data.error || 'Unknown error');
                         }
                     } catch (error) {
                         resultDiv.style.background = '#fee2e2';
@@ -2612,7 +2612,7 @@ Exclude any products that don't match the brand's tone.</pre>
                         } else {
                             resultDiv.style.background = '#fee2e2';
                             resultDiv.style.border = '1px solid #f87171';
-                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + data.error;
+                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + (data.message || data.error || 'Unknown error');
                         }
                     } catch (error) {
                         resultDiv.style.background = '#fee2e2';

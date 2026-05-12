@@ -594,9 +594,14 @@ def update_ai(tenant_id):
 
 
 @settings_bp.route("/ai/test", methods=["POST"])
-@require_tenant_access(api_mode=True, role=("admin",))
+@require_tenant_access(api_mode=True, role=("admin",), allow_embedded_writes=True)
 def test_ai_connection(tenant_id):
-    """Test AI connection with current configuration."""
+    """Test AI connection with current configuration.
+
+    This endpoint is a read-only probe — it validates credentials against the
+    upstream provider and never writes to tenant state — so it opts into the
+    embedded-write gate. The verb-based gate would otherwise misclassify it.
+    """
     import asyncio
     import concurrent.futures
 
@@ -686,9 +691,12 @@ def test_ai_connection(tenant_id):
 
 
 @settings_bp.route("/ai/test-logfire", methods=["POST"])
-@require_tenant_access(api_mode=True, role=("admin",))
+@require_tenant_access(api_mode=True, role=("admin",), allow_embedded_writes=True)
 def test_logfire_connection(tenant_id):
-    """Test Logfire connection with provided token."""
+    """Test Logfire connection with provided token.
+
+    Read-only probe — see `test_ai_connection` above for rationale.
+    """
     try:
         data = request.get_json() or {}
         logfire_token = data.get("logfire_token", "").strip()
