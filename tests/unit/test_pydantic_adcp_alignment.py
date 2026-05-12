@@ -52,7 +52,6 @@ class TestGetProductsRequestAlignment:
             brief="Looking for display advertising on tech sites",
             filters=ProductFilters(
                 delivery_type="guaranteed",
-                format_types=["video", "display"],
                 format_ids=[
                     FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
                     FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_30s"),
@@ -66,8 +65,7 @@ class TestGetProductsRequestAlignment:
         assert req.brief == "Looking for display advertising on tech sites"
         assert req.filters is not None
         assert req.filters.delivery_type.value == "guaranteed"
-        # format_types are stored as enum objects internally but serialize to strings
-        assert [ft.value for ft in req.filters.format_types] == ["video", "display"]
+        # format_ids are FormatId objects
         assert len(req.filters.format_ids) == 2
         assert req.filters.format_ids[0].id == "display_300x250"
         assert req.filters.format_ids[1].id == "video_30s"
@@ -79,14 +77,14 @@ class TestGetProductsRequestAlignment:
             brand={"domain": "tesla.com"},
             filters={
                 "delivery_type": "non_guaranteed",
-                "format_types": ["video"],
+                "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard"}],
             },
         )
 
         assert req.filters is not None
         # Library uses enum for delivery_type
         assert req.filters.delivery_type.value == "non_guaranteed"
-        assert [ft.value for ft in req.filters.format_types] == ["video"]
+        assert [fid.id for fid in req.filters.format_ids] == ["video_standard"]
 
     def test_partial_filters(self):
         """Test with only some filter fields (all filters are optional)."""
@@ -97,19 +95,15 @@ class TestGetProductsRequestAlignment:
 
         assert req.filters is not None
         assert req.filters.delivery_type.value == "guaranteed"
-        assert req.filters.format_types is None
+        assert req.filters.format_ids is None
 
-    def test_filters_format_types_enum(self):
-        """Test that format_types accepts valid enum values per AdCP spec."""
-        # AdCP spec only supports: video, display, audio (no native)
-        valid_types = ["video", "display", "audio"]
+    def test_filters_format_ids(self):
+        """Test that format_ids accepts valid FormatId values per AdCP spec."""
+        from src.core.schemas import FormatId
 
-        for format_type in valid_types:
-            req = GetProductsRequest(
-                brand={"domain": "testbrand.com"}, filters=ProductFilters(format_types=[format_type])
-            )
-            # format_types are stored as enum objects, check enum value
-            assert format_type in [ft.value for ft in req.filters.format_types]
+        fid = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")
+        req = GetProductsRequest(brand={"domain": "testbrand.com"}, filters=ProductFilters(format_ids=[fid]))
+        assert req.filters.format_ids[0].id == "display_300x250"
 
     def test_filters_delivery_type_values(self):
         """Test that delivery_type accepts valid values per AdCP spec."""
@@ -132,7 +126,7 @@ class TestProductFiltersModel:
         filters = ProductFilters()
 
         assert filters.delivery_type is None
-        assert filters.format_types is None
+        assert filters.format_ids is None
         assert filters.format_ids is None
         assert filters.standard_formats_only is None
 
@@ -148,9 +142,8 @@ class TestProductFiltersModel:
         assert filters.standard_formats_only is False
 
     def test_array_filters(self):
-        """Test array filter fields (format_types, format_ids)."""
+        """Test array filter fields (format_ids)."""
         filters = ProductFilters(
-            format_types=["video", "display", "audio"],
             format_ids=[
                 FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
                 FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_30s"),
@@ -158,9 +151,6 @@ class TestProductFiltersModel:
             ],
         )
 
-        assert len(filters.format_types) == 3
-        # format_types are stored as enum objects, convert to strings for comparison
-        assert "video" in [ft.value for ft in filters.format_types]
         assert len(filters.format_ids) == 3
         assert filters.format_ids[0].id == "display_300x250"
 
@@ -172,7 +162,6 @@ class TestProductFiltersModel:
 
         assert "delivery_type" in dumped
         assert "standard_formats_only" in dumped
-        assert "format_types" not in dumped  # Was None
         assert "format_ids" not in dumped  # Was None
 
 
@@ -185,10 +174,13 @@ class TestAdCPSchemaCompatibility:
         adcp 3.6.0: brand_manifest replaced by brand (BrandReference with domain).
         """
         # This is the updated example - using brand (BrandReference) instead of brand_manifest
-        req = GetProductsRequest(brand={"domain": "mobileapps.com"}, filters={"format_types": ["video"]})
+        req = GetProductsRequest(
+            brand={"domain": "mobileapps.com"},
+            filters={"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard"}]},
+        )
 
         assert req.brand is not None
-        assert [ft.value for ft in req.filters.format_types] == ["video"]
+        assert [fid.id for fid in req.filters.format_ids] == ["video_standard"]
 
     def test_example_minimal_adcp_request(self):
         """Test minimal valid request per AdCP spec.
@@ -220,7 +212,6 @@ class TestAdCPSchemaCompatibility:
             brand={"domain": "premium-video.com"},
             filters={
                 "delivery_type": "non_guaranteed",
-                "format_types": ["video"],
                 "format_ids": [
                     {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_30s"},
                     {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_15s"},
@@ -229,7 +220,6 @@ class TestAdCPSchemaCompatibility:
         )
 
         assert req.filters.delivery_type.value == "non_guaranteed"
-        assert [ft.value for ft in req.filters.format_types] == ["video"]
         assert len(req.filters.format_ids) == 2
         assert req.filters.format_ids[0].id == "video_30s"
         assert req.filters.format_ids[1].id == "video_15s"
@@ -250,7 +240,7 @@ class TestRegressionPrevention:
                 brief="video ads",
                 filters={
                     "delivery_type": "guaranteed",
-                    "format_types": ["video"],
+                    "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard"}],
                 },
             )
             assert req.brand is not None
@@ -277,7 +267,10 @@ class TestRegressionPrevention:
         payload = {
             "brand": {"domain": "purinacatfood.com"},
             "brief": "video advertising campaigns",
-            "filters": {"delivery_type": "guaranteed", "format_types": ["video"]},
+            "filters": {
+                "delivery_type": "guaranteed",
+                "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard"}],
+            },
         }
 
         req = GetProductsRequest(**payload)
@@ -285,4 +278,4 @@ class TestRegressionPrevention:
         assert req.brand is not None
         assert req.brief == "video advertising campaigns"
         assert req.filters.delivery_type.value == "guaranteed"
-        assert [ft.value for ft in req.filters.format_types] == ["video"]
+        assert [fid.id for fid in req.filters.format_ids] == ["video_standard"]

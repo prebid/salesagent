@@ -65,7 +65,6 @@ def make_media_buy(
     media_buy_id="buy_1",
     principal_id="principal_1",
     tenant_id="tenant_1",
-    buyer_ref="ref_1",
     start_date=date(2025, 1, 1),
     end_date=date(2025, 12, 31),
     start_time=None,
@@ -78,7 +77,7 @@ def make_media_buy(
     buy.media_buy_id = media_buy_id
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
-    buy.buyer_ref = buyer_ref
+    buy.buyer_ref = None
     buy.start_date = start_date
     buy.end_date = end_date
     buy.start_time = start_time
@@ -113,9 +112,9 @@ def make_package(
 
 
 class TestComputeStatus:
-    def test_pending_activation_when_before_start(self):
+    def test_pending_start_when_before_start(self):
         buy = make_media_buy(start_date=date(2099, 1, 1), end_date=date(2099, 12, 31))
-        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_activation
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_start
 
     def test_active_when_in_flight(self):
         buy = make_media_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
@@ -133,7 +132,7 @@ class TestComputeStatus:
             start_time=datetime(2099, 1, 1, tzinfo=UTC),
             end_time=datetime(2099, 12, 31, tzinfo=UTC),
         )
-        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_activation
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_start
 
 
 class TestResolveStatusFilter:
@@ -155,8 +154,8 @@ class TestResolveStatusFilter:
         class StatusFilter(RootModel[list[MediaBuyStatus]]):
             pass
 
-        result = _resolve_status_filter(StatusFilter([MediaBuyStatus.pending_activation]))
-        assert result == {MediaBuyStatus.pending_activation}
+        result = _resolve_status_filter(StatusFilter([MediaBuyStatus.pending_start]))
+        assert result == {MediaBuyStatus.pending_start}
 
 
 class TestFetchTargetMediaBuys:
@@ -176,16 +175,6 @@ class TestFetchTargetMediaBuys:
         completed = make_media_buy("buy_done", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
         req = GetMediaBuysRequest(
             media_buy_ids=["buy_active", "buy_done"],
-            status_filter=MediaBuyStatus.active,
-        )
-        result = self._run(req, [active, completed])
-        assert [b.media_buy_id for b in result] == ["buy_active"]
-
-    def test_buyer_refs_with_status_filter_excludes_non_matching(self):
-        active = make_media_buy("buy_active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
-        completed = make_media_buy("buy_done", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
-        req = GetMediaBuysRequest(
-            buyer_refs=["ref_1"],
             status_filter=MediaBuyStatus.active,
         )
         result = self._run(req, [active, completed])
@@ -461,7 +450,7 @@ class TestGetMediaBuysResponseStructure:
 
     def test_media_buy_status_values(self):
         """MediaBuyStatus enum values match AdCP spec strings."""
-        assert MediaBuyStatus.pending_activation.value == "pending_activation"
+        assert MediaBuyStatus.pending_start.value == "pending_start"
         assert MediaBuyStatus.active.value == "active"
         assert MediaBuyStatus.completed.value == "completed"
 

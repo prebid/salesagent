@@ -28,16 +28,15 @@ class TestResponseSchemas:
 
     def test_create_media_buy_response_no_protocol_fields(self):
         """Verify CreateMediaBuyResponse has only domain fields (no protocol fields)."""
-        response = CreateMediaBuySuccess(media_buy_id="buy_123", buyer_ref="ref_456", packages=[])
+        response = CreateMediaBuySuccess(media_buy_id="buy_123", packages=[])
 
         # Verify protocol fields are not in the schema (moved to ProtocolEnvelope)
         assert not hasattr(response, "context_id")
-        assert not hasattr(response, "status")
+        # status is now a domain field on CreateMediaBuySuccess (added in adcp 3.12)
         assert not hasattr(response, "task_id")
         assert not hasattr(response, "message")
 
         # Verify domain fields are present
-        assert response.buyer_ref == "ref_456"
         assert response.media_buy_id == "buy_123"
 
     def test_get_products_response_no_context_id(self):
@@ -81,13 +80,13 @@ class TestResponseSchemas:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
-            errors=[{"code": "validation_error", "message": "Validation error", "details": {"budget": -100}}],
+            errors=[{"code": "VALIDATION_ERROR", "message": "Validation error", "details": {"budget": -100}}],
         )
 
         # Verify domain fields
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "validation_error"
+        assert response.errors[0].code == "VALIDATION_ERROR"
 
         # Verify no protocol fields
         assert not hasattr(response, "status")
@@ -166,23 +165,21 @@ class TestProtocolCompliance:
         # Response with media_buy_id (success case)
         response = CreateMediaBuySuccess(
             media_buy_id="pending_123",
-            buyer_ref="ref_123",
             packages=[],
         )
 
         # Domain fields present
         assert response.media_buy_id == "pending_123"
-        assert response.buyer_ref == "ref_123"
 
         # Protocol fields NOT present (moved to ProtocolEnvelope)
-        assert not hasattr(response, "status")
+        # status is now a domain field on CreateMediaBuySuccess (added in adcp 3.12)
         assert not hasattr(response, "task_id")
 
         # Error case
         from src.core.schemas import CreateMediaBuyError
 
         error_response = CreateMediaBuyError(
-            errors=[{"code": "invalid_budget", "message": "Invalid budget"}],
+            errors=[{"code": "VALIDATION_ERROR", "message": "Invalid budget"}],
         )
 
         assert error_response.errors is not None
@@ -191,14 +188,12 @@ class TestProtocolCompliance:
         # Success case with packages
         response = CreateMediaBuySuccess(
             media_buy_id="buy_456",
-            buyer_ref="ref_789",
-            packages=[{"buyer_ref": "ref_789", "package_id": "pkg_1", "paused": False}],
+            packages=[{"package_id": "pkg_1", "paused": False}],
         )
 
         assert response.media_buy_id == "buy_456"
-        assert response.buyer_ref == "ref_789"
         assert len(response.packages) == 1
-        assert not hasattr(response, "status")  # Protocol field removed
+        # status is now a domain field on CreateMediaBuySuccess (added in adcp 3.12)
 
 
 if __name__ == "__main__":

@@ -160,7 +160,6 @@ def _run_sync_thread(
 
         # Import here to avoid circular dependencies
         import os
-        import tempfile
 
         import google.oauth2.service_account
         from googleads import ad_manager, oauth2
@@ -207,23 +206,16 @@ def _run_sync_thread(
                     _mark_sync_failed(sync_id, "Service account JSON not found")
                     return
 
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-                    f.write(service_account_json_str)
-                    temp_keyfile = f.name
+                import json as json_mod
 
-                try:
-                    credentials = google.oauth2.service_account.Credentials.from_service_account_file(
-                        temp_keyfile, scopes=["https://www.googleapis.com/auth/dfp"]
-                    )
-                    oauth2_client = oauth2.GoogleCredentialsClient(credentials)
-                    client = ad_manager.AdManagerClient(
-                        oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
-                    )
-                finally:
-                    try:
-                        os.unlink(temp_keyfile)
-                    except Exception:
-                        pass
+                service_account_info = json_mod.loads(service_account_json_str)
+                credentials = google.oauth2.service_account.Credentials.from_service_account_info(
+                    service_account_info, scopes=["https://www.googleapis.com/auth/dfp"]
+                )
+                oauth2_client = oauth2.GoogleCredentialsClient(credentials)
+                client = ad_manager.AdManagerClient(
+                    oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
+                )
             else:  # OAuth
                 oauth2_client = oauth2.GoogleRefreshTokenClient(
                     client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),

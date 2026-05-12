@@ -55,7 +55,6 @@ def test_update_package_budget_persists_to_database():
         result = GoogleAdManager.update_media_buy(
             mock_adapter,
             media_buy_id=media_buy_id,
-            buyer_ref="buyer_test",
             action="update_package_budget",
             package_id=package_id,
             budget=new_budget,
@@ -113,7 +112,6 @@ def test_update_package_budget_returns_error_when_package_not_found():
         result = GoogleAdManager.update_media_buy(
             mock_adapter,
             media_buy_id=media_buy_id,
-            buyer_ref="buyer_test",
             action="update_package_budget",
             package_id=package_id,
             budget=new_budget,
@@ -123,7 +121,7 @@ def test_update_package_budget_returns_error_when_package_not_found():
         # Verify error response
         assert isinstance(result, UpdateMediaBuyError)
         assert len(result.errors) == 1
-        assert result.errors[0].code == "package_not_found"
+        assert result.errors[0].code == "PACKAGE_NOT_FOUND"
         assert package_id in result.errors[0].message
 
         # Verify commit was NOT called (no changes to persist)
@@ -146,7 +144,6 @@ def test_unsupported_action_returns_explicit_error():
     result = GoogleAdManager.update_media_buy(
         mock_adapter,
         media_buy_id=media_buy_id,
-        buyer_ref="buyer_test",
         action="delete_media_buy",  # Not supported
         package_id=None,
         budget=None,
@@ -156,7 +153,7 @@ def test_unsupported_action_returns_explicit_error():
     # Verify error response (not success!)
     assert isinstance(result, UpdateMediaBuyError)
     assert len(result.errors) == 1
-    assert result.errors[0].code == "unsupported_action"
+    assert result.errors[0].code == "UNSUPPORTED_FEATURE"
     assert "delete_media_buy" in result.errors[0].message
 
 
@@ -201,7 +198,6 @@ def test_pause_resume_package_actions_work():
         result = GoogleAdManager.update_media_buy(
             mock_adapter,
             media_buy_id=media_buy_id,
-            buyer_ref="buyer_test",
             action="pause_package",
             package_id=package_id,
             budget=None,
@@ -224,7 +220,6 @@ def test_pause_resume_package_actions_work():
         result = GoogleAdManager.update_media_buy(
             mock_adapter,
             media_buy_id=media_buy_id,
-            buyer_ref="buyer_test",
             action="resume_package",
             package_id=package_id,
             budget=None,
@@ -279,7 +274,6 @@ def test_pause_resume_media_buy_actions_work():
         result = GoogleAdManager.update_media_buy(
             mock_adapter,
             media_buy_id=media_buy_id,
-            buyer_ref="buyer_test",
             action="pause_media_buy",
             package_id=None,
             budget=None,
@@ -304,7 +298,6 @@ def test_pause_resume_media_buy_actions_work():
         result = GoogleAdManager.update_media_buy(
             mock_adapter,
             media_buy_id=media_buy_id,
-            buyer_ref="buyer_test",
             action="resume_media_buy",
             package_id=None,
             budget=None,
@@ -360,7 +353,6 @@ def test_update_package_budget_rejects_budget_below_delivery():
         result = GoogleAdManager.update_media_buy(
             mock_adapter,
             media_buy_id=media_buy_id,
-            buyer_ref="buyer_test",
             action="update_package_budget",
             package_id=package_id,
             budget=new_budget,
@@ -370,7 +362,7 @@ def test_update_package_budget_rejects_budget_below_delivery():
         # Verify error response
         assert isinstance(result, UpdateMediaBuyError)
         assert len(result.errors) == 1
-        assert result.errors[0].code == "budget_below_delivery"
+        assert result.errors[0].code == "BUDGET_EXCEEDED"
         assert str(new_budget) in result.errors[0].message
         assert str(current_spend) in result.errors[0].message
 

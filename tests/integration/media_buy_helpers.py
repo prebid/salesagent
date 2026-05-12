@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,14 +19,12 @@ def _future(days: int = 1) -> datetime:
 def _make_create_request(**overrides: Any) -> CreateMediaBuyRequest:
     """Build a minimal valid CreateMediaBuyRequest."""
     defaults: dict[str, Any] = {
-        "buyer_ref": f"test-buyer-{uuid.uuid4().hex[:8]}",
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
         "packages": [
             {
                 "product_id": "guaranteed_display",
-                "buyer_ref": "pkg-1",
                 "budget": 5000.0,
                 "pricing_option_id": "cpm_usd_fixed",
             }

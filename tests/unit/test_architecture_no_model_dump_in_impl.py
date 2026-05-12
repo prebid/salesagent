@@ -28,32 +28,33 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # Line numbers reflect FIXME comment restored in media_buy_update.py (PR04 review item 1).
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 22 violations (workflow step response_data)
-    ("media_buy_update.py", 224),
-    ("media_buy_update.py", 279),
-    ("media_buy_update.py", 280),
-    ("media_buy_update.py", 334),
-    ("media_buy_update.py", 391),
-    ("media_buy_update.py", 415),
-    ("media_buy_update.py", 449),
-    ("media_buy_update.py", 477),
-    ("media_buy_update.py", 494),
-    ("media_buy_update.py", 549),
-    ("media_buy_update.py", 580),
-    ("media_buy_update.py", 600),
-    ("media_buy_update.py", 626),
-    ("media_buy_update.py", 806),
-    ("media_buy_update.py", 834),
-    ("media_buy_update.py", 863),
-    ("media_buy_update.py", 1035),
-    ("media_buy_update.py", 1053),
-    ("media_buy_update.py", 1104),
-    ("media_buy_update.py", 1198),
-    ("media_buy_update.py", 1230),
-    ("media_buy_update.py", 1292),
+    # Line numbers updated after state-machine precondition guard added.
+    ("media_buy_update.py", 267),
+    ("media_buy_update.py", 327),
+    ("media_buy_update.py", 328),
+    ("media_buy_update.py", 382),
+    ("media_buy_update.py", 439),
+    ("media_buy_update.py", 462),
+    ("media_buy_update.py", 504),
+    ("media_buy_update.py", 531),
+    ("media_buy_update.py", 548),
+    ("media_buy_update.py", 602),
+    ("media_buy_update.py", 632),
+    ("media_buy_update.py", 652),
+    ("media_buy_update.py", 678),
+    ("media_buy_update.py", 857),
+    ("media_buy_update.py", 888),
+    ("media_buy_update.py", 916),
+    ("media_buy_update.py", 1087),
+    ("media_buy_update.py", 1105),
+    ("media_buy_update.py", 1155),
+    ("media_buy_update.py", 1248),
+    ("media_buy_update.py", 1280),
+    ("media_buy_update.py", 1343),
     # _get_products_impl: 1 violation (logging)
-    ("products.py", 637),
+    ("products.py", 617),
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 153),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 144),  # filters.model_dump(exclude_none=True)
 }
 
 

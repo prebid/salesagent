@@ -225,7 +225,7 @@ class TestMCPEndpointsComprehensive:
 
         Note: Legacy formats (product_ids, total_budget, start_date, end_date) were
         removed in adcp 2.16.0. All requests must use the standard AdCP format with
-        explicit packages, buyer_ref, start_time, and end_time fields.
+        explicit packages, start_time, and end_time fields.
         """
         from src.core.schemas import CreateMediaBuyRequest
         from tests.helpers.adcp_factories import create_test_package_request
@@ -233,21 +233,15 @@ class TestMCPEndpointsComprehensive:
         # Test: Standard AdCP format with explicit packages
         request = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
-            buyer_ref="custom_ref_123",
             po_number="PO-V24-67890",
             packages=[
-                create_test_package_request(
-                    buyer_ref="pkg_1", product_id="prod_1", budget=6000.0, pricing_option_id="default"
-                ),
-                create_test_package_request(
-                    buyer_ref="pkg_2", product_id="prod_2", budget=4000.0, pricing_option_id="default"
-                ),
+                create_test_package_request(product_id="prod_1", budget=6000.0, pricing_option_id="default"),
+                create_test_package_request(product_id="prod_2", budget=4000.0, pricing_option_id="default"),
             ],
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),
         )
 
-        assert request.buyer_ref == "custom_ref_123"
         assert len(request.packages) == 2
 
         # Helper methods work correctly
@@ -336,10 +330,8 @@ class TestMCPEndpointsComprehensive:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
-                    "buyer_ref": "test_workflow_buy_001",  # Required per AdCP spec
                     "packages": [
                         create_test_package_request_dict(
-                            buyer_ref="pkg_001",
                             product_id=product["product_id"],
                             pricing_option_id=pricing_option_id,
                             budget=10000.0,

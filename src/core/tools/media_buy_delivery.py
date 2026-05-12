@@ -11,11 +11,11 @@ Handles delivery metrics reporting including:
 import logging
 from datetime import UTC, date, datetime, timedelta
 from math import floor
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import RootModel, ValidationError
+from pydantic import Field, RootModel, ValidationError
 from rich.console import Console
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
@@ -24,8 +24,13 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 console = Console()
 
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import Error, MediaBuyStatus
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
+    AttributionWindow,
+    ReportingDimensions,
+)
 
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
@@ -96,7 +101,7 @@ def _get_media_buy_delivery_impl(
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
-            errors=[Error(code="principal_id_missing", message="Principal ID not found in context")],
+            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
             context=context_val,
         )
 
@@ -117,7 +122,7 @@ def _get_media_buy_delivery_impl(
                 media_buy_count=0,
             ),
             media_buy_deliveries=[],
-            errors=[Error(code="principal_not_found", message=f"Principal {principal_id} not found")],
+            errors=[Error(code="AUTH_REQUIRED", message=f"Principal {principal_id} not found")],
             context=context_val,
         )
 
@@ -151,7 +156,7 @@ def _get_media_buy_delivery_impl(
                     media_buy_count=0,
                 ),
                 media_buy_deliveries=[],
-                errors=[Error(code="invalid_date_range", message="Start date must be before end date")],
+                errors=[Error(code="VALIDATION_ERROR", message="Start date must be before end date")],
                 context=context_val,
             )
     else:
@@ -167,7 +172,7 @@ def _get_media_buy_delivery_impl(
     # Determine which media buys to fetch from database
     # UoW scope encompasses all code that accesses MediaBuy ORM objects to prevent
     # DetachedInstanceError — the session must stay open while we read attributes
-    # like buy.raw_request, buy.buyer_ref, buy.start_date, etc.
+    # like buy.raw_request, buy.start_date, etc.
     with MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
         repo = uow.media_buys
@@ -181,14 +186,7 @@ def _get_media_buy_delivery_impl(
             for requested_id in req.media_buy_ids:
                 if requested_id not in found_ids:
                     not_found_errors.append(
-                        Error(code="media_buy_not_found", message=f"Media buy {requested_id} not found")
-                    )
-        elif req.buyer_refs:
-            found_buyer_refs = {buy.buyer_ref for _, buy in target_media_buys if buy.buyer_ref}
-            for requested_ref in req.buyer_refs:
-                if requested_ref not in found_buyer_refs:
-                    not_found_errors.append(
-                        Error(code="media_buy_not_found", message=f"Buyer ref {requested_ref} not found")
+                        Error(code="MEDIA_BUY_NOT_FOUND", message=f"Media buy {requested_id} not found")
                     )
 
         pricing_option_ids: list[Any] = []
@@ -319,7 +317,9 @@ def _get_media_buy_delivery_impl(
                                 media_buy_count=0,
                             ),
                             media_buy_deliveries=[],
-                            errors=[Error(code="adapter_error", message=f"Error getting delivery for {media_buy_id}")],
+                            errors=[
+                                Error(code="SERVICE_UNAVAILABLE", message=f"Error getting delivery for {media_buy_id}")
+                            ],
                             context=context_val,
                         )
                 else:
@@ -414,7 +414,6 @@ def _get_media_buy_delivery_impl(
                         package_deliveries.append(
                             PackageDelivery(
                                 package_id=package_id,
-                                buyer_ref=pkg_data.get("buyer_ref") or buy.raw_request.get("buyer_ref", None),
                                 impressions=package_impressions or 0.0,
                                 spend=package_spend or 0.0,
                                 clicks=package_clicks,
@@ -447,9 +446,6 @@ def _get_media_buy_delivery_impl(
                             else:
                                 buy_pricing_options.append({"pricing_option_id": pkg_po_id})
 
-                # Create delivery data
-                buyer_ref = buy.raw_request.get("buyer_ref", None)
-
                 # Calculate clicks and CTR (click-through rate) where applicable
 
                 clicks = 0
@@ -465,7 +461,6 @@ def _get_media_buy_delivery_impl(
                 )
                 delivery_data = MediaBuyDeliveryData(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
                     status=status_typed,
                     pricing_model=PricingModel(
                         "cpm"
@@ -586,14 +581,15 @@ def _get_media_buy_delivery_impl(
 
 async def get_media_buy_delivery(
     media_buy_ids: list[str] | None = None,
-    buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    reporting_dimensions: dict[str, Any] | None = None,
-    attribution_window: dict[str, Any] | None = None,
-    include_package_daily_breakdown: bool | None = None,
-    account: dict[str, Any] | None = None,
+    start_date: Annotated[str | None, Field(description="Start date for reporting period in YYYY-MM-DD format")] = None,
+    end_date: Annotated[str | None, Field(description="End date for reporting period in YYYY-MM-DD format")] = None,
+    reporting_dimensions: ReportingDimensions | None = None,
+    attribution_window: AttributionWindow | None = None,
+    include_package_daily_breakdown: Annotated[
+        bool | None, Field(description="When true, include daily breakdown metrics per package")
+    ] = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -603,7 +599,6 @@ async def get_media_buy_delivery(
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to get delivery data for (optional)
-        buyer_refs: Array of buyer reference IDs to get delivery data for (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
         start_date: Start date for reporting period in YYYY-MM-DD format (optional)
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
@@ -621,18 +616,14 @@ async def get_media_buy_delivery(
 
     # Handle account resolution at boundary (same as sync_creatives pattern)
     if account is not None and identity is not None:
-        from adcp.types import AccountReference as LibraryAccountReference
-
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = LibraryAccountReference(**account) if isinstance(account, dict) else account
-        identity = enrich_identity_with_account(identity, account_ref)
+        identity = enrich_identity_with_account(identity, account)
 
     # Create AdCP-compliant request object
     try:
         req = GetMediaBuyDeliveryRequest(
             media_buy_ids=media_buy_ids,
-            buyer_refs=buyer_refs,
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             start_date=start_date,
             end_date=end_date,
@@ -651,14 +642,13 @@ async def get_media_buy_delivery(
 
 def get_media_buy_delivery_raw(
     media_buy_ids: list[str] | None = None,
-    buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    reporting_dimensions: dict[str, Any] | None = None,
-    attribution_window: dict[str, Any] | None = None,
+    reporting_dimensions: ReportingDimensions | None = None,
+    attribution_window: AttributionWindow | None = None,
     include_package_daily_breakdown: bool | None = None,
-    account: dict[str, Any] | None = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -667,7 +657,6 @@ def get_media_buy_delivery_raw(
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to get delivery data for (optional)
-        buyer_refs: Array of buyer reference IDs to get delivery data for (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
         start_date: Start date for reporting period in YYYY-MM-DD format (optional)
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
@@ -689,17 +678,13 @@ def get_media_buy_delivery_raw(
 
     # Handle account resolution at boundary (same as sync_creatives pattern)
     if account is not None and identity is not None:
-        from adcp.types import AccountReference as LibraryAccountReference
-
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = LibraryAccountReference(**account) if isinstance(account, dict) else account
-        identity = enrich_identity_with_account(identity, account_ref)
+        identity = enrich_identity_with_account(identity, account)
 
     # Create request object
     req = GetMediaBuyDeliveryRequest(
         media_buy_ids=media_buy_ids,
-        buyer_refs=buyer_refs,
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
         start_date=start_date,
         end_date=end_date,
@@ -764,30 +749,28 @@ def _get_target_media_buys(
 ) -> list[tuple[str, MediaBuy]]:
     # Resolve status_filter to a set of internal status strings.
     # Internal statuses: ready, active, paused, completed, failed
-    # AdCP MediaBuyStatus: pending_activation, active, paused, completed
-    # Map: pending_activation -> ready (internal)
+    # AdCP MediaBuyStatus: pending_start, active, paused, completed
+    # Map: pending_start -> ready (internal)
     valid_internal_statuses = {"active", "ready", "paused", "completed", "failed"}
 
     def _to_internal(status: MediaBuyStatus) -> str:
         """Convert AdCP MediaBuyStatus enum to internal status string."""
-        if status == MediaBuyStatus.pending_activation:
+        if status == MediaBuyStatus.pending_start:
             return "ready"
         return status.value
 
     # When specific IDs/refs are provided without an explicit status_filter,
     # return all matching buys regardless of status. The "active" default only
     # applies when browsing (no specific IDs).
-    has_explicit_ids = bool(req.media_buy_ids or req.buyer_refs)
+    has_explicit_ids = bool(req.media_buy_ids)
     if has_explicit_ids and not req.status_filter:
         filter_statuses = list(valid_internal_statuses)
     else:
         filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
 
-    # Preserve if/elif/else precedence: media_buy_ids takes priority over buyer_refs
+    # Fetch media buys by IDs or all for principal
     if req.media_buy_ids:
         fetched_buys = repo.get_by_principal(principal_id, media_buy_ids=req.media_buy_ids)
-    elif req.buyer_refs:
-        fetched_buys = repo.get_by_principal(principal_id, buyer_refs=req.buyer_refs)
     else:
         fetched_buys = repo.get_by_principal(principal_id)
 

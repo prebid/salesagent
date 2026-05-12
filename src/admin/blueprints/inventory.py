@@ -6,7 +6,7 @@ import logging
 from flask import Blueprint, jsonify, render_template, request, session
 from sqlalchemy import String, func, or_, select
 
-from src.admin.utils import get_tenant_config_from_db, require_auth, require_tenant_access
+from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
@@ -851,34 +851,182 @@ def get_sync_status(tenant_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _unit_to_dict(unit, *, matched_search=False):
+    """Convert a GAMInventory ORM object to a response dict."""
+    metadata = unit.inventory_metadata or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return {
+        "id": unit.inventory_id,
+        "name": unit.name,
+        "status": unit.status,
+        "code": metadata.get("ad_unit_code", ""),
+        "path": unit.path or [unit.name],
+        "parent_id": metadata.get("parent_id"),
+        "has_children": metadata.get("has_children", False),
+        "matched_search": matched_search,
+        "sizes": metadata.get("sizes", []),
+        "children": [],
+    }
+
+
+def _get_inventory_stats(db_session, tenant_id):
+    """Get counts for non-ad-unit inventory types and last sync time."""
+    stats = {}
+    for inv_type, key in [
+        ("placement", "placements"),
+        ("label", "labels"),
+        ("custom_targeting_key", "custom_targeting_keys"),
+        ("audience_segment", "audience_segments"),
+    ]:
+        stats[key] = (
+            db_session.scalar(
+                select(func.count())
+                .select_from(GAMInventory)
+                .where(
+                    GAMInventory.tenant_id == tenant_id,
+                    GAMInventory.inventory_type == inv_type,
+                    GAMInventory.status == "ACTIVE",
+                )
+            )
+            or 0
+        )
+
+    last_sync = db_session.scalar(
+        select(GAMInventory.last_synced)
+        .where(GAMInventory.tenant_id == tenant_id)
+        .order_by(GAMInventory.last_synced.desc())
+        .limit(1)
+    )
+    stats["last_sync"] = last_sync.isoformat() if last_sync else None
+    return stats
+
+
+def _get_parent_id(unit):
+    """Extract parent_id from a GAMInventory unit's metadata."""
+    metadata = unit.inventory_metadata or {}
+    if isinstance(metadata, dict):
+        return metadata.get("parent_id")
+    return None
+
+
+def _batch_fetch_ancestors(db_session, tenant_id, matching_units):
+    """Fetch all ancestor nodes using batch IN() queries (not N+1).
+
+    Walks up the tree level by level: collect parent_ids from matching units,
+    fetch those parents, collect their parent_ids, repeat until no new parents.
+    """
+    ancestor_ids = set()
+    for unit in matching_units:
+        pid = _get_parent_id(unit)
+        if pid:
+            ancestor_ids.add(pid)
+
+    seen_ids = {unit.inventory_id for unit in matching_units}
+    ids_to_fetch = ancestor_ids - seen_ids
+    all_ancestor_units = []
+
+    while ids_to_fetch:
+        fetched = db_session.scalars(
+            select(GAMInventory).where(
+                GAMInventory.tenant_id == tenant_id,
+                GAMInventory.inventory_id.in_(ids_to_fetch),
+            )
+        ).all()
+        all_ancestor_units.extend(fetched)
+        seen_ids.update(ids_to_fetch)
+
+        next_ids = set()
+        for unit in fetched:
+            pid = _get_parent_id(unit)
+            if pid and pid not in seen_ids:
+                next_ids.add(pid)
+        ids_to_fetch = next_ids
+
+    return all_ancestor_units
+
+
+def _build_tree(all_units, matching_ids):
+    """Build hierarchical tree from a flat list of unit dicts.
+
+    Two-pass algorithm:
+    1. Create dict objects keyed by inventory_id
+    2. Wire parent→child relationships; orphans become roots
+    """
+    units_by_id = {}
+    for unit in all_units:
+        is_match = unit.inventory_id in matching_ids
+        units_by_id[unit.inventory_id] = _unit_to_dict(unit, matched_search=is_match)
+
+    root_units = []
+    for unit_obj in units_by_id.values():
+        parent_id = unit_obj.get("parent_id")
+        if parent_id and parent_id in units_by_id:
+            units_by_id[parent_id]["children"].append(unit_obj)
+        else:
+            root_units.append(unit_obj)
+
+    return root_units
+
+
+# Safety limits to prevent OOM on large GAM networks (GitHub #1154)
+# All list-returning inventory queries must use execute_limited() with one of these.
+_TREE_LIMIT = 10_000
+_SEARCH_LIMIT = 1_000
+_LIST_LIMIT = 500
+
+
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory/tree", methods=["GET"])
 @require_tenant_access(api_mode=True)
 def get_inventory_tree(tenant_id):
-    """Get ad unit hierarchy tree structure for tree view.
+    """Get ad unit hierarchy tree structure with lazy-loading support.
 
     Query Parameters:
+        parent_id (str, optional): Return direct children of this ad unit
         search (str, optional): Search term to filter ad units by name or path
 
-    Returns:
-        JSON with hierarchical tree of ad units including parent-child relationships
+    Modes:
+        1. No params: Root nodes only (parent_id IS NULL) + stats
+        2. ?parent_id=X: Direct children of X (lightweight, no stats)
+        3. ?search=term: Matching nodes + ancestors as tree (with limit)
     """
     from flask import current_app, request
 
     search = request.args.get("search", "").strip()
+    parent_id_param = request.args.get("parent_id", "").strip()
 
-    # Cache keys for inventory tree
-    cache_key = f"inventory_tree:v2:{tenant_id}"  # v2: added search_active/matching_count fields
-    cache_time_key = f"inventory_tree_time:v2:{tenant_id}"
+    # --- Mode 2: Children of a specific parent (lightweight) ---
+    if parent_id_param:
+        logger.info(f"Fetching children of {parent_id_param} for tenant: {tenant_id}")
+        try:
+            with get_db_session() as db_session:
+                stmt = (
+                    select(GAMInventory)
+                    .where(
+                        GAMInventory.tenant_id == tenant_id,
+                        GAMInventory.inventory_type == "ad_unit",
+                        GAMInventory.status == "ACTIVE",
+                        GAMInventory.inventory_metadata["parent_id"].as_string() == parent_id_param,
+                    )
+                    .order_by(GAMInventory.name)
+                )
+                children, truncated = execute_limited(db_session, stmt, _TREE_LIMIT)
+                units = [_unit_to_dict(u) for u in children]
+                logger.info(f"Found {len(units)} children of {parent_id_param} (truncated: {truncated})")
+                return jsonify({"units": units, "truncated": truncated})
+        except Exception as e:
+            logger.error(f"Error fetching children for {parent_id_param}: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
 
-    # Use cache if available (5 minute TTL) - only cache when no search
+    # --- Cache (root mode only, no search, no parent_id) ---
+    cache_key = f"inventory_tree:v3:{tenant_id}"
+    cache_time_key = f"inventory_tree_time:v3:{tenant_id}"
     cache = getattr(current_app, "cache", None)
+
     if cache and not search:
         cached_result = cache.get(cache_key)
         cached_time = cache.get(cache_time_key)
-
         if cached_result and cached_time:
-            # Check if a sync completed after the cache was set
-            # If so, invalidate the cache and rebuild
             from sqlalchemy import desc
 
             from src.core.database.models import SyncJob
@@ -893,13 +1041,9 @@ def get_inventory_tree(tenant_id):
                     )
                     .order_by(desc(SyncJob.completed_at))
                 ).first()
-
                 if last_sync and last_sync.completed_at:
-                    # Compare timestamps - invalidate if sync completed after cache was set
                     if last_sync.completed_at.timestamp() > cached_time:
-                        logger.info(
-                            f"Invalidating stale cache for tenant {tenant_id} - sync completed after cache was set"
-                        )
+                        logger.info(f"Invalidating stale cache for tenant {tenant_id}")
                         cache.delete(cache_key)
                         cache.delete(cache_time_key)
                     else:
@@ -912,195 +1056,99 @@ def get_inventory_tree(tenant_id):
     logger.info(f"Building inventory tree for tenant: {tenant_id}, search: '{search}'")
     try:
         with get_db_session() as db_session:
-            from src.core.database.models import GAMInventory
-
-            # Get all ad units (active only by default)
-            stmt = select(GAMInventory).where(
+            # Base filter: active ad units for this tenant
+            base_where = [
                 GAMInventory.tenant_id == tenant_id,
                 GAMInventory.inventory_type == "ad_unit",
                 GAMInventory.status == "ACTIVE",
+            ]
+
+            # Count total active ad units (for truncation warning)
+            total_active_count = (
+                db_session.scalar(select(func.count()).select_from(GAMInventory).where(*base_where)) or 0
             )
 
-            # If search term provided, filter by name or path
             if search:
-                stmt = stmt.where(
-                    or_(
-                        GAMInventory.name.ilike(f"%{search}%"),
-                        func.cast(GAMInventory.path, String).ilike(f"%{search}%"),
+                # --- Mode 3: Search with ancestors ---
+                search_stmt = (
+                    select(GAMInventory)
+                    .where(
+                        *base_where,
+                        or_(
+                            GAMInventory.name.ilike(f"%{search}%"),
+                            func.cast(GAMInventory.path, String).ilike(f"%{search}%"),
+                        ),
                     )
+                    .order_by(GAMInventory.name)
+                )
+                matching_units, truncated = execute_limited(db_session, search_stmt, _SEARCH_LIMIT)
+
+                logger.info(f"Search found {len(matching_units)} matches (truncated: {truncated})")
+
+                matching_ids = {u.inventory_id for u in matching_units}
+
+                if matching_units:
+                    ancestors = _batch_fetch_ancestors(db_session, tenant_id, matching_units)
+                    all_units = list(matching_units) + ancestors
+                    if ancestors:
+                        logger.info(f"Added {len(ancestors)} ancestor nodes")
+                else:
+                    all_units = []
+
+                root_units = _build_tree(all_units, matching_ids) if all_units else []
+
+                return jsonify(
+                    {
+                        "root_units": root_units,
+                        "total_units": len(all_units),
+                        "truncated": truncated,
+                        "search_active": True,
+                        "matching_count": len(matching_ids),
+                    }
                 )
 
-            matching_units = db_session.scalars(stmt).all()
-
-            logger.info(f"Found {len(matching_units)} matching ad units")
-
-            # If search is active, we need to include all ancestor nodes
-            # to build the proper tree hierarchy
-            if search and matching_units:
-                # Collect all parent IDs from matching units
-                ancestor_ids = set()
-                for unit in matching_units:
-                    metadata = unit.inventory_metadata or {}
-                    if isinstance(metadata, dict):
-                        parent_id = metadata.get("parent_id")
-                        # Walk up the tree to get all ancestors
-                        while parent_id:
-                            if parent_id not in ancestor_ids:
-                                ancestor_ids.add(parent_id)
-                                # Fetch the parent to get its parent_id
-                                parent_stmt = select(GAMInventory).where(
-                                    GAMInventory.tenant_id == tenant_id,
-                                    GAMInventory.inventory_id == parent_id,
-                                )
-                                parent_unit = db_session.scalars(parent_stmt).first()
-                                if parent_unit:
-                                    parent_metadata = parent_unit.inventory_metadata or {}
-                                    if isinstance(parent_metadata, dict):
-                                        parent_id = parent_metadata.get("parent_id")
-                                    else:
-                                        break
-                                else:
-                                    break
-                            else:
-                                break
-
-                # Fetch all ancestor nodes
-                if ancestor_ids:
-                    ancestor_stmt = select(GAMInventory).where(
-                        GAMInventory.tenant_id == tenant_id,
-                        GAMInventory.inventory_id.in_(ancestor_ids),
-                    )
-                    ancestor_units = db_session.scalars(ancestor_stmt).all()
-                    all_units = list(matching_units) + list(ancestor_units)
-                    logger.info(f"Added {len(ancestor_units)} ancestor nodes for tree structure")
-                else:
-                    all_units = list(matching_units)
             else:
-                all_units = matching_units
-
-            logger.info(f"Building tree from {len(all_units)} total nodes")
-
-            # Build tree structure
-            units_by_id = {}
-            root_units = []
-
-            # Track which units matched the search (for highlighting)
-            matching_ids = {unit.inventory_id for unit in matching_units} if search else set()
-
-            # First pass: create all unit objects
-            for unit in all_units:
-                metadata = unit.inventory_metadata or {}
-                if not isinstance(metadata, dict):
-                    metadata = {}
-
-                unit_obj = {
-                    "id": unit.inventory_id,
-                    "name": unit.name,
-                    "status": unit.status,
-                    "code": metadata.get("ad_unit_code", ""),
-                    "path": unit.path or [unit.name],
-                    "parent_id": metadata.get("parent_id"),
-                    "has_children": metadata.get("has_children", False),
-                    "matched_search": unit.inventory_id in matching_ids,  # Flag for highlighting
-                    "sizes": metadata.get("sizes", []),  # Include sizes for format matching
-                    "children": [],
-                }
-                units_by_id[unit.inventory_id] = unit_obj
-
-            # Second pass: build hierarchy
-            for _unit_id, unit_obj in units_by_id.items():
-                parent_id = unit_obj.get("parent_id")
-                if parent_id and parent_id in units_by_id:
-                    # This is a child unit
-                    units_by_id[parent_id]["children"].append(unit_obj)
-                else:
-                    # This is a root unit (no parent or parent not found)
-                    root_units.append(unit_obj)
-
-            logger.info(f"Built tree with {len(root_units)} root units")
-
-            # Get counts for other inventory types (for Quick Stats)
-            placements_stmt = (
-                select(func.count())
-                .select_from(GAMInventory)
-                .where(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "placement",
-                    GAMInventory.status == "ACTIVE",
+                # --- Mode 1: Root nodes only (lazy loading) ---
+                # Roots: parent_id is null or missing in JSONB metadata.
+                # PostgreSQL ->> returns NULL for both cases (null value and missing key).
+                root_stmt = (
+                    select(GAMInventory)
+                    .where(
+                        *base_where,
+                        GAMInventory.inventory_metadata["parent_id"].as_string().is_(None),
+                    )
+                    .order_by(GAMInventory.name)
                 )
-            )
-            placements_count = db_session.scalar(placements_stmt) or 0
+                roots, truncated = execute_limited(db_session, root_stmt, _TREE_LIMIT)
 
-            labels_stmt = (
-                select(func.count())
-                .select_from(GAMInventory)
-                .where(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "label",
-                    GAMInventory.status == "ACTIVE",
+                root_units = [_unit_to_dict(u) for u in roots]
+                logger.info(
+                    f"Returning {len(root_units)} root units "
+                    f"(total active: {total_active_count}, truncated: {truncated})"
                 )
-            )
-            labels_count = db_session.scalar(labels_stmt) or 0
 
-            targeting_stmt = (
-                select(func.count())
-                .select_from(GAMInventory)
-                .where(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "custom_targeting_key",
-                    GAMInventory.status == "ACTIVE",
+                stats = _get_inventory_stats(db_session, tenant_id)
+
+                result = jsonify(
+                    {
+                        "root_units": root_units,
+                        "total_units": len(root_units),
+                        "total_active_count": total_active_count,
+                        "truncated": truncated,
+                        "root_count": len(root_units),
+                        "search_active": False,
+                        "matching_count": 0,
+                        **stats,
+                    }
                 )
-            )
-            targeting_count = db_session.scalar(targeting_stmt) or 0
 
-            segments_stmt = (
-                select(func.count())
-                .select_from(GAMInventory)
-                .where(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "audience_segment",
-                    GAMInventory.status == "ACTIVE",
-                )
-            )
-            segments_count = db_session.scalar(segments_stmt) or 0
+                if cache:
+                    import time
 
-            logger.info(
-                f"Inventory counts - Ad Units: {len(all_units)}, Placements: {placements_count}, "
-                f"Labels: {labels_count}, Targeting Keys: {targeting_count}, Audience Segments: {segments_count}"
-            )
+                    cache.set(cache_key, result, timeout=300)
+                    cache.set(cache_time_key, time.time(), timeout=300)
 
-            # Get last sync time from most recent inventory item
-            last_sync_stmt = (
-                select(GAMInventory.last_synced)
-                .where(GAMInventory.tenant_id == tenant_id)
-                .order_by(GAMInventory.last_synced.desc())
-                .limit(1)
-            )
-            last_sync = db_session.scalar(last_sync_stmt)
-
-            result = jsonify(
-                {
-                    "root_units": root_units,
-                    "total_units": len(all_units),
-                    "root_count": len(root_units),
-                    "placements": placements_count,
-                    "labels": labels_count,
-                    "custom_targeting_keys": targeting_count,
-                    "audience_segments": segments_count,
-                    "search_active": bool(search),  # Flag to indicate filtered results
-                    "matching_count": len(matching_ids) if search else 0,
-                    "last_sync": last_sync.isoformat() if last_sync else None,
-                }
-            )
-
-            # Cache the result for 5 minutes - only when no search
-            if cache and not search:
-                import time
-
-                cache.set(cache_key, result, timeout=300)
-                cache.set(cache_time_key, time.time(), timeout=300)
-
-            return result
+                return result
 
     except Exception as e:
         logger.error(f"Error building inventory tree for tenant {tenant_id}: {e}", exc_info=True)
@@ -1217,10 +1265,7 @@ def get_inventory_list(tenant_id):
             # Order by path/name for better organization
             stmt = stmt.order_by(GAMInventory.inventory_type, GAMInventory.name)
 
-            # Limit results to prevent overwhelming the UI
-            stmt = stmt.limit(500)
-
-            items = db_session.scalars(stmt).all()
+            items, truncated = execute_limited(db_session, stmt, _LIST_LIMIT)
 
             logger.info(
                 f"Query returned {len(items)} items after filtering "
@@ -1242,7 +1287,7 @@ def get_inventory_list(tenant_id):
                 )
 
             logger.info(f"Returning {len(result)} formatted inventory items to UI")
-            response = jsonify({"items": result, "count": len(result), "has_more": len(result) >= 500})
+            response = jsonify({"items": result, "count": len(result), "has_more": truncated})
 
             # Cache the result for 5 minutes (only if no search term)
             if cache and not search:
@@ -1315,20 +1360,41 @@ def get_inventory_sizes(tenant_id):
                 GAMInventory.tenant_id == tenant_id,
                 GAMInventory.inventory_id.in_(inventory_ids),
             )
-            items = db_session.scalars(stmt).all()
+            items = list(db_session.scalars(stmt).all())
 
-            # Extract sizes from inventory metadata
+            # Resolve placements to their constituent ad units (placements don't
+            # carry sizes — only ad_unit_ids pointing to the ad units that do).
+            placement_au_ids = set()
+            for item in items:
+                if item.inventory_type == "placement":
+                    meta = item.inventory_metadata or {}
+                    placement_au_ids.update(meta.get("ad_unit_ids", []))
+            # Exclude ad units already fetched directly
+            placement_au_ids -= {item.inventory_id for item in items if item.inventory_type == "ad_unit"}
+            if placement_au_ids:
+                au_stmt = select(GAMInventory).filter(
+                    GAMInventory.tenant_id == tenant_id,
+                    GAMInventory.inventory_type == "ad_unit",
+                    GAMInventory.inventory_id.in_(list(placement_au_ids)),
+                )
+                items.extend(db_session.scalars(au_stmt).all())
+
+            # Extract sizes from inventory metadata (ad_unit rows only)
             sizes = set()
             for item in items:
                 metadata = item.inventory_metadata or {}
                 if not isinstance(metadata, dict):
                     continue
 
-                # Get sizes from metadata (array of "WxH" strings)
+                # GAM sync writes sizes as dicts ({"width": W, "height": H} — see
+                # src/adapters/gam_inventory_discovery.py:54,70). Legacy rows may still
+                # hold "WxH" strings. Normalize both shapes to "WxH" here.
                 item_sizes = metadata.get("sizes", [])
                 if isinstance(item_sizes, list):
                     for size in item_sizes:
-                        if isinstance(size, str) and "x" in size:
+                        if isinstance(size, dict) and "width" in size and "height" in size:
+                            sizes.add(f"{size['width']}x{size['height']}")
+                        elif isinstance(size, str) and "x" in size:
                             sizes.add(size)
 
             # Sort sizes by width, then height

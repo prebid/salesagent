@@ -145,13 +145,11 @@ class TestMCPToolsAudit:
         # Create delivery data object to test roundtrip
         delivery_data = MediaBuyDeliveryData(
             media_buy_id="audit_test_mb_001",
-            buyer_ref="audit_test_ref",
             status="active",
             totals=DeliveryTotals(impressions=100000.0, spend=5000.0, clicks=2500.0, ctr=0.025),
             by_package=[
                 PackageDelivery(
                     package_id="audit_test_package_001",
-                    buyer_ref="audit_package_ref",
                     impressions=100000.0,
                     spend=5000.0,
                     clicks=2500.0,
@@ -179,7 +177,6 @@ class TestMCPToolsAudit:
 
             # Verify essential data survived roundtrip
             assert reconstructed_delivery.media_buy_id == delivery_data.media_buy_id
-            assert reconstructed_delivery.buyer_ref == delivery_data.buyer_ref
             assert reconstructed_delivery.status == delivery_data.status
             assert reconstructed_delivery.totals.impressions == delivery_data.totals.impressions
             assert reconstructed_delivery.totals.spend == delivery_data.totals.spend
@@ -201,13 +198,11 @@ class TestMCPToolsAudit:
         """
         delivery_data = MediaBuyDeliveryData(
             media_buy_id="field_consistency_test",
-            buyer_ref="consistency_ref",
             status="active",
             totals=DeliveryTotals(impressions=50000.0, spend=3000.0, clicks=1500.0, ctr=0.03),
             by_package=[
                 PackageDelivery(
                     package_id="consistency_test_package",
-                    buyer_ref="consistency_package_ref",
                     impressions=50000.0,
                     spend=3000.0,
                     clicks=1500.0,
@@ -241,7 +236,6 @@ class TestMCPToolsAudit:
 
         # Verify reconstruction preserves all data
         assert reconstructed.media_buy_id == delivery_data.media_buy_id
-        assert reconstructed.buyer_ref == delivery_data.buyer_ref
         assert reconstructed.status == delivery_data.status
         assert reconstructed.totals.impressions == delivery_data.totals.impressions
         assert reconstructed.totals.spend == delivery_data.totals.spend
@@ -270,7 +264,6 @@ class TestMCPToolsAudit:
 
             delivery_data = MediaBuyDeliveryData(
                 media_buy_id=f"budget_test_{i}",
-                buyer_ref=f"budget_ref_{i}",
                 status="active",
                 totals=DeliveryTotals(
                     impressions=25000.0,
@@ -281,7 +274,6 @@ class TestMCPToolsAudit:
                 by_package=[
                     PackageDelivery(
                         package_id=f"budget_test_package_{i}",
-                        buyer_ref=f"budget_package_ref_{i}",
                         impressions=25000.0,
                         spend=budget.total,
                         clicks=750.0,
@@ -400,7 +392,6 @@ class TestMCPToolsAudit:
         # Anti-pattern: Type mismatches
         type_mismatch_data = {
             "media_buy_id": "type_mismatch_test",
-            "buyer_ref": "mismatch_ref",
             "status": "active",
             "totals": {"total_budget_usd": 1000.0},  # WRONG: Dict instead of DeliveryTotals object
             "by_package": [{"package_id": "test", "wrong_field": "invalid"}],  # WRONG: Missing required fields

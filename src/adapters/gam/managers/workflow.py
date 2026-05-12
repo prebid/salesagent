@@ -151,7 +151,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
         # Use pre-loaded naming template or fallback to default
         from src.core.utils.naming import apply_naming_template, build_order_name_context
 
-        effective_template = order_name_template or "{campaign_name|brand_name} - {date_range}"
+        effective_template = order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
         tenant_gemini_key = None
 
         # Get tenant's Gemini key for auto_name generation
@@ -169,7 +169,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
             logger.warning(f"Could not load tenant Gemini key: {e}")
 
         naming_context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key
+            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=media_buy_id
         )
         order_name = apply_naming_template(effective_template, naming_context)
 

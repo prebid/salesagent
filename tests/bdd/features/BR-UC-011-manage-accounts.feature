@@ -72,7 +72,7 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a list_accounts request without an authentication token
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_TOKEN_INVALID"
+    And the error code is "AUTH_REQUIRED"
     And the error message describes the authentication requirement
     # @bva authentication (account operations): no token on list
 
@@ -92,7 +92,7 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has a connection with tenant resolved but no principal_id
     When the Buyer Agent sends a list_accounts request with no principal_id
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_TOKEN_INVALID"
+    And the error code is "AUTH_REQUIRED"
     # Security: identity with tenant_id but missing principal_id must be rejected
 
   @T-UC-011-sync-cross-agent @sync @auth @security @hand-authored
@@ -288,7 +288,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_TOKEN_INVALID"
+    And the error code is "AUTH_REQUIRED"
     And the error message describes the authentication requirement
     And the error should include "suggestion" field with remediation guidance
     And no accounts were modified on the seller
@@ -303,7 +303,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant
-    And the error code is "AUTH_TOKEN_INVALID"
+    And the error code is "AUTH_REQUIRED"
     And the error should include "suggestion" field with remediation guidance
     # @bva authentication (account operations): invalid token on sync
 
@@ -314,7 +314,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_TOKEN_INVALID"
+    And the error code is "AUTH_REQUIRED"
     # Security: parity with list_accounts no-principal guard
 
   @T-UC-011-list-expired @list @auth @hand-authored
@@ -322,7 +322,7 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an A2A connection with an expired token
     When the Buyer Agent sends a list_accounts request without an authentication token
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_TOKEN_INVALID"
+    And the error code is "AUTH_REQUIRED"
     # Auth parity: list mirrors sync expired-token behavior
 
   @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary
@@ -347,7 +347,7 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com | operator |
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "BILLING_NOT_SUPPORTED"
+    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
     And the error message explains the billing model is not available
     And the error should include "suggestion" field with remediation guidance
     # @bva billing: billing = unsupported value for seller
@@ -365,7 +365,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the response is a success variant with accounts array
     And the account for brand domain "good-brand.com" has action "created"
     And the account for brand domain "bad-brand.com" has action "failed"
-    And the failed account has status "rejected" with BILLING_NOT_SUPPORTED error
+    And the failed account has status "rejected" with UNSUPPORTED_FEATURE error
     And the error should include "suggestion" field with remediation guidance
     # BR-RULE-059 INV-2 + BR-RULE-057 INV-1: rejected billing produces per-account failure within success variant
 
@@ -559,7 +559,7 @@ Feature: BR-UC-011 Manage Accounts
   Scenario: Context echoed in sync error response
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a sync_accounts request with context {"trace": "err-001"}
-    Then the response is an error variant with AUTH_TOKEN_INVALID
+    Then the response is an error variant with AUTH_REQUIRED
     And the response includes context {"trace": "err-001"}
     And the error should include "suggestion" field with remediation guidance
     # POST-F3: Context echoed even on error path

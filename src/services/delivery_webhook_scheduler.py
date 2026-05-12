@@ -218,13 +218,12 @@ class DeliveryWebhookScheduler:
             # by DB status (active/approved) at query time, so the delivery impl
             # should include ended campaigns (dynamic status=completed) rather
             # than filtering them out and reporting "not found" errors.
-            # We exclude "pending_activation" (ready) to avoid returning delivery
+            # We exclude "pending_start" (ready) to avoid returning delivery
             # data for future-dated campaigns that haven't started yet.
             from adcp.types import MediaBuyStatus
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=[media_buy.media_buy_id],
-                buyer_refs=None,
                 status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
                 start_date=start_date_obj.strftime("%Y-%m-%d"),
                 end_date=end_date_obj.strftime("%Y-%m-%d"),

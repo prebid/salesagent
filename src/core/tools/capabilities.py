@@ -17,6 +17,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Execution,
     GeoMetros,
     GeoPostalAreas,
+    Idempotency,
     MajorVersion,
     MediaBuy,
     Portfolio,
@@ -84,7 +85,10 @@ def _get_adcp_capabilities_impl(
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
-            adcp=Adcp(major_versions=[MajorVersion(root=3)]),
+            adcp=Adcp(
+                major_versions=[MajorVersion(root=3)],
+                idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+            ),
             supported_protocols=[SupportedProtocol.media_buy],
         )
 
@@ -153,12 +157,12 @@ def _get_adcp_capabilities_impl(
     # Build features - be honest about what we actually support
     # These should be adapter-dependent in the future
     features = MediaBuyFeatures(
-        # content_standards: We have creative review but not full AdCP content standards
-        content_standards=False,
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
         # property_list_filtering: Implemented — filters products by buyer property lists
         property_list_filtering=True,
+        # catalog_management: We have product catalog management
+        catalog_management=True,
     )
 
     # Build targeting capabilities from adapter
@@ -215,7 +219,6 @@ def _get_adcp_capabilities_impl(
         geo_regions=targeting_caps.geo_regions if targeting_caps else True,
         geo_metros=geo_metros,
         geo_postal_areas=geo_postal_areas,
-        device_platform=True,
     )
 
     # Build execution capabilities
@@ -232,7 +235,10 @@ def _get_adcp_capabilities_impl(
 
     # Build response
     response = GetAdcpCapabilitiesResponse(
-        adcp=Adcp(major_versions=[MajorVersion(root=3)]),
+        adcp=Adcp(
+            major_versions=[MajorVersion(root=3)],
+            idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+        ),
         supported_protocols=[SupportedProtocol.media_buy],
         media_buy=media_buy,
         last_updated=datetime.now(UTC),

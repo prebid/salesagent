@@ -200,7 +200,7 @@ class TestNonexistentMediaBuyIdReturnsNotFoundError:
             assert response.errors is not None
             assert len(response.errors) == 1
             error = response.errors[0]
-            assert error.code == "media_buy_not_found"
+            assert error.code == "MEDIA_BUY_NOT_FOUND"
             assert "nonexistent_id" in error.message
 
 
@@ -253,45 +253,10 @@ class TestPartialMediaBuyIdsNotFound:
             assert response.errors is not None
             assert len(response.errors) == 1
             not_found_error = response.errors[0]
-            assert not_found_error.code == "media_buy_not_found"
+            assert not_found_error.code == "MEDIA_BUY_NOT_FOUND"
             assert "mb_999" in not_found_error.message
 
             assert all("mb_1" not in e.message for e in response.errors)
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-C-03
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestBuyerRefNotFound:
-    """Buyer ref lookup returns media_buy_not_found error in response.
-
-    Covers: UC-004-EXT-C-03
-    """
-
-    def test_unknown_buyer_ref_produces_not_found_error(self, integration_db):
-        """When buyer_refs contains a ref that matches no media buy, the response
-        contains an error with code 'media_buy_not_found'.
-
-        Covers: UC-004-EXT-C-03
-        """
-        from tests.factories import PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
-
-            response = env.call_impl(buyer_refs=["no_such_ref"])
-
-            assert isinstance(response, GetMediaBuyDeliveryResponse)
-            assert response.errors is not None, "Expected errors list, got None"
-            error_codes = [e.code for e in response.errors]
-            assert "media_buy_not_found" in error_codes, f"Expected 'media_buy_not_found' in errors, got: {error_codes}"
-            not_found_error = next(e for e in response.errors if e.code == "media_buy_not_found")
-            assert "no_such_ref" in not_found_error.message
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +291,7 @@ class TestEqualDateRangeReturnsInvalidDateRangeError:
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "invalid_date_range"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +326,7 @@ class TestStartDateAfterEndDateReturnsInvalidDateRangeError:
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "invalid_date_range"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +361,7 @@ class TestInvalidDateRangeDoesNotFetchDeliveryData:
 
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "invalid_date_range"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
             # Verify adapter's delivery method was never called (no data fetched)
             env.mock["adapter"].return_value.get_media_buy_delivery.assert_not_called()
@@ -438,8 +403,8 @@ class TestAdapterUnavailableReturnsAdapterError:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             error_codes = [e.code for e in response.errors]
-            assert "adapter_error" in error_codes
-            adapter_error = next(e for e in response.errors if e.code == "adapter_error")
+            assert "SERVICE_UNAVAILABLE" in error_codes
+            adapter_error = next(e for e in response.errors if e.code == "SERVICE_UNAVAILABLE")
             assert "mb_001" in adapter_error.message
 
 
@@ -479,8 +444,8 @@ class TestAdapterInternalServerErrorReturnsAdapterError:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             error_codes = [e.code for e in response.errors]
-            assert "adapter_error" in error_codes
-            adapter_error = next(e for e in response.errors if e.code == "adapter_error")
+            assert "SERVICE_UNAVAILABLE" in error_codes
+            adapter_error = next(e for e in response.errors if e.code == "SERVICE_UNAVAILABLE")
             assert "mb_001" in adapter_error.message
 
 
@@ -525,7 +490,7 @@ class TestAdapterFailureAuditTrail:
 
             assert response is not None
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            assert any(e.code == "adapter_error" for e in response.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in response.errors)
 
             # Check real audit log table for records
             from sqlalchemy import select
@@ -577,7 +542,7 @@ class TestAdapterErrorNoStateMutation:
             assert isinstance(result, GetMediaBuyDeliveryResponse)
             assert result.errors is not None
             assert len(result.errors) == 1
-            assert result.errors[0].code == "adapter_error"
+            assert result.errors[0].code == "SERVICE_UNAVAILABLE"
             assert "mb_err" in result.errors[0].message
             assert result.media_buy_deliveries == []
             assert result.aggregated_totals.impressions == 0.0
@@ -609,12 +574,11 @@ class TestMultipleMediaBuyDelivery:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
 
-            for i, (mb_id, ref) in enumerate([("mb_1", "ref_1"), ("mb_2", "ref_2"), ("mb_3", "ref_3")]):
+            for i, mb_id in enumerate(["mb_1", "mb_2", "mb_3"]):
                 MediaBuyFactory(
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
-                    buyer_ref=ref,
                 )
                 env.set_adapter_response(
                     mb_id,
@@ -661,7 +625,7 @@ class TestNoIdentifiersReturnAll:
     """
 
     def test_all_five_media_buys_returned_when_no_identifiers(self, integration_db):
-        """When neither media_buy_ids nor buyer_refs is provided, response contains
+        """When media_buy_ids is not provided, response contains
         delivery data for ALL 5 media buys owned by the principal.
 
         Covers: UC-004-MAIN-04
@@ -682,7 +646,6 @@ class TestNoIdentifiersReturnAll:
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
-                    buyer_ref=f"ref_{i:03d}",
                     start_date=today - timedelta(days=30),
                     end_date=today + timedelta(days=30),
                     budget=10000.0 + i * 1000,
@@ -726,7 +689,6 @@ class TestNoIdentifiersReturnAll:
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
-                    buyer_ref=f"ref_{i:03d}",
                     start_date=today - timedelta(days=30),
                     end_date=today + timedelta(days=30),
                 )
@@ -772,11 +734,9 @@ class TestPackageLevelBreakdowns:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_two_pkg",
-                buyer_ref="ref_two_pkg",
                 start_date=date(2025, 3, 1),
                 end_date=date(2025, 3, 31),
                 raw_request={
-                    "buyer_ref": "ref_two_pkg",
                     "packages": [
                         {"package_id": "pkg_A", "product_id": "prod_A"},
                         {"package_id": "pkg_B", "product_id": "prod_B"},
@@ -828,11 +788,9 @@ class TestPackageLevelBreakdowns:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_active",
-                buyer_ref="ref_active",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
                 raw_request={
-                    "buyer_ref": "ref_active",
                     "packages": [
                         {"package_id": "pkg_X", "product_id": "prod_X"},
                         {"package_id": "pkg_Y", "product_id": "prod_Y"},
@@ -875,11 +833,9 @@ class TestPackageLevelBreakdowns:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_sum",
-                buyer_ref="ref_sum",
                 start_date=date(2025, 4, 1),
                 end_date=date(2025, 4, 30),
                 raw_request={
-                    "buyer_ref": "ref_sum",
                     "packages": [
                         {"package_id": "pkg_1", "product_id": "prod_1"},
                         {"package_id": "pkg_2", "product_id": "prod_2"},
@@ -950,7 +906,7 @@ class TestPackageDeliveryStatus:
 
             resp = env.call_impl(
                 media_buy_ids=["mb_future"],
-                status_filter=[MediaBuyStatus.pending_activation],
+                status_filter=[MediaBuyStatus.pending_start],
                 start_date="2025-01-01",
                 end_date="2025-03-15",
             )
@@ -1060,7 +1016,7 @@ class TestPackageDeliveryStatus:
             resp = env.call_impl(
                 media_buy_ids=["mb_future", "mb_active", "mb_completed"],
                 status_filter=[
-                    MediaBuyStatus.pending_activation,
+                    MediaBuyStatus.pending_start,
                     MediaBuyStatus.active,
                     MediaBuyStatus.completed,
                 ],
@@ -1121,21 +1077,18 @@ class TestAggregatedTotalsMultipleBuys:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_1",
-                buyer_ref="ref_1",
                 budget=5000.0,
             )
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_2",
-                buyer_ref="ref_2",
                 budget=10000.0,
             )
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_3",
-                buyer_ref="ref_3",
                 budget=2500.0,
             )
             env.set_adapter_response("mb_1", impressions=1000, spend=50.0)
@@ -1174,21 +1127,18 @@ class TestAggregatedTotalsMultipleBuys:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_1",
-                buyer_ref="ref_1",
                 budget=5000.0,
             )
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_2",
-                buyer_ref="ref_2",
                 budget=10000.0,
             )
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_3",
-                buyer_ref="ref_3",
                 budget=2500.0,
             )
             env.set_adapter_response("mb_1", impressions=1000, spend=50.0)
@@ -1365,51 +1315,6 @@ class TestDeliverySpendComputation:
 
 
 # ---------------------------------------------------------------------------
-# UC-004-MAIN-16
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestBuyerRefInDeliveryEntries:
-    """Verify that buyer_ref from raw_request propagates to media_buy_deliveries entries.
-
-    Covers: UC-004-MAIN-16
-    """
-
-    def test_buyer_ref_propagates_to_delivery_entry(self, integration_db):
-        """When a media buy has buyer_ref='buyer_camp_1',
-        each media_buy_deliveries entry must include buyer_ref='buyer_camp_1'.
-
-        Covers: UC-004-MAIN-16
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_camp",
-                buyer_ref="buyer_camp_1",
-            )
-            env.set_adapter_response("mb_camp", impressions=1000, spend=50.0)
-
-            response = env.call_impl(
-                media_buy_ids=["mb_camp"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            assert len(response.media_buy_deliveries) == 1
-            delivery = response.media_buy_deliveries[0]
-            assert delivery.buyer_ref == "buyer_camp_1", (
-                f"Expected buyer_ref='buyer_camp_1' but got '{delivery.buyer_ref}'. "
-                "The delivery boundary must propagate buyer_ref from raw_request."
-            )
-
-
 # ---------------------------------------------------------------------------
 # UC-004-MAIN-17
 # ---------------------------------------------------------------------------
@@ -1438,13 +1343,11 @@ class TestPartialResolutionMissingIds:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_1",
-                buyer_ref="ref_1",
             )
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_2",
-                buyer_ref="ref_2",
             )
             env.set_adapter_response("mb_1", impressions=1000, spend=50.0)
             env.set_adapter_response("mb_2", impressions=2000, spend=100.0)
@@ -1539,7 +1442,6 @@ class TestUnpopulatedFieldsGraceful:
 
         pkg = PackageDelivery(
             package_id="pkg_001",
-            buyer_ref="ref_001",
             impressions=5000.0,
             spend=250.0,
             clicks=None,
@@ -2010,7 +1912,6 @@ class TestEndToEndDeliveryMetricsCpmPricing:
                 principal=principal,
                 media_buy_id="mb_cpm",
                 raw_request={
-                    "buyer_ref": "ref_cpm",
                     "packages": [
                         {
                             "package_id": "pkg_cpm",
@@ -2067,7 +1968,6 @@ class TestEndToEndDeliveryMetricsCpmPricing:
                 principal=principal,
                 media_buy_id="mb_cpm2",
                 raw_request={
-                    "buyer_ref": "ref_cpm2",
                     "packages": [
                         {
                             "package_id": "pkg_cpm2",
@@ -2147,7 +2047,6 @@ class TestEndToEndDeliveryMetricsCpcPricing:
                 principal=principal,
                 media_buy_id="mb_cpc",
                 raw_request={
-                    "buyer_ref": "ref_cpc",
                     "pricing_option_id": str(po.id),
                     "packages": [
                         {
@@ -2193,7 +2092,6 @@ class TestEndToEndDeliveryMetricsCpcPricing:
                 principal=principal,
                 media_buy_id="mb_cpc2",
                 raw_request={
-                    "buyer_ref": "ref_cpc2",
                     "packages": [
                         {
                             "package_id": "pkg_cpc2",
@@ -2256,7 +2154,6 @@ class TestDeliveryMetricsFlatRatePricing:
                 principal=principal,
                 media_buy_id="mb_flat",
                 raw_request={
-                    "buyer_ref": "ref_flat",
                     "packages": [
                         {
                             "package_id": "pkg_flat",
@@ -2315,7 +2212,6 @@ class TestDeliveryMetricsFlatRatePricing:
                 principal=principal,
                 media_buy_id="mb_flat2",
                 raw_request={
-                    "buyer_ref": "ref_flat2",
                     "packages": [
                         {
                             "package_id": "pkg_flat2",
@@ -2527,54 +2423,8 @@ class TestPrincipalNotFoundReturnsError:
 
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "principal_not_found"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert response.media_buy_deliveries == []
-
-
-# ---------------------------------------------------------------------------
-# UC-004-MAIN-02 (buyer_ref resolution via _impl)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestBuyerRefResolutionFullImpl:
-    """Full _impl returns delivery metrics when buyer_refs used.
-
-    Covers: UC-004-MAIN-02
-    """
-
-    def test_full_impl_returns_delivery_via_buyer_ref(self, integration_db):
-        """_get_media_buy_delivery_impl returns delivery data when buyer_refs used.
-
-        Covers: UC-004-MAIN-02
-        """
-        from datetime import date
-
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_200",
-                buyer_ref="my_campaign_1",
-                start_date=date(2025, 1, 1),
-                end_date=date(2027, 12, 31),
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=8000, spend=400.0)
-
-            response = env.call_impl(buyer_refs=["my_campaign_1"])
-
-        assert len(response.media_buy_deliveries) == 1
-        delivery = response.media_buy_deliveries[0]
-        assert delivery.media_buy_id == "mb_200"
-        assert delivery.buyer_ref == "my_campaign_1"
-        assert delivery.totals.impressions == 8000.0
-        assert delivery.totals.spend == 400.0
-        assert response.aggregated_totals.media_buy_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2829,7 +2679,6 @@ class TestCpcPackageClicksDerivation:
                 principal=principal,
                 media_buy_id="mb_cpc",
                 raw_request={
-                    "buyer_ref": "ref_cpc",
                     "packages": [
                         {
                             "package_id": "pkg_cpc",

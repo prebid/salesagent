@@ -28,6 +28,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
 from adcp.types import MediaBuyStatus
 
 from src.core.resolved_identity import ResolvedIdentity
@@ -98,15 +99,14 @@ def _make_mock_media_buy(
     buy.end_date = end_date or date(2025, 12, 31)
     buy.start_time = start_time
     buy.end_time = end_time
-    buy.buyer_ref = buyer_ref
+    buy.buyer_ref = None
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
     buy.is_paused = False
     buy.raw_request = raw_request or {
         "packages": [
             {"package_id": "pkg_001", "product_id": "prod_1"},
-        ],
-        "buyer_ref": buyer_ref,
+        ]
     }
     return buy
 
@@ -258,11 +258,7 @@ class TestDeliveryPollingSingleBuy:
             budget=10000.0,
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
-            raw_request={
-                "packages": [{"package_id": "pkg_a", "product_id": "prod_1"}],
-                "buyer_ref": "buyer_1",
-            },
-            buyer_ref="buyer_1",
+            raw_request={"packages": [{"package_id": "pkg_a", "product_id": "prod_1"}]},
         )
 
         mock_adapter = MagicMock()
@@ -303,7 +299,6 @@ class TestDeliveryPollingSingleBuy:
         assert len(response.media_buy_deliveries) == 1
         delivery = response.media_buy_deliveries[0]
         assert delivery.media_buy_id == "mb_single"
-        assert delivery.buyer_ref == "buyer_1"
 
         # UC-004-MAIN-09: totals
         assert delivery.totals.impressions == 8000
@@ -342,22 +337,14 @@ class TestDeliveryPollingMultiBuy:
             budget=5000.0,
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
-            raw_request={
-                "packages": [{"package_id": "pkg_1a", "product_id": "prod_1"}],
-                "buyer_ref": "ref_1",
-            },
-            buyer_ref="ref_1",
+            raw_request={"packages": [{"package_id": "pkg_1a", "product_id": "prod_1"}]},
         )
         buy2 = _make_mock_media_buy(
             media_buy_id="mb_agg_2",
             budget=8000.0,
             start_date=date(2025, 3, 1),
             end_date=date(2025, 12, 31),
-            raw_request={
-                "packages": [{"package_id": "pkg_2a", "product_id": "prod_2"}],
-                "buyer_ref": "ref_2",
-            },
-            buyer_ref="ref_2",
+            raw_request={"packages": [{"package_id": "pkg_2a", "product_id": "prod_2"}]},
         )
 
         mock_adapter = MagicMock()
@@ -410,51 +397,12 @@ class TestDeliveryIdentificationModes:
     """UC-004 BR-RULE-030: media_buy_ids vs buyer_refs vs both vs neither."""
 
     def test_media_buy_ids_only(self):
-        """UC-004-MAIN-01: media_buy_ids provided, buyer_refs absent.
+        """UC-004-MAIN-02: media_buy_ids provided.
 
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
-        CONFIRMED: media_buy_ids is an optional array of strings (minItems: 1).
-        Covers: UC-004-MAIN-01
-        """
-        buy = _make_mock_media_buy(media_buy_id="mb_id1")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_id1",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 10.0}],
-        )
-
-        patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_id1", buy)])
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_id1"])
-        identity = _make_identity()
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
-        with (
-            patches["principal_obj"],
-            patches["adapter"],
-            patches["tenant"],
-            patches["target_buys"] as mock_target,
-            patches["pricing_options"],
-            patches["uow"],
-        ):
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        assert len(response.media_buy_deliveries) == 1
-        mock_target.assert_called_once()
-        call_req = mock_target.call_args[0][0]
-        assert call_req.media_buy_ids == ["mb_id1"]
-
-    def test_buyer_refs_only(self):
-        """UC-004-MAIN-02: buyer_refs provided, media_buy_ids absent.
-
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
-        CONFIRMED: buyer_refs is an optional array of strings (minItems: 1).
+        Spec: UPDATED -- buyer_refs removed in adcp 3.12, media_buy_ids is the identifier.
         Covers: UC-004-MAIN-02
         """
-        buy = _make_mock_media_buy(media_buy_id="mb_ref1", buyer_ref="buyer_A")
+        buy = _make_mock_media_buy(media_buy_id="mb_ref1")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
             media_buy_id="mb_ref1",
@@ -464,7 +412,7 @@ class TestDeliveryIdentificationModes:
         )
 
         patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_ref1", buy)])
-        req = GetMediaBuyDeliveryRequest(buyer_refs=["buyer_A"])
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_ref1"])
         identity = _make_identity()
 
         mock_inner_session = MagicMock()
@@ -482,47 +430,21 @@ class TestDeliveryIdentificationModes:
 
         assert len(response.media_buy_deliveries) == 1
         call_req = mock_target.call_args[0][0]
-        assert call_req.buyer_refs == ["buyer_A"]
+        assert call_req.media_buy_ids == ["mb_ref1"]
 
-    def test_both_provided_media_buy_ids_wins(self):
-        """UC-004-MAIN-05: media_buy_ids takes precedence over buyer_refs.
+    def test_buyer_refs_no_longer_accepted(self):
+        """UC-004-MAIN-05: buyer_refs removed from delivery request in adcp 3.12.
 
-        Spec: UNSPECIFIED (implementation-defined precedence when both identifiers provided).
-        Request schema allows both fields simultaneously but does not define precedence.
+        Spec: UPDATED -- buyer_refs removed from get-media-buy-delivery-request in adcp 3.12.
         Covers: UC-004-MAIN-05
         """
-        buy = _make_mock_media_buy(media_buy_id="mb_priority")
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_priority",
-            impressions=100,
-            spend=10.0,
-            packages=[{"package_id": "pkg_001", "impressions": 100, "spend": 10.0}],
-        )
+        from pydantic import ValidationError
 
-        patches = _standard_patches(adapter=mock_adapter, target_buys=[("mb_priority", buy)])
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_priority"],
-            buyer_refs=["should_be_ignored"],
-        )
-        identity = _make_identity()
-
-        mock_inner_session = MagicMock()
-        mock_inner_session.scalars.return_value.all.return_value = []
-
-        with (
-            patches["principal_obj"],
-            patches["adapter"],
-            patches["tenant"],
-            patches["target_buys"] as mock_target,
-            patches["pricing_options"],
-            patches["uow"],
-        ):
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        call_req = mock_target.call_args[0][0]
-        assert call_req.media_buy_ids == ["mb_priority"]
-        assert len(response.media_buy_deliveries) == 1
+        with pytest.raises(ValidationError, match="buyer_refs"):
+            GetMediaBuyDeliveryRequest(
+                media_buy_ids=["mb_priority"],
+                buyer_refs=["should_be_rejected"],
+            )
 
     def test_neither_provided_fetches_all(self):
         """UC-004-MAIN-04: neither identifiers fetches all principal buys.
@@ -559,7 +481,6 @@ class TestDeliveryIdentificationModes:
 
         call_req = mock_target.call_args[0][0]
         assert call_req.media_buy_ids is None
-        assert call_req.buyer_refs is None
         assert len(response.media_buy_deliveries) == 1
 
     def test_partial_ids_returns_found_and_errors_for_missing(self):
@@ -608,7 +529,7 @@ class TestDeliveryIdentificationModes:
         assert "mb_missing_1" in error_messages
         assert "mb_missing_2" in error_messages
         for err in response.errors:
-            assert err.code == "media_buy_not_found"
+            assert err.code == "MEDIA_BUY_NOT_FOUND"
 
     def test_all_ids_invalid_returns_empty_with_errors(self):
         """UC-004-MAIN-15: all requested IDs missing returns empty deliveries + errors.
@@ -639,7 +560,7 @@ class TestDeliveryIdentificationModes:
         assert response.errors is not None
         assert len(response.errors) == 2
         error_codes = {e.code for e in response.errors}
-        assert error_codes == {"media_buy_not_found"}
+        assert error_codes == {"MEDIA_BUY_NOT_FOUND"}
         error_messages = " ".join(e.message for e in response.errors)
         assert "mb_ghost_1" in error_messages
         assert "mb_ghost_2" in error_messages
@@ -1074,10 +995,7 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpm",
             budget=10000.0,
-            raw_request={
-                "packages": [{"package_id": "pkg_cpm", "product_id": "prod_1", "pricing_option_id": "1"}],
-                "buyer_ref": "buyer_cpm",
-            },
+            raw_request={"packages": [{"package_id": "pkg_cpm", "product_id": "prod_1", "pricing_option_id": "1"}]},
         )
 
         mock_po = MagicMock()
@@ -1122,10 +1040,7 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpc",
             budget=5000.0,
-            raw_request={
-                "packages": [{"package_id": "pkg_cpc", "product_id": "prod_1", "pricing_option_id": "2"}],
-                "buyer_ref": "buyer_cpc",
-            },
+            raw_request={"packages": [{"package_id": "pkg_cpc", "product_id": "prod_1", "pricing_option_id": "2"}]},
         )
 
         mock_po = MagicMock()
@@ -1171,10 +1086,7 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_flat",
             budget=5000.0,
-            raw_request={
-                "packages": [{"package_id": "pkg_flat", "product_id": "prod_1", "pricing_option_id": "3"}],
-                "buyer_ref": "buyer_flat",
-            },
+            raw_request={"packages": [{"package_id": "pkg_flat", "product_id": "prod_1", "pricing_option_id": "3"}]},
         )
 
         mock_po = MagicMock()
@@ -1219,20 +1131,14 @@ class TestDeliveryPricingOptionLookup:
 class TestDeliveryUpgradeCompat:
     """UC-004-UPG: 3.6 upgrade schema compatibility."""
 
-    def test_buyer_ref_present_in_delivery_entries(self):
-        """UC-004-UPG-03: buyer_ref present in media_buy_deliveries.
+    def test_buyer_ref_not_in_delivery_entries(self):
+        """UC-004-UPG-03: buyer_ref removed from media_buy_deliveries (adcp 3.12).
 
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
-        CONFIRMED: media_buy_deliveries[].buyer_ref is an optional string field.
         Covers: UC-004-MAIN-16
         """
         buy = _make_mock_media_buy(
             media_buy_id="mb_ref",
-            buyer_ref="buyer_camp_1",
-            raw_request={
-                "packages": [{"package_id": "pkg_1", "product_id": "prod_1"}],
-                "buyer_ref": "buyer_camp_1",
-            },
+            raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
         )
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -1251,7 +1157,8 @@ class TestDeliveryUpgradeCompat:
         )
 
         assert len(response.media_buy_deliveries) == 1
-        assert response.media_buy_deliveries[0].buyer_ref == "buyer_camp_1"
+        # buyer_ref removed from schema in adcp 3.12
+        assert not hasattr(response.media_buy_deliveries[0], "buyer_ref")
 
     def test_nested_serialization_model_dump(self):
         """UC-004-UPG-04: GetMediaBuyDeliveryResponse nested serialization with NestedModelSerializerMixin.
@@ -1261,7 +1168,7 @@ class TestDeliveryUpgradeCompat:
         DeliveryTotals, and PackageDelivery via NestedModelSerializerMixin.
         Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-01
         """
-        buy = _make_mock_media_buy(media_buy_id="mb_serial", buyer_ref="buyer_s")
+        buy = _make_mock_media_buy(media_buy_id="mb_serial")
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
             media_buy_id="mb_serial",
@@ -1357,7 +1264,7 @@ class TestDeliveryAuthErrors:
 
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "principal_id_missing"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert response.media_buy_deliveries == []
 
     def test_principal_not_found_returns_error(self):
@@ -1373,7 +1280,7 @@ class TestDeliveryAuthErrors:
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.errors is not None
-        assert response.errors[0].code == "principal_not_found"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert "ghost_principal" in response.errors[0].message
         assert response.media_buy_deliveries == []
 
@@ -1403,7 +1310,7 @@ class TestDeliveryAuthErrors:
 
         # Auth failed
         assert response.errors is not None
-        assert response.errors[0].code == "principal_id_missing"
+        assert response.errors[0].code == "AUTH_REQUIRED"
 
         # No adapter or DB calls occurred
         mock_adapter.assert_not_called()
@@ -1423,7 +1330,7 @@ class TestDeliveryMediaBuyNotFound:
 
         Spec: CONTRADICTS -- get-media-buy-delivery-response.json errors array is for
         "Task-specific errors and warnings (e.g., missing delivery data)". Current impl
-        returns empty deliveries with errors=None. Correct: errors=[{code: "media_buy_not_found"}].
+        returns empty deliveries with errors=None. Correct: errors=[{code: "MEDIA_BUY_NOT_FOUND"}].
         https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/media-buy/get-media-buy-delivery-response.json
         Fix: _get_target_media_buys must diff requested IDs vs found IDs. See salesagent-mexj.
         Priority: P1
@@ -1443,7 +1350,7 @@ class TestDeliveryMediaBuyNotFound:
         assert response.media_buy_deliveries == []
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_nonexistent" in response.errors[0].message
 
     def test_partial_ids_returns_found_and_errors(self):
@@ -1485,34 +1392,21 @@ class TestDeliveryMediaBuyNotFound:
         # Missing ID reported as error
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_gone" in response.errors[0].message
 
-    def test_buyer_ref_not_found_returns_error(self):
-        """UC-004-EXT-C3: buyer_ref not found returns error in response.
+    def test_buyer_refs_no_longer_accepted_on_delivery(self):
+        """UC-004-EXT-C3: buyer_refs removed from delivery request in adcp 3.12.
 
-        Spec: CONTRADICTS -- same pattern as media_buy_id: errors array must report
-        unresolved buyer_refs. Current impl silently returns empty.
-        Fix: _get_target_media_buys must diff requested buyer_refs vs found. See salesagent-mexj.
-        Priority: P1
-        Type: unit
-        Source: UC-004, salesagent-mexj
+        Spec: UPDATED -- buyer_refs removed from get-media-buy-delivery-request in adcp 3.12.
         Covers: UC-004-EXT-C-03
         """
-        req = GetMediaBuyDeliveryRequest(
-            buyer_refs=["buyer_phantom"],
-        )
+        from pydantic import ValidationError
 
-        response = _run_impl_with_patches(
-            req,
-            target_buys=[],  # nothing found for buyer_ref
-        )
-
-        assert response.media_buy_deliveries == []
-        assert response.errors is not None
-        assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
-        assert "buyer_phantom" in response.errors[0].message
+        with pytest.raises(ValidationError, match="buyer_refs"):
+            GetMediaBuyDeliveryRequest(
+                buyer_refs=["buyer_phantom"],
+            )
 
 
 # ===========================================================================
@@ -1547,7 +1441,7 @@ class TestDeliveryOwnership:
         assert response.media_buy_deliveries == []
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_other_principal" in response.errors[0].message
 
     def test_no_info_leakage_on_ownership_error(self):
@@ -1567,8 +1461,8 @@ class TestDeliveryOwnership:
         )
 
         assert response.errors is not None
-        # Must NOT reveal ownership: code is "media_buy_not_found", not "ownership_mismatch"
-        assert response.errors[0].code == "media_buy_not_found"
+        # Must NOT reveal ownership: code is "MEDIA_BUY_NOT_FOUND", not "ownership_mismatch"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "ownership" not in response.errors[0].message.lower()
 
     def test_mixed_ownership_behavior(self):
@@ -1605,7 +1499,7 @@ class TestDeliveryOwnership:
         # Non-owned buy reported as not found (not ownership error)
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_theirs" in response.errors[0].message
 
 
@@ -1632,7 +1526,7 @@ class TestDeliveryInvalidDateRange:
         response = _run_impl_with_patches(req)
 
         assert response.errors is not None
-        assert response.errors[0].code == "invalid_date_range"
+        assert response.errors[0].code == "VALIDATION_ERROR"
         assert response.media_buy_deliveries == []
 
     def test_start_date_after_end_date_returns_error(self):
@@ -1649,7 +1543,7 @@ class TestDeliveryInvalidDateRange:
         response = _run_impl_with_patches(req)
 
         assert response.errors is not None
-        assert response.errors[0].code == "invalid_date_range"
+        assert response.errors[0].code == "VALIDATION_ERROR"
         assert response.media_buy_deliveries == []
 
     def test_date_range_error_no_state_change(self):
@@ -1681,7 +1575,7 @@ class TestDeliveryInvalidDateRange:
 
         # Date range error returned
         assert response.errors is not None
-        assert response.errors[0].code == "invalid_date_range"
+        assert response.errors[0].code == "VALIDATION_ERROR"
 
         # No adapter calls or target media buy lookups occurred
         mock_adapter.get_media_buy_delivery.assert_not_called()
@@ -1717,7 +1611,7 @@ class TestDeliveryAdapterError:
         )
 
         assert response.errors is not None
-        assert response.errors[0].code == "adapter_error"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
         assert "mb_err" in response.errors[0].message
         assert response.media_buy_deliveries == []
         assert response.aggregated_totals.impressions == 0.0
@@ -1749,7 +1643,7 @@ class TestDeliveryAdapterError:
 
         assert response.reporting_period.start.month == 3
         assert response.reporting_period.end.month == 3
-        assert response.errors[0].code == "adapter_error"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
 
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
@@ -1773,7 +1667,7 @@ class TestDeliveryAdapterError:
 
         # Error response returned
         assert response.errors is not None
-        assert response.errors[0].code == "adapter_error"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
 
         # Error was logged
         mock_logger.error.assert_called()
@@ -1806,7 +1700,7 @@ class TestDeliveryAdapterError:
 
         # Error returned, no deliveries
         assert response.errors is not None
-        assert response.errors[0].code == "adapter_error"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
         assert response.media_buy_deliveries == []
 
         # Aggregated totals are zeroed (no partial data leaked)

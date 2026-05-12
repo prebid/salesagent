@@ -123,7 +123,6 @@ class DeliveryPollMixin:
     def call_impl(
         self,
         media_buy_ids: list[str] | None = None,
-        buyer_refs: list[str] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         status_filter: list[str] | None = None,
@@ -139,11 +138,12 @@ class DeliveryPollMixin:
         raw_identity = extra.pop("identity", _no_identity)
         identity = self.identity if raw_identity is _no_identity else raw_identity  # type: ignore[attr-defined]
 
+        # buyer_refs removed from GetMediaBuyDeliveryRequest in adcp 3.12
+        extra.pop("buyer_refs", None)
+
         kwargs: dict[str, Any] = {}
         if media_buy_ids is not None:
             kwargs["media_buy_ids"] = media_buy_ids
-        if buyer_refs is not None:
-            kwargs["buyer_refs"] = buyer_refs
         if start_date is not None:
             kwargs["start_date"] = start_date
         if end_date is not None:
@@ -171,6 +171,8 @@ class DeliveryPollMixin:
 
 class WebhookMixin:
     """Shared fluent API for webhook delivery testing."""
+
+    _seq_counter: dict[str, int]
 
     def set_http_status(self, code: int, text: str = "") -> None:
         """Configure requests.post to return a single response with the given status."""
@@ -213,11 +215,41 @@ class WebhookMixin:
         event_type: str | None = None,
         tenant_id: str | None = None,
         object_id: str | None = None,
+        media_buy_id: str | None = None,
+        notification_type: str | None = None,
     ) -> tuple[bool, dict[str, Any]]:
-        """Call deliver_webhook_with_retry with the given parameters."""
+        """Call deliver_webhook_with_retry with the given parameters.
+
+        When ``payload`` is omitted, a structured default payload is built that
+        includes ``media_buy_id``, a monotonically increasing ``sequence_number``
+        (per media_buy_id), ``reporting_period``, and optionally
+        ``notification_type`` / ``next_expected_at``.  This mirrors the payload
+        shape that ``WebhookDeliveryService`` produces so that BDD Then steps can
+        assert on payload fields without requiring the full service stack.
+        """
         self._commit_factory_data()  # type: ignore[attr-defined]
+        mb = media_buy_id or "mb_001"
+
+        # Per-media-buy sequence counter (simulates WebhookDeliveryService behaviour)
+        if not hasattr(self, "_seq_counter"):
+            self._seq_counter = {}  # type: ignore[assignment]
+        self._seq_counter[mb] = self._seq_counter.get(mb, 0) + 1  # type: ignore[index]
+        seq: int = self._seq_counter[mb]  # type: ignore[index]
+
         if payload is None:
-            payload = {"event": "delivery.update", "media_buy_id": "mb_001"}
+            payload = {
+                "event": "delivery.update",
+                "media_buy_id": mb,
+                "sequence_number": seq,
+                "reporting_period": {
+                    "start": "2025-01-01T00:00:00+00:00",
+                    "end": "2025-12-31T23:59:59+00:00",
+                },
+            }
+            if notification_type is not None:
+                payload["notification_type"] = notification_type
+                if notification_type != "final":
+                    payload["next_expected_at"] = "2025-01-08T00:00:00+00:00"
         if headers is None:
             headers = {"Content-Type": "application/json"}
         delivery = WebhookDelivery(
@@ -301,6 +333,28 @@ class CircuitBreakerMixin:
     def call_impl(self, **kwargs: Any) -> bool:
         """Alias for call_send to satisfy BaseTestEnv interface."""
         return self.call_send(**kwargs)
+
+    def get_breaker_state(self) -> str:
+        """Return circuit breaker state for this tenant's endpoints.
+
+        Scans all circuit breakers keyed to this tenant and returns the
+        worst observed state: 'open' > 'half_open' > 'closed'.
+
+        Returns:
+            State string: 'closed', 'open', or 'half_open'
+        """
+        from src.services.webhook_delivery_service import CircuitState
+
+        service = self.get_service()
+        tenant_prefix = f"{self._tenant_id}:"  # type: ignore[attr-defined]
+        worst = CircuitState.CLOSED
+        for key, cb in service._circuit_breakers.items():
+            if key.startswith(tenant_prefix):
+                if cb.state == CircuitState.OPEN:
+                    return CircuitState.OPEN.value
+                if cb.state == CircuitState.HALF_OPEN:
+                    worst = CircuitState.HALF_OPEN
+        return worst.value
 
 
 class ProductMixin:

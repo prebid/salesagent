@@ -13,6 +13,11 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
+from adcp.types.generated_poc.core.brand_ref import BrandReference
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
+    AttributionWindow,
+    ReportingDimensions,
+)
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
@@ -43,18 +48,15 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 
 def _handle_tool_error(e: ToolError) -> JSONResponse:
-    """Convert MCP ToolError to HTTP error response."""
+    """Convert MCP ToolError to HTTP error response using adcp_error()."""
+    from adcp.server.helpers import adcp_error
+
     from src.core.tool_error_logging import extract_error_info
 
     error_code, error_message, recovery = extract_error_info(e)
     return JSONResponse(
         status_code=500,
-        content={
-            "error_code": error_code,
-            "message": error_message,
-            "recovery": recovery,
-            "details": None,
-        },
+        content=adcp_error(error_code, error_message, recovery=recovery),
     )
 
 
@@ -71,15 +73,11 @@ class GetProductsBody(BaseModel):
 
 
 class CreateMediaBuyBody(BaseModel):
-    buyer_ref: str
-    brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
-    packages: list[dict[str, Any]] = []
+    brand: BrandReference | str | None = None  # adcp 3.6.0: BrandReference with domain field
+    packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
     start_time: str | None = None
     end_time: str | None = None
-    budget: Any | None = None
     po_number: str | None = None
-    product_ids: list[str] | None = None
-    total_budget: float | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -96,12 +94,11 @@ class UpdateMediaBuyBody(BaseModel):
 
 class GetMediaBuyDeliveryBody(BaseModel):
     media_buy_ids: list[str] | None = None
-    buyer_refs: list[str] | None = None
     status_filter: Any = None
     start_date: str | None = None
     end_date: str | None = None
-    reporting_dimensions: dict[str, Any] | None = None
-    attribution_window: dict[str, Any] | None = None
+    reporting_dimensions: ReportingDimensions | None = None
+    attribution_window: AttributionWindow | None = None
     include_package_daily_breakdown: bool | None = None
     account: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
@@ -120,7 +117,6 @@ class SyncCreativesBody(BaseModel):
 class ListCreativesBody(BaseModel):
     media_buy_id: str | None = None
     media_buy_ids: list[str] | None = None
-    buyer_ref: str | None = None
     status: str | None = None
     format: str | None = None
     adcp_version: str = "1.0.0"
@@ -225,18 +221,18 @@ async def list_authorized_properties(
 
 @router.post("/media-buys")
 async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity = require_auth):
-    """Create a new media buy (auth required)."""
+    """Create a new media buy (auth required).
+
+    Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
+    targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
+    """
     try:
         response = await media_buy_create_module.create_media_buy_raw(
-            buyer_ref=body.buyer_ref,
             brand=body.brand,
-            packages=body.packages,
+            packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
             start_time=body.start_time,
             end_time=body.end_time,
-            budget=body.budget,
             po_number=body.po_number,
-            product_ids=body.product_ids,
-            total_budget=body.total_budget,
             identity=identity,
         )
     except ToolError as e:
@@ -283,7 +279,6 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
 
         response = media_buy_delivery_module.get_media_buy_delivery_raw(
             media_buy_ids=body.media_buy_ids,
-            buyer_refs=body.buyer_refs,
             status_filter=body.status_filter,
             start_date=body.start_date,
             end_date=body.end_date,
@@ -324,7 +319,6 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
         response = creatives_listing_module.list_creatives_raw(
             media_buy_id=body.media_buy_id,
             media_buy_ids=body.media_buy_ids,
-            buyer_ref=body.buyer_ref,
             status=body.status,
             format=body.format,
             identity=identity,

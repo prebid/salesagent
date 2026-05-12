@@ -17,7 +17,7 @@ import base64
 import logging
 import uuid
 from datetime import UTC
-from typing import Any
+from typing import Annotated, Any
 
 from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
@@ -33,6 +33,7 @@ from adcp.types.generated_poc.core.pagination_request import PaginationRequest
 from adcp.types.generated_poc.core.pagination_response import PaginationResponse
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
@@ -178,7 +179,7 @@ def _list_accounts_impl(
 async def list_accounts(
     status: AccountStatus | None = None,
     pagination: PaginationRequest | None = None,
-    sandbox: bool | None = None,
+    sandbox: Annotated[bool | None, Field(description="When true, return only sandbox/test accounts")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -261,13 +262,20 @@ def _enum_to_str(val: Any) -> str | None:
 
 
 def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
-    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage."""
+    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage.
+
+    Both dict and model inputs are normalized through model_dump(mode="json")
+    to ensure consistent comparison (e.g., AnyUrl → str).
+    """
+    from adcp.types.generated_poc.core.account import GovernanceAgent
+
     if agents is None:
         return None
     result: list[dict[str, Any]] = []
     for g in agents:
         if isinstance(g, dict):
-            result.append(g)
+            # Validate through model to normalize types (AnyUrl → str, etc.)
+            result.append(GovernanceAgent.model_validate(g).model_dump(mode="json"))
         elif hasattr(g, "model_dump"):
             result.append(g.model_dump(mode="json"))
         else:
@@ -300,7 +308,7 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
     # Compare governance_agents (JSON field)
     # Both sides must be serialized to dicts for comparison — db_account.governance_agents
     # is hydrated to list[GovernanceAgent] by JSONType, while incoming is already serialized.
-    incoming_gov = _serialize_governance_agents(entry.governance_agents)
+    incoming_gov = _serialize_governance_agents(getattr(entry, "governance_agents", None))
     db_gov = _serialize_governance_agents(db_account.governance_agents)
     if db_gov != incoming_gov:
         changes["governance_agents"] = incoming_gov
@@ -369,7 +377,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
         if brand_domain.endswith(tld):
             return [
                 Error(
-                    code="INVALID_DOMAIN",
+                    code="VALIDATION_ERROR",
                     message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
                     f"and cannot be used for account provisioning.",
                     suggestion="Use a real domain name for production accounts.",
@@ -390,14 +398,17 @@ def _check_billing_policy(
     """
     from adcp.types.generated_poc.core.error import Error
 
-    supported = getattr(identity, "supported_billing", None)
+    # Read billing policy from tenant configuration (not identity).
+    # Both dict and TenantContext expose .get() identically, so no branching needed.
+    tenant = identity.tenant if identity else None
+    supported = tenant.get("supported_billing") if tenant else None
     if supported is None:
         return None  # No policy configured → accept all
 
     if billing_val not in supported:
         return [
             Error(
-                code="BILLING_NOT_SUPPORTED",
+                code="UNSUPPORTED_FEATURE",
                 message=f"Billing model '{billing_val}' is not supported by this seller. "
                 f"Supported models: {', '.join(supported)}.",
                 suggestion=f"Use one of the supported billing models: {', '.join(supported)}.",
@@ -444,7 +455,7 @@ async def _sync_accounts_impl(
         SyncAccountsResponse with per-account action results.
     """
     if req is None:
-        req = SyncAccountsRequest(accounts=[])
+        req = SyncAccountsRequest(accounts=[], idempotency_key=str(uuid.uuid4()))
 
     # BR-RULE-055: sync requires auth
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
@@ -554,10 +565,20 @@ async def _sync_accounts_impl(
                 # Create new account
                 billing_val = _enum_to_str(entry.billing)
                 payment_terms_val = _enum_to_str(entry.payment_terms)
-                governance_agents_val = _serialize_governance_agents(entry.governance_agents)
+                governance_agents_val = _serialize_governance_agents(getattr(entry, "governance_agents", None))
 
                 account_id = _generate_account_id()
                 account_name = _generate_account_name(brand_domain, operator, brand_id)
+
+                # BR-RULE-060: determine approval status from tenant config.
+                # account_approval_mode is a distinct field from creative approval_mode
+                # (BR-RULE-037) — do NOT fall back to approval_mode.
+                # Resolved BEFORE the dry_run branch so previews reflect what a real
+                # create would return (BR-RULE-062).
+                tenant = identity.tenant if identity else None
+                approval_mode = tenant.get("account_approval_mode") if tenant else None
+                setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
+                initial_status = "pending_approval" if setup else "active"
 
                 if dry_run:
                     results.append(
@@ -565,18 +586,14 @@ async def _sync_accounts_impl(
                             brand=entry.brand,
                             operator=operator,
                             action="created",
-                            status="active",
+                            status=initial_status,
                             name=account_name,
                             billing=billing_val,
                             sandbox=sandbox,
+                            setup=setup,
                         )
                     )
                     continue
-
-                # BR-RULE-060: determine approval status
-                approval_mode = getattr(identity, "account_approval_mode", None)
-                setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
-                initial_status = "pending_approval" if setup else "active"
 
                 new_account = DBAccount(
                     tenant_id=tenant_id,
@@ -650,8 +667,10 @@ async def _sync_accounts_impl(
 
 async def sync_accounts(
     accounts: list[SyncAccountInput] | None = None,
-    delete_missing: bool | None = None,
-    dry_run: bool | None = None,
+    delete_missing: Annotated[
+        bool | None, Field(description="Deactivate accounts not present in the sync list")
+    ] = None,
+    dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -675,6 +694,7 @@ async def sync_accounts(
         delete_missing=delete_missing,
         dry_run=dry_run,
         context=context,
+        idempotency_key=str(uuid.uuid4()),
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)

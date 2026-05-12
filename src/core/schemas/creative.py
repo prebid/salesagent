@@ -285,15 +285,8 @@ class CreativeAssignment(SalesAgentBaseModel):
 class AddCreativeAssetsRequest(SalesAgentBaseModel):
     """Request to add creative assets to a media buy (AdCP spec compliant)."""
 
-    media_buy_id: str | None = None
-    buyer_ref: str | None = None
+    media_buy_id: str
     assets: list[Creative]  # Renamed from 'creatives' to match spec
-
-    def model_validate(cls, values):
-        # Ensure at least one of media_buy_id or buyer_ref is provided
-        if not values.get("media_buy_id") and not values.get("buyer_ref"):
-            raise ValueError("Either media_buy_id or buyer_ref must be provided")
-        return values
 
     # Backward compatibility
     @property
@@ -330,9 +323,11 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 3.9 makes account required. Our impl resolves identity at the transport
-    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
+    # adcp 4.3 makes account and idempotency_key required.  Override as optional
+    # — identity is resolved at the transport boundary, and idempotency_key is
+    # generated at the transport boundary when not supplied by the caller.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
 
     creatives: list[Creative] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
@@ -369,9 +364,6 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Internal-only fields (not in AdCP spec)
-    status: str | None = Field(
-        None, exclude=True, description="Current approval status of the creative (INTERNAL - excluded from responses)"
-    )
     review_feedback: str | None = Field(
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
@@ -380,7 +372,6 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     changes: list[str] = Field(
         default_factory=list, description="List of field names that were modified (for 'updated' action)"
     )
-    errors: list[str] = Field(default_factory=list, description="Validation or processing errors (for 'failed' action)")
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
 
     def model_dump(self, **kwargs):
@@ -460,6 +451,13 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     Design decision (salesagent-g3c): error variant never constructed.
     """
+
+    def model_dump(self, **kwargs):
+        """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
+        result = super().model_dump(**kwargs)
+        if "creatives" in result and self.creatives:
+            result["creatives"] = [c.model_dump(**kwargs) for c in self.creatives]
+        return result
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

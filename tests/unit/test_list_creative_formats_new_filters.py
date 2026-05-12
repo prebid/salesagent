@@ -4,8 +4,6 @@ Tests the is_responsive, name_search, asset_types, and dimension filters
 that were added to match the AdCP spec.
 """
 
-from adcp.types import FormatCategory
-
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -55,7 +53,6 @@ class TestListCreativeFormatsNewFilters:
     def test_all_new_filters_combined(self):
         """Test that all new filters can be used together."""
         req = ListCreativeFormatsRequest(
-            type="display",
             is_responsive=False,
             name_search="leaderboard",
             asset_types=["image"],
@@ -64,8 +61,7 @@ class TestListCreativeFormatsNewFilters:
             min_height=50,
             max_height=300,
         )
-        # Pydantic coerces string "display" to FormatCategory.display enum
-        assert req.type == FormatCategory.display
+        # type removed from ListCreativeFormatsRequest in adcp 3.12
         assert req.is_responsive is False
         assert req.name_search == "leaderboard"
         assert req.asset_types is not None
@@ -110,8 +106,7 @@ class TestListCreativeFormatsNewFilters:
             is_responsive=True,
             name_search="banner",
         )
-        # Old filters should be None
-        assert req.type is None
+        # type removed in adcp 3.12, format_ids should be None
         assert req.format_ids is None
         # New filters should be set
         assert req.is_responsive is True
@@ -174,5 +169,8 @@ class TestListCreativeFormatsMCPToolSignature:
         format_ids_param = sig.parameters["format_ids"]
 
         # The annotation should be list[FormatId] | None for proper schema exposure
+        # adcp 4.3: FormatId is an alias for FormatReferenceStructuredObject
         annotation_str = str(format_ids_param.annotation)
-        assert "FormatId" in annotation_str, f"Expected list[FormatId], got {annotation_str}"
+        assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
+            f"Expected list[FormatId] or list[FormatReferenceStructuredObject], got {annotation_str}"
+        )

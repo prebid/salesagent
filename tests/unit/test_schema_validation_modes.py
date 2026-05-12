@@ -28,26 +28,13 @@ from src.core.schemas import (
 # Minimal valid data for constructing test models
 # adcp 3.6.0: brand replaced brand_manifest
 _VALID_CMR_DATA = {
-    "buyer_ref": "test-123",
     "brand": {"domain": "testproduct.com"},
-    "packages": [
-        {
-            "buyer_ref": "pkg_1",
-            "product_id": "prod_1",
-            "budget": 5000.0,
-            "pricing_option_id": "test",
-        }
-    ],
+    "packages": [{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test"}],
     "start_time": "2025-02-15T00:00:00Z",
     "end_time": "2025-02-28T23:59:59Z",
 }
 
-_VALID_PACKAGE_DATA = {
-    "buyer_ref": "pkg_1",
-    "product_id": "prod_1",
-    "budget": 5000.0,
-    "pricing_option_id": "test",
-}
+_VALID_PACKAGE_DATA = {"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test"}
 
 
 class TestBuyerModelRejectsExtraInDev:
@@ -93,10 +80,7 @@ class TestNestedModelRejectsExtraInDev:
 
     def test_nested_package_rejects_extra(self):
         """Bogus field on PackageRequest within CMR.packages is rejected."""
-        data = {
-            **_VALID_CMR_DATA,
-            "packages": [{**_VALID_PACKAGE_DATA, "bogus_pkg_field": "injected"}],
-        }
+        data = {**_VALID_CMR_DATA, "packages": [{**_VALID_PACKAGE_DATA, "bogus_pkg_field": "injected"}]}
         with pytest.raises(ValidationError, match="bogus_pkg_field"):
             CreateMediaBuyRequest(**data)
 
@@ -107,10 +91,7 @@ class TestNestedModelRejectsExtraInDev:
             "packages": [
                 {
                     **_VALID_PACKAGE_DATA,
-                    "targeting_overlay": {
-                        "geo_country_any_of": ["US"],
-                        "bogus_targeting": "injected",
-                    },
+                    "targeting_overlay": {"geo_country_any_of": ["US"], "bogus_targeting": "injected"},
                 }
             ],
         }

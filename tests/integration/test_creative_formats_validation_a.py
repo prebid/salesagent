@@ -9,7 +9,6 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from adcp.types import FormatCategory
 from pydantic import ValidationError
 
 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
@@ -62,7 +61,7 @@ class TestAdapterFormatsViaA2A:
                     id="display_300x250",
                 ),
                 name="Display 300x250",
-                type=FormatCategory.display,
+                type="display",
                 is_standard=True,
             )
             env.set_registry_formats([standard_format])
@@ -125,7 +124,6 @@ class TestAdapterFormatsViaA2A:
 
             # Format metadata
             assert fmt.name is not None and len(fmt.name) > 0
-            assert fmt.type == FormatCategory.display
             # is_standard is exclude=True (internal-only) — not visible through A2A serialization
 
             # Assets must be present (regression guard)
@@ -160,7 +158,7 @@ class TestAdapterFormatsViaA2A:
                     id="display_300x250",
                 ),
                 name="Display 300x250",
-                type=FormatCategory.display,
+                type="display",
                 is_standard=True,
             )
             env.set_registry_formats([standard_format])
@@ -184,64 +182,46 @@ class TestInvalidFormatCategoryEnum:
     """
 
     def test_invalid_type_raises_validation_error(self, integration_db):
-        """UC-005-EXT-B-01: type='invalid_category' raises ValidationError at request construction.
+        """UC-005-EXT-B-01: unknown fields raise ValidationError at request construction.
 
-        Pydantic validates FormatCategory enum values at request construction
+        Pydantic extra="forbid" rejects unknown fields at request construction
         time, producing a clear error before the request reaches _impl.
         """
-        with pytest.raises(ValidationError) as exc_info:
+        with pytest.raises(ValidationError):
             ListCreativeFormatsRequest(type="invalid_category")
 
-        errors = exc_info.value.errors()
-        assert len(errors) == 1
+    def test_unknown_field_rejected(self, integration_db):
+        """UC-005-EXT-B-01: unknown fields are rejected by extra=forbid.
 
-        error = errors[0]
-        # Error should reference the 'type' field
-        assert "type" in error["loc"], f"Error should reference 'type' field, got: {error['loc']}"
-        # Error type should be enum validation
-        assert error["type"] == "enum", f"Expected enum error type, got: {error['type']}"
-
-    def test_invalid_type_error_lists_valid_values(self, integration_db):
-        """UC-005-EXT-B-01: error message includes valid FormatCategory values.
-
-        The error message should list the valid enum values so the buyer
-        knows what to use instead.
+        The type field was removed in adcp 3.12. Passing it now triggers
+        extra_forbidden validation error.
         """
-        with pytest.raises(ValidationError) as exc_info:
-            ListCreativeFormatsRequest(type="invalid_category")
+        with pytest.raises(ValidationError):
+            ListCreativeFormatsRequest(type="display")
 
-        error_msg = str(exc_info.value)
+    def test_valid_filters_via_mcp_works(self, integration_db):
+        """UC-005-EXT-B-01: MCP wrapper correctly handles valid filter parameters.
 
-        # Valid FormatCategory values should appear in the error
-        valid_values = ["audio", "video", "display"]
-        for value in valid_values:
-            assert value in error_msg, f"Error should mention valid value '{value}'. Full error: {error_msg}"
-
-    def test_valid_type_enum_via_mcp_works(self, integration_db):
-        """UC-005-EXT-B-01: MCP wrapper correctly handles FormatCategory enum.
-
-        FastMCP coerces string inputs to FormatCategory enums before calling
-        the wrapper. Verify the wrapper handles a real enum without error.
-        Invalid strings never reach the wrapper (FastMCP rejects them).
+        The type filter was removed in adcp 3.12. Verify the MCP wrapper
+        handles remaining valid filters (e.g., name_search) without error.
         """
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
 
-            # Pass a real enum — the wrapper's type.value should work
-            response = env.call_mcp(type=FormatCategory.audio)
+            # Pass a valid filter — name_search for nonexistent name → empty result
+            response = env.call_mcp(name_search="nonexistent_format_xyz")
 
-        # Audio filter on a catalog with no audio formats → empty result
         assert isinstance(response, ListCreativeFormatsResponse)
         assert len(response.formats) == 0
 
     def test_each_valid_category_accepted(self, integration_db):
-        """UC-005-EXT-B-01 (positive counterpart): all valid FormatCategory values are accepted.
+        """UC-005-EXT-B-01 (positive counterpart): all valid format filter values are accepted.
 
-        Ensures the validation correctly accepts valid enum values.
+        Ensures the validation correctly accepts valid ListCreativeFormatsRequest construction.
         """
-        for category in FormatCategory:
-            req = ListCreativeFormatsRequest(type=category.value)
-            assert req.type == category
+        # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
+        req = ListCreativeFormatsRequest()
+        assert req is not None
 
 
 class TestMalformedFormatIdObjects:

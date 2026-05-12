@@ -25,6 +25,7 @@ import requests
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
 from adcp.types import McpWebhookPayload
+from google.protobuf import json_format
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
@@ -49,8 +50,7 @@ def _normalize_localhost_for_docker(url: str) -> str:
             new_netloc = f"{userinfo}host.docker.internal{port}"
             return urlunparse(parsed._replace(netloc=new_netloc))
     except Exception:
-        # If anything goes wrong, fall back to the original URL
-        pass
+        logger.debug("Docker URL rewrite failed, using original URL", exc_info=True)
     return url
 
 
@@ -111,8 +111,11 @@ class ProtocolWebhookService:
 
         # Serialize payload to dict at the delivery boundary (for HMAC signing and JSON send)
         payload_dict: dict[str, Any]
-        if isinstance(payload, (Task, TaskStatusUpdateEvent, McpWebhookPayload)):
+        if isinstance(payload, McpWebhookPayload):
             payload_dict = payload.model_dump(mode="json", exclude_none=True)
+        elif isinstance(payload, (Task, TaskStatusUpdateEvent)):
+            # a2a-sdk 1.0: protobuf types — use MessageToDict
+            payload_dict = json_format.MessageToDict(payload, preserving_proto_field_name=True)
         else:
             payload_dict = payload
 

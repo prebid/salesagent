@@ -88,19 +88,19 @@ def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) 
 
 def _make_governance_agent(
     url: str = "https://compliance.example.com/check",
-    credentials: str = "compliance-token-" + "x" * 32,
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a valid GovernanceAgent dict matching the adcp schema.
 
     Uses the library GovernanceAgent model for validation, then dumps to dict
     for use in SyncAccountsRequest entries.
+
+    Note: authentication was removed from GovernanceAgent in adcp 3.12.
     """
-    from adcp.types.generated_poc.account.sync_accounts_request import GovernanceAgent
+    from adcp.types.generated_poc.core.account import GovernanceAgent
 
     agent = GovernanceAgent(
         url=url,
-        authentication={"schemes": ["Bearer"], "credentials": credentials},
         categories=categories,
     )
     return agent.model_dump()
@@ -178,10 +178,8 @@ def given_seller_no_billing(ctx: dict) -> None:
 
 
 def _set_billing_policy(ctx: dict, supported: list[str]) -> None:
-    """Set billing policy on the env and clear identity cache."""
-    env = ctx["env"]
-    env._supported_billing = supported
-    env._identity_cache.clear()  # Force re-creation with new billing policy
+    """Set billing policy via the harness."""
+    ctx["env"].set_billing_policy(supported)
 
 
 @given(parsers.parse('the seller does not support "{billing}" billing'))
@@ -198,10 +196,8 @@ def given_seller_partial_billing(ctx: dict, supported: str, rejected: str) -> No
 
 
 def _set_approval_mode(ctx: dict, mode: str) -> None:
-    """Set approval mode on the env and clear identity cache."""
-    env = ctx["env"]
-    env._account_approval_mode = mode
-    env._identity_cache.clear()
+    """Set approval mode via the harness."""
+    ctx["env"].set_approval_mode(mode)
 
 
 @given("the seller requires credit review for new accounts")
@@ -466,9 +462,9 @@ def then_accounts_have_fields(ctx: dict) -> None:
     """Assert each account schema includes the required fields.
 
     account_id, name, status: always required — must be non-None.
-    advertiser, rate_card, payment_terms: optional fields — verify the schema
-    exposes them (hasattr), not that they're populated. "Includes" = field is
-    present in the response shape, allowing callers to read it.
+    advertiser, rate_card, payment_terms: optional fields — verify the
+    serialized output exposes them (via model_dump()), allowing callers to read
+    the field even when the value is None.
     """
     resp = ctx["response"]
     for i, acct in enumerate(resp.accounts):
@@ -476,10 +472,11 @@ def then_accounts_have_fields(ctx: dict) -> None:
         assert acct.account_id is not None, f"Account {i} missing account_id"
         assert acct.name is not None, f"Account {i} missing name"
         assert acct.status is not None, f"Account {i} missing status"
-        # Optional fields — schema must expose them (value may be None)
-        assert hasattr(acct, "advertiser"), f"Account {i} schema missing 'advertiser' field"
-        assert hasattr(acct, "rate_card"), f"Account {i} schema missing 'rate_card' field"
-        assert hasattr(acct, "payment_terms"), f"Account {i} schema missing 'payment_terms' field"
+        # Optional fields — schema must expose them in serialized output
+        dumped = acct.model_dump()
+        assert "advertiser" in dumped, f"Account {i} serialized output missing 'advertiser' field"
+        assert "rate_card" in dumped, f"Account {i} serialized output missing 'rate_card' field"
+        assert "payment_terms" in dumped, f"Account {i} serialized output missing 'payment_terms' field"
 
 
 @then("the accounts are only those accessible to the authenticated agent")
@@ -645,11 +642,20 @@ def then_result_set_identical(ctx: dict) -> None:
     """Assert the unfiltered result set contains all accounts.
 
     The Given step created accounts with 4 different statuses,
-    so all 4 should appear in the unfiltered results.
+    so all 4 should appear in the unfiltered results. When expected_account_ids
+    is tracked in ctx by Given steps, verifies exact ID-set equality; otherwise
+    falls back to the minimum count check.
     """
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
     assert len(resp.accounts) >= 4, f"Expected at least 4 accounts (one per status), got {len(resp.accounts)}"
+    expected_ids = ctx.get("expected_account_ids")
+    if expected_ids:
+        returned_ids = {acct.account_id for acct in resp.accounts}
+        assert returned_ids == expected_ids, (
+            f"Result set mismatch: returned {returned_ids}, expected {expected_ids}. "
+            f"Extra: {returned_ids - expected_ids}, Missing: {expected_ids - returned_ids}"
+        )
 
 
 @then(parsers.parse('the response has outcome "{outcome}"'))
@@ -751,7 +757,6 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
     governance_agents = [
         _make_governance_agent(
             url="https://governance.example.com/check",
-            credentials="governance-token-" + "x" * 32,
             categories=["budget_authority", "strategic_alignment"],
         )
     ]
@@ -783,7 +788,7 @@ def then_success_with_accounts(ctx: dict) -> None:
     assert error is None, f"Expected success but got error: {error}"
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    assert hasattr(resp, "accounts"), f"Response missing 'accounts': {type(resp)}"
+    assert resp.accounts is not None, f"Response 'accounts' field is None: {type(resp)}"
     assert isinstance(resp.accounts, list), f"accounts is not a list: {type(resp.accounts)}"
 
 
@@ -815,8 +820,10 @@ def then_account_action(ctx: dict, domain: str, action: str) -> None:
 def then_account_has_id(ctx: dict) -> None:
     """Assert the last referenced account has a seller-assigned account_id."""
     acct = ctx.get("last_account") or ctx["response"].accounts[0]
-    name = getattr(acct, "name", None)
-    assert name is not None, "Account missing name (seller-assigned identifier)"
+    account_id = getattr(acct, "account_id", None)
+    assert account_id is not None and isinstance(account_id, str) and len(account_id) > 0, (
+        f"Account missing non-empty seller-assigned account_id: {acct}"
+    )
 
 
 @then(parsers.parse('the account has status "{status}"'))
@@ -860,14 +867,14 @@ def then_n_account_results(ctx: dict, count: int) -> None:
 
 @then("each account echoes brand domain and brand_id from the request")
 def then_all_accounts_echo_brand(ctx: dict) -> None:
-    """Assert each account in the response has brand with domain and brand_id."""
+    """Assert each account in the response has non-empty brand domain and brand_id."""
     resp = ctx["response"]
     for acct in resp.accounts:
         brand = acct.brand
         domain = brand.domain
         bid = _brand_id_str(getattr(brand, "brand_id", None))
-        assert domain is not None, f"Account missing brand domain: {brand}"
-        assert bid is not None, f"Account for {domain} missing brand_id: {brand}"
+        assert isinstance(domain, str) and domain, f"Account missing non-empty brand domain: {brand}"
+        assert isinstance(bid, str) and bid, f"Account for {domain!r} missing non-empty brand_id: {brand}"
 
 
 @then(parsers.parse('the account operator is "{operator}"'))
@@ -938,10 +945,12 @@ def then_error_code(ctx: dict, code: str) -> None:
 
 @then("the error message describes the authentication requirement")
 def then_error_message_auth(ctx: dict) -> None:
-    """Assert the error message mentions authentication."""
+    """Assert the error message is a substantive auth-related message."""
     error = _get_error(ctx)
     msg = str(error).lower()
-    assert "auth" in msg or "token" in msg, f"Expected auth-related message, got: {error}"
+    auth_phrases = {"x-adcp-auth", "valid token", "authentication required", "auth", "token", "unauthorized"}
+    assert any(p in msg for p in auth_phrases), f"Expected auth-related message, got: {error}"
+    assert len(msg) > 20, f"Expected substantive auth error message (>20 chars), got: {repr(str(error))}"
 
 
 @then(parsers.parse('the error should include "suggestion" field with remediation guidance'))
@@ -961,8 +970,8 @@ def then_error_has_suggestion(ctx: dict) -> None:
     # Fall back to operation-level exception
     error = ctx.get("error")
     if error is not None:
-        has_suggestion = hasattr(error, "recovery") or hasattr(error, "suggestion")
-        assert has_suggestion, f"Expected suggestion/recovery in error: {error}"
+        suggestion = getattr(error, "suggestion", None) or getattr(error, "recovery", None)
+        assert suggestion, f"Expected non-empty suggestion/recovery in error: {error}"
         return
     raise AssertionError("No error found — expected suggestion field on per-account or operation error")
 
@@ -1118,7 +1127,7 @@ def then_billing_error_message(ctx: dict) -> None:
     """Assert the billing error has an explanatory message."""
     acct = ctx.get("last_account")
     assert acct is not None and acct.errors, "No account errors"
-    billing_err = next((e for e in acct.errors if e.code == "BILLING_NOT_SUPPORTED"), None)
+    billing_err = next((e for e in acct.errors if e.code == "UNSUPPORTED_FEATURE"), None)
     assert billing_err is not None, "No BILLING_NOT_SUPPORTED error found"
     assert "billing" in billing_err.message.lower() or "supported" in billing_err.message.lower(), (
         f"Expected billing-related message, got: {billing_err.message}"
@@ -1139,9 +1148,24 @@ def then_failed_status_with_error(ctx: dict, status: str, code: str) -> None:
 
 @then(parsers.parse("the account processing fails with a validation error for {field}"))
 def then_field_validation_error(ctx: dict, field: str) -> None:
-    """Assert a field was rejected at schema or per-account validation level."""
+    """Assert a field was rejected at schema or per-account validation level.
+
+    Checks that the field name appears in the error message or in Pydantic
+    ValidationError loc entries.
+    """
+    from pydantic import ValidationError
+
     error = ctx.get("error")
     assert error is not None, f"Expected a validation error for {field}"
+    field_lower = field.lower()
+    error_str = str(error).lower()
+    if isinstance(error, ValidationError):
+        locs = [str(loc).lower() for err in error.errors() for loc in err.get("loc", [])]
+        assert field_lower in error_str or any(field_lower in loc for loc in locs), (
+            f"Expected field '{field}' in validation error locs/message, got: {error}"
+        )
+    else:
+        assert field_lower in error_str, f"Expected field '{field}' mentioned in error, got: {error}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1353,6 +1377,7 @@ def when_sync_with_delete_missing(ctx: dict, value: str, datatable: Any) -> None
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
 
+    ctx["sync_request_domains"] = {a["brand"]["domain"] for a in accounts if a.get("brand", {}).get("domain")}
     try:
         req = SyncAccountsRequest(
             accounts=accounts,
@@ -1372,6 +1397,7 @@ def when_sync_without_delete_missing(ctx: dict, datatable: Any) -> None:
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
 
+    ctx["sync_request_domains"] = {a["brand"]["domain"] for a in accounts if a.get("brand", {}).get("domain")}
     try:
         req = SyncAccountsRequest(accounts=accounts)
         dispatch_request(ctx, req=req)
@@ -1503,11 +1529,20 @@ def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
 
 @then("only agent A's absent accounts are deactivated")
 def then_only_agent_a_deactivated(ctx: dict) -> None:
-    """Assert only agent A's absent accounts were deactivated."""
-    # If agent B's account assertion passed, this is implicitly true.
-    # The sync response should show the deactivation for agent A's missing accounts.
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    """Assert agent B's accounts were not deactivated by agent A's delete_missing operation."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    agent_b = ctx.get("agents", {}).get("B")
+    assert agent_b is not None, "Test setup error: no agent B in context"
+    tenant = ctx["tenant"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        agent_b_accounts = repo.list_by_principal(agent_b.principal_id)
+    closed = [a for a in agent_b_accounts if _status_str(a.status) == "closed"]
+    assert not closed, (
+        f"Agent A's delete_missing operation deactivated agent B's accounts: {[a.account_id for a in closed]}"
+    )
 
 
 @then(parsers.parse('brand domain "{domain}" remains in its current state'))
@@ -1530,11 +1565,14 @@ def then_brand_unchanged(ctx: dict, domain: str) -> None:
 
 @then("only the included accounts are processed")
 def then_only_included_processed(ctx: dict) -> None:
-    """Assert only the accounts in the sync request were processed."""
+    """Assert the response only contains accounts that were in the sync request."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    # The response should contain exactly the accounts from the request
-    # (absent accounts are NOT in the response unless delete_missing is true)
+    request_domains = ctx.get("sync_request_domains")
+    assert request_domains, "Test setup error: sync_request_domains not tracked by When step"
+    response_domains = {a.brand.domain for a in resp.accounts if a.brand}
+    extra = response_domains - request_domains
+    assert not extra, f"Response included accounts not in the sync request: {extra}. Request domains: {request_domains}"
 
 
 @then("no accounts are deactivated")
@@ -1866,9 +1904,10 @@ def then_account_sandbox_true(ctx: dict) -> None:
 
 @then("the account should have a seller-assigned account_id")
 def then_sandbox_account_has_id(ctx: dict) -> None:
-    """Assert the account has a seller-assigned name (account identifier)."""
+    """Assert the account has a seller-assigned account_id."""
     acct = ctx.get("last_account") or ctx["response"].accounts[0]
-    assert acct.name is not None, "Account missing name (seller-assigned identifier)"
+    account_id = getattr(acct, "account_id", None)
+    assert account_id is not None, f"Account missing seller-assigned account_id: {acct}"
 
 
 @then("no real ad platform account should have been created")
@@ -2155,7 +2194,6 @@ def when_sync_different_governance(ctx: dict, domain: str) -> None:
                 "governance_agents": [
                     _make_governance_agent(
                         url="https://new-bot.example.com/check",
-                        credentials="new-bot-token-" + "x" * 32,
                     )
                 ],
             }

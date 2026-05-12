@@ -12,24 +12,26 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
+
+from sqlalchemy.exc import IntegrityError
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 from adcp import PushNotificationConfig
+from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from adcp.types.aliases import Package as ResponsePackage
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
-from adcp.types.generated_poc.core.targeting import TargetingOverlay
 from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
 from src.core.exceptions import (
@@ -93,7 +95,6 @@ from src.core.database.models import Product as ModelProduct
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
-    _convert_creative_to_adapter_asset,
     extract_click_url,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
@@ -164,15 +165,16 @@ def _determine_media_buy_status(
     This ensures consistent status across all adapters (GAM, Mock, Kevel, etc.).
 
     Status Priority (highest to lowest) - ALL SPEC-COMPLIANT:
-    1. pending_activation: Manual approval required OR needs creatives OR scheduled for future
-    2. active: Currently delivering (has creatives, approved, within flight dates)
-    3. completed: Past end date
-    4. paused: (Reserved for future use - not currently returned)
+    1. completed: Past end date
+    2. pending_creatives: Missing creatives or unapproved creatives
+    3. pending_start: Manual approval required OR scheduled for future start
+    4. active: Currently delivering (has creatives, approved, within flight dates)
+    5. paused: (Reserved for future use - not currently returned)
 
     Internal states mapped to spec statuses:
-    - "pending_approval" → pending_activation (awaiting manual approval)
-    - "needs_creatives" → pending_activation (missing or unapproved creatives)
-    - "ready" → pending_activation (scheduled for future start)
+    - "needs_creatives" → pending_creatives (missing or unapproved creatives)
+    - "pending_approval" → pending_start (awaiting manual approval)
+    - "ready" → pending_start (scheduled for future start)
 
     Args:
         manual_approval_required: Whether the media buy requires manual approval
@@ -183,23 +185,27 @@ def _determine_media_buy_status(
         now: Current time (defaults to datetime.now(UTC))
 
     Returns:
-        Status string matching AdCP MediaBuyStatus enum (pending_activation, active, paused, completed)
+        Status string matching AdCP MediaBuyStatus enum
+        (pending_creatives, pending_start, active, paused, completed)
     """
     if now is None:
         now = datetime.now(UTC)
 
-    # Priority 1: Completed (past end date - check first to avoid false pending_activation)
+    # Priority 1: Completed (past end date - check first to avoid false pending states)
     if now > end_time:
         return MediaBuyStatus.completed.value
 
-    # Priority 2: Pending activation (any blocking condition or scheduled for future)
-    # - Manual approval required
-    # - Missing creatives or unapproved creatives
-    # - Scheduled for future start
-    if manual_approval_required or not has_creatives or not creatives_approved or now < start_time:
-        return MediaBuyStatus.pending_activation.value
+    # Priority 2: Pending creatives (missing or unapproved creatives block delivery)
+    # This is distinct from pending_start: the buy is otherwise ready, but creatives
+    # need to be assigned/approved before it can go active.
+    if not has_creatives or not creatives_approved:
+        return MediaBuyStatus.pending_creatives.value
 
-    # Priority 3: Active (currently delivering - all conditions met)
+    # Priority 3: Pending start (manual approval required or scheduled for future)
+    if manual_approval_required or now < start_time:
+        return MediaBuyStatus.pending_start.value
+
+    # Priority 4: Active (currently delivering - all conditions met)
     return MediaBuyStatus.active.value
 
 
@@ -701,7 +707,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         impressions=impressions,
                         format_ids=cast(list[Any], format_ids_list),
                         targeting_overlay=targeting_overlay,
-                        buyer_ref=package_config.get("buyer_ref"),
                         product_id=product_id,
                         budget=budget,
                     )
@@ -1267,6 +1272,49 @@ from src.services.setup_checklist_service import SetupIncompleteError, validate_
 from src.services.slack_notifier import get_slack_notifier
 
 
+def _build_idempotency_hit_result(
+    tenant_id: str,
+    idempotency_key: str | None,
+    principal_id: str,
+    context: ContextObject | None,
+) -> CreateMediaBuyResult:
+    """Re-query the winner of an idempotency race and return its result.
+
+    Used both for the happy-path idempotency lookup and for the TOCTOU
+    race-condition recovery (IntegrityError on commit).
+    """
+    from src.core.database.repositories import MediaBuyUoW
+
+    key = idempotency_key or ""
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        existing = uow.media_buys.find_by_idempotency_key(key, principal_id)
+        if existing is None:
+            raise AdCPValidationError(
+                f"Idempotency key {idempotency_key} not found after race resolution",
+                recovery="terminal",
+            )
+
+        db_packages = uow.media_buys.get_packages(existing.media_buy_id)
+        response_packages = [Package(package_id=pkg.package_id) for pkg in db_packages]
+
+        try:
+            adcp_status = MediaBuyStatus(existing.status)
+        except ValueError:
+            adcp_status = MediaBuyStatus.pending_start
+
+        return CreateMediaBuyResult(
+            response=CreateMediaBuySuccess(
+                media_buy_id=existing.media_buy_id,
+                packages=response_packages,
+                status=adcp_status,
+                valid_actions=valid_actions_for_status(adcp_status.value),
+                context=context,
+            ),
+            status=AdcpTaskStatus.completed.value,
+        )
+
+
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | None = None,
@@ -1290,11 +1338,10 @@ async def _create_media_buy_impl(
         raw_freq = str(getattr(req.reporting_webhook, "reporting_frequency", None) or "daily").lower()
         if raw_freq != "daily":
             logger.warning(
-                "CreateMediaBuy requested reporting webhook frequency '%s' for buyer_ref '%s', "
+                "CreateMediaBuy requested reporting webhook frequency '%s', "
                 "but only 'daily' frequency is currently supported. "
                 "Hourly and monthly reporting will be ignored until implemented.",
                 raw_freq,
-                req.buyer_ref,
             )
 
     # Extract testing context first
@@ -1333,23 +1380,33 @@ async def _create_media_buy_impl(
         # Cannot create context or workflow step without valid principal
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code="authentication_error", message=error_msg, details=None)],
+                errors=[Error(code="AUTH_REQUIRED", message=error_msg, details=None)],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,
         )
 
-    # Validate buyer_ref uniqueness within tenant+principal scope (BR-RULE-009)
-    if req.buyer_ref:
-        from src.core.database.repositories import MediaBuyUoW
+    # Idempotency check: if request carries an idempotency_key, look up an existing
+    # media buy for the same (tenant, principal, key) triple.  Per adcp 3.12 spec,
+    # retrying with the same key must return the original media_buy_id without
+    # creating a duplicate ad-server booking.
+    if req.idempotency_key:
+        from src.core.database.repositories import MediaBuyUoW as _IdempotencyUoW
 
-        with MediaBuyUoW(tenant["tenant_id"]) as dup_uow:
-            assert dup_uow.media_buys is not None
-            existing = dup_uow.media_buys.get_by_principal(principal_id, buyer_refs=[req.buyer_ref])
-            if existing:
-                raise AdCPValidationError(
-                    f"buyer_ref '{req.buyer_ref}' already exists for this principal. "
-                    f"Each buyer_ref must be unique within a principal."
+        with _IdempotencyUoW(tenant["tenant_id"]) as idem_uow:
+            assert idem_uow.media_buys is not None
+            existing = idem_uow.media_buys.find_by_idempotency_key(req.idempotency_key, principal_id)
+            if existing is not None:
+                logger.info(
+                    "Idempotency hit: returning existing media buy %s for key %s",
+                    existing.media_buy_id,
+                    req.idempotency_key,
+                )
+                return _build_idempotency_hit_result(
+                    tenant_id=tenant["tenant_id"],
+                    idempotency_key=req.idempotency_key,
+                    principal_id=principal_id,
+                    context=req.context,
                 )
 
     # Context management and workflow step creation - create workflow step FIRST
@@ -1511,7 +1568,7 @@ async def _create_media_buy_impl(
         product_ids = req.get_product_ids()
         logger.info(f"DEBUG: Extracted product_ids: {product_ids}")
         logger.info(
-            f"DEBUG: Request packages: {[{'product_id': p.product_id, 'buyer_ref': p.buyer_ref, 'bid_price': p.bid_price, 'pricing_option_id': p.pricing_option_id} for p in (req.packages or [])]}"
+            f"DEBUG: Request packages: {[{'product_id': p.product_id, 'bid_price': p.bid_price, 'pricing_option_id': p.pricing_option_id} for p in (req.packages or [])]}"
         )
         if not product_ids:
             error_msg = "At least one product is required."
@@ -1521,7 +1578,7 @@ async def _create_media_buy_impl(
             for package in req.packages:
                 # Check product_id field per AdCP spec
                 if not package.product_id:
-                    error_msg = f"Package {package.buyer_ref} must specify product_id."
+                    error_msg = "Package must specify product_id."
                     raise ValueError(error_msg)
 
             # Check for duplicate product_ids across packages
@@ -1872,7 +1929,7 @@ async def _create_media_buy_impl(
         # Return error response with failed status
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code="validation_error", message=str(e), details=None)],
+                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,
@@ -2013,12 +2070,10 @@ async def _create_media_buy_impl(
 
                 package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
 
-                # Use product_id or buyer_ref for package name since Package schema doesn't have 'name'
+                # Use product_id for package name since Package schema doesn't have 'name'
                 pkg_name = f"Package {idx}"
                 if pkg.product_id:
                     pkg_name = f"{pkg.product_id} - Package {idx}"
-                elif pkg.buyer_ref:
-                    pkg_name = f"{pkg.buyer_ref} - Package {idx}"
 
                 # Build Package object with complete package data (matching auto-approval path)
                 # NOTE: Package schema does NOT have a 'status' field - workflow state is tracked in WorkflowStep
@@ -2031,7 +2086,6 @@ async def _create_media_buy_impl(
                 pending_packages.append(
                     Package(
                         package_id=package_id,
-                        buyer_ref=pkg.buyer_ref,
                         paused=False,  # Initial state is not paused (AdCP 2.12.0)
                         product_id=pkg.product_id,
                         budget=pkg.budget,
@@ -2065,25 +2119,40 @@ async def _create_media_buy_impl(
             # Create media buy record in the database with permanent ID
             # Status is "pending_approval" but the ID is final
             # Repository handles raw_request serialization + package_id injection at the DB boundary
-            with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
-                assert pending_uow.media_buys is not None
-                pending_uow.media_buys.create_from_request(
-                    media_buy_id=media_buy_id,
-                    req=req,
-                    principal_id=principal.principal_id,
-                    advertiser_name=principal.name,
-                    budget=total_budget,
-                    currency=request_currency or "USD",
-                    start_time=start_time,
-                    end_time=end_time,
-                    status="pending_approval",
-                    order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
-                    package_id_map=package_id_map,
-                    by_alias=True,
-                    account_id=identity.account_id if identity else None,
-                    created_at=datetime.now(UTC),
+            try:
+                with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
+                    assert pending_uow.media_buys is not None
+                    pending_uow.media_buys.create_from_request(
+                        media_buy_id=media_buy_id,
+                        req=req,
+                        principal_id=principal.principal_id,
+                        advertiser_name=principal.name,
+                        budget=total_budget,
+                        currency=request_currency or "USD",
+                        start_time=start_time,
+                        end_time=end_time,
+                        status="pending_approval",
+                        order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
+                        package_id_map=package_id_map,
+                        by_alias=True,
+                        account_id=identity.account_id if identity else None,
+                        created_at=datetime.now(UTC),
+                    )
+                    logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
+            except IntegrityError as exc:
+                if "idempotency_key" not in str(exc.orig):
+                    raise
+                logger.warning(
+                    "Idempotency race (pending_approval): another request won the commit for key %s. "
+                    "Returning the winner. An orphan adapter-side order may exist.",
+                    req.idempotency_key,
                 )
-                logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
+                return _build_idempotency_hit_result(
+                    tenant_id=tenant["tenant_id"],
+                    idempotency_key=req.idempotency_key,
+                    principal_id=principal.principal_id,
+                    context=req.context,
+                )
 
             # Log to activity feed for manual approval case
             try:
@@ -2111,7 +2180,6 @@ async def _create_media_buy_impl(
                     success=True,
                     details={
                         "media_buy_id": media_buy_id,
-                        "buyer_ref": req.buyer_ref,
                         "budget": total_budget,
                         "currency": request_currency or "USD",
                         "workflow_step_id": step.step_id,
@@ -2347,14 +2415,12 @@ async def _create_media_buy_impl(
 
             # Return success response with packages awaiting approval
             # The workflow_step_id in packages indicates approval is required
-            # buyer_ref is required by schema, but mypy needs explicit check
-            response_buyer_ref = req.buyer_ref if req.buyer_ref else "unknown"
             return CreateMediaBuyResult(
                 response=CreateMediaBuySuccess(
-                    buyer_ref=response_buyer_ref,
                     media_buy_id=media_buy_id,
                     creative_deadline=None,
                     packages=pending_packages,
+                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
                     context=req.context,
                 ),
@@ -2423,9 +2489,7 @@ async def _create_media_buy_impl(
                     ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
                 return CreateMediaBuyResult(
                     response=CreateMediaBuyError(
-                        errors=[
-                            Error(code="invalid_configuration", message=err, details=None) for err in config_errors
-                        ],
+                        errors=[Error(code="VALIDATION_ERROR", message=err, details=None) for err in config_errors],
                         context=req.context,
                     ),
                     status=AdcpTaskStatus.failed.value,
@@ -2462,11 +2526,9 @@ async def _create_media_buy_impl(
                 package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
 
                 # Per AdCP spec, create-media-buy-response Package only includes:
-                # - buyer_ref (required): Buyer's reference identifier
                 # - package_id (required): Publisher's unique identifier
                 response_packages.append(
                     Package(
-                        buyer_ref=pkg.buyer_ref,
                         package_id=package_id,
                     )
                 )
@@ -2514,9 +2576,9 @@ async def _create_media_buy_impl(
 
             return CreateMediaBuyResult(
                 response=CreateMediaBuySuccess(
-                    buyer_ref=req.buyer_ref if req.buyer_ref else "unknown",
                     media_buy_id=media_buy_id,
                     packages=response_packages,
+                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),
@@ -2737,11 +2799,9 @@ async def _create_media_buy_impl(
 
             package_id = f"pkg_{pkg_product.product_id}_{secrets.token_hex(4)}_{idx}"
 
-            # Get buyer_ref and budget from matching request package if available
-            package_buyer_ref: str | None = None
+            # Get budget from matching request package if available
             package_budget_value: float | None = None
             if matching_package:
-                package_buyer_ref = matching_package.buyer_ref
                 if matching_package.budget is not None:
                     raw_budget = matching_package.budget
                     # Normalize budget: MediaPackage expects float | None (ADCP 2.5.0)
@@ -2776,7 +2836,6 @@ async def _create_media_buy_impl(
                         "Targeting | None",
                         matching_package.targeting_overlay if matching_package else None,
                     ),
-                    buyer_ref=package_buyer_ref,
                     product_id=pkg_product.product_id,  # Include product_id
                     budget=package_budget_value,  # Include budget from request (now normalized)
                     creative_ids=(
@@ -2808,7 +2867,7 @@ async def _create_media_buy_impl(
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
             return CreateMediaBuyResult(
                 response=CreateMediaBuyError(
-                    errors=[Error(code="invalid_datetime", message=error_msg, details=None)],
+                    errors=[Error(code="VALIDATION_ERROR", message=error_msg, details=None)],
                     context=req.context,
                 ),
                 status=AdcpTaskStatus.failed.value,
@@ -2854,15 +2913,14 @@ async def _create_media_buy_impl(
                 ResponsePackage(
                     package_id=pkg.package_id,
                     product_id=pkg.product_id,
-                    buyer_ref=pkg.buyer_ref,
                     budget=pkg.budget,
                 )
                 for pkg in packages
             ]
             simulated_response = CreateMediaBuySuccess(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
-                buyer_ref=req.buyer_ref or "",
                 packages=simulated_packages,
+                valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
@@ -2932,23 +2990,39 @@ async def _create_media_buy_impl(
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
         # Repository handles raw_request serialization at the DB boundary
-        with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
-            assert create_uow.media_buys is not None
-            create_uow.media_buys.create_from_request(
-                media_buy_id=response.media_buy_id,
-                req=req,
-                principal_id=principal_id,
-                advertiser_name=principal.name,
-                budget=total_budget,
-                currency=request_currency,
-                start_time=start_time,
-                end_time=end_time,
-                status=media_buy_status,
-                campaign_objective=getattr(req, "campaign_objective", "") or "",
-                kpi_goal=getattr(req, "kpi_goal", "") or "",
-                account_id=identity.account_id if identity else None,
+        try:
+            with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
+                assert create_uow.media_buys is not None
+                create_uow.media_buys.create_from_request(
+                    media_buy_id=response.media_buy_id,
+                    req=req,
+                    principal_id=principal_id,
+                    advertiser_name=principal.name,
+                    budget=total_budget,
+                    currency=request_currency,
+                    start_time=start_time,
+                    end_time=end_time,
+                    status=media_buy_status,
+                    campaign_objective=getattr(req, "campaign_objective", "") or "",
+                    kpi_goal=getattr(req, "kpi_goal", "") or "",
+                    account_id=identity.account_id if identity else None,
+                )
+                # UoW auto-commits on clean exit
+        except IntegrityError as exc:
+            if "idempotency_key" not in str(exc.orig):
+                raise
+            logger.warning(
+                "Idempotency race (auto-approved): another request won the commit for key %s. "
+                "Returning the winner. An orphan adapter-side order may exist for %s.",
+                req.idempotency_key,
+                response.media_buy_id,
             )
-            # UoW auto-commits on clean exit
+            return _build_idempotency_hit_result(
+                tenant_id=tenant["tenant_id"],
+                idempotency_key=req.idempotency_key,
+                principal_id=principal_id,
+                context=req.context,
+            )
 
         # Populate media_packages table for structured querying
         # This enables creative_assignments to work properly
@@ -3104,7 +3178,7 @@ async def _create_media_buy_impl(
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
                         raise AdCPNotFoundError(
                             error_msg,
-                            details={"error_code": "CREATIVES_NOT_FOUND"},
+                            details={"error_code": "CREATIVE_REJECTED"},
                             recovery="correctable",
                         )
 
@@ -3361,53 +3435,14 @@ async def _create_media_buy_impl(
                                 f"Creatives will need to be associated via sync_creatives."
                             )
 
-        # Handle creatives if provided
-        # Note: creatives field no longer exists on CreateMediaBuyRequest per AdCP spec
-        # Creative IDs are now at package level (package.creative_ids). Check with getattr for backward compat.
+        # Per AdCP 4.3 (commit 3c604130) creatives live on each PackageRequest, not at
+        # request level. Inline creative submission to the adapter happens via the
+        # package-level inline creative flow (process_and_upload_package_creatives
+        # earlier in this function and req.packages[].creatives).
         creative_statuses: dict[str, CreativeApprovalStatus] = {}
-        legacy_creatives = getattr(req, "creatives", None)
-        if legacy_creatives:
-            # Convert Creative objects to format expected by adapter
-            assets = []
-            for creative in legacy_creatives:
-                try:
-                    # Ensure product_ids is a list, not None
-                    # Note: product_ids no longer exists on CreateMediaBuyRequest - use get_product_ids() method
-                    product_ids_list = req.get_product_ids()
-                    asset = _convert_creative_to_adapter_asset(creative, product_ids_list)
-                    assets.append(asset)
-                except Exception as e:
-                    logger.error(f"Error converting creative {creative.creative_id}: {e}")
-                    # Add a failed status for this creative
-                    creative_statuses[creative.creative_id] = CreativeApprovalStatus(
-                        creative_id=creative.creative_id, status="rejected", detail=f"Conversion error: {str(e)}"
-                    )
-                    continue
-            statuses = adapter.add_creative_assets(response.media_buy_id, assets, datetime.now(UTC))
-
-            # Check if manual approval is required for creatives
-            require_creative_approval = manual_approval_required and "add_creative_assets" in manual_approval_operations
-
-            for status in statuses:
-                # Skip statuses without creative_id (shouldn't happen but defensive)
-                if status.creative_id:
-                    # Override status to pending_review if manual approval is required for creatives
-                    if require_creative_approval:
-                        final_status: str = "pending_review"
-                        detail = "Creative requires manual approval"
-                    else:
-                        final_status = "approved" if status.status == "approved" else "pending_review"
-                        detail = "Creative submitted to ad server"
-
-                    creative_statuses[status.creative_id] = CreativeApprovalStatus(
-                        creative_id=status.creative_id,
-                        status=cast(Any, final_status),
-                        detail=detail,
-                    )
 
         # Build packages list for response (AdCP v2.4 format)
         # Per AdCP spec, create-media-buy-response Package only includes:
-        # - buyer_ref (required): Buyer's reference identifier
         # - package_id (required): Publisher's unique identifier
         response_packages = []
 
@@ -3453,7 +3488,6 @@ async def _create_media_buy_impl(
                 Package(
                     package_id=adapter_package_id,
                     paused=adapter_paused,
-                    buyer_ref=package.buyer_ref,
                     product_id=package.product_id,
                     budget=package.budget,
                     bid_price=package.bid_price,
@@ -3466,17 +3500,11 @@ async def _create_media_buy_impl(
                 )
             )
 
-        # Ensure buyer_ref is set (defensive check — buyer_ref is required in CreateMediaBuyRequest)
-        buyer_ref_value = req.buyer_ref
-        if not buyer_ref_value:
-            logger.error(f"🚨 buyer_ref is missing! req.buyer_ref={req.buyer_ref}")
-            buyer_ref_value = f"missing-{response.media_buy_id}"
-
         # Create AdCP response with typed Package objects
         adcp_response = CreateMediaBuySuccess(
-            buyer_ref=buyer_ref_value,
             media_buy_id=response.media_buy_id,
             packages=response_packages,
+            valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
         )
@@ -3556,9 +3584,9 @@ async def _create_media_buy_impl(
             }
             slack_notifier = get_slack_notifier(notifier_config)
 
-            # Create success notification details
-            # Note: creatives field no longer exists on CreateMediaBuyRequest per AdCP spec
-            notification_creatives = getattr(req, "creatives", None)
+            # Per AdCP 4.3, creatives live on each PackageRequest. Count creatives across
+            # all request packages for the notification.
+            notification_creatives_count = sum(len(pkg.creatives) for pkg in (req.packages or []) if pkg.creatives)
             success_details = {
                 "total_budget": total_budget,
                 "po_number": req.po_number,
@@ -3567,7 +3595,7 @@ async def _create_media_buy_impl(
                 "product_ids": req.get_product_ids(),
                 "duration_days": (end_time_val - start_time_val).days + 1,
                 "packages_count": len(response_packages) if response_packages else 0,
-                "creatives_count": len(notification_creatives) if notification_creatives else 0,
+                "creatives_count": notification_creatives_count,
                 "workflow_step_id": step.step_id,
             }
 
@@ -3687,30 +3715,20 @@ async def _create_media_buy_impl(
 
 
 async def create_media_buy(
-    buyer_ref: str,
-    brand: Any | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
-    packages: list[PackageRequest] | None = None,  # REQUIRED per AdCP spec - Package objects with all fields
-    start_time: str | None = None,  # datetime ISO 8601 or 'asap' - REQUIRED per AdCP spec
-    end_time: str | None = None,  # datetime ISO 8601 - REQUIRED per AdCP spec
-    budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
-    po_number: str | None = None,
-    product_ids: list[str] | None = None,  # Legacy format conversion
-    start_date: Any | None = None,  # Legacy format conversion
-    end_date: Any | None = None,  # Legacy format conversion
-    total_budget: float | None = None,  # Legacy format conversion
-    targeting_overlay: TargetingOverlay | None = None,
-    pacing: str = "even",
-    daily_budget: float | None = None,
-    creatives: list[CreativeAsset] | None = None,
+    brand: Annotated[
+        BrandReference | str | None,
+        Field(description="Brand reference with domain field, or domain string shorthand (e.g. 'acme.com')"),
+    ] = None,
+    packages: list[PackageRequest] | None = None,
+    start_time: Annotated[
+        str | None, Field(description="Campaign start time in ISO 8601 format, or 'asap' for immediate start")
+    ] = None,
+    end_time: Annotated[str | None, Field(description="Campaign end time in ISO 8601 format")] = None,
+    po_number: Annotated[str | None, Field(description="Purchase order number for billing reference")] = None,
     reporting_webhook: ReportingWebhook | None = None,
-    required_axe_signals: list[str] | None = None,
-    enable_creative_macro: bool = False,
-    strategy_id: str | None = None,
     push_notification_config: PushNotificationConfig | None = None,
-    context: ContextObject | None = None,  # payload-level context
-    buyer_campaign_ref: str | None = None,
-    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
-    webhook_url: str | None = None,
+    context: ContextObject | None = None,
+    ext: dict[str, Any] | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Create a media buy with the specified parameters.
@@ -3718,40 +3736,35 @@ async def create_media_buy(
     MCP tool wrapper that delegates to the shared implementation.
     FastMCP automatically validates and coerces JSON inputs to Pydantic models.
 
+    Per AdCP 4.3 (commit 3c604130) targeting_overlay and creatives live on each
+    PackageRequest (packages[].targeting_overlay, packages[].creatives), not at
+    request level.
+
     Args:
-        buyer_ref: Buyer reference for tracking (REQUIRED per AdCP spec)
-        brand: Brand reference with domain field - per AdCP v3.6.0 spec
-        packages: Array of packages with products and budgets (REQUIRED - budgets are at package level per AdCP v2.2.0)
+        brand: Brand reference with domain field per AdCP v3 spec.
+            String shorthand accepted: "acme.com" is coerced to BrandReference(domain="acme.com").
+        packages: Array of packages with products, budgets, targeting_overlay, and
+            creatives (REQUIRED per AdCP spec)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)
         end_time: Campaign end time ISO 8601 (REQUIRED)
-        budget: DEPRECATED - Budget is package-level only per AdCP v2.2.0 (ignored if provided)
         po_number: Purchase order number (optional)
-        product_ids: Legacy: Product IDs (converted to packages)
-        start_date: Legacy: Start date (converted to start_time)
-        end_date: Legacy: End date (converted to end_time)
-        total_budget: Legacy: Total budget (converted to package budgets)
-        targeting_overlay: Targeting overlay configuration
-        pacing: Pacing strategy (even, asap, daily_budget)
-        daily_budget: Daily_budget limit
-        creatives: Creative assets for the campaign
         reporting_webhook: Webhook configuration for automated reporting delivery
-        required_axe_signals: Required targeting signals
-        enable_creative_macro: Enable AXE to provide creative_macro signal
-        strategy_id: Optional strategy ID for linking operations
-        push_notification_config: Push notification config dict with url, authentication (AdCP spec)
-        context: Application level context per adcp spec
-        buyer_campaign_ref: Buyer's campaign reference identifier (optional, per AdCP spec)
+        push_notification_config: Push notification config for async notifications (AdCP spec)
+        context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
-        ctx:  FastMCP context (automatically provided) (automatically provided)
+        ctx: FastMCP context (automatically provided)
 
     Returns:
         ToolResult with CreateMediaBuyResponse data
     """
+    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
+    if isinstance(brand, str):
+        brand = BrandReference(domain=brand)
+
     # Construct spec-compliant request object at the boundary — validation happens here
     # FastMCP already coerced JSON inputs to typed Pydantic models
     try:
         req = CreateMediaBuyRequest(
-            buyer_ref=buyer_ref,
             brand=brand,
             packages=packages,
             start_time=start_time,
@@ -3759,7 +3772,6 @@ async def create_media_buy(
             po_number=po_number,
             reporting_webhook=reporting_webhook,
             context=context,
-            buyer_campaign_ref=buyer_campaign_ref,
             ext=ext,
         )
     except ValidationError as e:
@@ -3777,64 +3789,43 @@ async def create_media_buy(
     # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None)
     pnc_dict = push_notification_config.model_dump() if push_notification_config else None
     result = await _create_media_buy_impl(
-        req=req, push_notification_config=pnc_dict, identity=identity, context_id=_ctx_id
+        req=req,
+        push_notification_config=pnc_dict,
+        identity=identity,
+        context_id=_ctx_id,
     )
     return ToolResult(content=str(result), structured_content=result)
 
 
 async def create_media_buy_raw(
-    buyer_ref: str,
-    brand: Any | None = None,  # BrandReference with domain field - per AdCP v3.6.0 spec
-    packages: list[Any] | None = None,  # REQUIRED per AdCP spec
-    start_time: Any | None = None,  # datetime | Literal["asap"] | str - REQUIRED per AdCP spec
-    end_time: Any | None = None,  # datetime | str - REQUIRED per AdCP spec
-    budget: Any | None = None,  # DEPRECATED: Budget is package-level only per AdCP v2.2.0
+    brand: BrandReference | str | None = None,
+    packages: list[AdcpPackageRequest] | None = None,  # REQUIRED per AdCP spec
+    start_time: str | None = None,  # ISO 8601 or 'asap' - REQUIRED per AdCP spec
+    end_time: str | None = None,  # ISO 8601 - REQUIRED per AdCP spec
     po_number: str | None = None,
-    product_ids: list[str] | None = None,  # Legacy format conversion
-    total_budget: float | None = None,  # Legacy format conversion
-    start_date: Any | None = None,  # Legacy format conversion
-    end_date: Any | None = None,  # Legacy format conversion
-    targeting_overlay: dict[str, Any] | None = None,
-    pacing: str = "even",
-    daily_budget: float | None = None,
-    creatives: list[Any] | None = None,
-    reporting_webhook: dict[str, Any] | None = None,
-    required_axe_signals: list[str] | None = None,
-    enable_creative_macro: bool = False,
-    strategy_id: str | None = None,
-    push_notification_config: dict[str, Any] | None = None,
-    context: dict[str, Any] | None = None,  # Application level context per adcp spec
-    buyer_campaign_ref: str | None = None,
+    reporting_webhook: ReportingWebhook | None = None,
+    push_notification_config: PushNotificationConfig | None = None,
+    context: ContextObject | None = None,  # Application level context per adcp spec
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
-    Delegates to the shared implementation.
+    Param set mirrors CreateMediaBuyRequest per AdCP 4.3 spec. Per-package fields
+    (budget, pacing, daily_budget, targeting_overlay, creatives, product_id, etc.)
+    live inside packages[].
 
     Args:
-        buyer_ref: Buyer reference identifier (REQUIRED per AdCP spec)
         brand: Brand reference with domain field - per AdCP v3.6.0 spec
-        packages: List of media packages (REQUIRED)
+        packages: List of media packages with products, budgets, targeting, and
+            creatives (REQUIRED per AdCP spec)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)
         end_time: Campaign end time ISO 8601 (REQUIRED)
-        budget: DEPRECATED - Budget is at package level only per AdCP v2.2.0 (ignored if provided)
         po_number: Purchase order number (optional)
-        product_ids: Legacy: Product IDs (converted to packages)
-        total_budget: Legacy: Total budget (converted to Budget object)
-        start_date: Legacy: Start date (converted to start_time)
-        end_date: Legacy: End date (converted to end_time)
-        targeting_overlay: Additional targeting parameters
-        pacing: Pacing strategy
-        daily_budget: Daily budget limit
-        creatives: Creative assets
         reporting_webhook: Webhook configuration for automated reporting delivery
-        required_axe_signals: Required signals
-        enable_creative_macro: Enable creative macro
-        strategy_id: Strategy ID
         push_notification_config: Push notification config for status updates
-        buyer_campaign_ref: Buyer's campaign reference identifier (optional, per AdCP spec)
+        context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
@@ -3842,11 +3833,14 @@ async def create_media_buy_raw(
     Returns:
         Dict with status and CreateMediaBuyResponse data
     """
+    # Coerce string brand shorthand to BrandReference (A2A may send raw "acme.com")
+    if isinstance(brand, str):
+        brand = BrandReference(domain=brand)
+
     # Construct spec-compliant request object at the boundary — validation happens here
     # A2A server sends dict inputs which Pydantic coerces to typed models
     try:
         req = CreateMediaBuyRequest(
-            buyer_ref=buyer_ref,
             brand=brand,
             packages=packages,
             start_time=start_time,
@@ -3854,7 +3848,6 @@ async def create_media_buy_raw(
             po_number=po_number,
             reporting_webhook=to_reporting_webhook(reporting_webhook),
             context=to_context_object(context),
-            buyer_campaign_ref=buyer_campaign_ref,
             ext=ext,
         )
     except ValidationError as e:
@@ -3870,10 +3863,17 @@ async def create_media_buy_raw(
 
     identity = enrich_identity_with_account(identity, req.account)
 
+    # Serialize SDK model to dict for _impl (which uses dict-based config access)
+    pnc_dict = (
+        push_notification_config.model_dump()
+        if isinstance(push_notification_config, PushNotificationConfig)
+        else push_notification_config
+    )
+
     # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(
         req=req,
-        push_notification_config=push_notification_config,
+        push_notification_config=pnc_dict,
         identity=identity,
     )
 

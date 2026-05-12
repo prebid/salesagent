@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
+from dateutil import parser as dateutil_parser
 
 from src.adapters.base import AdServerAdapter
 from src.core.retry_utils import api_retry
@@ -511,7 +512,7 @@ class XandrAdapter(AdServerAdapter):
                     campaign_name = brand.domain
                 elif isinstance(brand, dict):
                     campaign_name = brand.get("domain")
-            campaign_name = campaign_name or f"AdCP Campaign {request.buyer_ref}"
+            campaign_name = campaign_name or "AdCP Campaign"
 
             io_data = {
                 "insertion-order": {
@@ -617,7 +618,6 @@ class XandrAdapter(AdServerAdapter):
     def update_media_buy(
         self,
         media_buy_id: str,
-        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,
@@ -664,8 +664,8 @@ class XandrAdapter(AdServerAdapter):
                 package_statuses=package_statuses,
                 total_budget=total_budget,
                 total_spent=spent,
-                start_date=datetime.fromisoformat(io["start_date"]),
-                end_date=datetime.fromisoformat(io["end_date"]),
+                start_date=dateutil_parser.parse(io["start_date"]),
+                end_date=dateutil_parser.parse(io["end_date"]),
                 approval_status="approved" if io["state"] == "active" else "pending",
             )
 
@@ -808,7 +808,7 @@ class XandrAdapter(AdServerAdapter):
                 if "budget" in package_update:
                     li["lifetime_budget"] = float(package_update["budget"])
                     # Recalculate daily budget
-                    days = (datetime.fromisoformat(li["end_date"]) - datetime.fromisoformat(li["start_date"])).days
+                    days = (dateutil_parser.parse(li["end_date"]) - dateutil_parser.parse(li["start_date"])).days
                     li["daily_budget"] = float(package_update["budget"]) / days if days > 0 else 0
 
                 if "impressions" in package_update:

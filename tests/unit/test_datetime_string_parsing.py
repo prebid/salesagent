@@ -17,17 +17,10 @@ class TestDateTimeStringParsing:
     def test_create_media_buy_with_utc_z_format(self):
         """Test parsing ISO 8601 with Z timezone (most common format)."""
         req = CreateMediaBuyRequest(
-            buyer_ref="test_ref",  # Required per AdCP spec
+            # Required per AdCP spec
             brand={"domain": "nike.com"},
             po_number="TEST-001",
-            packages=[
-                {
-                    "buyer_ref": "pkg_1",
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "test_pricing",
-                }
-            ],
+            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],
             start_time="2025-02-15T00:00:00Z",  # String, not datetime object!
             end_time="2025-02-28T23:59:59Z",
             # budget moved to package level per AdCP v2.2.0
@@ -46,17 +39,10 @@ class TestDateTimeStringParsing:
     def test_create_media_buy_with_offset_format(self):
         """Test parsing ISO 8601 with +00:00 offset."""
         req = CreateMediaBuyRequest(
-            buyer_ref="test_ref",  # Required per AdCP spec
+            # Required per AdCP spec
             brand={"domain": "adidas.com"},
             po_number="TEST-002",
-            packages=[
-                {
-                    "buyer_ref": "pkg_1",
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "test_pricing",
-                }
-            ],
+            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],
             start_time="2025-02-15T00:00:00+00:00",
             end_time="2025-02-28T23:59:59+00:00",
             # budget moved to package level per AdCP v2.2.0
@@ -71,17 +57,10 @@ class TestDateTimeStringParsing:
     def test_create_media_buy_with_pst_timezone(self):
         """Test parsing ISO 8601 with PST offset."""
         req = CreateMediaBuyRequest(
-            buyer_ref="test_ref",  # Required per AdCP spec
+            # Required per AdCP spec
             brand={"domain": "puma.com"},
             po_number="TEST-003",
-            packages=[
-                {
-                    "buyer_ref": "pkg_1",
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "test_pricing",
-                }
-            ],
+            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],
             start_time="2025-02-15T00:00:00-08:00",
             end_time="2025-02-28T23:59:59-08:00",
             # budget moved to package level per AdCP v2.2.0
@@ -115,17 +94,10 @@ class TestDateTimeStringParsing:
         # Library enforces timezone on end_time (datetime type)
         with pytest.raises(ValidationError, match="timezone"):
             CreateMediaBuyRequest(
-                buyer_ref="test_ref",  # Required per AdCP spec
+                # Required per AdCP spec
                 brand={"domain": "converse.com"},
                 po_number="TEST-006",
-                packages=[
-                    {
-                        "buyer_ref": "pkg_1",
-                        "product_id": "prod_1",
-                        "pricing_option_id": "test_pricing",
-                        "budget": 5000.0,
-                    }
-                ],
+                packages=[{"product_id": "prod_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
                 start_time="2025-02-15T00:00:00",  # No timezone!
                 end_time="2025-02-28T23:59:59",
                 # budget moved to package level per AdCP v2.2.0
@@ -137,18 +109,10 @@ class TestDateTimeStringParsing:
 
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
-                buyer_ref="test_ref",  # Required per AdCP spec
+                # Required per AdCP spec
                 brand={"domain": "vans.com"},
                 po_number="TEST-007",
-                packages=[
-                    {
-                        "package_id": "pkg_1",
-                        "buyer_ref": "pkg_1",
-                        "products": ["prod_1"],
-                        "status": "draft",
-                        "budget": 5000.0,
-                    }
-                ],
+                packages=[{"package_id": "pkg_1", "products": ["prod_1"], "status": "draft", "budget": 5000.0}],
                 start_time="02/15/2025",  # Wrong format!
                 end_time="02/28/2025",
                 # budget moved to package level per AdCP v2.2.0
@@ -157,17 +121,10 @@ class TestDateTimeStringParsing:
     def test_create_media_buy_roundtrip_serialization(self):
         """Test that parsed datetimes can be serialized back to ISO 8601."""
         req = CreateMediaBuyRequest(
-            buyer_ref="test_ref",  # Required per AdCP spec
+            # Required per AdCP spec
             brand={"domain": "asics.com"},
             po_number="TEST-008",
-            packages=[
-                {
-                    "buyer_ref": "pkg_1",
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "test_pricing",
-                }
-            ],
+            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             # budget moved to package level per AdCP v2.2.0
@@ -189,17 +146,10 @@ class TestDateTimeParsingEdgeCases:
     def test_datetime_with_tzinfo_access(self):
         """Test that accessing .tzinfo on datetime works correctly."""
         req = CreateMediaBuyRequest(
-            buyer_ref="test_ref",  # Required per AdCP spec
+            # Required per AdCP spec
             brand={"domain": "brooks.com"},
             po_number="TEST-009",
-            packages=[
-                {
-                    "buyer_ref": "pkg_1",
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "test_pricing",
-                }
-            ],
+            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             # budget moved to package level per AdCP v2.2.0
@@ -217,16 +167,9 @@ class TestDateTimeParsingEdgeCases:
         """Test that CreateMediaBuyRequest works with datetime objects."""
 
         req = CreateMediaBuyRequest(
-            buyer_ref="test_ref",  # Required per AdCP spec
+            # Required per AdCP spec
             brand={"domain": "saucony.com"},
-            packages=[
-                {
-                    "buyer_ref": "pkg_1",
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "test_pricing",
-                }
-            ],
+            packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],
             start_time=datetime(2025, 2, 15, 0, 0, 0, tzinfo=UTC),
             end_time=datetime(2025, 2, 28, 23, 59, 59, tzinfo=UTC),
         )

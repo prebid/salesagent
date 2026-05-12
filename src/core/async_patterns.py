@@ -161,7 +161,6 @@ class CreateMediaBuyResult(BaseModel):
     """Result of a completed media buy creation."""
 
     media_buy_id: str
-    buyer_ref: str
     packages: list[dict[str, Any]]
     creative_deadline: datetime | None = None
     total_budget: float

@@ -26,9 +26,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent sends a list_creative_formats task via A2A with no filters
     Then the response should include all registered formats
     And each format should include a format_id with agent_url and id
-    And each format should include a name and type category
     And each format should include asset requirements with type and dimensions
-    And the results should be sorted by format type then name
+    And the results should be sorted by name
     # POST-S1: Complete catalog returned
     # POST-S2: Asset requirements included per format
 
@@ -38,18 +37,18 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent calls list_creative_formats MCP tool with no filters
     Then the response should include all registered formats
     And each format should include a format_id with agent_url and id
-    And each format should include a name and type category
     And each format should include asset requirements with type and dimensions
-    And the results should be sorted by format type then name
+    And the results should be sorted by name
     # POST-S1: Complete catalog returned
     # POST-S2: Asset requirements included per format
 
   @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @rest @post-s3
   Scenario: Discover filtered format catalog via REST
-    Given the creative agent registry has formats of types "display" and "video"
-    When the Buyer Agent sends a list_creative_formats task via A2A with type filter "display"
-    Then the response should include only display formats
-    And no video formats should be present in the results
+    Given the registry has format "image-banner" with assets of type "image"
+    And the registry has format "video-ad" with assets of type "video"
+    When the Buyer Agent requests formats with asset_types filter ["image"]
+    Then the response should include only formats with image assets
+    And no video-only formats should be present in the results
     # POST-S3: Only matching formats returned when filters applied
 
   @T-UC-005-main-referrals @UC-005-MAIN-MCP-13 @main-flow @post-s4
@@ -62,52 +61,34 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-inv-031-1-holds @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-1 holds - Multiple filters combine as AND
-    Given the registry has format "display-banner" of type "display" with asset type "image"
-    And the registry has format "video-banner" of type "display" with asset type "video"
-    And the registry has format "pre-roll" of type "video" with asset type "video"
-    When the Buyer Agent requests formats with type "display" and asset_types ["video"]
-    Then only "video-banner" should be returned
-    # BR-RULE-031 INV-1: both filters must match (type=display AND asset=video)
+    Given the registry has format "image-banner" with assets of type "image"
+    And the registry has format "video-banner" with assets of type "video"
+    And the registry has format "image-card" with assets of type "image"
+    When the Buyer Agent requests formats with asset_types ["image"] and name_search "banner"
+    Then only "image-banner" should be returned
+    # BR-RULE-031 INV-1: both filters must match (asset_types=image AND name_search=banner)
 
   @T-UC-005-inv-031-1-violated @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-1 violated - AND combination excludes partial matches
-    Given the registry has format "pre-roll" of type "video" with asset type "video"
-    When the Buyer Agent requests formats with type "display" and asset_types ["video"]
+    Given the registry has format "video-banner" with assets of type "video"
+    When the Buyer Agent requests formats with asset_types ["image"] and name_search "banner"
     Then no formats should be returned
-    # BR-RULE-031 INV-1: type=display excludes video-type format despite matching asset_types
+    # BR-RULE-031 INV-1: asset_types=image excludes video format despite matching name_search
 
   @T-UC-005-inv-031-2-holds @UC-005-MAIN-MCP-04 @invariant @BR-RULE-031
-  Scenario: BR-RULE-031 INV-2 holds - Results sorted by type then name
-    Given the registry has formats:
-    | name            | type    |
-    | Zebra Banner    | display |
-    | Alpha Banner    | display |
-    | Pre-Roll        | video   |
-    | Audio Spot      | audio   |
+  Scenario: BR-RULE-031 INV-2 holds - Results sorted by name
+    Given the registry has format named "Zebra Banner"
+    And the registry has format named "Alpha Banner"
+    And the registry has format named "Pre-Roll"
+    And the registry has format named "Audio Spot"
     When the Buyer Agent requests all formats with no filters
-    Then the results should be ordered:
-    | name            | type    |
-    | Audio Spot      | audio   |
-    | Alpha Banner    | display |
-    | Zebra Banner    | display |
-    | Pre-Roll        | video   |
-    # BR-RULE-031 INV-2: sorted by type value then name
-
-  @T-UC-005-inv-049-1-holds @UC-005-MAIN-MCP-05 @invariant @BR-RULE-049
-  Scenario: BR-RULE-049 INV-1 holds - Type filter matches exact category
-    Given the registry has formats: "leaderboard" (display), "pre-roll" (video), "podcast-ad" (audio)
-    When the Buyer Agent requests formats with type filter "display"
-    Then only "leaderboard" should be returned
-    And the returned format type should be "display"
-    # BR-RULE-049 INV-1: type filter -> only formats with exactly matching FormatCategory
-
-  @T-UC-005-inv-049-1-violated @UC-005-MAIN-MCP-05 @invariant @BR-RULE-049
-  Scenario: BR-RULE-049 INV-1 violated - Type filter excludes non-matching formats
-    Given the registry has formats: "leaderboard" (display), "pre-roll" (video)
-    When the Buyer Agent requests formats with type filter "audio"
-    Then no formats should be returned
-    # BR-RULE-049 INV-1: non-matching FormatCategory excluded
-    # --- INV-2: format_ids id match with silent exclusion ---
+    Then the results should be ordered by name:
+    | name            |
+    | Alpha Banner    |
+    | Audio Spot      |
+    | Pre-Roll        |
+    | Zebra Banner    |
+    # BR-RULE-031 INV-2: sorted by name
 
   @T-UC-005-inv-049-2-holds @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 holds - Format IDs filter matches on id field
@@ -483,23 +464,6 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
 
-  @T-UC-005-partition-type-filter @UC-005-MAIN-MCP-05 @partition @format_type_filter
-  Scenario Outline: Format type filter partition - <partition>
-    Given a seller with formats of various types
-    When the Buyer Agent requests creative formats with type filter "<partition>"
-    Then the type filtering should result in <expected>
-
-    Examples: Valid partitions
-      | partition     | expected |
-      | display       | valid    |
-      | video         | valid    |
-      | native        | valid    |
-      | omitted       | valid    |
-
-    Examples: Invalid partitions
-      | partition     | expected |
-      | invalid_type  | invalid  |
-
   @T-UC-005-partition-format-ids @UC-005-MAIN-MCP-06 @partition @format_ids_filter
   Scenario Outline: Format IDs filter partition - <partition>
     Given a seller with known format IDs in the catalog
@@ -654,19 +618,6 @@ Feature: BR-UC-005 Discover Creative Formats
       | empty_array                         | invalid  |
       | invalid_format_id_missing_agent_url | invalid  |
       | invalid_format_id_missing_id        | invalid  |
-
-  @T-UC-005-boundary-type-filter @UC-005-MAIN-MCP-05 @boundary @format_type_filter
-  Scenario Outline: Format type filter boundary - <boundary_point>
-    Given a seller with formats of various types
-    When the Buyer Agent requests creative formats at type boundary "<boundary_point>"
-    Then the type handling should be <expected>
-
-    Examples:
-      | boundary_point              | expected |
-      | display (valid enum)        | valid    |
-      | video (valid enum)          | valid    |
-      | omitted (no filter)         | valid    |
-      | invalid type (rejected)     | invalid  |
 
   @T-UC-005-boundary-format-ids @UC-005-MAIN-MCP-06 @boundary @format_ids_filter
   Scenario Outline: Format IDs filter boundary - <boundary_point>

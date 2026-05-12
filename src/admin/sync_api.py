@@ -184,7 +184,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                 sync_job.error_message = str(e)
                 db_session.commit()
             except Exception:
-                pass  # Ignore secondary errors in error handling
+                logger.warning("Failed to update sync_job error record", exc_info=True)
 
             return jsonify({"sync_id": sync_id, "status": "failed", "error": str(e)}), 500
 

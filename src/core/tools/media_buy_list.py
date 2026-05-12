@@ -11,12 +11,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import RootModel, ValidationError
+from pydantic import Field, RootModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,7 +31,6 @@ class _MediaBuyData:
     """Plain data extracted from a MediaBuy ORM row."""
 
     media_buy_id: str
-    buyer_ref: str | None
     currency: str | None
     budget: Decimal | None
     start_date: date | None
@@ -54,6 +53,8 @@ class _PackageData:
     bid_price: Decimal | None
 
 
+from adcp.server.helpers import valid_actions_for_status
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
@@ -102,14 +103,14 @@ def _get_media_buys_impl(
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "principal_id_missing", "message": "Principal ID not found in context"}],
+            errors=[{"code": "PRINCIPAL_ID_MISSING", "message": "Principal ID not found in context"}],
         )
 
     principal = get_principal_object(principal_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "principal_not_found", "message": f"Principal {principal_id} not found"}],
+            errors=[{"code": "PRINCIPAL_NOT_FOUND", "message": f"Principal {principal_id} not found"}],
         )
 
     tenant = identity.tenant
@@ -180,7 +181,6 @@ def _get_media_buys_impl(
             response_packages.append(
                 GetMediaBuysPackage(
                     package_id=pkg_id,
-                    buyer_ref=pkg_config.get("buyer_ref"),
                     budget=float(pkg.budget) if pkg.budget is not None else None,
                     bid_price=float(pkg.bid_price) if pkg.bid_price is not None else None,
                     product_id=pkg_config.get("product_id"),
@@ -199,9 +199,9 @@ def _get_media_buys_impl(
         response_media_buys.append(
             GetMediaBuysMediaBuy(
                 media_buy_id=buy.media_buy_id,
-                buyer_ref=buy.buyer_ref,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
+                valid_actions=valid_actions_for_status(status.value),
                 currency=buy.currency or "USD",
                 total_budget=total_budget,
                 packages=response_packages,
@@ -218,10 +218,11 @@ def _get_media_buys_impl(
 
 async def get_media_buys(
     media_buy_ids: list[str] | None = None,
-    buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    include_snapshot: bool = False,
-    account: dict | None = None,
+    include_snapshot: Annotated[
+        bool, Field(description="When true, include near-real-time delivery stats per package")
+    ] = False,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -231,7 +232,6 @@ async def get_media_buys(
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
-        buyer_refs: Array of buyer reference IDs to retrieve (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
         account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
@@ -244,7 +244,6 @@ async def get_media_buys(
     try:
         req = GetMediaBuysRequest(
             media_buy_ids=media_buy_ids,
-            buyer_refs=buyer_refs,
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             account=account,
             context=cast(ContextObject | None, context),
@@ -259,10 +258,9 @@ async def get_media_buys(
 
 def get_media_buys_raw(
     media_buy_ids: list[str] | None = None,
-    buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
-    account: dict | None = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -271,7 +269,6 @@ def get_media_buys_raw(
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
-        buyer_refs: Array of buyer reference IDs to retrieve (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
         account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
@@ -289,7 +286,6 @@ def get_media_buys_raw(
 
     req = GetMediaBuysRequest(
         media_buy_ids=media_buy_ids,
-        buyer_refs=buyer_refs,
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
         account=account,
         context=cast(ContextObject | None, context),
@@ -313,13 +309,11 @@ def _fetch_target_media_buys(
     buys = uow.media_buys.get_by_principal(
         principal_id,
         media_buy_ids=req.media_buy_ids,
-        buyer_refs=req.buyer_refs,
     )
 
     return [
         _MediaBuyData(
             media_buy_id=buy.media_buy_id,
-            buyer_ref=buy.buyer_ref,
             currency=buy.currency,
             budget=buy.budget,
             start_date=cast(date, buy.start_date),
@@ -358,7 +352,7 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
 
     if today < start:
-        return MediaBuyStatus.pending_activation
+        return MediaBuyStatus.pending_start
     if today > end:
         return MediaBuyStatus.completed
     return MediaBuyStatus.active

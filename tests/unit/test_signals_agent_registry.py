@@ -69,6 +69,11 @@ class TestSignalsAgentRegistry:
         mock_signals = [
             {
                 "signal_agent_segment_id": "seg1",
+                "signal_id": {
+                    "source": "catalog",
+                    "data_provider_domain": "testprovider.com",
+                    "id": "seg1",
+                },
                 "name": "Test Signal",
                 "description": "Test description",
                 "signal_type": "marketplace",

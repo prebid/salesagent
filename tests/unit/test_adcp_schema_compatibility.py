@@ -17,10 +17,7 @@ class TestADCPSchemaCompatibility:
         """Test Format model can be created from adcp library response format."""
         # Simulate format data as returned by adcp library (minimal required fields)
         adcp_format_data = {
-            "format_id": {
-                "agent_url": "https://creative.adcontextprotocol.org",
-                "id": "display_300x250",
-            },
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
             "name": "Display 300x250",
             "type": "display",
         }
@@ -33,14 +30,11 @@ class TestADCPSchemaCompatibility:
             str(format_obj.format_id.agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
         )  # AnyUrl adds trailing slash
         assert format_obj.name == "Display 300x250"
-        assert format_obj.type.value == "display"  # Type is an enum, compare with .value
+        # type removed from Format in adcp 3.12
 
     def test_format_id_from_adcp_response(self):
         """Test FormatId model can be created from adcp library format_id."""
-        adcp_format_id = {
-            "agent_url": "https://creative.adcontextprotocol.org",
-            "id": "video_1920x1080",
-        }
+        adcp_format_id = {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_1920x1080"}
 
         format_id = FormatId(**adcp_format_id)
 
@@ -64,19 +58,14 @@ class TestADCPSchemaCompatibility:
         # Simulate signal data as returned by adcp library (all required fields)
         # adcp 3.9: pricing_options replaces the old pricing field
         adcp_signal_data = {
+            "signal_id": {"source": "catalog", "data_provider_domain": "optable.co", "id": "segment_123"},
             "signal_agent_segment_id": "segment_123",
             "name": "Automotive Enthusiasts",
             "description": "Users interested in automotive content",
             "signal_type": "marketplace",
             "data_provider": "Optable",
             "coverage_percentage": 85.0,
-            "deployments": [
-                {
-                    "platform": "gam",
-                    "is_live": True,
-                    "type": "platform",
-                }
-            ],
+            "deployments": [{"platform": "gam", "is_live": True, "type": "platform"}],
             "pricing_options": [
                 {"pricing_option_id": "cpm_usd", "cpm": 5.0, "currency": "USD", "model": "cpm"},
             ],
@@ -96,10 +85,7 @@ class TestADCPSchemaCompatibility:
         """Test Format model does NOT allow agent_url at top level (only in format_id)."""
         # Per adcp library schema, agent_url only exists in format_id, not at Format level
         adcp_format_data = {
-            "format_id": {
-                "agent_url": "https://creative.adcontextprotocol.org",
-                "id": "display_728x90",
-            },
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
             "name": "Display 728x90",
             "type": "display",
         }
@@ -110,22 +96,19 @@ class TestADCPSchemaCompatibility:
         assert (
             str(format_obj.format_id.agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
         )  # AnyUrl adds trailing slash
-        assert format_obj.type.value == "display"  # Type is an enum
+        # type removed from Format in adcp 3.12
 
     def test_format_with_renders(self):
         """Test Format model handles renders correctly (AdCP v2.4 spec)."""
         format_data = {
-            "format_id": {
-                "agent_url": "https://test.com",
-                "id": "test_format",
-            },
+            "format_id": {"agent_url": "https://test.com", "id": "test_format"},
             "name": "Test Format",
             "type": "display",
             "renders": [{"role": "primary", "dimensions": {"width": 1920, "height": 1080}}],
         }
 
         format_obj = Format(**format_data)
-        assert format_obj.type.value == "display"  # Type is an enum
+        # type removed from Format in adcp 3.12
         # Renders is a list of Render objects (Pydantic models), compare dict representation
         assert len(format_obj.renders) == 1
         assert format_obj.renders[0].role == "primary"
@@ -136,57 +119,44 @@ class TestADCPSchemaCompatibility:
     def test_format_minimal_required_fields(self):
         """Test Format model works with only required fields."""
         format_data = {
-            "format_id": {
-                "agent_url": "https://test.com",
-                "id": "minimal_format",
-            },
+            "format_id": {"agent_url": "https://test.com", "id": "minimal_format"},
             "name": "Minimal Format",
             "type": "audio",
         }
 
         format_obj = Format(**format_data)
         assert format_obj.name == "Minimal Format"
-        assert format_obj.type.value == "audio"  # Type is an enum, compare with .value
+        # type removed from Format in adcp 3.12
         assert format_obj.renders is None
 
     def test_format_with_platform_config(self):
         """Test Format model handles platform_config correctly."""
         format_data = {
-            "format_id": {
-                "agent_url": "https://test.com",
-                "id": "test_format",
-            },
+            "format_id": {"agent_url": "https://test.com", "id": "test_format"},
             "name": "Test Format",
             "type": "display",
-            "platform_config": {
-                "gam": {"creative_template_id": "123"},
-                "kevel": {"template_id": "456"},
-            },
+            "platform_config": {"gam": {"creative_template_id": "123"}, "kevel": {"template_id": "456"}},
         }
 
         format_obj = Format(**format_data)
-        assert format_obj.platform_config == {
-            "gam": {"creative_template_id": "123"},
-            "kevel": {"template_id": "456"},
-        }
+        assert format_obj.platform_config == {"gam": {"creative_template_id": "123"}, "kevel": {"template_id": "456"}}
 
     def test_signal_roundtrip_with_model_dump(self):
         """Test Signal can roundtrip through model_dump and reconstruction."""
         # adcp 3.9: pricing_options replaces the old pricing field
         original_data = {
             "signal_agent_segment_id": "roundtrip_seg",
+            "signal_id": {
+                "id": "roundtrip_seg",
+                "source": "agent",
+                "agent_url": "https://salesagent.adcontextprotocol.org",
+            },
             "name": "Roundtrip Signal",
             "description": "Test signal for roundtrip",
             "signal_type": "marketplace",  # Must be one of: marketplace, custom, owned
             "data_provider": "TestProvider",
             "coverage_percentage": 90.5,
-            "deployments": [
-                {
-                    "platform": "gam",
-                    "is_live": True,
-                    "type": "platform",
-                }
-            ],
+            "deployments": [{"platform": "gam", "is_live": True, "type": "platform"}],
             "pricing_options": [
                 {"pricing_option_id": "cpm_usd", "cpm": 10.0, "currency": "USD", "model": "cpm"},
             ],
@@ -212,10 +182,7 @@ class TestADCPSchemaCompatibility:
     def test_format_roundtrip_with_model_dump(self):
         """Test Format can roundtrip through model_dump and reconstruction."""
         original_data = {
-            "format_id": {
-                "agent_url": "https://roundtrip.example.com",
-                "id": "roundtrip_format",
-            },
+            "format_id": {"agent_url": "https://roundtrip.example.com", "id": "roundtrip_format"},
             "name": "Roundtrip Format",
             "type": "video",
             "renders": [{"role": "primary", "dimensions": {"width": 1280, "height": 720}}],
@@ -236,7 +203,7 @@ class TestADCPSchemaCompatibility:
             str(reconstructed.format_id.agent_url).rstrip("/") == "https://roundtrip.example.com"
         )  # AnyUrl adds trailing slash
         assert reconstructed.name == "Roundtrip Format"
-        assert reconstructed.type.value == "video"  # Type is an enum, compare with .value
+        # type removed from Format in adcp 3.12
         # Renders is a list of Render Pydantic objects
         assert len(reconstructed.renders) == 1
         assert reconstructed.renders[0].role == "primary"

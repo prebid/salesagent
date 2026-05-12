@@ -24,7 +24,7 @@ from enum import Enum
 from typing import Any
 
 import httpx
-from adcp import get_adcp_version
+from adcp import get_adcp_spec_version
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +247,7 @@ class WebhookDeliveryService:
 
             # Build AdCP compliant payload with new fields
             delivery_payload = {
-                "adcp_version": get_adcp_version(),
+                "adcp_version": get_adcp_spec_version(),
                 "notification_type": notification_type,
                 "is_adjusted": is_adjusted,  # New field for late data
                 "sequence_number": sequence_number,

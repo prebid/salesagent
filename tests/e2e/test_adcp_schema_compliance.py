@@ -171,7 +171,7 @@ class TestAdCPSchemaCompliance:
                         "product_id": "test-1",
                         "name": "Test Product",
                         "description": "Test description",
-                        "formats": [{"format_id": "display_300x250", "name": "Rectangle", "type": "display"}],
+                        "formats": [{"format_id": "display_300x250", "name": "Rectangle"}],
                         "delivery_type": "guaranteed",
                     }
                 ],
@@ -251,10 +251,10 @@ class TestAdCPSchemaCompliance:
 
         # Test format examples from different media types
         format_examples = [
-            {"format_id": "display_300x250", "name": "Medium Rectangle", "type": "display"},
-            {"format_id": "video_30s", "name": "30 Second Video", "type": "video", "requirements": {"duration": 30}},
-            {"format_id": "native_sponsored", "name": "Sponsored Content", "type": "native"},
-            {"format_id": "audio_15s", "name": "15 Second Audio", "type": "audio", "requirements": {"duration": 15}},
+            {"format_id": "display_300x250", "name": "Medium Rectangle"},
+            {"format_id": "video_30s", "name": "30 Second Video", "requirements": {"duration": 30}},
+            {"format_id": "native_sponsored", "name": "Sponsored Content"},
+            {"format_id": "audio_15s", "name": "15 Second Audio", "requirements": {"duration": 15}},
         ]
 
         for _i, format_example in enumerate(format_examples):
@@ -272,13 +272,13 @@ class TestAdCPSchemaCompliance:
             try:
                 # Skip validation due to reference resolution issues for now
                 compliance_report.add_result(
-                    "formats", f"type-{format_example['type']}", "warning", "Skipped due to reference resolution"
+                    "formats", f"format-{format_example['format_id']}", "warning", "Skipped due to reference resolution"
                 )
             except SchemaValidationError as e:
-                compliance_report.add_result("formats", f"type-{format_example['type']}", "fail", str(e))
+                compliance_report.add_result("formats", f"format-{format_example['format_id']}", "fail", str(e))
             except Exception as e:
                 compliance_report.add_result(
-                    "formats", f"type-{format_example['type']}", "warning", f"Validation error: {e}"
+                    "formats", f"format-{format_example['format_id']}", "warning", f"Validation error: {e}"
                 )
 
     @pytest.mark.asyncio
