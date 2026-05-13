@@ -141,28 +141,39 @@ def given_no_principal(ctx: dict, principal_id: str) -> None:
     ctx["nonexistent_principal"] = principal_id
 
 
+def _create_unique_media_buy(
+    ctx: dict,
+    label: str,
+    owner: str,
+    status: str = "active",
+) -> str:
+    """Create a media buy with a UUID-based ID, register its Gherkin label.
+
+    Generates a unique ``media_buy_id`` so parallel pytest-xdist workers
+    never collide on ``media_buys_pkey``.
+    """
+    real_id = _generate_unique_id(label)
+    _register_media_buy_label(ctx, label, real_id)
+    entry: dict[str, str] = {"media_buy_id": real_id, "owner": owner}
+    if status != "active":
+        entry["status"] = status
+    ctx.setdefault("media_buys", {})[real_id] = entry
+    _ensure_media_buy_in_db(ctx, real_id, owner, status)
+    return real_id
+
+
 @given(parsers.parse('multiple media buys owned by "{owner}" in various statuses'))
 def given_multiple_buys_various_statuses(ctx: dict, owner: str) -> None:
     """Create media buys in various statuses for partition testing."""
     for status in ("active", "completed", "paused"):
-        mb_id = f"mb-{status}"
-        ctx.setdefault("media_buys", {})[mb_id] = {
-            "media_buy_id": mb_id,
-            "owner": owner,
-            "status": status,
-        }
-        _ensure_media_buy_in_db(ctx, mb_id, owner, status)
+        _create_unique_media_buy(ctx, label=f"mb-{status}", owner=owner, status=status)
 
 
 @given(parsers.parse('media buys owned by "{owner}"'))
 def given_media_buys_owned_by(ctx: dict, owner: str) -> None:
     """Create a default set of media buys owned by the given principal."""
-    for mb_id in ("mb-001", "mb-002"):
-        ctx.setdefault("media_buys", {})[mb_id] = {
-            "media_buy_id": mb_id,
-            "owner": owner,
-        }
-        _ensure_media_buy_in_db(ctx, mb_id, owner)
+    for label in ("mb-001", "mb-002"):
+        _create_unique_media_buy(ctx, label=label, owner=owner)
 
 
 # ── Adapter response configuration ────────────────────────────────────
