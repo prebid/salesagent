@@ -18,6 +18,9 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from adcp import fetch_adagents, get_all_properties, get_properties_by_agent
+from adcp.adagents import validate_adagents_structure
+
+from src.services._adagents_shapes import find_agent_entry, is_bare_entry, top_level_properties
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,13 @@ _PLATFORM_AGENT_HOSTS_ENV = os.environ.get("EMBEDDED_PLATFORM_AGENT_HOSTS", "int
 _PLATFORM_AGENT_HOSTS = frozenset(h.strip().lower() for h in _PLATFORM_AGENT_HOSTS_ENV.split(",") if h.strip())
 
 
-PublisherPartnerStatusKind = Literal["authorized", "pending", "unreachable"]
+PublisherPartnerStatusKind = Literal[
+    "authorized",
+    "unbound",
+    "pending",
+    "no_properties",
+    "unreachable",
+]
 
 
 @dataclass(frozen=True)
@@ -48,15 +57,34 @@ class PublisherPartnerStatus:
       counts on :class:`PublisherPartner` so the UI doesn't re-hit AAO on
       every page load).
 
-    ``status``:
+    ``status`` — the five operationally-distinct cases the UI cares about
+    (see salesagent#377 for the rationale on why this is finer than the
+    spec's binary "valid/invalid"):
 
-    - ``authorized`` — at least one property is authorized to ``public_agent_url``.
-    - ``pending``    — the publisher's adagents.json fetched cleanly and lists
-                       at least one property, but none authorize this agent.
-                       The user should send the publisher the AAO onboarding
-                       link (:attr:`aao_onboarding_url`).
-    - ``unreachable`` — the adagents.json fetch failed (DNS, 404, parse error,
-                        timeout). :attr:`error` carries the message.
+    - ``authorized`` — our agent's entry has typed binding
+                       (``authorization_type`` + selector) resolving to ≥1
+                       property. Spec-conformant and operational.
+    - ``unbound``    — our agent is listed in ``authorized_agents`` with no
+                       ``authorization_type`` (bare entry), but the file
+                       has a top-level ``properties[]`` block. Not
+                       spec-conformant — the SDK's strict resolver returns
+                       []  — but the publisher's intent is clear and we
+                       resolve permissively to all top-level properties.
+                       Real-world repro: wonderstruck.org, Raptive (when
+                       they ship properties). Operator should nudge the
+                       publisher to add ``authorization_type`` but products
+                       work today.
+    - ``pending``    — file fetched cleanly, has properties, but our agent
+                       isn't listed in ``authorized_agents`` at all.
+                       Operator sends the AAO onboarding link
+                       (:attr:`aao_onboarding_url`).
+    - ``no_properties`` — file fetched cleanly but exposes zero properties
+                       to anyone (no top-level array, no inline). Even if
+                       we're listed there's nothing to sell. Publisher
+                       must add a ``properties[]`` block before this row
+                       can do anything.
+    - ``unreachable`` — the adagents.json fetch failed (DNS, 404, parse
+                       error, timeout). :attr:`error` carries the message.
     """
 
     publisher_domain: str
@@ -232,19 +260,44 @@ def _count_total_properties(adagents: dict[str, Any]) -> int:
     return len(get_all_properties(adagents) or [])
 
 
+def _count_top_level_properties(adagents: dict[str, Any]) -> int:
+    """Length of the top-level ``properties[]`` array. Used only in the
+    unbound branch, where the SDK's per-agent resolver returns [] but
+    operationally we treat the agent as authorized for every top-level
+    property the publisher exposes."""
+    return len(top_level_properties(adagents))
+
+
 async def get_publisher_partner_status(
     publisher_domain: str,
     public_agent_url: str,
     *,
     force_refresh: bool = False,
 ) -> PublisherPartnerStatus:
-    """Fetch the publisher's adagents.json once and return both counts.
+    """Fetch the publisher's adagents.json once and classify it into one of
+    the five :class:`PublisherPartnerStatusKind` states.
 
-    A single HTTP fetch yields ``total_properties`` (full inline_properties
-    list) and ``authorized_properties`` (the subset authorized to
-    ``public_agent_url`` — the SDK's ``get_properties_by_agent`` does the
-    matching). On fetch failure, returns ``status="unreachable"`` with the
-    error message rather than raising — callers persist this directly on
+    Decision tree (see salesagent#377 for rationale):
+
+    1. Fetch fails → ``unreachable``.
+    2. SDK strict resolver returns ≥1 property for our agent → ``authorized``.
+       (Covers typed bindings: ``inline_properties``, ``property_ids``,
+       ``property_tags``, ``publisher_properties``.)
+    3. Our agent's entry exists but is bare (no ``authorization_type``,
+       no selector) AND the file has a top-level ``properties[]`` block →
+       ``unbound``. Permissive resolution: treat as authorized for every
+       top-level property. ``error`` carries the conformance hint so the
+       operator can nudge the publisher.
+    4. Our agent is listed, but neither (2) nor (3) applies (typed
+       binding resolved to nothing, or bare entry with no top-level
+       properties) → ``no_properties``. Publisher must add a
+       ``properties[]`` block.
+    5. Our agent isn't listed at all. If the publisher exposes any
+       properties to anyone → ``pending`` (publisher just hasn't
+       authorized us); otherwise → ``no_properties``.
+
+    On fetch failure returns ``status="unreachable"`` with the error
+    message rather than raising — callers persist it on
     :class:`PublisherPartner.last_fetch_error`.
     """
     now = time.monotonic()
@@ -269,20 +322,88 @@ async def get_publisher_partner_status(
             )
         _ADAGENTS_CACHE[publisher_domain] = (now, adagents)
 
-    total = _count_total_properties(adagents)
+    total_listed = _count_total_properties(adagents)
     authorized_props = get_properties_by_agent(adagents, public_agent_url) or []
-    authorized = len(authorized_props)
+    if authorized_props:
+        return PublisherPartnerStatus(
+            publisher_domain=publisher_domain,
+            total_properties=total_listed,
+            authorized_properties=len(authorized_props),
+            status="authorized",
+            aao_onboarding_url=_aao_onboarding_url(publisher_domain),
+            error=None,
+        )
 
-    if authorized > 0:
-        kind: PublisherPartnerStatusKind = "authorized"
-    else:
-        kind = "pending"
+    our_entry = find_agent_entry(adagents, public_agent_url)
+    top_level_count = _count_top_level_properties(adagents)
+
+    if our_entry is not None and is_bare_entry(our_entry) and top_level_count > 0:
+        # validate_adagents_structure is informational here — we use it
+        # only to surface a richer hint on the unbound chip. The
+        # authorized/pending/no_properties branches don't need it, so the
+        # call lives inside this branch (was hoisted on every fetch by an
+        # earlier revision — measurable cost on UI polls).
+        report = validate_adagents_structure(adagents)
+        if report.schema_valid:
+            hint = (
+                "Publisher's entry has no authorization_type — products bind to all "
+                "top-level properties; ask publisher to add a typed binding for spec "
+                "conformance."
+            )
+        else:
+            hint = _format_validation_error(report.errors)
+        return PublisherPartnerStatus(
+            publisher_domain=publisher_domain,
+            total_properties=top_level_count,
+            authorized_properties=top_level_count,
+            status="unbound",
+            aao_onboarding_url=_aao_onboarding_url(publisher_domain),
+            error=hint,
+        )
+
+    if total_listed > 0 or top_level_count > 0:
+        # Publisher exposes inventory; our agent isn't authorized for any
+        # of it. Either we're not in authorized_agents[] at all, or we
+        # are with a typed binding whose selector resolved to nothing.
+        if our_entry is None:
+            pending_error: str | None = None
+        else:
+            pending_error = (
+                "Publisher's entry for our agent has a typed binding that resolves to "
+                "no properties — verify the publisher's property_ids / property_tags "
+                "selector matches their published inventory."
+            )
+        return PublisherPartnerStatus(
+            publisher_domain=publisher_domain,
+            total_properties=max(total_listed, top_level_count),
+            authorized_properties=0,
+            status="pending",
+            aao_onboarding_url=_aao_onboarding_url(publisher_domain),
+            error=pending_error,
+        )
 
     return PublisherPartnerStatus(
         publisher_domain=publisher_domain,
-        total_properties=total,
-        authorized_properties=authorized,
-        status=kind,
+        total_properties=0,
+        authorized_properties=0,
+        status="no_properties",
         aao_onboarding_url=_aao_onboarding_url(publisher_domain),
-        error=None,
+        error="Publisher's adagents.json has no properties — add a top-level properties[] block before products can bind.",
     )
+
+
+def _format_validation_error(errors: list) -> str:
+    """One-line summary of an AdagentsValidationReport's errors for the UI.
+
+    Shows the first error verbatim plus "(and N more)" when multiple — fits
+    in a table cell, gives the publisher something concrete to act on, and
+    keeps the wording stable (SDK ``message`` may evolve but ``kind`` is
+    stable, so we lean on the SDK's human-readable ``message`` for now and
+    can branch on ``kind`` later if we need localized copy).
+    """
+    if not errors:
+        return "adagents.json failed schema validation"
+    first = errors[0].message
+    if len(errors) == 1:
+        return f"Non-conformant adagents.json: {first}"
+    return f"Non-conformant adagents.json: {first} (and {len(errors) - 1} more)"

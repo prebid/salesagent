@@ -2131,13 +2131,21 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // AAO status chip styles, keyed by aao_status. Rendered inline in the
-// publisher row + the summary header. "stale" is a transitional UI-only
+// publisher row + the summary header. See salesagent#377 for the
+// operational rationale on each state. "stale" is a transitional UI-only
 // state for rows that pre-date the AAO counts columns.
 const AAO_STATUS_STYLES = {
-    authorized: { bg: '#d1fae5', fg: '#065f46', label: 'Authorized' },
-    pending:    { bg: '#fef3c7', fg: '#92400e', label: 'Pending' },
-    unreachable:{ bg: '#fee2e2', fg: '#991b1b', label: 'Unreachable' },
-    stale:      { bg: '#e0e7ff', fg: '#3730a3', label: 'Refresh needed' },
+    authorized:   { bg: '#d1fae5', fg: '#065f46', label: 'Authorized' },
+    // Non-conformant file but products bind — publisher's entry lacks
+    // authorization_type and we resolve permissively to top-level
+    // properties[]. Yellow rather than red because the row works.
+    unbound:      { bg: '#fef3c7', fg: '#92400e', label: 'Authorized (non-conformant file)' },
+    pending:      { bg: '#fef3c7', fg: '#92400e', label: 'Pending' },
+    // File fetched but exposes zero properties — operator can't do
+    // anything until the publisher adds a properties[] block.
+    no_properties:{ bg: '#fee2e2', fg: '#991b1b', label: 'No properties listed' },
+    unreachable:  { bg: '#fee2e2', fg: '#991b1b', label: 'Unreachable' },
+    stale:        { bg: '#e0e7ff', fg: '#3730a3', label: 'Refresh needed' },
 };
 
 function aaoStatusChip(kind) {
@@ -2241,7 +2249,7 @@ function loadPublishers() {
                 ? '<span style="color: #9ca3af;">— / —</span>'
                 : `<strong>${partner.authorized_properties || 0}</strong> / ${partner.total_properties || 0}`;
             const refreshed = relativeTime(partner.last_refreshed_at || partner.last_synced_at);
-            const onboardingHint = (statusKind === 'pending' || statusKind === 'unreachable')
+            const onboardingHint = (statusKind === 'pending' || statusKind === 'unreachable' || statusKind === 'no_properties' || statusKind === 'unbound')
                 ? `<div style="margin-top: 0.5rem; font-size: 0.75rem;">
                        <a href="${escapeHtml(partner.aao_onboarding_url)}" target="_blank" rel="noopener" style="color: #2563eb;">
                            Send AAO link to publisher →

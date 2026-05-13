@@ -2306,6 +2306,14 @@ class PublisherPartner(Base, JSONValidatorMixin):
     authorized_properties: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_fetch_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Literal PublisherPartnerStatusKind ("authorized" | "unbound" |
+    # "pending" | "no_properties" | "unreachable"). Persisted so
+    # _partner_to_dict can render the operationally-different post-fetch
+    # states the prior derivation collapsed together (e.g. "unbound"
+    # publisher whose products bind permissively vs "no_properties"
+    # publisher who has no inventory at all). See salesagent#377. NULL on
+    # rows that haven't been refreshed since the column was added.
+    aao_status_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

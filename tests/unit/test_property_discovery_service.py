@@ -306,15 +306,16 @@ class TestPropertyDiscoveryService:
         mock_db_patcher.stop()
 
     @pytest.mark.asyncio
-    async def test_sync_properties_unrestricted_agent_all_properties(self):
-        """Test syncing when agent has no property restrictions (access to all properties).
-
-        Per AdCP spec: if property_ids/property_tags/properties/publisher_properties
-        are all missing/empty, agent has access to ALL properties from that publisher.
+    async def test_sync_properties_unbound_entry_with_agent_url_uses_top_level(self):
+        """Wonderstruck-class file: our agent is listed with a bare entry
+        (no ``authorization_type``, no selector) and the file has a top-level
+        ``properties[]`` block. The SDK's strict resolver returns [] for the
+        bare entry, but the salesagent's permissive fallback recognizes the
+        intent and binds products to all top-level properties. See
+        salesagent#377 for the ``unbound`` state rationale.
         """
         mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
 
-        # Mock database queries to return empty lists
         def create_mock_scalars():
             mock_scalars = Mock()
             mock_scalars.first.return_value = None
@@ -323,16 +324,13 @@ class TestPropertyDiscoveryService:
 
         mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
 
-        # Mock adagents.json with unrestricted agent (no property_ids field)
-        # AND top-level properties array
+        agent_url = "https://wonderstruck.sales-agent.example.com"
         mock_adagents_data = {
             "authorized_agents": [
                 {
-                    "url": "https://wonderstruck.sales-agent.example.com",
+                    "url": agent_url,
                     "authorized_for": "Authorized for display banners",
-                    # Note: No property_ids, property_tags, properties, or publisher_properties fields
-                    # This means access to ALL properties from this publisher
-                }
+                },
             ],
             "properties": [
                 {
@@ -342,39 +340,50 @@ class TestPropertyDiscoveryService:
                     "identifiers": [{"type": "domain", "value": "wonderstruck.org"}],
                     "tags": ["sites"],
                 },
-                {
-                    "property_id": "mobile_app",
-                    "property_type": "mobile_app",
-                    "name": "Mobile App",
-                    "identifiers": [{"type": "bundle_id", "value": "com.wonderstruck.app"}],
-                    "tags": ["apps"],
-                },
             ],
         }
 
         with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
-            with patch("src.services.property_discovery_service.get_all_properties") as mock_props:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
                 with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
                     mock_fetch.return_value = mock_adagents_data
-                    # get_all_properties returns empty list (no per-agent properties)
-                    mock_props.return_value = []
-                    mock_tags.return_value = ["sites", "apps"]
+                    # SDK strict resolver returns [] for the bare entry —
+                    # the permissive fallback in _extract_properties then
+                    # reads adagents_data["properties"] directly.
+                    mock_by_agent.return_value = []
+                    mock_tags.return_value = ["sites"]
 
-                    # Test sync
-                    stats = await self.service.sync_properties_from_adagents("tenant1", ["wonderstruck.org"])
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1", ["wonderstruck.org"], agent_url=agent_url
+                    )
 
-                    # Verify results - should sync ALL top-level properties
                     assert stats["domains_synced"] == 1
-                    assert stats["properties_found"] == 2, "Should sync both top-level properties"
-                    assert stats["tags_found"] == 2
-                    assert stats["properties_created"] == 2
+                    assert stats["properties_found"] == 1, (
+                        "Unbound entry should resolve permissively to top-level properties"
+                    )
+                    assert stats["properties_created"] == 1
                     assert len(stats["errors"]) == 0
 
         mock_db_patcher.stop()
 
     @pytest.mark.asyncio
-    async def test_sync_properties_unrestricted_agent_no_top_level_properties(self):
-        """Test unrestricted agent when no top-level properties exist (edge case)."""
+    async def test_sync_properties_unbound_branch_drops_properties_without_matching_domain(self):
+        """Security gate on the permissive unbound branch: top-level
+        properties must carry a ``type=domain`` identifier matching the
+        publisher we're talking to. Without the gate, a publisher whose
+        adagents.json we've added could bare-list our agent and claim
+        arbitrary app bundle IDs, podcast GUIDs, or DOOH venue identifiers —
+        none of which we can verify. Strict typed bindings don't need the
+        gate (the publisher's authorization_type is the attestation), but
+        permissive resolution has no such attestation.
+
+        Three top-level properties:
+        - mobile_app (bundle_id only — no domain identifier; dropped)
+        - foreign_site (domain=other.example; dropped — domain mismatch)
+        - main_site (domain=wonderstruck.org; kept)
+
+        Only ``main_site`` survives the gate.
+        """
         mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
 
         def create_mock_scalars():
@@ -385,28 +394,91 @@ class TestPropertyDiscoveryService:
 
         mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
 
-        # Unrestricted agent but no top-level properties
+        agent_url = "https://wonderstruck.sales-agent.example.com"
         mock_adagents_data = {
             "authorized_agents": [
-                {
-                    "url": "https://sales-agent.example.com",
-                    "authorized_for": "All properties",
-                    # No property restrictions
-                }
+                {"url": agent_url, "authorized_for": "Display banners"},
             ],
-            # No top-level properties array
+            "properties": [
+                {
+                    "property_id": "main_site",
+                    "property_type": "website",
+                    "name": "Main site",
+                    "identifiers": [{"type": "domain", "value": "wonderstruck.org"}],
+                },
+                {
+                    "property_id": "mobile_app",
+                    "property_type": "mobile_app",
+                    "name": "Companion app",
+                    "identifiers": [{"type": "bundle_id", "value": "com.wonderstruck.app"}],
+                },
+                {
+                    "property_id": "foreign_site",
+                    "property_type": "website",
+                    "name": "Foreign site",
+                    "identifiers": [{"type": "domain", "value": "other.example"}],
+                },
+            ],
         }
 
         with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
-            with patch("src.services.property_discovery_service.get_all_properties") as mock_props:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
                 with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
                     mock_fetch.return_value = mock_adagents_data
-                    mock_props.return_value = []
+                    mock_by_agent.return_value = []
                     mock_tags.return_value = []
 
-                    stats = await self.service.sync_properties_from_adagents("tenant1", ["example.com"])
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1", ["wonderstruck.org"], agent_url=agent_url
+                    )
 
-                    # Should handle gracefully - no properties to sync
+                    assert stats["domains_synced"] == 1
+                    assert stats["properties_found"] == 1, (
+                        "Permissive unbound branch must drop properties without "
+                        "a matching domain identifier (mobile_app, foreign_site); "
+                        "only main_site should pass the gate."
+                    )
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_sync_properties_unbound_entry_no_top_level_yields_zero(self):
+        """Raptive-class file (in its blocked variant): bare entry for our
+        agent but no top-level ``properties[]``. Permissive fallback has
+        nothing to bind to, so we sync zero properties. The publisher must
+        add a ``properties[]`` block; the chip surfaces that as
+        ``no_properties`` at the aao_lookup_service layer."""
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        agent_url = "https://sales-agent.example.com"
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": agent_url,
+                    "authorized_for": "All properties",
+                }
+            ],
+        }
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    mock_by_agent.return_value = []
+                    mock_tags.return_value = []
+
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1", ["example.com"], agent_url=agent_url
+                    )
+
                     assert stats["domains_synced"] == 1
                     assert stats["properties_found"] == 0
                     assert len(stats["errors"]) == 0
@@ -414,10 +486,11 @@ class TestPropertyDiscoveryService:
         mock_db_patcher.stop()
 
     @pytest.mark.asyncio
-    async def test_sync_properties_mixed_restricted_unrestricted(self):
-        """Test adagents.json with both restricted and unrestricted agents.
-
-        If ANY agent is unrestricted, we should sync all top-level properties.
+    async def test_sync_properties_mixed_bare_and_typed_entries(self):
+        """File with one bare entry and one ``authorization_type: property_ids``
+        entry: the SDK resolves only the typed entry, so we sync only the
+        properties it references. The bare entry contributes nothing — there
+        is no "any-agent-unrestricted → all properties" semantics in the spec.
         """
         mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
 
@@ -434,12 +507,12 @@ class TestPropertyDiscoveryService:
                 {
                     "url": "https://restricted-agent.example.com",
                     "authorized_for": "Only main site",
-                    "property_ids": ["main_site"],  # Restricted to specific property
+                    "authorization_type": "property_ids",
+                    "property_ids": ["main_site"],
                 },
                 {
-                    "url": "https://unrestricted-agent.example.com",
+                    "url": "https://bare-agent.example.com",
                     "authorized_for": "All properties",
-                    # No restrictions - access to all
                 },
             ],
             "properties": [
@@ -460,6 +533,8 @@ class TestPropertyDiscoveryService:
             with patch("src.services.property_discovery_service.get_all_properties") as mock_props:
                 with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
                     mock_fetch.return_value = mock_adagents_data
+                    # SDK get_all_properties: union of typed-agent resolutions,
+                    # bare entry contributes nothing.
                     mock_props.return_value = [
                         {
                             "property_id": "main_site",
@@ -471,24 +546,18 @@ class TestPropertyDiscoveryService:
 
                     stats = await self.service.sync_properties_from_adagents("tenant1", ["example.com"])
 
-                    # Should sync ALL properties (because of unrestricted agent)
                     assert stats["domains_synced"] == 1
-                    assert stats["properties_found"] == 2, "Should sync all properties due to unrestricted agent"
+                    assert stats["properties_found"] == 1, (
+                        "Only typed-entry property syncs; bare entry contributes nothing"
+                    )
 
         mock_db_patcher.stop()
 
     @pytest.mark.asyncio
-    async def test_sync_properties_unrestricted_check_scoped_to_our_agent(self):
-        """Test that unrestricted agent check is scoped to our agent when agent_url is provided.
-
-        Scenario: adagents.json has two agents:
-        - A media agency with no restrictions (unrestricted)
-        - Our agent restricted to property_ids: ["capital"]
-
-        When agent_url identifies our restricted agent, we should only get "capital",
-        NOT all top-level properties. The media agency's unrestricted status should
-        not override our agent's restrictions.
-        """
+    async def test_sync_properties_typed_agent_restricted_to_one_property(self):
+        """When ``agent_url`` is provided, the SDK's per-agent resolution
+        scopes the result to that agent's ``authorization_type`` + selector.
+        Co-listed agents on the same file can't widen our scope."""
         mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
 
         def create_mock_scalars():
@@ -504,7 +573,8 @@ class TestPropertyDiscoveryService:
                 {
                     "url": "https://media-agency.example.com",
                     "authorized_for": "Full portfolio management",
-                    # No restrictions — unrestricted agent
+                    # Bare entry — schema-invalid; SDK resolves it to []
+                    # and per-agent resolution is unaffected by co-listed agents.
                 },
                 {
                     "url": "https://our-agent.example.com",
@@ -558,11 +628,11 @@ class TestPropertyDiscoveryService:
                     )
 
                     assert stats["domains_synced"] == 1
-                    # Must be 1 (only capital), NOT 3 (all top-level properties)
-                    assert stats["properties_found"] == 1, (
-                        "Our restricted agent should only get 'capital', not all properties. "
-                        "The media agency's unrestricted status must not override our restrictions."
-                    )
+                    # Must be 1 (only capital), NOT 3 (all top-level properties).
+                    # Per-agent SDK resolution scopes the result to our entry's
+                    # property_ids selector regardless of what co-listed agents
+                    # declare.
+                    assert stats["properties_found"] == 1
                     assert stats["properties_created"] == 1
                     assert len(stats["errors"]) == 0
 

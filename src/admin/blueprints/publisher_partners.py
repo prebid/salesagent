@@ -54,19 +54,43 @@ def _persist_status(partner: PublisherPartner, status: PublisherPartnerStatus) -
     partner.total_properties = status.total_properties
     partner.authorized_properties = status.authorized_properties
     partner.last_refreshed_at = datetime.now(UTC)
-    partner.last_fetch_error = status.error
+    partner.aao_status_kind = status.status
+    # last_fetch_error is reserved for the "fetch failed" path so the
+    # legacy derivation in _partner_to_dict (used when aao_status_kind is
+    # NULL, e.g. after a column rollback) doesn't mis-render unbound or
+    # no_properties rows as "unreachable". Diagnostic hints for the
+    # post-fetch states live in sync_error instead, which the UI surfaces
+    # alongside the chip.
     if status.status == "unreachable":
+        partner.last_fetch_error = status.error
         partner.sync_status = "error"
         partner.sync_error = status.error
         partner.is_verified = False
-    elif status.status == "authorized":
+    elif status.status in ("authorized", "unbound"):
+        # Operational states — products can bind. "unbound" is non-conformant
+        # (no authorization_type on the publisher's entry) but the salesagent
+        # resolves permissively against top-level properties[] so the row is
+        # usable today. The chip + sync_error hint nudge the publisher to add
+        # a typed binding for spec conformance.
+        partner.last_fetch_error = None
         partner.sync_status = "success"
-        partner.sync_error = None
+        partner.sync_error = status.error  # hint copy for unbound, None for authorized
         partner.is_verified = True
         partner.last_synced_at = datetime.now(UTC)
-    else:  # pending
+    elif status.status == "no_properties":
+        # File fetched cleanly but exposes zero usable inventory. Counted
+        # as an error by the bulk sync handler (no inventory = nothing to
+        # do), so sync_status mirrors that for consistency with the
+        # response payload's `errors` count.
+        partner.last_fetch_error = None
+        partner.sync_status = "error"
+        partner.sync_error = status.error
+        partner.is_verified = False
+        partner.last_synced_at = datetime.now(UTC)
+    else:  # pending — file fetched cleanly, publisher just hasn't authorized us
+        partner.last_fetch_error = None
         partner.sync_status = "success"
-        partner.sync_error = None
+        partner.sync_error = status.error  # may be None or a typed-binding-empty hint
         partner.is_verified = False
         partner.last_synced_at = datetime.now(UTC)
 
@@ -78,12 +102,19 @@ def _partner_to_dict(partner: PublisherPartner, *, fallback_property_count: int 
     used only when the new AAO ``total_properties`` column is NULL (pre-AAO
     rows that haven't been refreshed yet)."""
     aao_url = f"https://agenticadvertising.org/publisher/{partner.publisher_domain}"
-    if partner.total_properties is None:
+    if partner.total_properties is None and partner.aao_status_kind is None:
         # Pre-AAO row — legacy count from AuthorizedProperty as a stopgap so
         # the UI shows something until the next sync runs.
         total = fallback_property_count
         authorized = fallback_property_count if partner.is_verified else 0
         ui_status = "stale"
+    elif partner.aao_status_kind is not None:
+        # Persisted kind from aao_lookup_service is the source of truth —
+        # distinguishes "invalid" (schema-broken file) from "unreachable"
+        # (fetch failed), which legacy derivation collapsed together.
+        total = partner.total_properties or 0
+        authorized = partner.authorized_properties or 0
+        ui_status = partner.aao_status_kind
     elif partner.last_fetch_error:
         total = partner.total_properties or 0
         authorized = partner.authorized_properties or 0
@@ -548,13 +579,17 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                 if status is None:
                     continue
                 _persist_status(partner, status)
-                if status.status == "authorized":
+                if status.status in ("authorized", "unbound"):
+                    # Both states are operational — products can bind. Run
+                    # property discovery so AuthorizedProperty rows populate
+                    # for the products page (unbound publishers like
+                    # wonderstruck.org depend on this).
                     verified += 1
                     verified_domains.append(partner.publisher_domain)
                     synced += 1
                 elif status.status == "pending":
                     synced += 1
-                else:
+                else:  # no_properties or unreachable
                     errors += 1
 
             session.commit()

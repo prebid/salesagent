@@ -37,19 +37,40 @@ class TestGetPublisherPartnerStatusAuthorized:
 
     @pytest.mark.asyncio
     async def test_authorized_returns_counts(self):
+        # Spec-compliant payload — entries declare authorization_type +
+        # matching selector. validate_adagents_structure passes through.
         adagents = {
             "authorized_agents": [
                 {
                     "url": "https://interchange.io",
-                    "inline_properties": [
-                        {"property_id": "p1"},
-                        {"property_id": "p2"},
+                    "authorized_for": "Demand for inline-listed properties",
+                    "authorization_type": "inline_properties",
+                    "properties": [
+                        {
+                            "property_id": "p1",
+                            "property_type": "website",
+                            "name": "P1",
+                            "identifiers": [{"type": "domain", "value": "p1.example.com"}],
+                        },
+                        {
+                            "property_id": "p2",
+                            "property_type": "website",
+                            "name": "P2",
+                            "identifiers": [{"type": "domain", "value": "p2.example.com"}],
+                        },
                     ],
                 },
                 {
                     "url": "https://other-agent.example.com",
-                    "inline_properties": [
-                        {"property_id": "p3"},
+                    "authorized_for": "Demand for inline-listed properties",
+                    "authorization_type": "inline_properties",
+                    "properties": [
+                        {
+                            "property_id": "p3",
+                            "property_type": "website",
+                            "name": "P3",
+                            "identifiers": [{"type": "domain", "value": "p3.example.com"}],
+                        },
                     ],
                 },
             ]
@@ -86,9 +107,21 @@ class TestGetPublisherPartnerStatusPending:
             "authorized_agents": [
                 {
                     "url": "https://other-agent.example.com",
-                    "inline_properties": [
-                        {"property_id": "p1"},
-                        {"property_id": "p2"},
+                    "authorized_for": "Demand for inline-listed properties",
+                    "authorization_type": "inline_properties",
+                    "properties": [
+                        {
+                            "property_id": "p1",
+                            "property_type": "website",
+                            "name": "P1",
+                            "identifiers": [{"type": "domain", "value": "p1.example.com"}],
+                        },
+                        {
+                            "property_id": "p2",
+                            "property_type": "website",
+                            "name": "P2",
+                            "identifiers": [{"type": "domain", "value": "p2.example.com"}],
+                        },
                     ],
                 }
             ]
@@ -113,6 +146,100 @@ class TestGetPublisherPartnerStatusPending:
         assert status.total_properties == 2
         assert status.authorized_properties == 0
         assert status.error is None
+
+
+class TestGetPublisherPartnerStatusUnbound:
+    """Wonderstruck-class file: our agent is in ``authorized_agents`` with a
+    bare entry (no ``authorization_type``, no selector) and the file has a
+    top-level ``properties[]`` block. Status is ``unbound`` — the file isn't
+    spec-conformant but operationally usable (products bind to the top-level
+    properties). The chip + error hint nudge the publisher to add a typed
+    binding. See salesagent#377."""
+
+    @pytest.mark.asyncio
+    async def test_unbound_resolves_to_top_level_properties(self):
+        adagents = {
+            "$schema": "https://adcontextprotocol.org/schemas/v1/adagents.json",
+            "authorized_agents": [
+                {
+                    "url": "https://interchange.io",
+                    "authorized_for": "Display banners",
+                },
+                {
+                    "url": "https://other-agent.example.com",
+                    "authorized_for": "Display banners",
+                },
+            ],
+            "properties": [
+                {
+                    "property_id": "main_site",
+                    "property_type": "website",
+                    "name": "Main site",
+                    "identifiers": [{"type": "domain", "value": "wonderstruck.org"}],
+                    "tags": ["sites"],
+                }
+            ],
+        }
+        with patch(
+            "src.services.aao_lookup_service.fetch_adagents",
+            AsyncMock(return_value=adagents),
+        ):
+            status = await get_publisher_partner_status("wonderstruck.org", "https://interchange.io")
+
+        assert status.status == "unbound"
+        assert status.total_properties == 1
+        assert status.authorized_properties == 1
+        assert status.error is not None
+        assert "authorization_type" in status.error
+        assert status.aao_onboarding_url == "https://agenticadvertising.org/publisher/wonderstruck.org"
+
+
+class TestGetPublisherPartnerStatusNoProperties:
+    """Raptive-class file (in its blocked variant): file fetches cleanly but
+    exposes zero properties — nothing to sell even though our agent may be
+    listed. Operator must ask the publisher to add a ``properties[]`` block
+    before this row can do anything."""
+
+    @pytest.mark.asyncio
+    async def test_no_properties_when_listed_but_empty_inventory(self):
+        adagents = {
+            "authorized_agents": [
+                {
+                    "url": "https://interchange.io",
+                    "authorized_for": "Display banners",
+                },
+            ],
+            # No top-level properties[] and no inline properties anywhere.
+        }
+        with patch(
+            "src.services.aao_lookup_service.fetch_adagents",
+            AsyncMock(return_value=adagents),
+        ):
+            status = await get_publisher_partner_status("empty.example.com", "https://interchange.io")
+
+        assert status.status == "no_properties"
+        assert status.total_properties == 0
+        assert status.authorized_properties == 0
+        assert status.error is not None
+        assert "properties[]" in status.error
+
+    @pytest.mark.asyncio
+    async def test_no_properties_when_not_listed_and_empty_inventory(self):
+        adagents = {
+            "authorized_agents": [
+                {
+                    "url": "https://other-agent.example.com",
+                    "authorized_for": "Display banners",
+                },
+            ],
+        }
+        with patch(
+            "src.services.aao_lookup_service.fetch_adagents",
+            AsyncMock(return_value=adagents),
+        ):
+            status = await get_publisher_partner_status("empty.example.com", "https://interchange.io")
+
+        assert status.status == "no_properties"
 
 
 class TestGetPublisherPartnerStatusUnreachable:
