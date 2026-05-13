@@ -62,7 +62,7 @@ def test_tenant(integration_db):
             tenant_id=_TENANT_ID,
             principal_id=_PRINCIPAL_ID,
             name="Creative Test Principal",
-            platform_mappings={"mock": {}},
+            platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},
             access_token=f"creative-test-token-{uuid.uuid4().hex}",
         )
         session.add(principal)
