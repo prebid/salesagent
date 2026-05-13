@@ -76,6 +76,7 @@ from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
+from src.core.database.repositories import SalesAgentProposalStore
 from src.core.signing import SigningVerifyMiddleware
 
 logger = logging.getLogger(__name__)
@@ -273,11 +274,32 @@ def build_router() -> LazyPlatformRouter:
     # so refine falls through to get_products (the buyer-side wire
     # contract is unchanged).
     proposal_managers = _build_proposal_managers()
+    # Single shared ProposalStore returned by the factory for every
+    # tenant — tenant isolation runs inside the store on
+    # ``expected_account_id`` (the framework passes the principal's
+    # account on every call). Wiring this lets the storyboard's
+    # ``proposal_finalize`` flow work end-to-end: ``get_products(brief)``
+    # persists the proposal, then ``create_media_buy(proposal_id=X)``
+    # resolves it and derives packages from the proposal's allocations.
+    # Without the store wired, the framework's ``proposal_dispatch``
+    # short-circuits at ``hasattr(platform, "proposal_store_for_tenant")``
+    # and the create_media_buy call falls through to a 0-package
+    # payload → INVALID_REQUEST.
+    #
+    # ``proposal_store_factory`` is the lazy-shape kwarg added in
+    # adcp 5.4 (#722) for parity with ``PlatformRouter.proposal_stores=``.
+    # We use the factory shape (not the eager dict) because the store
+    # is a single shared instance — boot-time tenant enumeration would
+    # miss tenants registered after boot, but the factory has no such
+    # coupling. The framework calls this on every dispatch; the
+    # closure return is O(1).
+    proposal_store = SalesAgentProposalStore()
     router = LazyPlatformRouter(
         accounts=SalesagentAccountStore(),
         factory=build_platform_for_tenant,
         capabilities=capabilities,
         proposal_managers=proposal_managers,
+        proposal_store_factory=lambda _tenant_id: proposal_store,
     )
     # validate_idempotency_wiring inspects the platform handed to serve()
     # for @IdempotencyStore.wrap decorators. The router shell has none —

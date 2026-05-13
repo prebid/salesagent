@@ -2600,3 +2600,57 @@ class TenantSigningCredential(Base):
             postgresql_where=text("is_active = TRUE"),
         ),
     )
+
+
+class Proposal(Base):
+    """Persistent backing for :class:`SalesAgentProposalStore`.
+
+    Stores the ``Proposal`` shape returned by ``get_products`` so a
+    subsequent ``create_media_buy(proposal_id=X)`` can derive packages
+    from the proposal's allocations + recipes instead of receiving them
+    inline. The framework's ``proposal_dispatch`` orchestrates the
+    lifecycle (put_draft → try_reserve_consumption → finalize_consumption);
+    this row is the durable backing the store reads/writes.
+
+    Multi-tenancy: ``tenant_id`` is the salesagent's row-level scoping
+    column (cascades on tenant deactivation); ``account_id`` is the
+    AdCP account that owns the proposal — the framework passes
+    ``expected_account_id`` on every read and the store collapses
+    cross-tenant probes to ``None``.
+
+    State machine: ``state`` is one of ``draft`` / ``committed`` /
+    ``consuming`` / ``consumed`` per :class:`adcp.decisioning.
+    proposal_store.ProposalState`.
+    """
+
+    __tablename__ = "proposals"
+
+    proposal_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
+    )
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    recipes: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    proposal_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    media_buy_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recipe_schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        # Reverse-index lookup constraint per the ProposalStore Protocol
+        # (:meth:`get_by_media_buy_id`). Partial because pre-consumption
+        # rows have NULL ``media_buy_id`` — those must not be rejected.
+        Index(
+            "ux_proposals_account_media_buy",
+            "account_id",
+            "media_buy_id",
+            unique=True,
+            postgresql_where=text("media_buy_id IS NOT NULL"),
+        ),
+        Index("ix_proposals_tenant_id", "tenant_id"),
+    )

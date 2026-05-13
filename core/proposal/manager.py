@@ -70,9 +70,21 @@ class SalesAgentProposalManager:
 
     # Match the platform's specialism declaration; v1 ships only the
     # non-guaranteed sales path (CPM auctions, no fixed-quantity holds).
+    #
+    # ``auto_commit_on_put_draft=True`` (adcp>=5.4 / #723): the
+    # storyboard's ``proposal_finalize/create_media_buy`` flow goes
+    # brief → create_media_buy with no intermediate finalize step, so
+    # the framework's ``try_reserve_consumption`` needs the proposal
+    # in COMMITTED state. Opting into auto-commit makes the framework
+    # call ``store.commit`` immediately after ``put_draft``,
+    # transparently promoting DRAFT → COMMITTED in a single dispatch.
+    # Mutually exclusive with ``finalize=True`` (validated by the
+    # ProposalCapabilities constructor) — v2 with a ``finalize_proposal``
+    # method swaps to the spec-canonical explicit-finalize lifecycle.
     capabilities: ClassVar[ProposalCapabilities] = ProposalCapabilities(
         sales_specialism="sales-non-guaranteed",
         refine=True,
+        auto_commit_on_put_draft=True,
     )
 
     @translate_adcp_errors

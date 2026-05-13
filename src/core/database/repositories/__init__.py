@@ -21,6 +21,7 @@ from src.core.database.repositories.audit_log import AuditLogRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.proposal_store import SalesAgentProposalStore
 from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_signing_credentials import TenantSigningCredentialRepository
@@ -40,6 +41,7 @@ __all__ = [
     "MediaBuyUoW",
     "ProductRepository",
     "ProductUoW",
+    "SalesAgentProposalStore",
     "SyncJobRepository",
     "TenantConfigRepository",
     "TenantConfigUoW",
