@@ -223,6 +223,14 @@ def _block_adapter_config_insert(mapper, connection, target):
     _enforce(mapper, connection, target, op="insert")
 
 
+# Note: PublisherPartner is intentionally NOT guarded here — the partner
+# roster is publisher-managed (the embedded admin UI lets each tenant add
+# its own publishers via /publisher-partners, opted in with
+# ``allow_embedded_writes=True`` on the four mutation routes). If a future
+# design decision flips that to platform-managed, also remove
+# ``allow_embedded_writes=True`` from src/admin/blueprints/publisher_partners.py
+# so the gate is consistent across layers.
+
 # Signing infrastructure (signing-non-embedded design) is platform-managed —
 # per-tenant signing policy and the salesagent's own outbound signing
 # credentials. Both are infrastructure surfaces; publisher UI never writes

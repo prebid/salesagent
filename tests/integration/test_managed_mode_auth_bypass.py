@@ -401,16 +401,14 @@ class TestEmbeddedViewBlocksMutations:
         return JSON, not HTML, on the 403. Stable error code lets
         programmatic callers branch without substring-matching messages.
 
-        ``/publisher-partners`` POST is api_mode=True and stays
-        platform-managed in embedded mode (Scope3 owns the partner
-        roster — see ``publisher_partners._reject_if_embedded``). Verify
-        the JSON envelope shape so a client regression to HTML-only
+        OIDC ``enable`` POST is api_mode=True and stays platform-managed in
+        embedded mode (the upstream platform owns the auth provider config).
+        Verify the JSON envelope shape so a client regression to HTML-only
         responses (or a different code) is caught here.
         """
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         resp = client.post(
-            f"/tenant/{preview_tenant['tenant_id']}/publisher-partners",
-            json={"publisher_domain": "evil.example"},
+            f"/auth/oidc/tenant/{preview_tenant['tenant_id']}/enable",
             headers=_identity_headers(preview_tenant["external_org_id"]),
         )
         assert resp.status_code == 403
@@ -476,6 +474,31 @@ class TestEmbeddedViewAllowsPublisherManagedWrites:
         assert body["operator_domain"] == "wpp.com"
         assert body["gam_advertiser_id"] == "98765"
 
+    def test_managed_tenant_can_add_publisher_partner(self, client, managed_tenant, monkeypatch):
+        """POST /publisher-partners writes PublisherPartner — publisher-managed
+        per embedded_tenant_guard. Without this, embedded tenants can't add
+        publishers and therefore can't create Products (no AuthorizedProperty
+        rows means the property selector is empty). Closes #336.
+
+        Mock tenants auto-verify the new partner (no real adagents.json
+        round-trip), so 201 here also confirms the create path runs to
+        completion, not just past the decorator gate."""
+        from src.core.database.models import PublisherPartner
+
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        tid = managed_tenant["tenant_id"]
+        resp = client.post(
+            f"/tenant/{tid}/publisher-partners",
+            json={"publisher_domain": "wonderstruck.org", "display_name": "Wonderstruck"},
+            headers=_identity_headers(managed_tenant["external_org_id"]),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        with get_db_session() as session:
+            created = session.scalars(
+                select(PublisherPartner).filter_by(tenant_id=tid, publisher_domain="wonderstruck.org")
+            ).first()
+            assert created is not None, "PublisherPartner row was not persisted"
+
     def test_managed_tenant_can_create_principal(self, client, managed_tenant, monkeypatch):
         """POST /principals/create writes Principal — publisher-managed per
         embedded_tenant_guard docstring. The publisher (via the iframe)
@@ -523,11 +546,70 @@ class TestEmbeddedGatePolarityNotInverted:
         assert resp.status_code == 403
         assert b"platform-managed" in resp.data
 
-    def test_publisher_partners_add_still_blocked(self, client, preview_tenant, monkeypatch):
+    def test_oidc_enable_still_blocked(self, client, preview_tenant, monkeypatch):
+        """OIDC auth config is platform-managed — embedded tenants must not
+        be able to flip their own auth provider on/off."""
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         resp = client.post(
-            f"/tenant/{preview_tenant['tenant_id']}/publisher-partners",
-            json={"publisher_domain": "evil.example"},
+            f"/auth/oidc/tenant/{preview_tenant['tenant_id']}/enable",
             headers=_identity_headers(preview_tenant["external_org_id"]),
         )
         assert resp.status_code == 403
+
+
+class TestEmbeddedGuardLayerConsistency:
+    """The route-level ``allow_embedded_writes=True`` opt-in and the
+    model-layer ``embedded_tenant_guard`` lock set must agree about which
+    tables are publisher-managed.
+
+    If someone adds a new model to the guard's locked set (Tenant,
+    AdapterConfig, TenantSigningPolicy, TenantSigningCredential today),
+    they must also remove ``allow_embedded_writes=True`` from any route
+    that writes that model — otherwise the request passes the decorator
+    gate but 500s at the model event listener.
+    """
+
+    @pytest.mark.requires_db
+    def test_publisher_partner_not_locked_at_model_layer(self, managed_tenant):
+        """``PublisherPartner`` writes succeed on an embedded tenant without
+        the ``management_api_caller`` bypass — i.e., the model-layer guard
+        does NOT treat the partner table as platform-managed.
+
+        If this test starts raising ``EmbeddedTenantWriteError``, the model
+        was added to the locked set. To restore consistency, also remove
+        ``allow_embedded_writes=True`` from the four publisher_partners
+        routes — see the note in src/core/database/embedded_tenant_guard.py.
+        """
+        from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
+        from src.core.database.models import PublisherPartner
+        from tests.factories import PublisherPartnerFactory
+        from tests.helpers.managed_tenant_api import bind_factories_to_session
+
+        tid = managed_tenant["tenant_id"]
+        with bind_factories_to_session() as session:
+            # Re-load the tenant inside the factory's session so the SubFactory
+            # parent is attached. No management_api_caller flag is set on the
+            # session — that's the point: this write must succeed without the
+            # platform-managed bypass.
+            from src.core.database.models import Tenant
+
+            attached_tenant = session.scalars(select(Tenant).filter_by(tenant_id=tid)).one()
+            try:
+                PublisherPartnerFactory(
+                    tenant=attached_tenant,
+                    publisher_domain="contract-pin.example",
+                    display_name="Contract Pin",
+                )
+            except EmbeddedTenantWriteError as e:
+                pytest.fail(
+                    f"PublisherPartner is now platform-managed (got {e!r}). "
+                    "If intentional, remove allow_embedded_writes=True from "
+                    "src/admin/blueprints/publisher_partners.py."
+                )
+
+        # Verify the row landed.
+        with get_db_session() as verify_session:
+            row = verify_session.scalars(
+                select(PublisherPartner).filter_by(tenant_id=tid, publisher_domain="contract-pin.example")
+            ).one()
+            assert row is not None

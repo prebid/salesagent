@@ -318,35 +318,30 @@ class TestLockBanner:
 # ---------------------------------------------------------------------------
 
 
-class TestPublisherPartnershipsReadonlyOnEmbedded:
-    """Publisher Partnerships section is visible on embedded tenants but
-    rendered readonly with a "Platform-managed by Scope3" banner.
+class TestPublisherPartnershipsEditableOnEmbedded:
+    """Publisher Partnerships section is editable on embedded tenants.
 
-    Embedded tenants need to *see* their AAO identity (house domain + agent
-    URL) and partner roster — they just can't *edit* them. Hiding the section
-    entirely (the previous behavior) left the user staring at a Configure
-    button that scrolled to nothing. Per Sprint 1.8 §6 the right move is
-    readonly + banner."""
+    Without publishers, embedded tenants cannot create Products (no
+    AuthorizedProperty rows means the property selector is empty). The
+    PublisherPartner table is not in the model-layer guard's locked set,
+    so publishers manage their own partner roster from the embedded UI.
+    Closes #336."""
 
     def test_embedded_renders_publisher_partnerships_section(self, client, embedded_tenant_id):
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_data(as_text=True)
-        # Section is present so the agent URL + partner list are reachable.
         assert "<h2>Publisher Partnerships</h2>" in body
         assert 'data-section="publishers"' in body
-        # Agent URL subsection renders with a readonly display.
         assert "Your agent URL" in body
-        # Platform-managed banner explains why the section is locked.
-        assert "Platform-managed" in body
 
-    def test_embedded_hides_edit_controls(self, client, embedded_tenant_id):
-        """Add-Publisher / Refresh-All controls are gone on embedded."""
+    def test_embedded_renders_edit_controls(self, client, embedded_tenant_id):
+        """Add-Publisher / Refresh-All controls are rendered on embedded."""
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
         body = resp.get_data(as_text=True)
-        assert "showAddPublisherModal()" not in body
-        assert 'id="add-publisher-modal"' not in body
-        assert "syncAllPublishers()" not in body
+        assert "showAddPublisherModal()" in body
+        assert 'id="add-publisher-modal"' in body
+        assert "syncAllPublishers()" in body
 
     def test_open_tenant_renders_publisher_partnerships_with_edit_controls(self, client, open_tenant_id):
         resp = client.get(f"/tenant/{open_tenant_id}/settings")
@@ -354,7 +349,6 @@ class TestPublisherPartnershipsReadonlyOnEmbedded:
         body = resp.get_data(as_text=True)
         assert "<h2>Publisher Partnerships</h2>" in body
         assert 'data-section="publishers"' in body
-        # Open tenants get the editable controls.
         assert "showAddPublisherModal()" in body
 
 

@@ -355,5 +355,158 @@ def test_list_products_json_parsing(client, test_tenant, integration_db):
     assert b"Error" not in response.data
 
 
+@pytest.fixture
+def authenticated_admin(client, test_tenant, integration_db):
+    """Create a tenant-admin User via factory and seed an authenticated session.
+
+    Returns the test_tenant for chained-fixture convenience.
+    """
+    from src.core.database.models import Tenant, User
+    from tests.factories import UserFactory
+    from tests.helpers.managed_tenant_api import bind_factories_to_session
+
+    with bind_factories_to_session() as session:
+        existing = session.scalars(select(User).filter_by(email="test@example.com")).first()
+        if not existing:
+            # Re-load the tenant inside the factory's session so UserFactory's
+            # tenant SubFactory uses a session-bound parent rather than the
+            # detached instance from the test_tenant fixture's closed session.
+            attached_tenant = session.scalars(select(Tenant).filter_by(tenant_id=test_tenant.tenant_id)).one()
+            UserFactory(
+                tenant=attached_tenant,
+                email="test@example.com",
+                name="Test User",
+                role="admin",
+                is_active=True,
+            )
+
+    with client.session_transaction() as sess:
+        sess["authenticated"] = True
+        sess["user"] = {
+            "email": "test@example.com",
+            "is_super_admin": False,
+            "tenant_id": "test_product_tenant",
+            "role": "admin",
+        }
+        sess["email"] = "test@example.com"
+        sess["tenant_id"] = "test_product_tenant"
+        sess["role"] = "tenant_admin"
+    return test_tenant
+
+
+@pytest.mark.requires_db
+def test_add_product_without_property_returns_validation_error_not_500(client, authenticated_admin, integration_db):
+    """Regression for #335: clicking Save without selecting a property
+    must render the form again with a flash error, NOT a 500.
+
+    The storefront iframe submits the form without ever selecting a
+    publisher property (because the embedded tenant had no publishers —
+    see #336). The user reported "Internal Server Error" instead of the
+    validation message the server-side code at
+    ``src/admin/blueprints/products.py:1031-1033`` was supposed to flash.
+
+    This test posts the minimum payload the storefront sends:
+    name + pricing, no ``selected_property_tags``, no ``property_mode``
+    override.
+    """
+    from werkzeug.datastructures import MultiDict
+
+    # Minimum form payload — name + one pricing option, no property selection.
+    # property_mode is intentionally omitted; the route defaults to "tags",
+    # then sees no ``selected_property_tags`` and should flash + re-render.
+    product_data = MultiDict(
+        [
+            ("name", "Storefront Repro Product"),
+            ("description", "Reproduces #335"),
+            ("delivery_type", "non_guaranteed"),
+            ("pricing_model_0", "cpm_auction"),
+            ("currency_0", "USD"),
+            ("floor_0", "5.0"),
+        ]
+    )
+
+    response = client.post(
+        "/tenant/test_product_tenant/products/add",
+        data=product_data,
+        follow_redirects=False,
+    )
+
+    # Must NOT be a 500 — the route is expected to render the form again
+    # with a validation flash, status 200.
+    assert response.status_code != 500, (
+        f"Product save returned 500 instead of a validation error. Body: {response.data[:500]!r}"
+    )
+    assert response.status_code == 200, f"Expected 200 (re-rendered form), got {response.status_code}"
+
+    # The flash should include the property-tag validation message.
+    body = response.get_data(as_text=True)
+    assert "Please select at least one property tag" in body, (
+        f"Expected property-tag validation message in re-rendered form; body did not contain it. "
+        f"First 500 chars: {body[:500]!r}"
+    )
+
+    # No product row should have been created.
+    with get_db_session() as session:
+        leaked = session.scalars(
+            select(Product).filter_by(tenant_id="test_product_tenant", name="Storefront Repro Product")
+        ).first()
+        assert leaked is None, "Validation failed but a Product row was persisted anyway"
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize(
+    "case_name, form_data",
+    [
+        ("only_name", [("name", "Bare Product")]),
+        ("name_and_pricing_only", [("name", "Repro2"), ("pricing_model_0", "cpm_auction"), ("currency_0", "USD")]),
+        (
+            "invalid_pricing_rate",
+            [
+                ("name", "Repro3"),
+                ("pricing_model_0", "cpm_fixed"),
+                ("currency_0", "USD"),
+                ("rate_0", "not-a-number"),
+            ],
+        ),
+        (
+            "invalid_property_mode",
+            [
+                ("name", "Repro4"),
+                ("pricing_model_0", "cpm_auction"),
+                ("currency_0", "USD"),
+                ("floor_0", "5.0"),
+                ("property_mode", "bogus_unknown_mode"),
+            ],
+        ),
+        (
+            "property_ids_mode_no_selection",
+            [
+                ("name", "Repro5"),
+                ("pricing_model_0", "cpm_auction"),
+                ("currency_0", "USD"),
+                ("floor_0", "5.0"),
+                ("property_mode", "property_ids"),
+            ],
+        ),
+    ],
+)
+def test_add_product_malformed_inputs_never_return_500(
+    client, authenticated_admin, integration_db, case_name, form_data
+):
+    """Regression for #335: every malformed product-create POST should
+    surface a validation error (200 with flash) or a structured error,
+    NEVER a raw 500. Parametrized over scenarios that bypass the
+    client-side validator (which the storefront iframe may not fire)."""
+    from werkzeug.datastructures import MultiDict
+
+    response = client.post(
+        "/tenant/test_product_tenant/products/add",
+        data=MultiDict(form_data),
+        follow_redirects=False,
+    )
+
+    assert response.status_code != 500, f"[{case_name}] Product save returned 500. Body: {response.data[:500]!r}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -647,10 +647,25 @@ class MediaBuyRepository:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_all_by_statuses(session: Session, statuses: list[str]) -> list[MediaBuy]:
+    def get_all_by_statuses(
+        session: Session, statuses: list[str], *, eager_load_tenant: bool = False
+    ) -> list[MediaBuy]:
         """Get media buys across ALL tenants filtered by status.
 
         This is a system-level query for schedulers that need to process
         media buys regardless of tenant. Not tenant-scoped.
+
+        ``eager_load_tenant`` joins MediaBuy.tenant so the relationship is
+        materialized into the instance state. The delivery webhook scheduler
+        needs this because each iteration of its batch loop calls
+        ``_get_media_buy_delivery_impl``, which opens its own
+        ``get_db_session()`` context. The inner ``scoped.remove()`` detaches
+        every MediaBuy loaded by the outer session, so a subsequent
+        ``media_buy.tenant`` access raises ``DetachedInstanceError``.
+        Eager-loading caches the tenant value in the instance, which
+        survives detach.
         """
-        return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())
+        stmt = select(MediaBuy).where(MediaBuy.status.in_(statuses))
+        if eager_load_tenant:
+            stmt = stmt.options(joinedload(MediaBuy.tenant))
+        return list(session.scalars(stmt).all())

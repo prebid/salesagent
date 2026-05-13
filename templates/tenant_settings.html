@@ -1922,8 +1922,7 @@ Exclude any products that don't match the brand's tone.</pre>
 
             {% if embedded_view %}
             <div class="alert alert-info" style="margin-bottom: 1.5rem; padding: 0.75rem 1rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; color: #1e40af;">
-                <strong>Platform-managed.</strong> Your agent URL and partner roster are configured by Scope3.
-                Contact your Scope3 representative to add or remove partners.
+                <strong>Platform-managed agent URL.</strong> Your agent URL is configured by Scope3. You manage your own publisher partner roster below.
             </div>
             {% endif %}
 
@@ -1966,7 +1965,6 @@ Exclude any products that don't match the brand's tone.</pre>
             <div class="form-section" style="margin-top: 2rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                     <h3>Publisher partners</h3>
-                    {% if not embedded_view %}
                     <div style="display: flex; gap: 0.5rem;">
                         <button onclick="syncAllPublishers()" class="btn btn-secondary" id="sync-publishers-btn">
                             <span id="sync-publishers-icon">🔄</span> Refresh all
@@ -1975,7 +1973,6 @@ Exclude any products that don't match the brand's tone.</pre>
                             + Add Publisher
                         </button>
                     </div>
-                    {% endif %}
                 </div>
 
                 <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
@@ -1995,7 +1992,6 @@ Exclude any products that don't match the brand's tone.</pre>
                 </div>
             </div>
 
-            {% if not embedded_view %}
             <!-- Add Publisher Modal -->
             <div id="add-publisher-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
                 <div style="background: white; border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; max-height: 90vh; overflow-y: auto;">
@@ -2030,7 +2026,6 @@ Exclude any products that don't match the brand's tone.</pre>
                     </form>
                 </div>
             </div>
-            {% endif %}
         </div>
 
         <!-- Products Settings -->

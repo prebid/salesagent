@@ -33,18 +33,6 @@ logger = logging.getLogger(__name__)
 publisher_partners_bp = Blueprint("publisher_partners", __name__)
 
 
-def _reject_if_embedded(tenant: Tenant) -> tuple[Response, int] | None:
-    """Mutating publisher-partner endpoints reject embedded tenants —
-    Scope3 owns the partner roster on managed-mode tenants. The UI hides
-    the buttons; this guard catches direct API hits."""
-    if tenant.is_embedded:
-        return (
-            jsonify({"error": "Embedded tenants are platform-managed; publisher partners are configured by Scope3."}),
-            403,
-        )
-    return None
-
-
 def _persist_status(partner: PublisherPartner, status: PublisherPartnerStatus) -> None:
     """Copy a fresh AAO status snapshot onto a PublisherPartner row.
 
@@ -240,7 +228,7 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     """Add a new publisher partner."""
     try:
@@ -250,6 +238,11 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
 
         if not publisher_domain:
             return jsonify({"error": "Publisher domain is required"}), 400
+
+        # Bound the display_name so a hostile or buggy caller can't persist
+        # multi-MB strings that later render into the admin UI / API responses.
+        if len(display_name) > 255:
+            return jsonify({"error": "Display name must be 255 characters or fewer"}), 400
 
         # Remove http:// or https:// if present
         publisher_domain = publisher_domain.replace("https://", "").replace("http://", "")
@@ -269,10 +262,6 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
             tenant = session.scalars(stmt_tenant).first()
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
-
-            embedded_reject = _reject_if_embedded(tenant)
-            if embedded_reject is not None:
-                return embedded_reject
 
             # For mock adapters OR development environment, auto-verify publishers (no adagents.json to check)
             # Development: Local dev servers won't be in any publisher's adagents.json
@@ -338,7 +327,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>", methods=["DELETE"])
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
     """Delete a publisher partner."""
     try:
@@ -346,9 +335,6 @@ def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tupl
             tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
-            embedded_reject = _reject_if_embedded(tenant)
-            if embedded_reject is not None:
-                return embedded_reject
 
             stmt = select(PublisherPartner).filter_by(id=partner_id, tenant_id=tenant_id)
             partner = session.scalars(stmt).first()
@@ -367,7 +353,7 @@ def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tupl
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """Sync verification status for all publisher partners."""
     try:
@@ -377,9 +363,6 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             tenant = session.scalars(stmt_tenant).first()
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
-            embedded_reject = _reject_if_embedded(tenant)
-            if embedded_reject is not None:
-                return embedded_reject
 
             # Get all publisher partners
             stmt_partners = select(PublisherPartner).filter_by(tenant_id=tenant_id)
@@ -627,7 +610,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/refresh", methods=["POST"])
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def refresh_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
     """Force-refresh AAO status for a single publisher partner.
 
@@ -640,9 +623,6 @@ def refresh_publisher_partner(tenant_id: str, partner_id: int) -> Response | tup
             tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
-            embedded_reject = _reject_if_embedded(tenant)
-            if embedded_reject is not None:
-                return embedded_reject
 
             partner = session.scalars(select(PublisherPartner).filter_by(id=partner_id, tenant_id=tenant_id)).first()
             if not partner:
