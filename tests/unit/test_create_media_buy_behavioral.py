@@ -320,9 +320,16 @@ class TestMaxDailySpendExceeded:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        # Canonical AdCP enum is uppercase ``VALIDATION_ERROR`` —
-        # adcontextprotocol/adcp #342 finding 3.
-        assert errors[0].code == "VALIDATION_ERROR"
+        # ``INVALID_REQUEST`` per AdCP 3.0 standard error-code enum — the
+        # canonical code for buyer-fixable shape / business-rule violations
+        # (max-daily-spend overage, past start_time, reversed dates). The
+        # pre-spec ``VALIDATION_ERROR`` was not in ``STANDARD_ERROR_CODES``
+        # and was dropped by buyer agents walking the enum for
+        # self-correction. Storyboards ``error_compliance/nonexistent_product``
+        # and ``error_compliance/reversed_dates_error`` both accept
+        # ``INVALID_REQUEST``; the latter also accepts ``VALIDATION_ERROR``
+        # — the intersection (and spec-canonical answer) is INVALID_REQUEST.
+        assert errors[0].code == "INVALID_REQUEST"
         assert "daily" in errors[0].message.lower()
 
     @pytest.mark.asyncio

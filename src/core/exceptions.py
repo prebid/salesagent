@@ -184,6 +184,30 @@ class AdCPNotCancellableError(AdCPError):
     recovery: RecoveryHint = "correctable"
 
 
+class AdCPInvalidStateError(AdCPError):
+    """Requested action is not legal for the entity's current state (422, INVALID_STATE).
+
+    Raised by ``update_media_buy`` when a buyer attempts a state transition
+    that the AdCP state machine forbids — pause/resume on an already-canceled
+    or completed buy is the canonical case. Distinct from ``NOT_CANCELLABLE``
+    (cancel-of-canceled, narrower) so buyers can distinguish "the action
+    you tried isn't legal here" from "this specific terminal-cancel
+    interaction is the issue". Recovery is correctable: the buyer can
+    pick a different action (or stop) without changing the wire payload's
+    other fields.
+
+    Storyboard ``media_buy_state_machine/pause_canceled_buy`` asserts on
+    ``/adcp_error/code == "INVALID_STATE"`` for the pause-of-canceled
+    transition. Pre-validation runs BEFORE adapter dispatch so the error
+    is idempotency-spec friendly (same payload → same wire code on
+    retry regardless of adapter).
+    """
+
+    status_code = 422
+    error_code = "INVALID_STATE"
+    recovery: RecoveryHint = "correctable"
+
+
 class AdCPBudgetExhaustedError(AdCPError):
     """Budget or spend limit has been reached (422)."""
 

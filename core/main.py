@@ -69,6 +69,7 @@ from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
+from core.middleware.www_authenticate import WWWAuthenticateMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -422,6 +423,23 @@ def _serve_kwargs(
 
     asgi_middleware: list = [
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
+        # WWWAuthenticateMiddleware runs after AdminWSGIMount so admin Flask
+        # paths (Google-OAuth-gated) short-circuit before it sees them — the
+        # Bearer-scheme challenge is wrong for those paths. For buyer-protocol
+        # traffic that flows past AdminWSGIMount, it wraps every inner
+        # middleware that can emit 401 and injects ``WWW-Authenticate: Bearer``
+        # (RFC 6750 §3) if missing.
+        #
+        # FIXME(adcp-client-python#712): workaround for an upstream defect in
+        # ``BearerTokenAuthMiddleware._unauthenticated`` (the MCP-leg 401 path
+        # emits a ``JSONResponse`` without ``WWW-Authenticate``; the sibling
+        # A2A leg ``_send_unauthenticated`` does it correctly). Drop this
+        # middleware and its registration once the upstream fix ships and
+        # we bump ``adcp``. The case-insensitive presence check makes the
+        # middleware a no-op once upstream emits the header, so the order
+        # of operations is safe: bump adcp → re-probe → remove middleware
+        # in a follow-up PR if everything stays green.
+        (WWWAuthenticateMiddleware, {}),
         # DualCredentialAuditMiddleware logs WARNING when an inbound
         # request carries two different bearer tokens (one in
         # ``Authorization: Bearer`` and one in ``x-adcp-auth``). Restores

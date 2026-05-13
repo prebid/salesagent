@@ -28,6 +28,7 @@ from sqlalchemy import select
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPInvalidStateError,
     AdCPMediaBuyNotFoundError,
     AdCPNotCancellableError,
     AdCPPackageNotFoundError,
@@ -732,6 +733,31 @@ def _update_media_buy_impl(
 
         # Handle campaign-level updates
         if req.paused is not None:
+            # Pre-validation: pause/resume on a terminal-state buy violates the
+            # AdCP state machine. The cancel branch (above) already guards
+            # cancel-of-canceled with AdCPNotCancellableError; the symmetric
+            # guard for pause/resume raises AdCPInvalidStateError so buyers
+            # see the spec-canonical INVALID_STATE wire code on
+            # ``/adcp_error/code`` (storyboard
+            # ``media_buy_state_machine/pause_canceled_buy``). Runs BEFORE
+            # adapter dispatch so the rejection is idempotency-spec friendly
+            # — same payload yields the same wire code on retry regardless
+            # of which adapter would have handled the transition.
+            current_mb = uow.media_buys.get_by_id(req.media_buy_id)
+            current_status = str(current_mb.status) if current_mb else None
+            if current_status in ("canceled", "completed"):
+                action_name = "pause" if req.paused else "resume"
+                error_msg = (
+                    f"media_buy_id={req.media_buy_id!r} is in terminal state {current_status!r} — "
+                    f"cannot {action_name} a {current_status} buy"
+                )
+                ctx_manager.update_workflow_step(
+                    step.step_id,
+                    status="failed",
+                    error_message=f"terminal state: {current_status}",
+                )
+                raise AdCPInvalidStateError(error_msg)
+
             # adcp 2.12.0+: paused=True means pause, paused=False means resume
             action = "pause_media_buy" if req.paused else "resume_media_buy"
             result = adapter.update_media_buy(

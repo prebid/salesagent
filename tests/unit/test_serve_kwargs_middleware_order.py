@@ -104,6 +104,41 @@ def test_signing_verify_runs_last(middleware_classes):
     )
 
 
+def test_www_authenticate_runs_after_admin_mount_and_before_signing(middleware_classes):
+    """``WWWAuthenticateMiddleware`` must sit AFTER ``AdminWSGIMount`` and
+    BEFORE ``SigningVerifyMiddleware``.
+
+    AFTER ``AdminWSGIMount``: admin Google-OAuth-gated paths short-circuit
+    to Flask before WWWAuthenticate sees them — a Bearer-scheme challenge
+    is contextually wrong for those.
+
+    BEFORE ``SigningVerifyMiddleware`` (and every other buyer-protocol
+    middleware that can emit 401): WWWAuthenticate must be OUTSIDE the
+    middlewares that emit 401 to wrap their response and inject the
+    header if missing.
+
+    A future refactor that moves it ahead of ``AdminWSGIMount`` would put
+    a misleading Bearer challenge on Google-OAuth 401s; moving it inside
+    ``SigningVerifyMiddleware`` would mean signing 401s ship without the
+    header. Pin the position so either drift surfaces here.
+    Workaround tracker: adcp-client-python#712.
+    """
+    from core.middleware.www_authenticate import WWWAuthenticateMiddleware
+
+    assert WWWAuthenticateMiddleware in middleware_classes, (
+        f"WWWAuthenticateMiddleware missing from asgi_middleware — RFC 6750 §3 "
+        f"compliance breaks. Got order: {[c.__name__ for c in middleware_classes]}"
+    )
+    admin_idx = middleware_classes.index(AdminWSGIMount)
+    www_idx = middleware_classes.index(WWWAuthenticateMiddleware)
+    signing_idx = middleware_classes.index(SigningVerifyMiddleware)
+    assert admin_idx < www_idx < signing_idx, (
+        f"WWWAuthenticateMiddleware must run AFTER AdminWSGIMount and BEFORE "
+        f"SigningVerifyMiddleware. Got admin={admin_idx}, www={www_idx}, "
+        f"signing={signing_idx}; full order: {[c.__name__ for c in middleware_classes]}"
+    )
+
+
 def _kwargs_with(env: dict[str, str]) -> dict:
     """Build ``_serve_kwargs`` output with the given env overrides applied."""
     from core import main as core_main
