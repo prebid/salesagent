@@ -106,6 +106,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
 | Single migration head | Alembic migration graph has exactly one head | `test_architecture_single_migration_head.py` |
+| AdCP schema cache complete | Local `schemas/<version>/` cache contains the transitive closure of every `$ref` declared in `index.json` | `test_architecture_adcp_schema_cache_complete.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead

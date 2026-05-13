@@ -201,7 +201,7 @@ class TestListAuthorizedPropertiesResponse:
     def test_response_adcp_compliance(self):
         """Test that ListAuthorizedPropertiesResponse complies with AdCP v2.4 schema."""
         # Create response with required fields only (no optional fields set)
-        # Per /schemas/v1/media-buy/list-authorized-properties-response.json
+        # Per /schemas/latest/media-buy/list-authorized-properties-response.json
         response = ListAuthorizedPropertiesResponse(
             publisher_domains=["example.com"],
             # All optional fields omitted - should be excluded from model_dump per AdCP spec

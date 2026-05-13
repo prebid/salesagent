@@ -53,7 +53,7 @@ class A2AAdCPValidator:
     def __init__(self):
         self.validator = None
         if SCHEMA_VALIDATION_AVAILABLE:
-            self.validator = AdCPSchemaValidator(offline_mode=True, adcp_version="v1")
+            self.validator = AdCPSchemaValidator(offline_mode=True, adcp_version="latest")
 
     async def __aenter__(self):
         if self.validator:
@@ -180,9 +180,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -230,9 +228,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -285,9 +281,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -344,9 +338,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -412,9 +404,7 @@ class TestA2ASkillInvocation:
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock identity resolution
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             from tests.a2a_helpers import make_a2a_context
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
@@ -460,9 +450,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -505,9 +493,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -755,9 +741,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -820,9 +804,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -856,9 +838,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -905,9 +885,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -940,9 +918,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -973,9 +949,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with (patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
