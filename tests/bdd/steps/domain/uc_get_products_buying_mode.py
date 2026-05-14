@@ -236,9 +236,12 @@ def then_response_has_refinement_applied(ctx: dict) -> None:
 def then_refinement_entries_have_status(ctx: dict) -> None:
     resp = ctx["response"]
     for entry in resp.refinement_applied:
-        assert getattr(entry, "status", None) is not None, "refinement_applied entry missing status"
+        # Each entry is a RefinementApplied root model — fields live on .root
+        # (RefinementApplied1/2/3 by scope discriminator).
+        inner = getattr(entry, "root", entry)
+        assert getattr(inner, "status", None) is not None, "refinement_applied entry missing status"
         # Status is an enum; .value is the string per AdCP spec
-        status_val = entry.status.value if hasattr(entry.status, "value") else entry.status
+        status_val = inner.status.value if hasattr(inner.status, "value") else inner.status
         assert status_val in {"applied", "partial", "unable"}, f"Invalid status: {status_val!r}"
 
 

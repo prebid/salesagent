@@ -116,11 +116,15 @@ def test_refine_mode_returns_refinement_applied(env, transport):
     assert len(payload.products) >= 2
     assert payload.refinement_applied is not None
     assert len(payload.refinement_applied) == 2
+    # Each entry is a RefinementApplied root model — read fields via .root.
+    # In adcp 4.3, scope is a plain string literal (not an enum); status remains an enum.
     # Both entries are unable until #1073 lands
-    assert all(item.status.value == "unable" for item in payload.refinement_applied)
+    assert all(item.root.status.value == "unable" for item in payload.refinement_applied)
     # Echo of scope per spec
-    assert payload.refinement_applied[0].scope.value == "request"
-    assert payload.refinement_applied[1].scope.value == "product"
+    assert payload.refinement_applied[0].root.scope == "request"
+    assert payload.refinement_applied[1].root.scope == "product"
+    # Product-scope entry echoes product_id (spec 3.0.6 wire field)
+    assert payload.refinement_applied[1].root.product_id == "display_premium"
 
 
 # ---------------------------------------------------------------------------
