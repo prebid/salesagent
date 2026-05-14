@@ -40,7 +40,8 @@ Then in your template, add browse buttons:
 
         <!-- List -->
         <div id="inventory-picker-list" style="flex: 1; overflow-y: auto; min-height: 200px;">
-            <!-- Items loaded dynamically -->
+            <div id="ad-unit-picker-container" style="display: none;"></div>
+            <div id="placement-picker-container" style="display: none;"></div>
         </div>
 
         <!-- Footer -->
@@ -144,15 +145,20 @@ Then in your template, add browse buttons:
     }
 
     function loadInventory(type, search = '') {
+        const adUnitContainer = document.getElementById('ad-unit-picker-container');
+        const placementContainer = document.getElementById('placement-picker-container');
+
         if (type === 'ad_unit') {
-            // Get current selections from hidden field
+            adUnitContainer.style.display = '';
+            placementContainer.style.display = 'none';
+
             const field = document.getElementById(config.adUnitFieldId);
             const selectedIds = new Set(field ? field.value.split(',').filter(Boolean) : []);
 
             if (!adUnitTree) {
                 adUnitTree = initInventoryTree({
                     apiUrl: treeApiUrl,
-                    containerId: 'inventory-picker-list',
+                    containerId: 'ad-unit-picker-container',
                     showCheckboxes: true,
                     selectedIds: selectedIds,
                     onSelect: (nodeId, nodeData) => {
@@ -164,15 +170,14 @@ Then in your template, add browse buttons:
             }
             if (search) adUnitTree.search(search);
         } else {
+            adUnitContainer.style.display = 'none';
+            placementContainer.style.display = '';
             loadPlacementsList(search);
         }
     }
 
     function loadPlacementsList(search = '') {
-        // Writing placement HTML into the shared container destroys the tree's DOM nodes.
-        // Reset so initInventoryTree() runs fresh on the next ad_unit open.
-        adUnitTree = null;
-        const list = document.getElementById('inventory-picker-list');
+        const list = document.getElementById('placement-picker-container');
         const url = `${config.scriptRoot}/api/tenant/${config.tenantId}/inventory-list?type=placement${search ? '&search=' + encodeURIComponent(search) : ''}`;
 
         fetch(url, { credentials: 'same-origin' })
@@ -192,7 +197,7 @@ Then in your template, add browse buttons:
                 }
 
                 if (data.items.length === 0) {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #666;">No placements found.</div>`;
+                    list.innerHTML = '<div style="padding: 2rem; text-align: center; color: #666;">No placements found.</div>';
                     return;
                 }
 
@@ -221,7 +226,7 @@ Then in your template, add browse buttons:
             .catch(error => {
                 // Don't show error for session expired (we're redirecting)
                 if (error.message !== 'Session expired') {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error loading placements: ${error.message}</div>`;
                 }
             });
     }
@@ -234,7 +239,7 @@ Then in your template, add browse buttons:
     function applyInventorySelection() {
         const selectedIds = (currentPickerType === 'ad_unit' && adUnitTree)
             ? Array.from(adUnitTree.getSelectedIds())
-            : Array.from(document.getElementById('inventory-picker-list')
+            : Array.from(document.getElementById('placement-picker-container')
                 .querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
 
         if (currentPickerType === 'ad_unit') {
