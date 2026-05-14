@@ -90,12 +90,12 @@ class TestA2AAppUsesCustomContextBuilder:
 
         source = (pathlib.Path(__file__).resolve().parents[2] / "src" / "app.py").read_text()
 
-        assert (
-            "context_builder" in source
-        ), "A2AStarletteApplication in app.py must be constructed with context_builder parameter"
-        assert (
-            "AdCPCallContextBuilder" in source
-        ), "A2AStarletteApplication must use AdCPCallContextBuilder, not DefaultCallContextBuilder"
+        assert "context_builder" in source, (
+            "A2AStarletteApplication in app.py must be constructed with context_builder parameter"
+        )
+        assert "AdCPCallContextBuilder" in source, (
+            "A2AStarletteApplication must use AdCPCallContextBuilder, not DefaultCallContextBuilder"
+        )
 
 
 class TestHandlerReadsFromContext:
@@ -132,6 +132,6 @@ class TestHandlerReadsFromContext:
         handler = AdCPRequestHandler()
         sig = inspect.signature(handler._resolve_a2a_identity)
         params = list(sig.parameters.keys())
-        assert (
-            "context" in params
-        ), "_resolve_a2a_identity must accept a 'context' parameter to read from ServerCallContext"
+        assert "context" in params, (
+            "_resolve_a2a_identity must accept a 'context' parameter to read from ServerCallContext"
+        )

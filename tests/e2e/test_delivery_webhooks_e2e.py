@@ -287,20 +287,20 @@ class TestDailyDeliveryWebhookFlow:
                 sleep(poll_interval)
                 elapsed += poll_interval
 
-            assert (
-                received
-            ), "Expected at least one delivery report webhook. Check connectivity and DELIVERY_WEBHOOK_INTERVAL."
+            assert received, (
+                "Expected at least one delivery report webhook. Check connectivity and DELIVERY_WEBHOOK_INTERVAL."
+            )
 
             if received:
                 webhook_payload = received[0]
 
                 # Verify webhook payload structure (MCP webhook format)
-                assert (
-                    webhook_payload.get("status") == "completed"
-                ), f"Expected status 'completed', got {webhook_payload.get('status')}"
-                assert (
-                    webhook_payload.get("task_id") == media_buy_id
-                ), f"Expected task_id '{media_buy_id}', got {webhook_payload.get('task_id')}"
+                assert webhook_payload.get("status") == "completed", (
+                    f"Expected status 'completed', got {webhook_payload.get('status')}"
+                )
+                assert webhook_payload.get("task_id") == media_buy_id, (
+                    f"Expected task_id '{media_buy_id}', got {webhook_payload.get('task_id')}"
+                )
                 assert "timestamp" in webhook_payload, "Missing timestamp in webhook payload"
 
                 result = webhook_payload.get("result") or {}
@@ -312,7 +312,7 @@ class TestDailyDeliveryWebhookFlow:
                 assert media_buy_deliveries[0]["media_buy_id"] == media_buy_id
 
                 # Verify scheduling metadata
-                assert (
-                    result.get("notification_type") == "scheduled"
-                ), f"Expected notification_type 'scheduled', got {result.get('notification_type')}"
+                assert result.get("notification_type") == "scheduled", (
+                    f"Expected notification_type 'scheduled', got {result.get('notification_type')}"
+                )
                 assert "next_expected_at" in result, "Missing next_expected_at in result"

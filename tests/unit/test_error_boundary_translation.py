@@ -569,9 +569,9 @@ class TestToDictRecoveryField:
         for exc, expected_recovery in cases:
             d = exc.to_dict()
             assert "recovery" in d, f"{type(exc).__name__}.to_dict() missing 'recovery' key"
-            assert (
-                d["recovery"] == expected_recovery
-            ), f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
+            assert d["recovery"] == expected_recovery, (
+                f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
+            )
 
     def test_to_dict_custom_recovery_override(self):
         """Custom recovery= kwarg overrides class default in to_dict() output."""
@@ -803,15 +803,15 @@ class TestRecoveryRoundtrip:
                     await handler._handle_explicit_skill("get_products", {}, "token")
 
                 # a2a-sdk 1.0: check exception type and attributes directly
-                assert isinstance(
-                    exc_info.value, expected_a2a_type
-                ), f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(exc_info.value).__name__}"
-                assert (
-                    exc_info.value.data["recovery"] == expected_recovery
-                ), f"{exc_class.__name__}: recovery={exc_info.value.data.get('recovery')!r}, expected {expected_recovery!r}"
-                assert (
-                    exc_info.value.data["error_code"] == exc_class.error_code
-                ), f"{exc_class.__name__}: error_code={exc_info.value.data.get('error_code')!r}, expected {exc_class.error_code!r}"
+                assert isinstance(exc_info.value, expected_a2a_type), (
+                    f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(exc_info.value).__name__}"
+                )
+                assert exc_info.value.data["recovery"] == expected_recovery, (
+                    f"{exc_class.__name__}: recovery={exc_info.value.data.get('recovery')!r}, expected {expected_recovery!r}"
+                )
+                assert exc_info.value.data["error_code"] == exc_class.error_code, (
+                    f"{exc_class.__name__}: error_code={exc_info.value.data.get('error_code')!r}, expected {exc_class.error_code!r}"
+                )
 
     def test_rest_roundtrip_all_subclasses(self):
         """All 11 AdCPError subclasses: raise -> REST handler -> JSON body -> verify recovery."""
@@ -853,13 +853,13 @@ class TestRecoveryRoundtrip:
             ):
                 client = TestClient(app, raise_server_exceptions=False)
                 response = client.get("/api/v1/capabilities")
-                assert (
-                    response.status_code == expected_status
-                ), f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
+                assert response.status_code == expected_status, (
+                    f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
+                )
                 body = response.json()
-                assert (
-                    body["error_code"] == expected_code
-                ), f"{exc_class.__name__}: error_code={body['error_code']!r}, expected {expected_code!r}"
-                assert (
-                    body["recovery"] == expected_recovery
-                ), f"{exc_class.__name__}: recovery={body['recovery']!r}, expected {expected_recovery!r}"
+                assert body["error_code"] == expected_code, (
+                    f"{exc_class.__name__}: error_code={body['error_code']!r}, expected {expected_code!r}"
+                )
+                assert body["recovery"] == expected_recovery, (
+                    f"{exc_class.__name__}: recovery={body['recovery']!r}, expected {expected_recovery!r}"
+                )

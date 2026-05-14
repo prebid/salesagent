@@ -49,17 +49,17 @@ class TestApiV1NoManualAuthCalls:
         """_resolve_auth should not exist in api_v1 (moved to auth_context Depends)."""
         import src.routes.api_v1 as api_v1_mod
 
-        assert not hasattr(
-            api_v1_mod, "_resolve_auth"
-        ), "_resolve_auth still exists in api_v1.py — should be replaced by Depends"
+        assert not hasattr(api_v1_mod, "_resolve_auth"), (
+            "_resolve_auth still exists in api_v1.py — should be replaced by Depends"
+        )
 
     def test_no_require_auth_in_api_v1(self):
         """_require_auth should not exist in api_v1 (moved to auth_context Depends)."""
         import src.routes.api_v1 as api_v1_mod
 
-        assert not hasattr(
-            api_v1_mod, "_require_auth"
-        ), "_require_auth still exists in api_v1.py — should be replaced by Depends"
+        assert not hasattr(api_v1_mod, "_require_auth"), (
+            "_require_auth still exists in api_v1.py — should be replaced by Depends"
+        )
 
 
 class TestRouteSignaturesUseDependsForIdentity:
@@ -142,9 +142,9 @@ class TestRouteSignaturesUseDependsForIdentity:
         for name in route_names:
             func = getattr(api_v1_mod, name)
             sig = inspect.signature(func)
-            assert (
-                "request" not in sig.parameters
-            ), f"{name} still takes 'request' parameter — should use Depends for auth"
+            assert "request" not in sig.parameters, (
+                f"{name} still takes 'request' parameter — should use Depends for auth"
+            )
 
 
 class TestResolveAuthDepBehavior:

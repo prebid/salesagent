@@ -30,9 +30,9 @@ class TestMCPToolImports:
         from src.core import schema_helpers
 
         # Check that the function exists in the schema_helpers module
-        assert hasattr(
-            schema_helpers, "create_get_products_request"
-        ), "create_get_products_request not found in schema_helpers module"
+        assert hasattr(schema_helpers, "create_get_products_request"), (
+            "create_get_products_request not found in schema_helpers module"
+        )
 
         # Verify it's callable
         assert callable(schema_helpers.create_get_products_request), "create_get_products_request should be callable"

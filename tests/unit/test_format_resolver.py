@@ -73,12 +73,12 @@ class TestProductFormatOverrideMerge:
         )
 
         # Verify our test setup: model_dump drops platform_config
-        assert (
-            "platform_config" not in base_format.model_dump()
-        ), "Test setup error: platform_config should be excluded from model_dump()"
-        assert base_format.platform_config == {
-            "gam": {"width": 300, "height": 250}
-        }, "Test setup error: platform_config should be accessible on the model"
+        assert "platform_config" not in base_format.model_dump(), (
+            "Test setup error: platform_config should be excluded from model_dump()"
+        )
+        assert base_format.platform_config == {"gam": {"width": 300, "height": 250}}, (
+            "Test setup error: platform_config should be accessible on the model"
+        )
 
         format_overrides = {
             "display_300x250": {

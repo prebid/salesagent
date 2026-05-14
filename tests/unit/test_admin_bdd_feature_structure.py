@@ -33,9 +33,9 @@ class TestAdminBddFeatureStructure:
     """Verify BR-ADMIN-ACCOUNTS.feature meets structural requirements."""
 
     def test_feature_file_exists(self) -> None:
-        assert (
-            FEATURE_FILE.exists()
-        ), f"Feature file not found at {FEATURE_FILE}. Task salesagent-oj0.1.1 requires creating this file."
+        assert FEATURE_FILE.exists(), (
+            f"Feature file not found at {FEATURE_FILE}. Task salesagent-oj0.1.1 requires creating this file."
+        )
 
     def test_minimum_scenario_count(self) -> None:
         text = FEATURE_FILE.read_text()
@@ -58,6 +58,6 @@ class TestAdminBddFeatureStructure:
     def test_tag_prefix_convention(self) -> None:
         text = FEATURE_FILE.read_text()
         scenario_tags = re.findall(r"@(T-ADMIN-ACCT-\d+)", text)
-        assert (
-            len(scenario_tags) >= MIN_SCENARIOS
-        ), f"Found {len(scenario_tags)} @T-ADMIN-ACCT-xxx tags, need >= {MIN_SCENARIOS}"
+        assert len(scenario_tags) >= MIN_SCENARIOS, (
+            f"Found {len(scenario_tags)} @T-ADMIN-ACCT-xxx tags, need >= {MIN_SCENARIOS}"
+        )

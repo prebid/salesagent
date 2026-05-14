@@ -554,9 +554,9 @@ class BaseTestEnv:
                         # If a third module imports get_http_headers without being
                         # patched, this won't catch it — but at least we verify
                         # the known auth paths were exercised.
-                        assert (
-                            patched_th.called or patched_mw.called
-                        ), f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
+                        assert patched_th.called or patched_mw.called, (
+                            f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
+                        )
                         return response_cls(**result.structured_content)
 
         else:

@@ -117,9 +117,9 @@ class TestDatabaseHealthIntegration:
             health = check_database_health()
 
             # Should handle error gracefully
-            assert (
-                health["status"] == "error"
-            ), f"Should report error status for database connection failure, got: {health['status']}"
+            assert health["status"] == "error", (
+                f"Should report error status for database connection failure, got: {health['status']}"
+            )
             assert len(health["schema_issues"]) > 0, "Should report schema issues for failed connection"
 
             # Error should be descriptive

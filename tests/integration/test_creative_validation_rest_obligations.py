@@ -65,9 +65,9 @@ class TestMissingFormatIdRejectedThroughImpl:
         assert result.errors is not None
         assert len(result.errors) > 0
         error_msgs = [e.message if hasattr(e, "message") else str(e) for e in result.errors]
-        assert any(
-            "format_id" in msg.lower() for msg in error_msgs
-        ), f"Expected error about format_id, got: {error_msgs}"
+        assert any("format_id" in msg.lower() for msg in error_msgs), (
+            f"Expected error about format_id, got: {error_msgs}"
+        )
 
 
 # ---------------------------------------------------------------------------

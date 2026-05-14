@@ -86,9 +86,9 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 )
 
 # Sanity check: every mapping target must be a standard code.
-assert all(
-    v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()
-), "ERROR_CODE_MAPPING contains non-standard target codes"
+assert all(v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()), (
+    "ERROR_CODE_MAPPING contains non-standard target codes"
+)
 
 
 def translate_error_code(code: str) -> str:

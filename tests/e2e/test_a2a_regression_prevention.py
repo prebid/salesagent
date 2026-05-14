@@ -39,19 +39,19 @@ class TestAgentCardURLRegression:
         agent_card = create_agent_card()
 
         # Critical: URL should not end with trailing slash
-        assert not agent_card.supported_interfaces[0].url.endswith(
-            "/"
-        ), f"Agent card URL '{agent_card.supported_interfaces[0].url}' should not end with trailing slash"
+        assert not agent_card.supported_interfaces[0].url.endswith("/"), (
+            f"Agent card URL '{agent_card.supported_interfaces[0].url}' should not end with trailing slash"
+        )
 
         # Should be a valid URL format
-        assert agent_card.supported_interfaces[0].url.startswith(
-            ("http://", "https://")
-        ), f"Invalid URL format: {agent_card.supported_interfaces[0].url}"
+        assert agent_card.supported_interfaces[0].url.startswith(("http://", "https://")), (
+            f"Invalid URL format: {agent_card.supported_interfaces[0].url}"
+        )
 
         # Should end with /a2a (no slash)
-        assert agent_card.supported_interfaces[0].url.endswith(
-            "/a2a"
-        ), f"Agent card URL should end with '/a2a': {agent_card.supported_interfaces[0].url}"
+        assert agent_card.supported_interfaces[0].url.endswith("/a2a"), (
+            f"Agent card URL should end with '/a2a': {agent_card.supported_interfaces[0].url}"
+        )
 
     def test_dynamic_agent_card_urls_no_trailing_slash(self):
         """Test that dynamically generated agent card URLs don't have trailing slashes."""
@@ -265,9 +265,9 @@ class TestHTTPBehaviorRegression:
 
                 if response.status_code == 200:
                     # Should be 200, not a redirect (301, 302, etc.)
-                    assert (
-                        200 <= response.status_code < 300
-                    ), f"Endpoint {endpoint} returned redirect: {response.status_code}"
+                    assert 200 <= response.status_code < 300, (
+                        f"Endpoint {endpoint} returned redirect: {response.status_code}"
+                    )
 
                     # Should return JSON
                     assert response.headers.get("content-type", "").startswith("application/json")

@@ -131,6 +131,6 @@ class TestAuthContextDocstringsMatchReality:
             "AuthContext docstring claims 'zero auth logic in handlers' "
             "but handlers call resolve_identity(). Fix docstring."
         )
-        assert (
-            "resolves auth" not in docstring_lower
-        ), "AuthContext docstring claims auth resolution but middleware only extracts tokens."
+        assert "resolves auth" not in docstring_lower, (
+            "AuthContext docstring claims auth resolution but middleware only extracts tokens."
+        )

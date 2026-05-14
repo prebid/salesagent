@@ -34,9 +34,9 @@ class TestActivityFeedSyncStorage:
             gc.collect()
 
         unawaited = [w for w in caught if issubclass(w.category, RuntimeWarning) and "never awaited" in str(w.message)]
-        assert (
-            len(unawaited) == 0
-        ), f"Should not emit unawaited coroutine warning, got: {[str(w.message) for w in unawaited]}"
+        assert len(unawaited) == 0, (
+            f"Should not emit unawaited coroutine warning, got: {[str(w.message) for w in unawaited]}"
+        )
 
         # Data must be stored
         activities = feed.recent_activities.get("test-tenant")

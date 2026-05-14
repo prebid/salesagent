@@ -412,17 +412,17 @@ class TestNoDeadA2AMap:
         """_A2A_ERROR_CODE_MAP was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(
-            exc_module, "_A2A_ERROR_CODE_MAP"
-        ), "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
+        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), (
+            "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
+        )
 
     def test_no_to_a2a_error_code_in_exceptions(self):
         """to_a2a_error_code() was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(
-            exc_module, "to_a2a_error_code"
-        ), "to_a2a_error_code() is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
+        assert not hasattr(exc_module, "to_a2a_error_code"), (
+            "to_a2a_error_code() is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
+        )
 
 
 # ---------------------------------------------------------------------------

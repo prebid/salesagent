@@ -228,18 +228,18 @@ def then_page_shows_action_buttons(ctx: dict, buttons_str: str) -> None:
     html = ctx["response"].data.decode()
     buttons = [b.strip().strip('"') for b in buttons_str.split(" and ")]
     for button_text in buttons:
-        assert (
-            f"onclick=\"changeStatus('{button_text.lower()}')" in html
-        ), f"Action button for '{button_text}' not found"
+        assert f"onclick=\"changeStatus('{button_text.lower()}')" in html, (
+            f"Action button for '{button_text}' not found"
+        )
 
 
 @then(parsers.parse('the page does not show action button for "{button_text}"'))
 def then_page_no_action_button(ctx: dict, button_text: str) -> None:
     """Assert an action button is NOT present."""
     html = ctx["response"].data.decode()
-    assert (
-        f"onclick=\"changeStatus('{button_text.lower()}')" not in html
-    ), f"Action button for '{button_text}' should not be present"
+    assert f"onclick=\"changeStatus('{button_text.lower()}')" not in html, (
+        f"Action button for '{button_text}' should not be present"
+    )
 
 
 @then("the page does not show any status action buttons")
@@ -258,9 +258,9 @@ def then_redirected_to_list(ctx: dict) -> None:
     response = ctx["response"]
     assert response.status_code in (302, 303), f"Expected redirect, got {response.status_code}"
     location = response.headers.get("Location", "")
-    assert "/accounts/" in location or location.endswith(
-        "/accounts"
-    ), f"Expected redirect to accounts list, got: {location}"
+    assert "/accounts/" in location or location.endswith("/accounts"), (
+        f"Expected redirect to accounts list, got: {location}"
+    )
 
 
 @then("the admin is redirected to the account detail page")

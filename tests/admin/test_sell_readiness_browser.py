@@ -239,9 +239,9 @@ def _create_pending_media_buy(live_server: dict[str, str], auth_token: str) -> s
     )
     media_buy_id = create_result["media_buy_id"]
     state = _get_media_buy_state(live_server, media_buy_id)
-    assert (
-        state["media_buy_status"] == "pending_approval"
-    ), f"Expected pending approval media buy, got {state['media_buy_status']}"
+    assert state["media_buy_status"] == "pending_approval", (
+        f"Expected pending approval media buy, got {state['media_buy_status']}"
+    )
     return media_buy_id
 
 

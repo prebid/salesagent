@@ -289,9 +289,9 @@ class TestSyncAccountsDryRun:
         assert len(response.accounts) == 1
         result = response.accounts[0]
         assert _action_value(result.action) == "created"
-        assert (
-            _status_value(result.status) == "pending_approval"
-        ), "dry_run must preview the approval-mode-derived status, not hardcoded 'active'"
+        assert _status_value(result.status) == "pending_approval", (
+            "dry_run must preview the approval-mode-derived status, not hardcoded 'active'"
+        )
         assert result.setup is not None, "dry_run must preview the setup object"
         assert result.setup.message is not None
         assert result.setup.url is not None
@@ -418,9 +418,9 @@ class TestSyncAccountsApproval:
                 tenant = fresh_session.scalars(select(Tenant).filter_by(tenant_id="harness_audit_t")).first()
                 assert tenant is not None
                 # MUST be written to account_approval_mode (BR-RULE-060)
-                assert (
-                    tenant.account_approval_mode == "credit_review"
-                ), "set_approval_mode writes to wrong DB column; MCP auth chain won't see it"
+                assert tenant.account_approval_mode == "credit_review", (
+                    "set_approval_mode writes to wrong DB column; MCP auth chain won't see it"
+                )
 
             # And the serialized tenant dict used by resolve_identity must include it
             tenant_dict = get_tenant_by_id("harness_audit_t")

@@ -90,9 +90,9 @@ class TestAuthorizationBearerSupport:
         principal_id, tenant_context = get_principal_from_context(None)
 
         # Assert: Should have extracted principal from Bearer token
-        assert (
-            principal_id == "test_principal_id"
-        ), "Authorization: Bearer should be accepted! Currently only x-adcp-auth is checked in auth.py:343"
+        assert principal_id == "test_principal_id", (
+            "Authorization: Bearer should be accepted! Currently only x-adcp-auth is checked in auth.py:343"
+        )
 
     @patch("src.core.auth.get_http_headers")
     @patch("src.core.auth.get_principal_from_token")

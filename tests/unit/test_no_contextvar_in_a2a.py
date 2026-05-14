@@ -88,9 +88,9 @@ class TestNoContextVarInMiddleware:
         """auth_middleware module must not have _auth_context_var in its namespace."""
         import src.core.auth_middleware as mw_mod
 
-        assert not hasattr(
-            mw_mod, "_auth_context_var"
-        ), "UnifiedAuthMiddleware still imports _auth_context_var. Only scope['state'] should be written to."
+        assert not hasattr(mw_mod, "_auth_context_var"), (
+            "UnifiedAuthMiddleware still imports _auth_context_var. Only scope['state'] should be written to."
+        )
 
 
 class TestNoContextVarInfrastructure:
@@ -100,9 +100,9 @@ class TestNoContextVarInfrastructure:
         """auth_context.py must not define _auth_context_var."""
         import src.core.auth_context as ac_mod
 
-        assert not hasattr(
-            ac_mod, "_auth_context_var"
-        ), "_auth_context_var still exists in auth_context module. Remove it after all consumers are migrated."
+        assert not hasattr(ac_mod, "_auth_context_var"), (
+            "_auth_context_var still exists in auth_context module. Remove it after all consumers are migrated."
+        )
 
     def test_no_get_current_auth_context_in_module(self):
         """auth_context.py must not define get_current_auth_context."""

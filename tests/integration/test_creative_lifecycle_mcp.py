@@ -1149,9 +1149,9 @@ class TestCreativeLifecycleMCP:
             print(f"DEBUG create_media_buy response: {domain_response}")
             if hasattr(domain_response, "errors") and domain_response.errors:
                 print(f"DEBUG errors: {domain_response.errors}")
-            assert hasattr(
-                domain_response, "media_buy_id"
-            ), f"Expected CreateMediaBuySuccess, got: {type(domain_response).__name__}"
+            assert hasattr(domain_response, "media_buy_id"), (
+                f"Expected CreateMediaBuySuccess, got: {type(domain_response).__name__}"
+            )
             assert domain_response.media_buy_id  # Just verify it exists
             actual_media_buy_id = domain_response.media_buy_id
             # Protocol envelope adds status field - domain response just has media_buy_id

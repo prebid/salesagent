@@ -141,17 +141,17 @@ class TestCreateMediaBuyFieldForwarding:
         """MCP create_media_buy must accept all AdCP spec fields as parameters."""
         params = _extract_wrapper_params(CREATE_FILE, "create_media_buy")
         missing = CREATE_SPEC_FIELDS - params
-        assert (
-            not missing
-        ), f"MCP wrapper 'create_media_buy' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        assert not missing, (
+            f"MCP wrapper 'create_media_buy' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        )
 
     def test_a2a_wrapper_accepts_all_spec_fields_as_params(self):
         """A2A create_media_buy_raw must accept all AdCP spec fields as parameters."""
         params = _extract_wrapper_params(CREATE_FILE, "create_media_buy_raw")
         missing = CREATE_SPEC_FIELDS - params
-        assert (
-            not missing
-        ), f"A2A wrapper 'create_media_buy_raw' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        assert not missing, (
+            f"A2A wrapper 'create_media_buy_raw' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -182,17 +182,17 @@ class TestUpdateMediaBuyFieldForwarding:
         """MCP update_media_buy must accept all AdCP spec fields as parameters."""
         params = _extract_wrapper_params(UPDATE_FILE, "update_media_buy")
         missing = UPDATE_SPEC_FIELDS - params
-        assert (
-            not missing
-        ), f"MCP wrapper 'update_media_buy' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        assert not missing, (
+            f"MCP wrapper 'update_media_buy' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        )
 
     def test_a2a_wrapper_accepts_all_spec_fields(self):
         """A2A update_media_buy_raw must accept all AdCP spec fields as parameters."""
         params = _extract_wrapper_params(UPDATE_FILE, "update_media_buy_raw")
         missing = UPDATE_SPEC_FIELDS - params
-        assert (
-            not missing
-        ), f"A2A wrapper 'update_media_buy_raw' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        assert not missing, (
+            f"A2A wrapper 'update_media_buy_raw' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        )
 
     def test_build_update_request_accepts_all_spec_fields(self):
         """_build_update_request must accept all AdCP spec fields as parameters."""
@@ -204,9 +204,9 @@ class TestUpdateMediaBuyFieldForwarding:
         """MCP wrapper must pass all spec fields to _build_update_request call site."""
         kwargs = _extract_call_kwargs(UPDATE_FILE, "update_media_buy", "_build_update_request")
         missing = UPDATE_SPEC_FIELDS - kwargs
-        assert (
-            not missing
-        ), f"MCP wrapper 'update_media_buy' doesn't forward AdCP fields to _build_update_request: {sorted(missing)}"
+        assert not missing, (
+            f"MCP wrapper 'update_media_buy' doesn't forward AdCP fields to _build_update_request: {sorted(missing)}"
+        )
 
     def test_a2a_wrapper_forwards_all_spec_fields_to_build(self):
         """A2A wrapper must pass all spec fields to _build_update_request call site."""

@@ -497,9 +497,9 @@ class TestAdapterFailureAuditTrail:
 
             with get_db_session() as session:
                 audit_records = session.scalars(select(AuditLog)).all()
-                assert (
-                    len(audit_records) > 0
-                ), "No AuditLog records written to DB. Adapter failure must be recorded in audit trail per NFR-003."
+                assert len(audit_records) > 0, (
+                    "No AuditLog records written to DB. Adapter failure must be recorded in audit trail per NFR-003."
+                )
 
 
 # ---------------------------------------------------------------------------

@@ -163,8 +163,7 @@ class TestBddNoPassSteps:
             if (rel, name) in _EMPTY_GIVEN_WHEN_ALLOWLIST and not _body_is_empty(func):
                 stale.append(f"{rel}:{lineno} {name}")
 
-        assert (
-            not stale
-        ), f"Found {len(stale)} allowlisted step(s) that are no longer empty — remove from allowlist:\n" + "\n".join(
-            f"  {v}" for v in stale
+        assert not stale, (
+            f"Found {len(stale)} allowlisted step(s) that are no longer empty — remove from allowlist:\n"
+            + "\n".join(f"  {v}" for v in stale)
         )

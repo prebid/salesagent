@@ -93,9 +93,9 @@ class TestMCPForwardsPushNotificationConfig:
             forwarded = call_kwargs["push_notification_config"]
             assert forwarded is not None, "push_notification_config was forwarded as None despite being provided"
             # _impl expects dict, not PushNotificationConfig model
-            assert isinstance(
-                forwarded, dict
-            ), f"push_notification_config must be forwarded as dict, got {type(forwarded).__name__}"
+            assert isinstance(forwarded, dict), (
+                f"push_notification_config must be forwarded as dict, got {type(forwarded).__name__}"
+            )
 
 
 class TestA2AForwardsPushNotificationConfig:
@@ -128,9 +128,9 @@ class TestA2AForwardsPushNotificationConfig:
 
             mock_impl.assert_called_once()
             call_kwargs = mock_impl.call_args.kwargs
-            assert (
-                "push_notification_config" in call_kwargs
-            ), "A2A wrapper does not forward push_notification_config to _impl"
+            assert "push_notification_config" in call_kwargs, (
+                "A2A wrapper does not forward push_notification_config to _impl"
+            )
             forwarded = call_kwargs["push_notification_config"]
             assert forwarded is not None
             assert isinstance(forwarded, dict)

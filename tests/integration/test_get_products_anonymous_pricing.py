@@ -88,9 +88,9 @@ class TestAnonymousPricingSuppression:
 
         assert len(result.products) == 3
         for product in result.products:
-            assert (
-                product.pricing_options == []
-            ), f"Product {product.product_id} should have empty pricing_options for anonymous user"
+            assert product.pricing_options == [], (
+                f"Product {product.product_id} should have empty pricing_options for anonymous user"
+            )
 
     @pytest.mark.asyncio
     async def test_authenticated_request_has_populated_pricing_options(self, integration_db):

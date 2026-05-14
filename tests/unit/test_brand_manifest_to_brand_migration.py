@@ -103,9 +103,9 @@ class TestA2AHandlerBrandParameterLookup:
 
         # The handler would raise: "Either 'brief' or 'brand' parameter is required"
         validation_fails = not brief and not brand
-        assert (
-            validation_fails
-        ), "Validation should fail when params have 'brand_manifest' but handler looks for 'brand'"
+        assert validation_fails, (
+            "Validation should fail when params have 'brand_manifest' but handler looks for 'brand'"
+        )
 
     def test_create_media_buy_handler_requires_brand_key(self):
         """When A2A create_media_buy params have 'brand_manifest' instead of 'brand',

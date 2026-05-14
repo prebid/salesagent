@@ -913,7 +913,9 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_gen"]
         package.package_id = "pkg_1"
 
-        with (patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),):
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
+        ):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 

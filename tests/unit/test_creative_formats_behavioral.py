@@ -539,9 +539,9 @@ class TestBroadstreetTemplateAssetParsing:
                 is_standard=False,
             )
             assert fmt.assets, f"Template {tid} must have non-empty assets list"
-            assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(
-                tmpl.get("optional_assets", [])
-            ), f"Template {tid} asset count mismatch"
+            assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(tmpl.get("optional_assets", [])), (
+                f"Template {tid} asset count mismatch"
+            )
 
     def test_asset_type_literals_match_inferred_type(self):
         """Each constructed asset must have asset_type matching the inferred string."""
@@ -558,9 +558,9 @@ class TestBroadstreetTemplateAssetParsing:
             inferred = _infer_asset_type(asset_id)
             assert inferred == expected_type, f"{asset_id}: expected {expected_type}, got {inferred}"
             asset = _make_asset(asset_id, inferred, required=True)
-            assert (
-                asset.asset_type == expected_type
-            ), f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
+            assert asset.asset_type == expected_type, (
+                f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
+            )
 
 
 class TestMCPWrapperStringCoercion:
@@ -813,9 +813,9 @@ class TestSuccessfulDiscoveryHasNoErrors:
         response = _call_impl_raw(formats)
 
         assert len(response.formats) == 2
-        assert (
-            response.errors is None or response.errors == []
-        ), f"Successful discovery must have no errors, got {response.errors}"
+        assert response.errors is None or response.errors == [], (
+            f"Successful discovery must have no errors, got {response.errors}"
+        )
 
 
 class TestAgentReferralFailureLogsWarning:
@@ -871,6 +871,6 @@ class TestAgentReferralFailureLogsWarning:
 
         # After fix: should log a warning about the referral failure
         warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any(
-            "referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs
-        ), f"Expected a warning about agent referral failure, got: {warning_msgs}"
+        assert any("referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs), (
+            f"Expected a warning about agent referral failure, got: {warning_msgs}"
+        )

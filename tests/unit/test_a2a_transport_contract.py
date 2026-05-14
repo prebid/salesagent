@@ -189,9 +189,9 @@ class TestA2AAuthContract:
                 "bearer token required",
             ]
             for phrase in auth_rejection_phrases:
-                assert (
-                    phrase not in error_msg
-                ), f"Discovery skill '{skill}' rejected unauthenticated request: {body['error']}"
+                assert phrase not in error_msg, (
+                    f"Discovery skill '{skill}' rejected unauthenticated request: {body['error']}"
+                )
 
     @pytest.mark.parametrize("skill", AUTH_REQUIRED_SKILLS)
     def test_auth_required_skills_reject_no_auth(self, client, no_auth_headers, skill):
@@ -201,9 +201,9 @@ class TestA2AAuthContract:
         body = response.json()
         assert "error" in body, f"Auth-required skill '{skill}' should return error without token"
         error_msg = body["error"].get("message", "").lower()
-        assert (
-            "auth" in error_msg or "token" in error_msg
-        ), f"Error for '{skill}' should mention auth/token: {body['error']['message']}"
+        assert "auth" in error_msg or "token" in error_msg, (
+            f"Error for '{skill}' should mention auth/token: {body['error']['message']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -341,9 +341,9 @@ class TestA2AResponseShape:
 
         if "result" in body:
             data = _extract_artifact_data(body["result"])
-            assert (
-                "creatives" in data or "synced_creatives" in data
-            ), "sync_creatives response must have 'creatives' field"
+            assert "creatives" in data or "synced_creatives" in data, (
+                "sync_creatives response must have 'creatives' field"
+            )
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_list_creatives_tool")
@@ -405,9 +405,9 @@ class TestA2AResponseShape:
 
         if "result" in body:
             data = _extract_artifact_data(body["result"])
-            assert (
-                "media_buy_deliveries" in data or "deliveries" in data
-            ), "get_media_buy_delivery response must have 'media_buy_deliveries' field"
+            assert "media_buy_deliveries" in data or "deliveries" in data, (
+                "get_media_buy_delivery response must have 'media_buy_deliveries' field"
+            )
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_update_performance_index_tool")
@@ -429,9 +429,9 @@ class TestA2AResponseShape:
 
         if "result" in body:
             data = _extract_artifact_data(body["result"])
-            assert (
-                "media_buy_id" in data or "status" in data
-            ), "update_performance_index response must have 'media_buy_id' or 'status'"
+            assert "media_buy_id" in data or "status" in data, (
+                "update_performance_index response must have 'media_buy_id' or 'status'"
+            )
 
 
 # ---------------------------------------------------------------------------

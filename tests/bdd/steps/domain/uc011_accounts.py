@@ -602,9 +602,9 @@ def then_accounts_from_first_page(ctx: dict) -> None:
     # Accounts are sorted by account_id — verify first account has the lexicographically
     # smallest account_id, confirming we started from offset 0.
     account_ids = [a.account_id for a in resp.accounts]
-    assert account_ids == sorted(
-        account_ids
-    ), f"Accounts not sorted by account_id — cannot confirm first-page ordering: {account_ids}"
+    assert account_ids == sorted(account_ids), (
+        f"Accounts not sorted by account_id — cannot confirm first-page ordering: {account_ids}"
+    )
 
 
 @then("the response contains a validation error")
@@ -614,9 +614,9 @@ def then_validation_error(ctx: dict) -> None:
     assert error is not None, "Expected a validation error but got no error"
     from src.core.exceptions import AdCPValidationError
 
-    assert isinstance(
-        error, (AdCPValidationError, ValueError)
-    ), f"Expected validation error, got {type(error).__name__}: {error}"
+    assert isinstance(error, (AdCPValidationError, ValueError)), (
+        f"Expected validation error, got {type(error).__name__}: {error}"
+    )
 
 
 @then("the error indicates the status value is not recognized")
@@ -822,9 +822,9 @@ def then_account_has_id(ctx: dict) -> None:
     """Assert the last referenced account has a seller-assigned account_id."""
     acct = ctx.get("last_account") or ctx["response"].accounts[0]
     account_id = getattr(acct, "account_id", None)
-    assert (
-        account_id is not None and isinstance(account_id, str) and len(account_id) > 0
-    ), f"Account missing non-empty seller-assigned account_id: {acct}"
+    assert account_id is not None and isinstance(account_id, str) and len(account_id) > 0, (
+        f"Account missing non-empty seller-assigned account_id: {acct}"
+    )
 
 
 @then(parsers.parse('the account has status "{status}"'))
@@ -1130,9 +1130,9 @@ def then_billing_error_message(ctx: dict) -> None:
     assert acct is not None and acct.errors, "No account errors"
     billing_err = next((e for e in acct.errors if e.code == "UNSUPPORTED_FEATURE"), None)
     assert billing_err is not None, "No BILLING_NOT_SUPPORTED error found"
-    assert (
-        "billing" in billing_err.message.lower() or "supported" in billing_err.message.lower()
-    ), f"Expected billing-related message, got: {billing_err.message}"
+    assert "billing" in billing_err.message.lower() or "supported" in billing_err.message.lower(), (
+        f"Expected billing-related message, got: {billing_err.message}"
+    )
 
 
 @then(parsers.parse('the failed account has status "{status}" with {code} error'))
@@ -1162,9 +1162,9 @@ def then_field_validation_error(ctx: dict, field: str) -> None:
     error_str = str(error).lower()
     if isinstance(error, ValidationError):
         locs = [str(loc).lower() for err in error.errors() for loc in err.get("loc", [])]
-        assert field_lower in error_str or any(
-            field_lower in loc for loc in locs
-        ), f"Expected field '{field}' in validation error locs/message, got: {error}"
+        assert field_lower in error_str or any(field_lower in loc for loc in locs), (
+            f"Expected field '{field}' in validation error locs/message, got: {error}"
+        )
     else:
         assert field_lower in error_str, f"Expected field '{field}' mentioned in error, got: {error}"
 
@@ -1258,9 +1258,9 @@ def then_push_sent(ctx: dict, url: str) -> None:
     and expected transition were recorded. Actual delivery is handled
     by the webhook delivery service.
     """
-    assert (
-        ctx.get("push_notification_url") == url
-    ), f"Expected push to {url}, registered: {ctx.get('push_notification_url')}"
+    assert ctx.get("push_notification_url") == url, (
+        f"Expected push to {url}, registered: {ctx.get('push_notification_url')}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1467,9 +1467,9 @@ def then_no_db_writes(ctx: dict) -> None:
     with get_db_session() as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
-        assert (
-            len(accounts) == 0
-        ), f"Expected 0 accounts after dry_run, but found {len(accounts)}: {[a.brand.domain for a in accounts]}"
+        assert len(accounts) == 0, (
+            f"Expected 0 accounts after dry_run, but found {len(accounts)}: {[a.brand.domain for a in accounts]}"
+        )
 
 
 @then("the account was actually created on the seller")
@@ -1495,9 +1495,9 @@ def then_deactivation_result(ctx: dict, domain: str) -> None:
     acct = _find_account_by_brand(resp, domain)
     actual_status = _status_str(acct.status)
     actual_action = _action_str(acct.action)
-    assert (
-        actual_status == "closed" or actual_action == "updated"
-    ), f"Expected deactivation for {domain}: got status={actual_status}, action={actual_action}"
+    assert actual_status == "closed" or actual_action == "updated", (
+        f"Expected deactivation for {domain}: got status={actual_status}, action={actual_action}"
+    )
 
 
 @then(parsers.parse('the account for brand domain "{domain}" has action "unchanged" or "updated"'))
@@ -1523,9 +1523,9 @@ def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
         accounts = repo.list_by_principal(agent_b.principal_id)
         matching = [a for a in accounts if a.brand and a.brand.domain == domain]
         assert len(matching) == 1, f"Expected 1 account for agent B domain {domain}, got {len(matching)}"
-        assert (
-            matching[0].status != "closed"
-        ), f"Agent B's account {domain} was deactivated (status={matching[0].status})"
+        assert matching[0].status != "closed", (
+            f"Agent B's account {domain} was deactivated (status={matching[0].status})"
+        )
 
 
 @then("only agent A's absent accounts are deactivated")
@@ -1541,9 +1541,9 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
         repo = AccountRepository(session, tenant.tenant_id)
         agent_b_accounts = repo.list_by_principal(agent_b.principal_id)
     closed = [a for a in agent_b_accounts if _status_str(a.status) == "closed"]
-    assert (
-        not closed
-    ), f"Agent A's delete_missing operation deactivated agent B's accounts: {[a.account_id for a in closed]}"
+    assert not closed, (
+        f"Agent A's delete_missing operation deactivated agent B's accounts: {[a.account_id for a in closed]}"
+    )
 
 
 @then(parsers.parse('brand domain "{domain}" remains in its current state'))
@@ -1559,9 +1559,9 @@ def then_brand_unchanged(ctx: dict, domain: str) -> None:
         accounts = repo.list_by_principal(principal.principal_id)
         matching = [a for a in accounts if a.brand and a.brand.domain == domain]
         assert len(matching) == 1, f"Expected account for {domain}, got {len(matching)}"
-        assert (
-            matching[0].status != "closed"
-        ), f"Account {domain} was deactivated (status={matching[0].status}) but should be unchanged"
+        assert matching[0].status != "closed", (
+            f"Account {domain} was deactivated (status={matching[0].status}) but should be unchanged"
+        )
 
 
 @then("only the included accounts are processed")
@@ -1588,9 +1588,9 @@ def then_no_deactivations(ctx: dict) -> None:
         repo = AccountRepository(session, tenant.tenant_id)
         all_accounts = repo.list_by_principal(principal.principal_id)
         closed = [a for a in all_accounts if a.status == "closed"]
-        assert (
-            len(closed) == 0
-        ), f"Expected 0 deactivated accounts, found {len(closed)}: {[a.brand.domain for a in closed]}"
+        assert len(closed) == 0, (
+            f"Expected 0 deactivated accounts, found {len(closed)}: {[a.brand.domain for a in closed]}"
+        )
 
 
 @then(parsers.parse('the account for brand domain "{domain}" is processed normally'))
@@ -1870,9 +1870,9 @@ def then_empty_accounts_error(ctx: dict) -> None:
     """Assert the error mentions empty accounts array."""
     error = _get_error(ctx)
     msg = str(error).lower()
-    assert (
-        "account" in msg or "empty" in msg or "min_length" in msg
-    ), f"Expected error about empty accounts, got: {error}"
+    assert "account" in msg or "empty" in msg or "min_length" in msg, (
+        f"Expected error about empty accounts, got: {error}"
+    )
 
 
 @then("the per-account error indicates brand domain is required")
@@ -1948,9 +1948,9 @@ def then_no_production_accounts(ctx: dict) -> None:
     """Assert no accounts have sandbox=False (production)."""
     resp = ctx["response"]
     for acct in resp.accounts:
-        assert (
-            acct.sandbox is not False or acct.sandbox is True
-        ), f"Production account found: {acct.name} (sandbox={acct.sandbox})"
+        assert acct.sandbox is not False or acct.sandbox is True, (
+            f"Production account found: {acct.name} (sandbox={acct.sandbox})"
+        )
 
 
 @then("the response should indicate a validation error")
@@ -1970,9 +1970,9 @@ def then_real_validation_error(ctx: dict) -> None:
 
     from src.core.exceptions import AdCPValidationError
 
-    assert isinstance(
-        error, (ValidationError, AdCPValidationError, ValueError)
-    ), f"Expected real validation error, got {type(error).__name__}: {error}"
+    assert isinstance(error, (ValidationError, AdCPValidationError, ValueError)), (
+        f"Expected real validation error, got {type(error).__name__}: {error}"
+    )
 
 
 @then("the error should include a suggestion for how to fix the issue")
@@ -2023,9 +2023,9 @@ def then_governance_agents_stored(ctx: dict, domain: str) -> None:
         assert len(matching) == 1, f"Expected 1 account for {domain}, got {len(matching)}"
         account = matching[0]
         assert account.governance_agents is not None, f"Expected governance_agents to be stored for {domain}, got None"
-        assert (
-            len(account.governance_agents) > 0
-        ), f"Expected non-empty governance_agents for {domain}, got {account.governance_agents}"
+        assert len(account.governance_agents) > 0, (
+            f"Expected non-empty governance_agents for {domain}, got {account.governance_agents}"
+        )
 
 
 @then(parsers.parse('no accounts were actually modified for brand domain "{domain}"'))

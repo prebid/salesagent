@@ -82,9 +82,9 @@ class TestDeliveryLoopErrorHandling:
             response = _get_media_buy_delivery_impl(req, identity)
 
         # The good media buy should still be in the response
-        assert (
-            len(response.media_buy_deliveries) >= 1
-        ), "A single media buy error killed the entire response — the loop must catch exceptions and continue"
+        assert len(response.media_buy_deliveries) >= 1, (
+            "A single media buy error killed the entire response — the loop must catch exceptions and continue"
+        )
         assert response.media_buy_deliveries[0].media_buy_id == "mb_good"
 
 

@@ -85,7 +85,9 @@ class TestNotificationUrlsExist:
 
             # Check if route exists (exact match or as a prefix)
             route_exists = any(
-                route == flask_route or route.startswith(flask_route + "/") or
+                route == flask_route
+                or route.startswith(flask_route + "/")
+                or
                 # Handle both /tenant/<tenant_id>/workflows and /tenant/<string:tenant_id>/workflows
                 route.replace("<string:", "<") == flask_route
                 for route in app_routes

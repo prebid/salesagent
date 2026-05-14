@@ -129,9 +129,9 @@ class TestCORSConfiguration:
         allowed_origin = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")[0].strip()
         response = client.get("/health", headers={"Origin": allowed_origin})
         acao = response.headers.get("access-control-allow-origin", "")
-        assert (
-            acao == allowed_origin
-        ), f"Allowed origin '{allowed_origin}' should get matching CORS header, got '{acao}'"
+        assert acao == allowed_origin, (
+            f"Allowed origin '{allowed_origin}' should get matching CORS header, got '{acao}'"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +303,9 @@ class TestFormatResolverNoEventLoopCreation:
         # Verify the module does not reference new_event_loop at attribute level
         assert not hasattr(fr_module, "new_event_loop"), "format_resolver should not export new_event_loop"
         # Verify run_async_in_sync_context is imported (the correct approach)
-        assert hasattr(
-            fr_module, "run_async_in_sync_context"
-        ), "format_resolver should import run_async_in_sync_context"
+        assert hasattr(fr_module, "run_async_in_sync_context"), (
+            "format_resolver should import run_async_in_sync_context"
+        )
 
     def test_get_format_works_from_sync_context(self):
         """get_format should work when called from a sync context."""

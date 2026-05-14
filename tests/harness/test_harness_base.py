@@ -311,17 +311,17 @@ class TestEnvMethodNamingConsistency:
         """IntegrationEnv.setup_default_data creates tenant + principal via factories."""
         from tests.harness._base import IntegrationEnv
 
-        assert hasattr(
-            IntegrationEnv, "setup_default_data"
-        ), "IntegrationEnv should have setup_default_data() to reduce boilerplate"
+        assert hasattr(IntegrationEnv, "setup_default_data"), (
+            "IntegrationEnv should have setup_default_data() to reduce boilerplate"
+        )
 
     def test_base_env_has_run_mcp_wrapper(self):
         """BaseTestEnv exposes _run_mcp_wrapper for DRY MCP dispatch."""
         from tests.harness._base import BaseTestEnv
 
-        assert hasattr(
-            BaseTestEnv, "_run_mcp_wrapper"
-        ), "BaseTestEnv should have _run_mcp_wrapper to reduce call_mcp duplication"
+        assert hasattr(BaseTestEnv, "_run_mcp_wrapper"), (
+            "BaseTestEnv should have _run_mcp_wrapper to reduce call_mcp duplication"
+        )
 
     def test_creative_sync_env_has_set_run_async_result(self):
         """CreativeSyncEnv uses set_run_async_result, not set_registry_formats.
@@ -332,9 +332,9 @@ class TestEnvMethodNamingConsistency:
         """
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        assert hasattr(
-            CreativeSyncEnv, "set_run_async_result"
-        ), "CreativeSyncEnv should have set_run_async_result (not set_registry_formats)"
+        assert hasattr(CreativeSyncEnv, "set_run_async_result"), (
+            "CreativeSyncEnv should have set_run_async_result (not set_registry_formats)"
+        )
         assert not hasattr(CreativeSyncEnv, "set_registry_formats"), (
             "CreativeSyncEnv should NOT have set_registry_formats — "
             "that name belongs to CreativeFormatsEnv (different mechanic)"

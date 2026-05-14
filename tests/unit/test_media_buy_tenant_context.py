@@ -58,9 +58,9 @@ class TestMediaBuyTenantContext:
         assert func_source is not None
 
         # No references to tenant_dict anywhere in the function
-        assert (
-            "tenant_dict" not in func_source
-        ), "execute_approved_media_buy still references tenant_dict — should use tenant_obj (ORM model) everywhere"
+        assert "tenant_dict" not in func_source, (
+            "execute_approved_media_buy still references tenant_dict — should use tenant_obj (ORM model) everywhere"
+        )
 
     def test_get_adapter_handles_orm_model(self):
         """get_adapter should accept Tenant ORM model via attribute access."""
@@ -68,6 +68,6 @@ class TestMediaBuyTenantContext:
 
         # get_adapter should have ORM model branch (not just dict access)
         assert "tenant.tenant_id" in source, "get_adapter does not support Tenant ORM model attribute access"
-        assert (
-            "tenant.ad_server" in source
-        ), "get_adapter does not support Tenant ORM model attribute access for ad_server"
+        assert "tenant.ad_server" in source, (
+            "get_adapter does not support Tenant ORM model attribute access for ad_server"
+        )

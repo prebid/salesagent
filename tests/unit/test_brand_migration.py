@@ -38,12 +38,12 @@ class TestCreateMediaBuyRequestBrandMigration:
         # Two distinct errors expected:
         # 1. brand_manifest is an extra (forbidden) input
         # 2. brand (BrandReference) is missing (required)
-        assert any(
-            "brand_manifest" in str(e["loc"]) for e in errors
-        ), "Expected 'brand_manifest' to be flagged as extra input"
-        assert any(
-            e["type"] == "missing" and "brand" in str(e["loc"]) for e in errors
-        ), "Expected 'brand' to be flagged as missing/required"
+        assert any("brand_manifest" in str(e["loc"]) for e in errors), (
+            "Expected 'brand_manifest' to be flagged as extra input"
+        )
+        assert any(e["type"] == "missing" and "brand" in str(e["loc"]) for e in errors), (
+            "Expected 'brand' to be flagged as missing/required"
+        )
 
     def test_brand_reference_accepted_on_create_media_buy_request(self):
         """Constructing CreateMediaBuyRequest with brand={'domain': '...'} succeeds.
@@ -75,9 +75,9 @@ class TestCreateMediaBuyRequestBrandMigration:
             )
 
         errors = exc_info.value.errors()
-        assert any(
-            e["type"] == "missing" and "brand" in str(e["loc"]) for e in errors
-        ), "Expected 'brand' to be required"
+        assert any(e["type"] == "missing" and "brand" in str(e["loc"]) for e in errors), (
+            "Expected 'brand' to be required"
+        )
 
 
 class TestGetProductsRequestBrandMigration:
@@ -98,9 +98,9 @@ class TestGetProductsRequestBrandMigration:
             )
 
         errors = exc_info.value.errors()
-        assert any(
-            "brand_manifest" in str(e["loc"]) for e in errors
-        ), "Expected 'brand_manifest' to be flagged as extra input"
+        assert any("brand_manifest" in str(e["loc"]) for e in errors), (
+            "Expected 'brand_manifest' to be flagged as extra input"
+        )
 
     def test_brand_reference_accepted_on_get_products_request(self):
         """Constructing GetProductsRequest with brand={'domain': '...'} succeeds."""

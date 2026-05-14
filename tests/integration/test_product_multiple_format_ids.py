@@ -68,9 +68,9 @@ def test_create_product_with_multiple_format_ids(integration_db, test_tenant):
             assert "agent_url" in fmt, f"Format {fmt['id']} should have agent_url"
             assert "id" in fmt, "Format should have id field"
             # Verify agent_url is correct (not 'creatives')
-            assert (
-                "creative.adcontextprotocol.org" in fmt["agent_url"]
-            ), f"Format {fmt['id']} should use 'creative' not 'creatives'"
+            assert "creative.adcontextprotocol.org" in fmt["agent_url"], (
+                f"Format {fmt['id']} should use 'creative' not 'creatives'"
+            )
 
 
 @pytest.mark.requires_db
@@ -169,7 +169,7 @@ def test_product_format_ids_migration_compatibility(integration_db, test_tenant)
 
         # Verify ALL have the new URL (this was the bug - only first one was updated)
         for i, fmt in enumerate(product.format_ids):
-            assert (
-                "creative.adcontextprotocol.org" in fmt["agent_url"]
-            ), f"Format {i} should have migrated URL, got: {fmt['agent_url']}"
+            assert "creative.adcontextprotocol.org" in fmt["agent_url"], (
+                f"Format {i} should have migrated URL, got: {fmt['agent_url']}"
+            )
             assert "creatives.adcontextprotocol.org" not in fmt["agent_url"], f"Format {i} should not have old URL"

@@ -47,9 +47,9 @@ class TestWebhookCaptureServerCleanup:
         # The socket should be closed after proper cleanup,
         # but shutdown() alone does NOT close it.
         # Verify the socket is still open (the bug):
-        assert (
-            server.socket.fileno() != -1
-        ), "Socket should still be open after shutdown() alone -- this test demonstrates the bug"
+        assert server.socket.fileno() != -1, (
+            "Socket should still be open after shutdown() alone -- this test demonstrates the bug"
+        )
 
         # Clean up for this test so we don't leak ourselves
         server.server_close()

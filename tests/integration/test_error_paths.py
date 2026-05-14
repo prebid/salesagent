@@ -539,9 +539,9 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             body = response.json()
-            assert (
-                body["recovery"] == "transient"
-            ), "Custom recovery='transient' must be preserved, not default 'terminal'"
+            assert body["recovery"] == "transient", (
+                "Custom recovery='transient' must be preserved, not default 'terminal'"
+            )
 
     def test_to_dict_serialization_roundtrip(self):
         """AdCPError.to_dict() -> JSON -> verify recovery is present and correct."""
@@ -564,6 +564,6 @@ class TestRecoveryFieldInErrorResponses:
             # Simulate JSON roundtrip (what happens in real HTTP response)
             json_str = json.dumps(d)
             deserialized = json.loads(json_str)
-            assert (
-                deserialized["recovery"] == expected_recovery
-            ), f"{type(exc).__name__}: recovery lost in JSON roundtrip"
+            assert deserialized["recovery"] == expected_recovery, (
+                f"{type(exc).__name__}: recovery lost in JSON roundtrip"
+            )

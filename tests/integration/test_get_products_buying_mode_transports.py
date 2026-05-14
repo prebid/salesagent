@@ -4,7 +4,7 @@ Exercises the full request/response pipeline at every transport for each of the 
 modes (brief / wholesale / refine), verifying:
 - Request reaches _get_products_impl with the right shape
 - Mode-specific behavior (ranker called/skipped, brief_relevance/refinement_applied)
-- Outbound 3.0.6 wire compat applies uniformly across transports
+- Refine response wire shape (scope-keyed product_id/proposal_id) at each transport
 - Audit log fields populate
 
 Covers: UC-001-MODE-BRIEF-01

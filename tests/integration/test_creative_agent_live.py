@@ -239,9 +239,9 @@ class TestCacheConsistency:
         await registry.get_formats_for_agent(agent_with_slash)
         cache_after_with_slash = len(registry._format_cache)
 
-        assert (
-            cache_after_with_slash == cache_after_no_slash
-        ), f"Expected 1 cache entry, got {cache_after_with_slash}. Keys: {list(registry._format_cache.keys())}"
+        assert cache_after_with_slash == cache_after_no_slash, (
+            f"Expected 1 cache entry, got {cache_after_with_slash}. Keys: {list(registry._format_cache.keys())}"
+        )
 
 
 class TestFormatResolverIntegration:

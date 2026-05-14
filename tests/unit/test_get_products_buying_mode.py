@@ -2,8 +2,8 @@
 
 Covers the AdCP 3.0 three-mode contract (brief / wholesale / refine). The library handles
 basic schema validation (buying_mode required, enum values, refine entry shape); our
-validator adds the cross-mode invariants the library does not enforce. See
-.claude/notes/buying-mode-refine-wireup/PLAN.md Layer 1 for context.
+validator adds the cross-mode invariants the library does not enforce. The seven
+cross-mode rules mirror tests/bdd/features/BR-UC-001-discover-available-inventory.feature:313-319.
 
 Covers: UC-001-MODE-VALIDATION-01
 """
