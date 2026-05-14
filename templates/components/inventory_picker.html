@@ -169,6 +169,9 @@ Then in your template, add browse buttons:
     }
 
     function loadPlacementsList(search = '') {
+        // Writing placement HTML into the shared container destroys the tree's DOM nodes.
+        // Reset so initInventoryTree() runs fresh on the next ad_unit open.
+        adUnitTree = null;
         const list = document.getElementById('inventory-picker-list');
         const url = `${config.scriptRoot}/api/tenant/${config.tenantId}/inventory-list?type=placement${search ? '&search=' + encodeURIComponent(search) : ''}`;
 

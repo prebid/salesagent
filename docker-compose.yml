@@ -82,15 +82,20 @@ services:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
-      # Per-tenant Setup Mode enables test credentials for new tenants
-      # Override .env ports to match nginx-development.conf expectations
       ADCP_SALES_PORT: "8080"
-      # Enable test login mode for development
-      ADCP_AUTH_TEST_MODE: "true"
-      # Development settings
       PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
       PYTHONUNBUFFERED: "1"
-      FLASK_ENV: development
+      # All vars below are read from .env (project root) with safe defaults
+      ADCP_AUTH_TEST_MODE: "${ADCP_AUTH_TEST_MODE:-true}"
+      FLASK_ENV: "${FLASK_ENV:-development}"
+      SUPER_ADMIN_EMAILS: "${SUPER_ADMIN_EMAILS:-}"
+      SUPER_ADMIN_DOMAINS: "${SUPER_ADMIN_DOMAINS:-}"
+      OAUTH_DISCOVERY_URL: "${OAUTH_DISCOVERY_URL:-}"
+      OAUTH_CLIENT_ID: "${OAUTH_CLIENT_ID:-}"
+      OAUTH_CLIENT_SECRET: "${OAUTH_CLIENT_SECRET:-}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY:-}"
+      CREATE_DEMO_TENANT: "${CREATE_DEMO_TENANT:-false}"
+      ENVIRONMENT: "${ENVIRONMENT:-development}"
     depends_on:
       postgres:
         condition: service_healthy
