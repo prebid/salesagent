@@ -169,8 +169,8 @@ class TestModeBranching:
 
             assert response.refinement_applied is not None
             assert len(response.refinement_applied) == 1
-            assert response.refinement_applied[0].status.value == "unable"
-            assert response.refinement_applied[0].scope.value == "request"
+            assert response.refinement_applied[0].root.status.value == "unable"
+            assert response.refinement_applied[0].root.scope == "request"
             # Refine mode does not run the ranker until #1073
             assert all(p.brief_relevance is None for p in response.products)
 

@@ -34,8 +34,9 @@ class TestGetProductsRequestAlignment:
         fields remain optional per spec. Pre-v3 clients are defaulted to 'brief' at
         the transport boundary, not at the schema layer.
         """
-        # Empty request is rejected (v3 spec: buying_mode required)
-        with pytest.raises(ValidationError, match="buying_mode is required"):
+        # Empty request is rejected (v3 spec: buying_mode required) — the library's
+        # required-field validator catches this before our cross-mode invariants run.
+        with pytest.raises(ValidationError, match="buying_mode"):
             GetProductsRequest()
 
         # Wholesale mode minimal (no other fields needed)
@@ -207,7 +208,7 @@ class TestAdCPSchemaCompatibility:
         AdCP 3.0 requires buying_mode for v3 clients. Other fields remain optional within mode.
         """
         # Empty request is rejected (buying_mode required)
-        with pytest.raises(ValidationError, match="buying_mode is required"):
+        with pytest.raises(ValidationError, match="buying_mode"):
             GetProductsRequest()
 
         # Brand only (wholesale mode)
@@ -276,7 +277,7 @@ class TestRegressionPrevention:
         to 'brief' at the transport boundary, not at the schema layer.
         """
         # No buying_mode -> rejected
-        with pytest.raises(ValidationError, match="buying_mode is required"):
+        with pytest.raises(ValidationError, match="buying_mode"):
             GetProductsRequest()
 
         # buying_mode='wholesale' alone is valid

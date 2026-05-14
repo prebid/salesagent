@@ -92,7 +92,7 @@ class TestSchemaMatchesLibrary:
             SyncCreativesRequest as LibSyncCreativesRequest,
         )
         from adcp.types import (
-            GetProductsWholesaleRequest as LibGetProductsRequest,
+            GetProductsRequest as LibGetProductsRequest,
         )
 
         from src.core.schemas import (
@@ -120,8 +120,6 @@ class TestSchemaMatchesLibrary:
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
         # product_selectors — internal-only field (not in AdCP spec)
-        # buying_mode and account are now in the library (adcp 3.9) but overridden locally
-        # (buying_mode widened to str|None, account made optional)
         local_extensions = {"product_selectors"}
         assert (
             lib_fields == local_fields - local_extensions
@@ -177,7 +175,7 @@ class TestSchemaMatchesLibrary:
 
         Within each mode, optional fields remain optional per spec.
         """
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import GetProductsRequest as LibraryGetProductsRequest
         from pydantic import ValidationError
 
         # Library accepts an empty request when buying_mode is set
@@ -187,9 +185,9 @@ class TestSchemaMatchesLibrary:
         assert lib_req.context is None
         assert lib_req.filters is None
 
-        # Our schema rejects requests without buying_mode (v3 spec requirement);
+        # Our schema rejects requests without buying_mode (library marks it required);
         # the wrapper layer is responsible for defaulting pre-v3 clients to 'brief'.
-        with pytest.raises(ValidationError, match="buying_mode is required"):
+        with pytest.raises(ValidationError, match="buying_mode"):
             GetProductsRequest()
 
         # Within wholesale mode, all other fields are optional
@@ -230,7 +228,7 @@ class TestSchemaMatchesLibrary:
         because each variant's buying_mode annotation is the BuyingMode enum, not a Literal.
         Cases that violate cross-mode invariants are tested separately in test_get_products_buying_mode.py.
         """
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import GetProductsRequest as LibraryGetProductsRequest
 
         # Cross-mode-valid cases (accepted by both library AND our stricter schema)
         test_cases = [

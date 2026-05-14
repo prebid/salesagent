@@ -79,6 +79,7 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     },
     "/schemas/latest/media-buy/sync-creatives-request.json": {
         "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "account_id",  # Mirror of above — generator produces 'account_id' from updated schema cache
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
     "/schemas/latest/media-buy/list-creatives-request.json": {
@@ -562,11 +563,14 @@ class TestPydanticSchemaAlignment:
             instance = model_class(**minimal_request)
             assert instance is not None
         except ValidationError as e:
-            # Check if this is a value_error (custom validator) - models can be stricter
-            value_errors = [err for err in e.errors() if err["type"] == "value_error"]
-            if value_errors:
+            # Check if this is a value_error (custom validator) or enum constraint - models can be stricter
+            # than spec. value_error covers @model_validator-raised ValueError; enum covers Literal/Enum
+            # field types where the spec leaves the type as string but the library narrowed it.
+            stricter_types = {"value_error", "enum"}
+            stricter_errors = [err for err in e.errors() if err["type"] in stricter_types]
+            if stricter_errors:
                 pytest.skip(
-                    f"{model_class.__name__} has stricter validation than spec (custom validators). "
+                    f"{model_class.__name__} has stricter validation than spec (custom validators/enums). "
                     f"This is acceptable for business logic. Error: {e}"
                 )
 

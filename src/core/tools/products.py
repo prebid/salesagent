@@ -874,9 +874,28 @@ async def get_products(
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # payload-level context
-    buying_mode: str | None = None,
+    buying_mode: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Buyer intent: 'brief' (publisher curates from the brief), 'wholesale' "
+                "(buyer requests raw inventory; brief and refine forbidden), or 'refine' "
+                "(iterate on a previous response via the refine array). v3 clients MUST "
+                "include this; pre-v3 clients are defaulted at the wrapper boundary."
+            ),
+        ),
+    ] = None,
     refine: list[dict[str, Any]] | None = None,
-    adcp_version: str | None = None,
+    adcp_version: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Client's AdCP version (e.g. '1.0.0', '3.0.0'). Used solely to drive the "
+                "inbound pre-v3 default-to-brief shim — the wrapper does not apply outbound "
+                "version_compat (handler responsibility, parity with A2A)."
+            ),
+        ),
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Get available products matching the brief.
