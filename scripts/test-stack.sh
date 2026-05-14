@@ -48,7 +48,11 @@ cmd_up() {
     dc up -d || { dc logs; exit 1; }
 
     echo "Waiting for services..."
-    local deadline=$(($(date +%s) + 120))
+    # Cold boot budget: ~10s container start + ~30s migrations (170 of them) +
+    # ~2min FastAPI/Admin/MCP/A2A/scheduler init. 120s was too tight on cold
+    # Docker image cache. 360s gives margin without making genuine hangs slow
+    # to surface.
+    local deadline=$(($(date +%s) + 360))
     local pg=false srv=false
     while [ $(date +%s) -lt $deadline ]; do
         [ "$pg" = false ] && dc exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1 && pg=true && echo -e "${GREEN}PostgreSQL ready${NC}"

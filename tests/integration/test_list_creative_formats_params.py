@@ -11,8 +11,8 @@ from __future__ import annotations
 import pytest
 from adcp.types.generated_poc.core.format import (
     Assets,
-    Assets5,
-    Assets9,
+    Assets81,
+    Assets85,
     Dimensions,
     Renders,
     Responsive,
@@ -215,14 +215,14 @@ def test_filtering_by_asset_types(integration_db):
         _fmt(
             "video_player",
             "Video Player",
-            assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+            assets=[Assets81(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         _fmt(
             "rich_media",
             "Rich Media",
             assets=[
                 Assets(asset_id="image", asset_type="image", item_type="individual", required=True),
-                Assets9(asset_id="code", asset_type="html", item_type="individual", required=True),
+                Assets85(asset_id="code", asset_type="html", item_type="individual", required=True),
             ],
         ),
         _fmt("no_assets", "No Asset Types"),
@@ -318,7 +318,7 @@ def test_new_filters_combined_with_existing(integration_db):
             "video_16x9",
             "Video 16:9",
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
-            assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+            assets=[Assets81(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         _fmt(
             "custom_display",

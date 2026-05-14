@@ -67,8 +67,12 @@ def _adcp_error_from_code(
         cls.error_code: cls
         for cls in (
             AdCPValidationError,
-            AdCPAuthenticationError,
+            # AdCPAuthorizationError listed before AdCPAuthenticationError so the
+            # latter wins the dict comprehension for the shared AUTH_REQUIRED code
+            # — at the wire we can't disambiguate auth-missing from auth-insufficient,
+            # and Authentication is the more common case (missing tenant/token).
             AdCPAuthorizationError,
+            AdCPAuthenticationError,
             AdCPNotFoundError,
             AdCPAccountNotFoundError,
             AdCPAccountSetupRequiredError,
@@ -149,23 +153,23 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
 
 
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
-    """Translate a2a ServerError back to the corresponding AdCPError.
+    """Translate a2a A2AError back to the corresponding AdCPError.
 
-    The A2A handler wraps AdCPError → ServerError (via _adcp_to_a2a_error).
+    The A2A handler wraps AdCPError → A2AError (via _adcp_to_a2a_error).
     This reverses that translation so callers can ``pytest.raises(AdCPAuthenticationError)``
     instead of catching the transport-level wrapper.
 
-    If the exception is not a ServerError or lacks enough info, returns it unchanged.
+    If the exception is not a A2AError or lacks enough info, returns it unchanged.
     """
     from a2a.types import InternalError, InvalidParamsError, InvalidRequestError
-    from a2a.utils.errors import ServerError
+    from a2a.utils.errors import A2AError
 
-    if not isinstance(exc, ServerError):
+    if not isinstance(exc, A2AError):
         return exc
 
-    error = exc.error
-    message = getattr(error, "message", str(exc))
-    data = getattr(error, "data", None) or {}
+    # a2a-sdk 1.0: the exception itself carries message/data (no .error wrapper)
+    message = getattr(exc, "message", str(exc))
+    data = getattr(exc, "data", None) or {}
 
     # If _adcp_to_a2a_error stored the error_code, reconstruct the exact subclass.
     error_code = data.get("error_code")
@@ -177,11 +181,11 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
         AdCPValidationError,
     )
 
-    if isinstance(error, InvalidRequestError):
+    if isinstance(exc, InvalidRequestError):
         return AdCPAuthenticationError(message)
-    if isinstance(error, InvalidParamsError):
+    if isinstance(exc, InvalidParamsError):
         return AdCPValidationError(message)
-    if isinstance(error, InternalError):
+    if isinstance(exc, InternalError):
         return RuntimeError(message)
     return exc
 
@@ -405,7 +409,8 @@ class BaseTestEnv:
         """
         import asyncio
 
-        from a2a.types import MessageSendParams, Task
+        from a2a.server.routes.common import ServerCallContext
+        from a2a.types import SendMessageRequest, Task
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.harness.transport import Transport
@@ -450,15 +455,15 @@ class BaseTestEnv:
             set_current_tenant(a2a_identity.tenant)
 
         message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
-        params = MessageSendParams(message=message)
+        params = SendMessageRequest(message=message)
 
         async def _call():
-            return await handler.on_message_send(params)
+            return await handler.on_message_send(params, ServerCallContext())
 
         try:
             task_result = asyncio.run(_call())
         except Exception as exc:
-            # Translate ServerError back to AdCPError for callers that catch
+            # Translate A2AError back to AdCPError for callers that catch
             # domain exceptions (e.g., pytest.raises(AdCPAuthenticationError)).
             raise _unwrap_a2a_server_error(exc) from exc
 

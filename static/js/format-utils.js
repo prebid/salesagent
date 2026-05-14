@@ -12,7 +12,7 @@
  * @typedef {Object} Format
  * @property {FormatId|string} format_id - Format identifier (nested object or legacy string)
  * @property {string} name - Human-readable format name
- * @property {string} type - Format type (display, video, audio, native)
+ * @property {string} category - Format category (display, video, audio, native)
  * @property {string} [description] - Optional format description
  * @property {string} [agent_url] - Convenience field (duplicates format_id.agent_url)
  * @property {string} [dimensions] - Dimension string like "300x250"
@@ -134,13 +134,13 @@ function searchFormats(formats, query) {
         const formatId = getFormatId(fmt).toLowerCase();
         const name = (fmt.name || '').toLowerCase();
         const description = (fmt.description || '').toLowerCase();
-        const type = (fmt.type || '').toLowerCase();
+        const category = (fmt.category || '').toLowerCase();
         const dimensions = (fmt.dimensions || '').toLowerCase();
 
         return formatId.includes(lowerQuery) ||
                name.includes(lowerQuery) ||
                description.includes(lowerQuery) ||
-               type.includes(lowerQuery) ||
+               category.includes(lowerQuery) ||
                dimensions.includes(lowerQuery);
     });
 }

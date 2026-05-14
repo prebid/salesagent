@@ -86,7 +86,7 @@ class TestGenerativeCreatives:
         """Test that static formats (without output_format_ids) call preview_creative."""
         from unittest.mock import MagicMock
 
-        from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+        from adcp.types import FormatId as LibraryFormatId
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()

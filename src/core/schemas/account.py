@@ -49,11 +49,15 @@ class ListAccountsRequest(LibraryListAccountsRequest):
 class SyncAccountsRequest(LibrarySyncAccountsRequest):
     """Extends library SyncAccountsRequest.
 
-    Library provides: accounts, delete_missing, dry_run,
+    Library provides: idempotency_key, accounts, delete_missing, dry_run,
     push_notification_config, context, ext.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # adcp 4.3 makes idempotency_key required.  Override as optional —
+    # generated at the transport boundary when not supplied by the caller.
+    idempotency_key: str | None = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------

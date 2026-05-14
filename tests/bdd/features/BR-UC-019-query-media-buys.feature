@@ -104,7 +104,7 @@ Feature: BR-UC-019 Query Media Buys
     Given an authenticated identity with no principal_id
     When the Buyer Agent sends a get_media_buys request
     Then the response should include an empty media_buys array
-    And the response errors array should include error code "principal_id_missing"
+    And the response errors array should include error code "AUTH_REQUIRED"
     And the error message should contain "Principal ID not found"
     And the error should include a "suggestion" field
     And the suggestion should contain "re-authenticate" or "credentials"
@@ -118,7 +118,7 @@ Feature: BR-UC-019 Query Media Buys
     And the principal "buyer-unknown" does not exist in the tenant database
     When the Buyer Agent sends a get_media_buys request
     Then the response should include an empty media_buys array
-    And the response errors array should include error code "principal_not_found"
+    And the response errors array should include error code "AUTH_REQUIRED"
     And the error message should contain "not found"
     And the error should include a "suggestion" field
     And the suggestion should contain "register" or "verify"
@@ -384,8 +384,8 @@ Feature: BR-UC-019 Query Media Buys
 
     Examples: Invalid partitions
       | partition              | principal_setup                                       | expected_outcome                                                                 | suggestion_fragment       |
-      | missing_principal_id   | an authenticated identity with no principal_id        | the response should include an empty media_buys array with error "principal_id_missing" | re-authenticate           |
-      | principal_not_found    | an authenticated principal "buyer-unknown" not in registry | the response should include an empty media_buys array with error "principal_not_found"  | register                  |
+      | missing_principal_id   | an authenticated identity with no principal_id        | the response should include an empty media_buys array with error "AUTH_REQUIRED" | re-authenticate           |
+      | principal_not_found    | an authenticated principal "buyer-unknown" not in registry | the response should include an empty media_buys array with error "AUTH_REQUIRED"  | register                  |
       | identity_missing       | no authentication context                             | the operation should fail with error code "AUTH_REQUIRED"                         | authentication            |
 
   @T-UC-019-boundary-principal @boundary @principal_id
@@ -399,9 +399,9 @@ Feature: BR-UC-019 Query Media Buys
       | boundary_point                          | principal_setup                                                       | expected_outcome                                                                 |
       | valid principal with multiple media buys | an authenticated principal "buyer-001" who owns 5 media buys         | the response should include 5 media buys scoped to buyer-001                     |
       | valid principal with zero media buys    | an authenticated principal "buyer-002" who owns no media buys         | the response should include an empty media_buys array                            |
-      | principal_id is null                    | an authenticated identity with principal_id null                      | empty media_buys with error "principal_id_missing"                               |
-      | principal_id is empty string            | an authenticated identity with principal_id ""                        | empty media_buys with error "principal_id_missing"                               |
-      | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with error "principal_not_found"                                |
+      | principal_id is null                    | an authenticated identity with principal_id null                      | empty media_buys with error "AUTH_REQUIRED"                               |
+      | principal_id is empty string            | an authenticated identity with principal_id ""                        | empty media_buys with error "AUTH_REQUIRED"                               |
+      | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with error "AUTH_REQUIRED"                                |
       | identity not resolved (no auth)         | no authentication context                                             | error "AUTH_REQUIRED" with suggestion                                            |
 
   @T-UC-019-inv-154-tenant @invariant @BR-RULE-154

@@ -26,17 +26,17 @@ T = TypeVar("T")
 class GAMErrorType(Enum):
     """Categorized error types for GAM operations."""
 
-    AUTHENTICATION = "authentication_error"
-    PERMISSION = "permission_error"
-    VALIDATION = "validation_error"
-    QUOTA_EXCEEDED = "quota_exceeded"
-    NETWORK = "network_error"
-    TIMEOUT = "timeout_error"
-    RESOURCE_NOT_FOUND = "resource_not_found"
-    DUPLICATE_RESOURCE = "duplicate_resource"
-    INTERNAL_ERROR = "internal_error"
-    CONFIGURATION = "configuration_error"
-    UNKNOWN = "unknown_error"
+    AUTHENTICATION = "AUTH_REQUIRED"
+    PERMISSION = "PERMISSION_ERROR"
+    VALIDATION = "VALIDATION_ERROR"
+    QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
+    NETWORK = "NETWORK_ERROR"
+    TIMEOUT = "TIMEOUT_ERROR"
+    RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
+    DUPLICATE_RESOURCE = "DUPLICATE_RESOURCE"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+    CONFIGURATION = "CONFIGURATION_ERROR"
+    UNKNOWN = "UNKNOWN_ERROR"
 
 
 class GAMError(Exception):

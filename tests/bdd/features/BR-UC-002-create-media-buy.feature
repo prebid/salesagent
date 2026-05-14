@@ -419,7 +419,7 @@ Feature: BR-UC-002 Create Media Buy
     But a package creative_assignment references creative_id "cr-nonexistent"
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "CREATIVES_NOT_FOUND"
+    And the error code should be "CREATIVE_REJECTED"
     And the error message should contain "cr-nonexistent"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
@@ -516,7 +516,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists but is accessible only to a different agent
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "AUTHORIZATION_ERROR"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "access"
     # Security: ID resolution enforces has_access() — agent cannot use another agent's account
 
@@ -526,7 +526,7 @@ Feature: BR-UC-002 Create Media Buy
     And the natural key resolves to an account accessible only to a different agent
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "AUTHORIZATION_ERROR"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "access"
     # Security: natural key resolution must have same auth behavior as ID resolution
 
@@ -536,7 +536,7 @@ Feature: BR-UC-002 Create Media Buy
     And the sandbox account exists but is accessible only to a different agent
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "AUTHORIZATION_ERROR"
+    And the error code should be "AUTH_REQUIRED"
     # Edge case: sandbox flag doesn't bypass access checks
 
     # --- ext-u: Optimization Goal Validation Failure ---

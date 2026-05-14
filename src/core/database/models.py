@@ -1016,7 +1016,9 @@ class MediaBuy(Base):
         if self.end_date is not None and today > self.end_date:
             return MediaBuyStatus.completed
         if self.start_date is not None and today < self.start_date:
-            return MediaBuyStatus.pending_activation
+            # AdCP 4.3 split pending_activation into pending_creatives + pending_start.
+            # pre-start with no creative-review gating maps to pending_start.
+            return MediaBuyStatus.pending_start
         return MediaBuyStatus.active
 
 

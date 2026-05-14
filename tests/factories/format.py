@@ -28,11 +28,11 @@ from __future__ import annotations
 import factory
 from adcp.types.generated_poc.core.format import (
     Assets,
-    Assets5,
-    Assets6,
-    Assets7,
-    Assets8,
-    Assets9,
+    Assets81,
+    Assets82,
+    Assets83,
+    Assets84,
+    Assets85,
     Dimensions,
     Renders,
     Responsive,
@@ -46,11 +46,11 @@ AGENT_URL = "https://creative.adcontextprotocol.org"
 
 _ASSET_CLASS_MAP = {
     "image": Assets,
-    "video": Assets5,
-    "audio": Assets6,
-    "text": Assets7,
-    "markdown": Assets8,
-    "html": Assets9,
+    "video": Assets81,
+    "audio": Assets82,
+    "text": Assets83,
+    "markdown": Assets84,
+    "html": Assets85,
 }
 
 
