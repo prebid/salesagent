@@ -79,6 +79,17 @@ from adcp.types import PlatformDeployment as LibraryPlatformDeployment
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
+
+# adcp 4.3 generates CollectionListReference and uses it on TargetingOverlay.collection_list /
+# collection_list_exclude, but does not re-export the type from the public adcp.types namespace
+# (PropertyListReference is exported, CollectionListReference is not — likely a codegen oversight).
+# We import from the internal generated path so our isinstance checks and type annotations match
+# the library's TargetingOverlay field types exactly. Track upstream:
+# https://github.com/adcontextprotocol/adcp-client-python — when CollectionListReference is added
+# to adcp.types, switch this import to the public path.
+from adcp.types.generated_poc.core.collection_list_ref import (
+    CollectionListReference,  # noqa: F401 — re-exported via src.core.schemas; used by callers and TargetingOverlay.collection_list type
+)
 from pydantic import (
     AnyUrl,
     BaseModel,
@@ -603,29 +614,6 @@ class FormatReference(SalesAgentBaseModel):
     format_id: str = Field(..., serialization_alias="id", description="Format ID within that agent's format catalog")
 
 
-# TODO: remove once adcp library generates CollectionListReference and adds it to TargetingOverlay.
-# Tracked upstream at github.com/adcontextprotocol/adcp-client-python — spec defines this at
-# /schemas/3.0.1/core/collection-list-ref.json but Python codegen lags as of adcp 3.12.0.
-class CollectionListReference(SalesAgentBaseModel):
-    """Reference to an externally managed collection list, mirroring AdCP 3.0.1 spec.
-
-    Enables passing large collection inclusion/exclusion sets without embedding them
-    in requests. The receiving agent fetches and caches the list independently.
-
-    Mirrors the shape of adcp.types.PropertyListReference exactly (agent_url, list_id,
-    optional auth_token) — see /schemas/3.0.1/core/collection-list-ref.json.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    agent_url: AnyUrl = Field(..., description="URL of the agent managing the collection list")
-    list_id: str = Field(..., min_length=1, description="Identifier for the collection list within the agent")
-    auth_token: str | None = Field(
-        None,
-        description="JWT or other authorization token for accessing the list. Optional if the list is public or caller has implicit access.",
-    )
-
-
 class Format(LibraryFormat):
     """Creative format definition per AdCP spec.
 
@@ -881,11 +869,9 @@ class Targeting(TargetingOverlay):
     geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
     geo_postal_areas_exclude: list[GeoPostalArea] | None = None  # type: ignore[assignment]
 
-    # --- Collection-list targeting (AdCP 3.0.1 spec; library codegen lag at 3.12.0) ---
-    # property_list is inherited from TargetingOverlay; collection_list / _exclude are
-    # added locally pending upstream regen — see CollectionListReference above.
-    collection_list: CollectionListReference | None = None
-    collection_list_exclude: CollectionListReference | None = None
+    # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
+    # TargetingOverlay (added natively in adcp 4.3). CollectionListReference is re-exported
+    # from src.core.schemas (see import above) so callers can use a single import path.
 
     # --- Internal dimensions (unchanged) ---
 

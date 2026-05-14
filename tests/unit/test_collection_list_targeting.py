@@ -1,8 +1,8 @@
 """Schema tests for CollectionListReference and Targeting.collection_list / _exclude.
 
-Mirrors AdCP 3.0.1 spec at /schemas/3.0.1/core/collection-list-ref.json and
-/schemas/3.0.1/core/targeting.json:189-200. Local extension because adcp Python
-library 3.12.0's TargetingOverlay codegen lags the spec.
+CollectionListReference is imported from the adcp library (4.3+) at the internal
+generated path because it is not yet re-exported on the public adcp.types namespace.
+The spec-drift guards below ensure the imported class still matches AdCP spec.
 
 Round-trip tests prove data survives the persistence path:
     Targeting -> model_dump -> JSON -> dict -> Targeting
@@ -146,11 +146,11 @@ class TestRoundTripThroughJson:
 # Spec-drift guards: local model must match AdCP collection-list-ref.json
 # ---------------------------------------------------------------------------
 class TestCollectionListReferenceSpecDrift:
-    """Guard against drift between local CollectionListReference and the AdCP spec.
+    """Guard against drift between the imported CollectionListReference and AdCP spec.
 
-    Local extension exists because adcp 3.12.0 Python codegen lags the spec.
-    When the library catches up, this test surfaces the drift so we can delete
-    the local mirror and inherit instead.
+    The class is sourced from the adcp library's internal generated path; these
+    guards pin the contract so any upstream regen drift surfaces here instead of
+    silently breaking the storyboard's literal field assertions.
     """
 
     @pytest.fixture(scope="class")
