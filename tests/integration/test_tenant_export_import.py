@@ -450,6 +450,86 @@ class TestCloneOnSameDeployment:
             assert referenced_profile is not None
             assert referenced_profile.tenant_id == "rt_clone_solo_dst"
 
+    def test_clone_remaps_string_pk_and_rewrites_fk(self, integration_db):
+        """Single-column string PKs (media_buys.media_buy_id, etc.) get fresh IDs and FKs follow.
+
+        Regression for #416: same-deployment clone via --target-tenant-id used
+        to collide on string PKs (proposals.proposal_id was the original
+        failure). The remap mints new IDs and rewrites every FK pointing at
+        them; this test exercises the media_buys → media_packages chain.
+        """
+        from src.core.database.models import MediaBuy, MediaPackage
+        from tests.factories import (
+            MediaBuyFactory,
+            MediaPackageFactory,
+            PrincipalFactory,
+            TenantFactory,
+        )
+
+        with _ExportEnv() as env:
+            session = env.get_session()
+            source = TenantFactory(tenant_id="rt_str_src", name="String PK Source")
+            principal = PrincipalFactory(
+                tenant=source,
+                principal_id="rt_str_src_buyer",
+                access_token="rt_str_src_token",
+            )
+            media_buy = MediaBuyFactory(
+                tenant=source,
+                principal=principal,
+                media_buy_id="mb_str_pk_clone_001",
+            )
+            MediaPackageFactory(media_buy=media_buy, package_id="pkg_str_pk_clone_a")
+            MediaPackageFactory(media_buy=media_buy, package_id="pkg_str_pk_clone_b")
+            session.commit()
+
+            source_media_buy_id = media_buy.media_buy_id
+
+            bundle = export_tenant(session.connection(), "rt_str_src")
+            session.commit()
+
+            # Rewrite globally-unique columns the pre-flight protects.
+            bundle["tenant"]["subdomain"] = "pub-rt-str-dst"
+            for row in bundle["tables"].get("principals", []):
+                if row.get("access_token") == "rt_str_src_token":
+                    row["access_token"] = "rt_str_dst_token"
+
+            import_tenant(session.connection(), bundle, target_tenant_id="rt_str_dst")
+            session.commit()
+
+            # Source media_buy still exists with its original ID.
+            assert (
+                session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == source_media_buy_id)).first()
+                is not None
+            )
+
+            # Clone has its own media_buy with a DIFFERENT id.
+            dst_media_buy = session.scalars(select(MediaBuy).where(MediaBuy.tenant_id == "rt_str_dst")).first()
+            assert dst_media_buy is not None
+            assert dst_media_buy.media_buy_id != source_media_buy_id, (
+                "clone must mint a fresh media_buy_id; sharing source's would collide"
+            )
+            # Prefix preservation: original was "mb_…" so the clone should be too.
+            assert dst_media_buy.media_buy_id.startswith("mb_"), (
+                f"expected prefix-preserving rename, got {dst_media_buy.media_buy_id!r}"
+            )
+
+            # The two media_packages should now reference the CLONE's media_buy_id,
+            # not the source's. Composite PK (media_buy_id, package_id) — the
+            # tuple is unique because media_buy_id is remapped, so package_id
+            # values can stay as-is.
+            dst_packages = session.scalars(
+                select(MediaPackage).where(MediaPackage.media_buy_id == dst_media_buy.media_buy_id)
+            ).all()
+            assert len(dst_packages) == 2, "both packages should be re-linked to the clone's media_buy"
+            assert {p.package_id for p in dst_packages} == {"pkg_str_pk_clone_a", "pkg_str_pk_clone_b"}
+
+            # Source's media_packages still attached to source's media_buy.
+            source_packages = session.scalars(
+                select(MediaPackage).where(MediaPackage.media_buy_id == source_media_buy_id)
+            ).all()
+            assert {p.package_id for p in source_packages} == {"pkg_str_pk_clone_a", "pkg_str_pk_clone_b"}
+
 
 class TestStripSecrets:
     def test_strip_secrets_wipes_encrypted_columns(self, integration_db):

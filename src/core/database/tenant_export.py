@@ -38,12 +38,25 @@ import contextlib
 import json
 import logging
 import os
+import uuid
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
 import pydantic_core
-from sqlalchemy import BigInteger, Column, Integer, MetaData, Table, delete, insert, inspect, select
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    delete,
+    insert,
+    inspect,
+    select,
+)
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import ColumnElement
@@ -196,6 +209,53 @@ def _autoincrement_pk_column(table: Table) -> Column | None:
         if _is_autoincrement_int_pk(column):
             return column
     return None
+
+
+def _globally_unique_string_pk_column(table: Table) -> Column | None:
+    """Return single-column non-composite string PK, or None.
+
+    These IDs (``media_buy_id``, ``proposal_id``, ``context_id``, etc.) are
+    globally unique by their PK constraint — they collide on same-deployment
+    clones even when ``tenant_id`` is rewritten. Composite PKs that include
+    ``tenant_id`` (e.g. ``products(tenant_id, product_id)``) don't qualify
+    because the tuple uniqueness already changes when the tenant_id does.
+
+    Excludes columns named ``tenant_id`` — single-column-PK tables whose
+    only PK is the tenant FK (e.g. ``adapter_config.tenant_id``) get the
+    new tenant_id from :func:`_retarget_tenant_id` upstream; remapping
+    here would overwrite that value with an uncorrelated UUID.
+    """
+    if len(table.primary_key.columns) != 1:
+        return None
+    column = next(iter(table.primary_key.columns))
+    if column.name == "tenant_id":
+        return None
+    if not isinstance(column.type, (String, Text)):
+        return None
+    return column
+
+
+def _mint_id(old_id: str, column: Column) -> str:
+    """Generate a fresh opaque ID for a remapped string PK.
+
+    Preserves the lexical prefix of the original (e.g. ``prop_<hex>`` stays
+    ``prop_<newhex>``) so logs and debugging remain readable. Falls back to
+    a bare uuid hex when no clean prefix is detectable. Truncates to the
+    column's declared length when one is set.
+    """
+    new_hex = uuid.uuid4().hex
+    candidate = new_hex
+    if "_" in old_id:
+        prefix = old_id.split("_", 1)[0]
+        # Only preserve short alphanumeric prefixes — anything weird falls
+        # through to bare uuid.
+        if 1 <= len(prefix) <= 16 and prefix.replace("-", "").isalnum():
+            candidate = f"{prefix}_{new_hex}"
+    column_type = column.type
+    max_length = getattr(column_type, "length", None)
+    if max_length and len(candidate) > max_length:
+        candidate = candidate[:max_length]
+    return candidate
 
 
 def build_tenant_filter(
@@ -467,8 +527,13 @@ def import_tenant(
     imported row. Independent of the source's value.
 
     ``target_tenant_id``: if set, rewrites the ``tenant_id`` column
-    throughout the bundle. Tenant identifiers embedded inside JSON columns
-    are NOT rewritten — see :func:`_retarget_tenant_id`.
+    throughout the bundle AND remaps surrogate PKs that would otherwise
+    collide on same-deployment clones — autoincrement int PKs strip and
+    re-allocate via the sequence, single-column string PKs get fresh
+    UUID-based IDs minted up-front. All FK references to remapped PKs are
+    rewritten generically by walking ``Table.foreign_keys``. Tenant
+    identifiers embedded inside JSON columns are NOT rewritten — see
+    :func:`_retarget_tenant_id`.
 
     Before inserting, performs a pre-flight check on globally-unique
     columns (``tenants.subdomain``, ``tenants.virtual_host``, and every
@@ -555,23 +620,33 @@ def import_tenant(
     total_rows = 0
 
     # When retargeting to a new tenant_id on the same deployment, the
-    # bundle's surrogate integer PKs collide with rows still owned by the
-    # source tenant. Strip those PKs so Postgres re-allocates from the
-    # sequence, then rewrite any inbound FK references using the
-    # old→new ID map we build via INSERT ... RETURNING. Only one FK in
-    # the current schema points at an autoincrement int PK
-    # (products.inventory_profile_id → inventory_profiles.id) but the
-    # remap loop walks the FK graph generically so future references
-    # are handled automatically.
+    # bundle's surrogate PKs collide with rows still owned by the source
+    # tenant. Two flavors:
+    #
+    # - Single-column autoincrement int PKs (gam_inventory.id, audit_logs.log_id,
+    #   ...): strip from rows, let Postgres re-allocate from the sequence,
+    #   capture old→new via INSERT ... RETURNING. Lazy: map filled per-table.
+    #
+    # - Single-column non-composite string PKs (proposals.proposal_id,
+    #   media_buys.media_buy_id, contexts.context_id, ...): mint fresh
+    #   opaque IDs up-front, store the map eagerly, rewrite both this row's
+    #   PK and any inbound FK references.
+    #
+    # The FK rewrite loop is unified — it walks `table.foreign_keys` and
+    # consults a single dict keyed by parent table name. New FK references
+    # to either flavor of remapped PK are handled automatically.
     remap_pks = target_tenant_id is not None
-    pk_id_maps: dict[str, dict[int, int]] = {}
+    pk_id_maps: dict[str, dict[Any, Any]] = {}
+    if remap_pks:
+        pk_id_maps.update(_build_string_pk_remap(bundle, scoped_tables, md))
 
     for table in scoped_tables:
         rows = bundle["tables"].get(table.name)
         if not rows:
             continue
 
-        # Rewrite inbound FK columns whose targets we've already remapped.
+        # Rewrite inbound FK columns whose targets we've remapped (string
+        # eagerly, int lazily after the parent insert completes).
         for row in rows:
             for fk in table.foreign_keys:
                 parent_map = pk_id_maps.get(fk.column.table.name)
@@ -584,6 +659,15 @@ def import_tenant(
                 new_value = parent_map.get(old_value)
                 if new_value is not None:
                     row[col_name] = new_value
+
+        # Apply this table's own string PK rewrite (eager — map already built).
+        string_pk = _globally_unique_string_pk_column(table) if remap_pks else None
+        if string_pk is not None and table.name in pk_id_maps:
+            own_map = pk_id_maps[table.name]
+            for row in rows:
+                old_pk = row.get(string_pk.name)
+                if old_pk in own_map:
+                    row[string_pk.name] = own_map[old_pk]
 
         auto_pk = _autoincrement_pk_column(table) if remap_pks else None
 
@@ -639,6 +723,42 @@ def import_tenant(
     )
 
     return {"tenant_id": tenant_id, "tables": summary_tables, "rows": total_rows}
+
+
+def _build_string_pk_remap(
+    bundle: dict[str, Any],
+    scoped_tables: list[Table],
+    metadata: MetaData,
+) -> dict[str, dict[str, str]]:
+    """Mint new opaque IDs for every single-column string PK in the bundle.
+
+    Built eagerly (before any insert) because string PKs aren't allocated
+    by Postgres — we have to know the new values up-front so we can rewrite
+    both the row's own PK and every inbound FK reference to it. The map is
+    keyed by parent table name so the unified FK-rewrite loop in
+    :func:`import_tenant` can look up replacements without caring whether
+    a parent is int- or string-keyed.
+
+    Only includes tables that actually appear in ``bundle["tables"]`` — no
+    point minting IDs for tables that wouldn't be inserted.
+    """
+    remap: dict[str, dict[str, str]] = {}
+    for table in scoped_tables:
+        string_pk = _globally_unique_string_pk_column(table)
+        if string_pk is None:
+            continue
+        rows = bundle["tables"].get(table.name)
+        if not rows:
+            continue
+        new_map: dict[str, str] = {}
+        for row in rows:
+            old = row.get(string_pk.name)
+            if old is None or old in new_map:
+                continue
+            new_map[old] = _mint_id(old, string_pk)
+        if new_map:
+            remap[table.name] = new_map
+    return remap
 
 
 def _check_unique_collisions(
