@@ -226,7 +226,7 @@ class Kevel(AdServerAdapter):
             error_msg = f"Unsupported targeting features for Kevel: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
             return CreateMediaBuyError(
-                errors=[Error(code="unsupported_targeting", message=error_msg, details={error_msg: error_msg})],
+                errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg, details={error_msg: error_msg})],
             )
 
         # Generate a media buy ID
@@ -613,7 +613,7 @@ class Kevel(AdServerAdapter):
             return UpdateMediaBuyError(
                 errors=[
                     Error(
-                        code="unsupported_action",
+                        code="UNSUPPORTED_FEATURE",
                         message=f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}",
                         details=None,
                     )
@@ -705,7 +705,7 @@ class Kevel(AdServerAdapter):
                     if not flight:
                         return UpdateMediaBuyError(
                             errors=[
-                                Error(code="flight_not_found", message=f"Flight '{package_id}' not found", details=None)
+                                Error(code="FLIGHT_NOT_FOUND", message=f"Flight '{package_id}' not found", details=None)
                             ],
                         )
 
@@ -747,7 +747,7 @@ class Kevel(AdServerAdapter):
                     if not flight:
                         return UpdateMediaBuyError(
                             errors=[
-                                Error(code="flight_not_found", message=f"Flight '{package_id}' not found", details=None)
+                                Error(code="FLIGHT_NOT_FOUND", message=f"Flight '{package_id}' not found", details=None)
                             ],
                         )
 
@@ -775,5 +775,5 @@ class Kevel(AdServerAdapter):
             except requests.exceptions.RequestException as e:
                 self.log(f"Error updating Kevel flight: {e}")
                 return UpdateMediaBuyError(
-                    errors=[Error(code="api_error", message=str(e), details=None)],
+                    errors=[Error(code="API_ERROR", message=str(e), details=None)],
                 )

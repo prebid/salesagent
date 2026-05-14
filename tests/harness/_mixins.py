@@ -330,6 +330,50 @@ class CircuitBreakerMixin:
             **extra,
         )
 
+    def call_deliver(
+        self,
+        media_buy_id: str = "mb_001",
+        notification_type: str | None = None,
+        **kwargs: Any,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Deliver via the production WebhookDeliveryService.
+
+        BDD scenarios that exercise webhook authentication (HMAC, bearer) and
+        retry/backoff timing must use the real production code path —
+        ``WebhookDeliveryService.send_delivery_webhook`` — because
+        ``deliver_webhook_with_retry`` (the legacy path used by
+        :class:`tests.harness.delivery_webhook.WebhookEnv`) emits a different
+        signature header name and has different retry timing.
+
+        ``notification_type`` is translated to the production flags:
+
+        * ``"final"``    -> ``is_final=True``
+        * ``"adjusted"`` -> ``is_adjusted=True``
+        * any other value (``None``, ``"scheduled"``, ``"delayed"``) leaves
+          both flags False, which yields a ``"scheduled"`` payload from
+          production. ``"delayed"`` is a spec-defined value that production
+          does not yet emit; tests that assert on it document a production
+          gap rather than a harness gap.
+
+        Returns ``(success, info_dict)`` to keep the call shape compatible
+        with :meth:`WebhookMixin.call_deliver`.
+        """
+        is_final = notification_type == "final"
+        is_adjusted = notification_type == "adjusted"
+        # Set a non-zero interval so production includes ``next_expected_at``
+        # in the payload for non-final notifications. The exact value does not
+        # matter — assertions check presence, not the value.
+        next_expected_interval_seconds = None if is_final else 86400.0
+
+        success = self.call_send(
+            media_buy_id=media_buy_id,
+            is_final=is_final,
+            is_adjusted=is_adjusted,
+            next_expected_interval_seconds=next_expected_interval_seconds,
+            **kwargs,
+        )
+        return success, {"success": success}
+
     def call_impl(self, **kwargs: Any) -> bool:
         """Alias for call_send to satisfy BaseTestEnv interface."""
         return self.call_send(**kwargs)

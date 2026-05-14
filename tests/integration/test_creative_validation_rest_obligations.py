@@ -64,8 +64,9 @@ class TestMissingFormatIdRejectedThroughImpl:
         assert result.action == CreativeAction.failed
         assert result.errors is not None
         assert len(result.errors) > 0
-        assert any("format_id" in err.lower() for err in result.errors), (
-            f"Expected error about format_id, got: {result.errors}"
+        error_msgs = [e.message if hasattr(e, "message") else str(e) for e in result.errors]
+        assert any("format_id" in msg.lower() for msg in error_msgs), (
+            f"Expected error about format_id, got: {error_msgs}"
         )
 
 

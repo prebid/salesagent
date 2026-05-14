@@ -328,7 +328,7 @@ class TestSyncAccountsBillingPolicy:
         assert _status_value(result.status) == "rejected"
         assert result.errors is not None
         assert len(result.errors) >= 1
-        assert result.errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
 
     @pytest.mark.asyncio
     async def test_mixed_billing_partial_success(self, integration_db):
@@ -459,7 +459,7 @@ class TestSyncAccountsBillingPolicyTransport:
         assert _action_value(acct.action) == "failed"
         assert _status_value(acct.status) == "rejected"
         assert acct.errors is not None
-        assert acct.errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert acct.errors[0].code == "UNSUPPORTED_FEATURE"
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_billing_rejection_error_includes_suggestion(self, integration_db, transport):

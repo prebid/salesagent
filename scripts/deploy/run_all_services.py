@@ -202,21 +202,22 @@ signal.signal(signal.SIGTERM, cleanup)
 def run_migrations():
     """Run database migrations before starting services."""
     print("📦 Running database migrations...")
+    # Stream output live so a hang shows which migration is in flight (we have
+    # 170 migrations; cold-DB runs blow past short timeouts and capture_output
+    # makes them invisible to the operator).
+    timeout_seconds = 300
     try:
         result = subprocess.run(
             [sys.executable, "scripts/ops/migrate.py"],
-            capture_output=True,
-            text=True,
-            timeout=60,
+            timeout=timeout_seconds,
         )
         if result.returncode == 0:
             print("✅ Migrations complete")
         else:
-            print(f"❌ Migration failed: {result.stderr}")
-            print(result.stdout)
+            print(f"❌ Migration failed (exit code {result.returncode})")
             sys.exit(1)
     except subprocess.TimeoutExpired:
-        print("❌ Migration timed out after 60 seconds")
+        print(f"❌ Migration timed out after {timeout_seconds} seconds")
         sys.exit(1)
     except Exception as e:
         print(f"❌ Migration error: {e}")

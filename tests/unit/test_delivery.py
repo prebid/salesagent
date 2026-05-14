@@ -529,7 +529,7 @@ class TestDeliveryIdentificationModes:
         assert "mb_missing_1" in error_messages
         assert "mb_missing_2" in error_messages
         for err in response.errors:
-            assert err.code == "media_buy_not_found"
+            assert err.code == "MEDIA_BUY_NOT_FOUND"
 
     def test_all_ids_invalid_returns_empty_with_errors(self):
         """UC-004-MAIN-15: all requested IDs missing returns empty deliveries + errors.
@@ -560,7 +560,7 @@ class TestDeliveryIdentificationModes:
         assert response.errors is not None
         assert len(response.errors) == 2
         error_codes = {e.code for e in response.errors}
-        assert error_codes == {"media_buy_not_found"}
+        assert error_codes == {"MEDIA_BUY_NOT_FOUND"}
         error_messages = " ".join(e.message for e in response.errors)
         assert "mb_ghost_1" in error_messages
         assert "mb_ghost_2" in error_messages
@@ -1264,7 +1264,7 @@ class TestDeliveryAuthErrors:
 
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "principal_id_missing"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert response.media_buy_deliveries == []
 
     def test_principal_not_found_returns_error(self):
@@ -1280,7 +1280,7 @@ class TestDeliveryAuthErrors:
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.errors is not None
-        assert response.errors[0].code == "principal_not_found"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert "ghost_principal" in response.errors[0].message
         assert response.media_buy_deliveries == []
 
@@ -1310,7 +1310,7 @@ class TestDeliveryAuthErrors:
 
         # Auth failed
         assert response.errors is not None
-        assert response.errors[0].code == "principal_id_missing"
+        assert response.errors[0].code == "AUTH_REQUIRED"
 
         # No adapter or DB calls occurred
         mock_adapter.assert_not_called()
@@ -1330,7 +1330,7 @@ class TestDeliveryMediaBuyNotFound:
 
         Spec: CONTRADICTS -- get-media-buy-delivery-response.json errors array is for
         "Task-specific errors and warnings (e.g., missing delivery data)". Current impl
-        returns empty deliveries with errors=None. Correct: errors=[{code: "media_buy_not_found"}].
+        returns empty deliveries with errors=None. Correct: errors=[{code: "MEDIA_BUY_NOT_FOUND"}].
         https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/media-buy/get-media-buy-delivery-response.json
         Fix: _get_target_media_buys must diff requested IDs vs found IDs. See salesagent-mexj.
         Priority: P1
@@ -1350,7 +1350,7 @@ class TestDeliveryMediaBuyNotFound:
         assert response.media_buy_deliveries == []
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_nonexistent" in response.errors[0].message
 
     def test_partial_ids_returns_found_and_errors(self):
@@ -1392,7 +1392,7 @@ class TestDeliveryMediaBuyNotFound:
         # Missing ID reported as error
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_gone" in response.errors[0].message
 
     def test_buyer_refs_no_longer_accepted_on_delivery(self):
@@ -1441,7 +1441,7 @@ class TestDeliveryOwnership:
         assert response.media_buy_deliveries == []
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_other_principal" in response.errors[0].message
 
     def test_no_info_leakage_on_ownership_error(self):
@@ -1461,8 +1461,8 @@ class TestDeliveryOwnership:
         )
 
         assert response.errors is not None
-        # Must NOT reveal ownership: code is "media_buy_not_found", not "ownership_mismatch"
-        assert response.errors[0].code == "media_buy_not_found"
+        # Must NOT reveal ownership: code is "MEDIA_BUY_NOT_FOUND", not "ownership_mismatch"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "ownership" not in response.errors[0].message.lower()
 
     def test_mixed_ownership_behavior(self):
@@ -1499,7 +1499,7 @@ class TestDeliveryOwnership:
         # Non-owned buy reported as not found (not ownership error)
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "media_buy_not_found"
+        assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_theirs" in response.errors[0].message
 
 
@@ -1526,7 +1526,7 @@ class TestDeliveryInvalidDateRange:
         response = _run_impl_with_patches(req)
 
         assert response.errors is not None
-        assert response.errors[0].code == "invalid_date_range"
+        assert response.errors[0].code == "VALIDATION_ERROR"
         assert response.media_buy_deliveries == []
 
     def test_start_date_after_end_date_returns_error(self):
@@ -1543,7 +1543,7 @@ class TestDeliveryInvalidDateRange:
         response = _run_impl_with_patches(req)
 
         assert response.errors is not None
-        assert response.errors[0].code == "invalid_date_range"
+        assert response.errors[0].code == "VALIDATION_ERROR"
         assert response.media_buy_deliveries == []
 
     def test_date_range_error_no_state_change(self):
@@ -1575,7 +1575,7 @@ class TestDeliveryInvalidDateRange:
 
         # Date range error returned
         assert response.errors is not None
-        assert response.errors[0].code == "invalid_date_range"
+        assert response.errors[0].code == "VALIDATION_ERROR"
 
         # No adapter calls or target media buy lookups occurred
         mock_adapter.get_media_buy_delivery.assert_not_called()
@@ -1611,7 +1611,7 @@ class TestDeliveryAdapterError:
         )
 
         assert response.errors is not None
-        assert response.errors[0].code == "adapter_error"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
         assert "mb_err" in response.errors[0].message
         assert response.media_buy_deliveries == []
         assert response.aggregated_totals.impressions == 0.0
@@ -1643,7 +1643,7 @@ class TestDeliveryAdapterError:
 
         assert response.reporting_period.start.month == 3
         assert response.reporting_period.end.month == 3
-        assert response.errors[0].code == "adapter_error"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
 
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
@@ -1667,7 +1667,7 @@ class TestDeliveryAdapterError:
 
         # Error response returned
         assert response.errors is not None
-        assert response.errors[0].code == "adapter_error"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
 
         # Error was logged
         mock_logger.error.assert_called()
@@ -1700,7 +1700,7 @@ class TestDeliveryAdapterError:
 
         # Error returned, no deliveries
         assert response.errors is not None
-        assert response.errors[0].code == "adapter_error"
+        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
         assert response.media_buy_deliveries == []
 
         # Aggregated totals are zeroed (no partial data leaked)

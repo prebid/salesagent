@@ -4,6 +4,7 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
+import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -18,30 +19,39 @@ from a2a.server.request_handlers.request_handler import RequestHandler
 from a2a.types import (
     AgentCard,
     AgentExtension,
+    AgentInterface,
     Artifact,
-    DataPart,
+    AuthenticationInfo,
+    CancelTaskRequest,
+    DeleteTaskPushNotificationConfigRequest,
+    GetExtendedAgentCardRequest,
+    GetTaskPushNotificationConfigRequest,
+    GetTaskRequest,
     InternalError,
     InvalidParamsError,
     InvalidRequestError,
+    ListTaskPushNotificationConfigsRequest,
+    ListTaskPushNotificationConfigsResponse,
+    ListTasksRequest,
+    ListTasksResponse,
     Message,
-    MessageSendParams,
     MethodNotFoundError,
     Part,
-    PushNotificationConfig,
+    SendMessageRequest,
+    SubscribeToTaskRequest,
     Task,
-    TaskIdParams,
-    TaskQueryParams,
+    TaskNotFoundError,
+    TaskPushNotificationConfig,
     TaskState,
     TaskStatus,
-    TextPart,
     UnsupportedOperationError,
 )
-from a2a.utils.errors import ServerError
+from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
-from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import GeneratedTaskStatus
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from google.protobuf import json_format, struct_pb2
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
@@ -100,22 +110,52 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 
+def _coerce_account_reference(account: Any) -> Any:
+    """Coerce a raw dict account param to AccountReference at the A2A boundary.
+
+    A2A clients may send account as a plain dict. The MCP wrapper's TypeAdapter
+    handles this automatically, but the A2A raw path passes dicts through. This
+    wraps dicts in the SDK AccountReference Pydantic model so downstream code
+    gets a typed object.
+    """
+    if account is None or not isinstance(account, dict):
+        return account
+    from adcp.types import AccountReference as LibraryAccountReference
+
+    return LibraryAccountReference.model_validate(account)
+
+
+def _dict_to_value(d: dict) -> struct_pb2.Value:
+    """Convert a Python dict to a protobuf Value for use in Part.data."""
+    val = struct_pb2.Value()
+    json_format.Parse(json.dumps(d, default=str), val)
+    return val
+
+
+def _dict_to_struct(d: dict) -> struct_pb2.Struct:
+    """Convert a Python dict to a protobuf Struct for use in Task.metadata."""
+    s = struct_pb2.Struct()
+    s.update(d)
+    return s
+
+
 def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
     """Translate AdCPError to an A2A SDK error type preserving semantics.
 
     The recovery classification, error_code, and details are forwarded in the
     ``data`` field so that buyer agents (and test harness unwrapping) can
-    reconstruct the original AdCPError.
+    reconstruct the original AdCPError. Non-standard codes are translated
+    to STANDARD_ERROR_CODES at this transport boundary.
     """
-    data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.error_code}
+    data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.wire_error_code}
     if exc.details:
         data["details"] = exc.details
     if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
-        return InvalidParamsError(message=exc.message, data=data)
+        return InvalidParamsError(message=str(exc.message), data=data)
     elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
-        return InvalidRequestError(message=exc.message, data=data)
+        return InvalidRequestError(message=str(exc.message), data=data)
     else:
-        return InternalError(message=exc.message, data=data)
+        return InternalError(message=str(exc.message), data=data)
 
 
 # ADCP Discovery Skills: Skills that don't require authentication
@@ -142,7 +182,8 @@ class AdCPRequestHandler(RequestHandler):
 
     def __init__(self):
         """Initialize the AdCP A2A request handler."""
-        self.tasks = {}  # In-memory task storage
+        self.tasks: dict[str, Task] = {}  # In-memory task storage
+        self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
@@ -170,14 +211,14 @@ class AdCPRequestHandler(RequestHandler):
 
         Args:
             auth_token: Bearer token from Authorization header (None for unauthenticated)
-            require_valid_token: If True, auth failures raise ServerError
+            require_valid_token: If True, auth failures raise A2AError
             context: ServerCallContext from SDK (None when called directly in tests).
 
         Returns:
             ResolvedIdentity with tenant and (optionally) principal info
 
         Raises:
-            ServerError: If require_valid_token=True and authentication fails
+            A2AError: If require_valid_token=True and authentication fails
         """
         from src.core.resolved_identity import resolve_identity
         from src.core.testing_hooks import AdCPTestContext
@@ -186,7 +227,7 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise ServerError(InvalidRequestError(message="Missing authentication token"))
+            raise InvalidRequestError(message="Missing authentication token")
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -200,17 +241,15 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            raise ServerError(InvalidRequestError(message=str(e))) from e
+            raise InvalidRequestError(message=str(e)) from e
 
         if require_valid_token:
             if not identity.principal_id:
-                raise ServerError(InvalidRequestError(message="Authentication token is invalid or expired."))
+                raise InvalidRequestError(message="Authentication token is invalid or expired.")
 
             if not identity.tenant:
-                raise ServerError(
-                    InvalidRequestError(
-                        message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
-                    )
+                raise InvalidRequestError(
+                    message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
                 )
 
             tenant_id = identity.tenant_id or identity.tenant.get("tenant_id", "unknown")
@@ -300,11 +339,11 @@ class AdCPRequestHandler(RequestHandler):
         Uses create_a2a_webhook_payload from adcp library to automatically select correct type.
         """
         try:
-            # Check if task has push notification config in metadata
-            if not task.metadata or "push_notification_config" not in task.metadata:
+            # Check if task has push notification config stored
+            webhook_config = self._task_push_configs.get(task.id)
+            if not webhook_config:
                 return
 
-            webhook_config: PushNotificationConfig = task.metadata["push_notification_config"]
             push_notification_service = get_protocol_webhook_service()
 
             from uuid import uuid4
@@ -314,10 +353,9 @@ class AdCPRequestHandler(RequestHandler):
                 logger.info("[red]No push notification URL present; skipping webhook[/red]")
                 return
 
-            auth = webhook_config.authentication
-            schemes = auth.schemes if auth else []
-            auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
-            auth_token = auth.credentials if auth else None
+            auth = webhook_config.authentication if webhook_config.HasField("authentication") else None
+            auth_type = auth.scheme if auth and auth.scheme else None
+            auth_token = auth.credentials if auth and auth.credentials else None
 
             push_notification_config = DBPushNotificationConfig(
                 id=webhook_config.id or f"pnc_{uuid4().hex[:16]}",
@@ -353,10 +391,11 @@ class AdCPRequestHandler(RequestHandler):
                 result=result_data,
             )
 
+            # Extract skills_requested from protobuf Struct metadata
+            meta_dict = json_format.MessageToDict(task.metadata) if task.metadata.ByteSize() > 0 else {}
+            skills = list(meta_dict.get("skills_requested", []))
             metadata = {
-                "task_type": (
-                    task.metadata["skills_requested"][0] if len(task.metadata["skills_requested"]) > 0 else "unknown"
-                ),
+                "task_type": skills[0] if skills else "unknown",
             }
 
             await push_notification_service.send_notification(
@@ -431,8 +470,8 @@ class AdCPRequestHandler(RequestHandler):
 
     async def on_message_send(
         self,
-        params: MessageSendParams,
-        context: ServerCallContext | None = None,
+        params: SendMessageRequest,
+        context: ServerCallContext,
     ) -> Task | Message:
         """Handle 'message/send' method for non-streaming requests.
 
@@ -457,30 +496,19 @@ class AdCPRequestHandler(RequestHandler):
         if hasattr(message, "parts") and message.parts:
             for part in message.parts:
                 # Handle text parts (natural language invocation)
-                if hasattr(part, "text"):
+                if part.text:
                     text_parts.append(part.text)
-                elif hasattr(part, "root") and hasattr(part.root, "text"):
-                    text_parts.append(part.root.text)
 
                 # Handle structured data parts (explicit skill invocation)
-                elif hasattr(part, "data") and isinstance(part.data, dict):
-                    # Support both "input" (A2A spec) and "parameters" (legacy) for skill params
-                    if "skill" in part.data:
-                        params_data = part.data.get("input") or part.data.get("parameters", {})
-                        skill_invocations.append({"skill": part.data["skill"], "parameters": params_data})
-                        logger.info(
-                            f"Found explicit skill invocation: {part.data['skill']} with params: {list(params_data.keys())}"
-                        )
-
-                # Handle nested data structure (some A2A clients use this format)
-                elif hasattr(part, "root") and hasattr(part.root, "data"):
-                    data = part.root.data
+                # part.data is a protobuf Value — convert to Python dict
+                elif part.HasField("data"):
+                    data = json_format.MessageToDict(part.data)
                     if isinstance(data, dict) and "skill" in data:
                         # Support both "input" (A2A spec) and "parameters" (legacy) for skill params
                         params_data = data.get("input") or data.get("parameters", {})
                         skill_invocations.append({"skill": data["skill"], "parameters": params_data})
                         logger.info(
-                            f"Found explicit skill invocation (nested): {data['skill']} with params: {list(params_data.keys())}"
+                            f"Found explicit skill invocation: {data['skill']} with params: {list(params_data.keys())}"
                         )
 
         # Combine text for natural language fallback
@@ -488,21 +516,20 @@ class AdCPRequestHandler(RequestHandler):
 
         # Create task for tracking
         task_id = f"task_{uuid.uuid4().hex[:12]}"
-        # Handle message_id being a number or string
-        msg_id = str(params.message.message_id) if hasattr(params.message, "message_id") else None
+        # In protobuf, message_id is always a string (empty string default)
+        msg_id = params.message.message_id or None
         context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
 
-        # Extract push notification config from protocol layer (A2A MessageSendConfiguration)
-        push_notification_config = None
-        if hasattr(params, "configuration") and params.configuration:
-            if hasattr(params.configuration, "push_notification_config"):
-                push_notification_config = params.configuration.push_notification_config
-                if push_notification_config:
-                    logger.info(
-                        f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
-                    )
+        # Extract push notification config from protocol layer (A2A SendMessageConfiguration)
+        push_notification_config: TaskPushNotificationConfig | None = None
+        if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
+            push_notification_config = params.configuration.task_push_notification_config
+            if push_notification_config.url:
+                logger.info(
+                    f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
+                )
 
-        # Prepare task metadata with both invocation types
+        # Prepare task metadata (JSON-serializable only — protobuf Struct)
         task_metadata: dict[str, Any] = {
             "request_text": combined_text,
             "invocation_type": "explicit_skill" if skill_invocations else "natural_language",
@@ -510,17 +537,15 @@ class AdCPRequestHandler(RequestHandler):
         if skill_invocations:
             task_metadata["skills_requested"] = [inv["skill"] for inv in skill_invocations]
 
-        # Store push notification config model directly in metadata (no destructuring)
-        if push_notification_config:
-            task_metadata["push_notification_config"] = push_notification_config
-
         task = Task(
             id=task_id,
             context_id=context_id,
-            kind="task",
-            status=TaskStatus(state=TaskState.working),
-            metadata=task_metadata,
+            status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+            metadata=_dict_to_struct(task_metadata),
         )
+        # Store push notification config outside protobuf metadata (not JSON-serializable)
+        if push_notification_config:
+            self._task_push_configs[task_id] = push_notification_config
         self.tasks[task_id] = task
 
         try:
@@ -539,10 +564,8 @@ class AdCPRequestHandler(RequestHandler):
 
             # Require authentication for non-public skills
             if requires_auth and not auth_token:
-                raise ServerError(
-                    InvalidRequestError(
-                        message="Missing authentication token - Bearer token required in Authorization header"
-                    )
+                raise InvalidRequestError(
+                    message="Missing authentication token - Bearer token required in Authorization header"
                 )
 
             # ── Transport boundary: resolve identity ONCE ──
@@ -569,11 +592,11 @@ class AdCPRequestHandler(RequestHandler):
                             skill_name,
                             parameters,
                             identity,
-                            push_notification_config=task_metadata.get("push_notification_config"),
+                            push_notification_config=push_notification_config,
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
-                    except ServerError:
-                        # ServerError should bubble up immediately (JSON-RPC error)
+                    except A2AError:
+                        # A2AError should bubble up immediately (JSON-RPC error)
                         raise
                     except Exception as e:
                         logger.error(f"Error in explicit skill {skill_name}: {e}")
@@ -585,8 +608,8 @@ class AdCPRequestHandler(RequestHandler):
                     if res["success"] and isinstance(res["result"], dict):
                         result_status = res["result"].get("status")
                         if result_status == "submitted":
-                            task.status = TaskStatus(state=TaskState.submitted)
-                            task.artifacts = None  # No artifacts for pending tasks
+                            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+                            del task.artifacts[:]  # No artifacts for pending tasks
                             logger.info(
                                 f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
                             )
@@ -610,13 +633,12 @@ class AdCPRequestHandler(RequestHandler):
                         except Exception:
                             logger.debug("Response reconstruction failed, skipping text part", exc_info=True)
 
-                    # Build parts list per A2A spec: optional TextPart + required DataPart
+                    # Build parts list per A2A spec: optional text Part + required data Part
                     parts = []
                     if text_message:
-                        parts.append(Part(root=TextPart(text=text_message)))
-                    parts.append(Part(root=DataPart(data=artifact_data)))
+                        parts.append(Part(text=text_message))
+                    parts.append(Part(data=_dict_to_value(artifact_data)))
 
-                    task.artifacts = task.artifacts or []
                     task.artifacts.append(
                         Artifact(
                             artifact_id=f"skill_result_{i + 1}",
@@ -631,7 +653,7 @@ class AdCPRequestHandler(RequestHandler):
 
                 if failed_skills and not successful_skills:
                     # All skills failed - mark task as failed
-                    task.status = TaskStatus(state=TaskState.failed)
+                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
 
                     # Send protocol-level webhook notification for failure
                     error_messages = [res.get("error", "Unknown error") for res in results if not res["success"]]
@@ -698,13 +720,14 @@ class AdCPRequestHandler(RequestHandler):
                         "product_count": len(result.get("products", [])) if isinstance(result, dict) else 0,
                     },
                 )
-                task.artifacts = [
+                del task.artifacts[:]
+                task.artifacts.append(
                     Artifact(
                         artifact_id="product_catalog_1",
                         name="product_catalog",
-                        parts=[Part(root=DataPart(data=result))],
+                        parts=[Part(data=_dict_to_value(result))],
                     )
-                ]
+                )
             elif any(word in combined_text for word in ["price", "pricing", "cost", "cpm", "budget"]):
                 # Redirect pricing queries to get_products which has real price_guidance
                 result = await self._handle_get_products_skill(
@@ -725,13 +748,14 @@ class AdCPRequestHandler(RequestHandler):
                         "products_count": len(result.get("products", [])) if isinstance(result, dict) else 0,
                     },
                 )
-                task.artifacts = [
+                del task.artifacts[:]
+                task.artifacts.append(
                     Artifact(
                         artifact_id="pricing_info_1",
                         name="pricing_information",
-                        parts=[Part(root=DataPart(data=result))],
+                        parts=[Part(data=_dict_to_value(result))],
                     )
-                ]
+                )
             elif any(word in combined_text for word in ["target", "audience"]):
                 # Redirect targeting queries to get_adcp_capabilities which has real targeting info
                 result = await self._handle_get_adcp_capabilities_skill({}, identity)
@@ -748,13 +772,14 @@ class AdCPRequestHandler(RequestHandler):
                         "query_type": "targeting",
                     },
                 )
-                task.artifacts = [
+                del task.artifacts[:]
+                task.artifacts.append(
                     Artifact(
                         artifact_id="targeting_opts_1",
                         name="targeting_options",
-                        parts=[Part(root=DataPart(data=result))],
+                        parts=[Part(data=_dict_to_value(result))],
                     )
-                ]
+                )
             elif any(word in combined_text for word in ["create", "buy", "campaign", "media"]):
                 result = await self._create_media_buy(combined_text, identity)
                 tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
@@ -768,22 +793,23 @@ class AdCPRequestHandler(RequestHandler):
                     {"query": combined_text[:100], "success": result.get("success", False)},
                     result.get("message") if not result.get("success") else None,
                 )
+                del task.artifacts[:]
                 if result.get("success"):
-                    task.artifacts = [
+                    task.artifacts.append(
                         Artifact(
                             artifact_id="media_buy_1",
                             name="media_buy_created",
-                            parts=[Part(root=DataPart(data=result))],
+                            parts=[Part(data=_dict_to_value(result))],
                         )
-                    ]
+                    )
                 else:
-                    task.artifacts = [
+                    task.artifacts.append(
                         Artifact(
                             artifact_id="media_buy_error_1",
                             name="media_buy_error",
-                            parts=[Part(root=DataPart(data=result))],
+                            parts=[Part(data=_dict_to_value(result))],
                         )
-                    ]
+                    )
             else:
                 # General help response
                 capabilities = {
@@ -810,53 +836,55 @@ class AdCPRequestHandler(RequestHandler):
                     True,
                     {"query": combined_text[:100], "response_type": "capabilities"},
                 )
-                task.artifacts = [
+                del task.artifacts[:]
+                task.artifacts.append(
                     Artifact(
                         artifact_id="capabilities_1",
                         name="capabilities",
-                        parts=[Part(root=DataPart(data=capabilities))],
+                        parts=[Part(data=_dict_to_value(capabilities))],
                     )
-                ]
+                )
 
             # Determine task status based on operation result
             # For sync_creatives, check if any creatives are pending review
-            task_state = TaskState.completed
+            task_state = TaskState.TASK_STATE_COMPLETED
             task_status_str = "completed"
 
             result_data = {}
             if task.artifacts:
-                # Extract result from artifacts
+                # Extract result from artifacts — part.data is a protobuf Value
                 for artifact in task.artifacts:
-                    if hasattr(artifact, "parts") and artifact.parts:
+                    if artifact.parts:
                         for part in artifact.parts:
-                            if hasattr(part, "data") and part.data:
-                                result_data[artifact.name] = part.data
+                            if part.HasField("data"):
+                                data_dict = json.loads(json_format.MessageToJson(part.data))
+                                result_data[artifact.name] = data_dict
 
                                 # Check if this is a sync_creatives response with pending creatives
-                                if artifact.name == "result" and isinstance(part.data, dict):
-                                    creatives = part.data.get("creatives", [])
+                                if artifact.name == "result" and isinstance(data_dict, dict):
+                                    creatives = data_dict.get("creatives", [])
                                     if any(
                                         c.get("status") == CreativeStatusEnum.pending_review.value
                                         for c in creatives
                                         if isinstance(c, dict)
                                     ):
-                                        task_state = TaskState.submitted
+                                        task_state = TaskState.TASK_STATE_SUBMITTED
                                         task_status_str = "submitted"
 
                                     # Check for explicit status field (e.g., create_media_buy returns this)
-                                    result_status = part.data.get("status")
+                                    result_status = data_dict.get("status")
                                     if result_status == "submitted":
-                                        task_state = TaskState.submitted
+                                        task_state = TaskState.TASK_STATE_SUBMITTED
                                         task_status_str = "submitted"
 
             # Mark task with appropriate status
-            task.status = TaskStatus(state=task_state)
+            task.status.CopyFrom(TaskStatus(state=task_state))
 
             # Send protocol-level webhook notification if configured
             await self._send_protocol_webhook(task, status=task_status_str)
 
-        except ServerError:
-            # Re-raise ServerError as-is (will be caught by JSON-RPC handler)
+        except A2AError:
+            # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
         except Exception as e:
             logger.error(f"Error processing message: {e}")
@@ -874,28 +902,29 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             # Send protocol-level webhook notification for failure if configured
-            task.status = TaskStatus(state=TaskState.failed)
+            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
             # Attach error to task artifacts
-            task.artifacts = [
+            del task.artifacts[:]
+            task.artifacts.append(
                 Artifact(
                     artifact_id="error_1",
                     name="processing_error",
-                    parts=[Part(root=DataPart(data={"error": str(e), "error_type": type(e).__name__}))],
+                    parts=[Part(data=_dict_to_value({"error": str(e), "error_type": type(e).__name__}))],
                 )
-            ]
+            )
 
             await self._send_protocol_webhook(task, status="failed")
 
-            # Raise ServerError instead of creating failed task
-            raise ServerError(InternalError(message=f"Message processing failed: {str(e)}"))
+            # Raise A2A error instead of creating failed task
+            raise InternalError(message=f"Message processing failed: {str(e)}")
 
         self.tasks[task_id] = task
         return task
 
     async def on_message_send_stream(
         self,
-        params: MessageSendParams,
-        context: ServerCallContext | None = None,
+        params: SendMessageRequest,
+        context: ServerCallContext,
     ) -> AsyncGenerator[Event]:
         """Handle 'message/stream' method for streaming requests.
 
@@ -904,21 +933,20 @@ class AdCPRequestHandler(RequestHandler):
             context: Server call context
 
         Yields:
-            Event objects from the agent's execution
+            Event objects (Task or Message) from the agent's execution
         """
         # For now, implement non-streaming behavior
         # In production, this would yield events as they occur
         result = await self.on_message_send(params, context)
 
-        # Yield a single event with the complete task
-        # result can be Task, Message, or other A2A types - all have model_dump()
-        # mypy doesn't understand that union members all have model_dump()
-        yield Event(type="task_update", data=result.model_dump(mode="json"))  # type: ignore[operator]
+        # Event is a union type: Message | Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent
+        # result is already Task | Message — yield it directly
+        yield result
 
     async def on_get_task(
         self,
-        params: TaskQueryParams,
-        context: ServerCallContext | None = None,
+        params: GetTaskRequest,
+        context: ServerCallContext,
     ) -> Task | None:
         """Handle 'tasks/get' method to retrieve task status.
 
@@ -934,8 +962,8 @@ class AdCPRequestHandler(RequestHandler):
 
     async def on_cancel_task(
         self,
-        params: TaskIdParams,
-        context: ServerCallContext | None = None,
+        params: CancelTaskRequest,
+        context: ServerCallContext,
     ) -> Task | None:
         """Handle 'tasks/cancel' method to cancel a task.
 
@@ -949,48 +977,50 @@ class AdCPRequestHandler(RequestHandler):
         task_id = params.id
         task = self.tasks.get(task_id)
         if task:
-            task.status = TaskStatus(state=TaskState.canceled)
+            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
             self.tasks[task_id] = task
         return task
 
-    async def on_resubscribe_to_task(
+    async def on_list_tasks(
         self,
-        params: Any,
-        context: ServerCallContext | None = None,
-    ) -> AsyncGenerator[Event, None]:
-        """Handle task resubscription requests."""
-        # Not implemented for now
-        from a2a.types import UnsupportedOperationError
-        from a2a.utils.errors import ServerError
+        params: ListTasksRequest,
+        context: ServerCallContext,
+    ) -> ListTasksResponse:
+        """Handle 'tasks/list' method."""
+        raise UnsupportedOperationError(message="Task listing not supported")
 
-        raise ServerError(UnsupportedOperationError(message="Task resubscription not supported"))
+    async def on_subscribe_to_task(
+        self,
+        params: SubscribeToTaskRequest,
+        context: ServerCallContext,
+    ) -> AsyncGenerator[Event, None]:
+        """Handle task subscription requests."""
+        raise UnsupportedOperationError(message="Task subscription not supported")
         yield  # Make this a generator (unreachable but satisfies type checker)
 
     async def on_get_task_push_notification_config(
         self,
-        params: Any,
-        context: ServerCallContext | None = None,
-    ) -> Any:
+        params: GetTaskPushNotificationConfigRequest,
+        context: ServerCallContext,
+    ) -> TaskPushNotificationConfig:
         """Handle get push notification config requests.
 
         Retrieves the push notification configuration for a specific config ID.
         """
-        from a2a.types import InvalidParamsError, TaskNotFoundError
-
         from src.core.database.database_session import get_db_session
 
         try:
             # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
             if not auth_token:
-                raise ServerError(InvalidRequestError(message="Missing authentication token"))
+                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "get_push_notification_config")
 
             # Extract config_id from params
             config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
             if not config_id:
-                raise ServerError(InvalidParamsError(message="Missing required parameter: id"))
+                raise InvalidParamsError(message="Missing required parameter: id")
 
             # Query database for config
             with get_db_session() as db:
@@ -1003,31 +1033,33 @@ class AdCPRequestHandler(RequestHandler):
                 config = db.scalars(stmt).first()
 
                 if not config:
-                    raise ServerError(TaskNotFoundError(message=f"Push notification config not found: {config_id}"))
+                    raise TaskNotFoundError(message=f"Push notification config not found: {config_id}")
 
-                # Return A2A PushNotificationConfig format
-                return {
-                    "id": config.id,
-                    "url": config.url,
-                    "authentication": (
-                        {"type": config.authentication_type or "none", "token": config.authentication_token}
-                        if config.authentication_type
-                        else None
-                    ),
-                    "token": config.validation_token,
-                }
+                # Return TaskPushNotificationConfig (protobuf)
+                auth_info = None
+                if config.authentication_type and config.authentication_token:
+                    auth_info = AuthenticationInfo(
+                        scheme=config.authentication_type, credentials=config.authentication_token
+                    )
+                return TaskPushNotificationConfig(
+                    id=config.id,
+                    task_id=params.task_id,
+                    url=config.url,
+                    authentication=auth_info,
+                    token=config.validation_token or "",
+                )
 
-        except ServerError:
+        except A2AError:
             raise
         except Exception as e:
             logger.error(f"Error getting push notification config: {e}")
-            raise ServerError(InternalError(message=f"Failed to get push notification config: {str(e)}"))
+            raise InternalError(message=f"Failed to get push notification config: {str(e)}")
 
-    async def on_set_task_push_notification_config(
+    async def on_create_task_push_notification_config(
         self,
-        params: Any,
-        context: ServerCallContext | None = None,
-    ) -> Any:
+        params: TaskPushNotificationConfig,
+        context: ServerCallContext,
+    ) -> TaskPushNotificationConfig:
         """Handle set push notification config requests.
 
         Creates or updates a push notification configuration for async operation callbacks.
@@ -1036,8 +1068,6 @@ class AdCPRequestHandler(RequestHandler):
         import uuid
         from datetime import UTC, datetime
 
-        from a2a.types import InvalidParamsError
-
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 
@@ -1045,40 +1075,27 @@ class AdCPRequestHandler(RequestHandler):
             # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
             if not auth_token:
-                raise ServerError(InvalidRequestError(message="Missing authentication token"))
+                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "set_push_notification_config")
 
-            # Extract parameters (A2A spec format)
-            # Params structure: {task_id, push_notification_config: {url, authentication}}
-            # Note: params comes as Pydantic object with snake_case attributes
-            task_id = getattr(params, "task_id", None)
-            push_config = getattr(params, "push_notification_config", None)
-
-            # Extract URL and authentication from push_config object
-            url = getattr(push_config, "url", None) if push_config else None
-            authentication = getattr(push_config, "authentication", None) if push_config else None
-            config_id = getattr(push_config, "id", None) if push_config else None
-            config_id = config_id or f"pnc_{uuid.uuid4().hex[:16]}"
-            validation_token = getattr(push_config, "token", None) if push_config else None
+            # In a2a-sdk 1.0, TaskPushNotificationConfig is a flat protobuf message
+            # with fields: tenant, id, task_id, url, token, authentication
+            task_id = params.task_id
+            url = params.url
+            config_id = params.id or f"pnc_{uuid.uuid4().hex[:16]}"
+            validation_token = params.token
             session_id = None  # Not in A2A spec
 
             if not url:
-                raise ServerError(InvalidParamsError(message="Missing required parameter: url"))
+                raise InvalidParamsError(message="Missing required parameter: url")
 
-            # Extract authentication details (A2A spec format: schemes, credentials)
+            # Extract authentication details from protobuf AuthenticationInfo
             auth_type = None
             auth_token_value = None
-            if authentication:
-                if isinstance(authentication, dict):
-                    # A2A spec uses "schemes" (array) and "credentials" (string)
-                    schemes = authentication.get("schemes", [])
-                    auth_type = schemes[0] if schemes else None
-                    auth_token_value = authentication.get("credentials")
-                else:
-                    schemes = getattr(authentication, "schemes", [])
-                    auth_type = schemes[0] if schemes else None
-                    auth_token_value = getattr(authentication, "credentials", None)
+            if params.HasField("authentication"):
+                auth_type = params.authentication.scheme or None
+                auth_token_value = params.authentication.credentials or None
 
             # Create or update configuration
             with get_db_session() as db:
@@ -1119,34 +1136,31 @@ class AdCPRequestHandler(RequestHandler):
                 )
 
                 # Return A2A response (TaskPushNotificationConfig format)
-                from a2a.types import (
-                    PushNotificationAuthenticationInfo,
-                    PushNotificationConfig,
-                    TaskPushNotificationConfig,
-                )
-
                 # Build authentication info if present
                 auth_info = None
                 if auth_type and auth_token_value:
-                    auth_info = PushNotificationAuthenticationInfo(schemes=[auth_type], credentials=auth_token_value)
+                    auth_info = AuthenticationInfo(scheme=auth_type, credentials=auth_token_value)
 
-                # Build push notification config
-                pnc = PushNotificationConfig(url=url, authentication=auth_info, id=config_id, token=validation_token)
+                # Return TaskPushNotificationConfig (protobuf)
+                return TaskPushNotificationConfig(
+                    task_id=task_id or "*",
+                    url=url,
+                    authentication=auth_info,
+                    id=config_id,
+                    token=validation_token or "",
+                )
 
-                # Return TaskPushNotificationConfig
-                return TaskPushNotificationConfig(task_id=task_id or "*", push_notification_config=pnc)
-
-        except ServerError:
+        except A2AError:
             raise
         except Exception as e:
             logger.error(f"Error setting push notification config: {e}")
-            raise ServerError(InternalError(message=f"Failed to set push notification config: {str(e)}"))
+            raise InternalError(message=f"Failed to set push notification config: {str(e)}")
 
-    async def on_list_task_push_notification_config(
+    async def on_list_task_push_notification_configs(
         self,
-        params: Any,
-        context: ServerCallContext | None = None,
-    ) -> Any:
+        params: ListTaskPushNotificationConfigsRequest,
+        context: ServerCallContext,
+    ) -> ListTaskPushNotificationConfigsResponse:
         """Handle list push notification config requests.
 
         Returns all active push notification configurations for the authenticated principal.
@@ -1158,7 +1172,7 @@ class AdCPRequestHandler(RequestHandler):
             # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
             if not auth_token:
-                raise ServerError(InvalidRequestError(message="Missing authentication token"))
+                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "list_push_notification_configs")
 
@@ -1169,45 +1183,44 @@ class AdCPRequestHandler(RequestHandler):
                 )
                 configs = db.scalars(stmt).all()
 
-                # Convert to A2A format
+                # Convert to protobuf TaskPushNotificationConfig list
                 configs_list = []
                 for config in configs:
+                    auth_info = None
+                    if config.authentication_type and config.authentication_token:
+                        auth_info = AuthenticationInfo(
+                            scheme=config.authentication_type, credentials=config.authentication_token
+                        )
                     configs_list.append(
-                        {
-                            "id": config.id,
-                            "url": config.url,
-                            "authentication": (
-                                {"type": config.authentication_type or "none", "token": config.authentication_token}
-                                if config.authentication_type
-                                else None
-                            ),
-                            "token": config.validation_token,
-                            "created_at": config.created_at.isoformat() if config.created_at else None,
-                        }
+                        TaskPushNotificationConfig(
+                            id=config.id,
+                            task_id=params.task_id,
+                            url=config.url,
+                            authentication=auth_info,
+                            token=config.validation_token or "",
+                        )
                     )
 
                 logger.info(f"Listed {len(configs_list)} push notification configs for tenant {tool_context.tenant_id}")
 
-                return {"configs": configs_list, "total_count": len(configs_list)}
+                return ListTaskPushNotificationConfigsResponse(configs=configs_list)
 
-        except ServerError:
+        except A2AError:
             raise
         except Exception as e:
             logger.error(f"Error listing push notification configs: {e}")
-            raise ServerError(InternalError(message=f"Failed to list push notification configs: {str(e)}"))
+            raise InternalError(message=f"Failed to list push notification configs: {str(e)}")
 
     async def on_delete_task_push_notification_config(
         self,
-        params: Any,
-        context: ServerCallContext | None = None,
-    ) -> Any:
+        params: DeleteTaskPushNotificationConfigRequest,
+        context: ServerCallContext,
+    ) -> None:
         """Handle delete push notification config requests.
 
         Marks a push notification configuration as inactive (soft delete).
         """
         from datetime import UTC, datetime
-
-        from a2a.types import InvalidParamsError, TaskNotFoundError
 
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
@@ -1216,14 +1229,14 @@ class AdCPRequestHandler(RequestHandler):
             # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
             if not auth_token:
-                raise ServerError(InvalidRequestError(message="Missing authentication token"))
+                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "delete_push_notification_config")
 
-            # Extract config_id from params
-            config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
+            # Extract config_id from protobuf params
+            config_id = params.id
             if not config_id:
-                raise ServerError(InvalidParamsError(message="Missing required parameter: id"))
+                raise InvalidParamsError(message="Missing required parameter: id")
 
             # Query database and mark as inactive
             with get_db_session() as db:
@@ -1233,7 +1246,7 @@ class AdCPRequestHandler(RequestHandler):
                 config = db.scalars(stmt).first()
 
                 if not config:
-                    raise ServerError(TaskNotFoundError(message=f"Push notification config not found: {config_id}"))
+                    raise TaskNotFoundError(message=f"Push notification config not found: {config_id}")
 
                 # Soft delete by marking as inactive
                 config.is_active = False
@@ -1241,18 +1254,21 @@ class AdCPRequestHandler(RequestHandler):
                 db.commit()
 
                 logger.info(f"Deleted push notification config: {config_id} for tenant {tool_context.tenant_id}")
+                return None
 
-                return {
-                    "id": config_id,
-                    "status": "deleted",
-                    "message": "Push notification configuration deleted successfully",
-                }
-
-        except ServerError:
+        except A2AError:
             raise
         except Exception as e:
             logger.error(f"Error deleting push notification config: {e}")
-            raise ServerError(InternalError(message=f"Failed to delete push notification config: {str(e)}"))
+            raise InternalError(message=f"Failed to delete push notification config: {str(e)}")
+
+    async def on_get_extended_agent_card(
+        self,
+        params: GetExtendedAgentCardRequest,
+        context: ServerCallContext,
+    ) -> AgentCard:
+        """Handle 'GetExtendedAgentCard' method."""
+        raise UnsupportedOperationError(message="Extended agent card not supported")
 
     @staticmethod
     def _serialize_for_a2a(response: Any) -> dict:
@@ -1294,7 +1310,7 @@ class AdCPRequestHandler(RequestHandler):
         skill_name: str,
         parameters: dict,
         identity: ResolvedIdentity | None,
-        push_notification_config: PushNotificationConfig | None = None,
+        push_notification_config: TaskPushNotificationConfig | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1314,13 +1330,16 @@ class AdCPRequestHandler(RequestHandler):
             ValueError: For unknown skills or invalid parameters
         """
         # Inject push_notification_config into parameters for skills that need it
-        # Serialize to dict at the transport boundary — _impl accepts dict, not BaseModel
+        # Serialize protobuf to dict at the transport boundary — _impl accepts dict
         if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
-            pnc_dict = (
-                push_notification_config.model_dump(mode="json")
-                if hasattr(push_notification_config, "model_dump")
-                else push_notification_config
-            )
+            pnc_dict = json_format.MessageToDict(push_notification_config)
+            # Translate A2A protobuf authentication.scheme (singular) → AdCP schemes (plural list).
+            # A2A's protobuf AuthenticationInfo uses a single `scheme` field; AdCP's
+            # PushNotificationConfig schema uses a `schemes` array.
+            auth = pnc_dict.get("authentication") if isinstance(pnc_dict, dict) else None
+            if isinstance(auth, dict) and "scheme" in auth and "schemes" not in auth:
+                scheme_value = auth.pop("scheme")
+                auth["schemes"] = [scheme_value] if scheme_value else []
             parameters = {**parameters, "push_notification_config": pnc_dict}
         # Normalize deprecated fields before any handler sees the parameters
         from src.core.request_compat import normalize_request_params
@@ -1332,7 +1351,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate identity for non-discovery skills
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise ServerError(InvalidRequestError(message="Authentication required for skill invocation"))
+            raise InvalidRequestError(message="Authentication required for skill invocation")
 
         # Map skill names to handlers
         skill_handlers = {
@@ -1364,9 +1383,7 @@ class AdCPRequestHandler(RequestHandler):
 
         if skill_name not in skill_handlers:
             available_skills = list(skill_handlers.keys())
-            raise ServerError(
-                MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
-            )
+            raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
 
         try:
             handler = skill_handlers[skill_name]
@@ -1374,24 +1391,24 @@ class AdCPRequestHandler(RequestHandler):
             result = await handler(parameters, identity)  # type: ignore[arg-type]
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
-        except ServerError:
-            # Re-raise ServerError as-is (already properly formatted)
+        except A2AError:
+            # Re-raise A2AError as-is (already properly formatted)
             raise
         except AdCPError as e:
             # Translate AdCPError to protocol-specific A2A error
             logger.error(f"AdCPError in skill handler {skill_name}: {e.error_code} - {e.message}")
-            raise ServerError(_adcp_to_a2a_error(e))
+            raise _adcp_to_a2a_error(e)
         except ValueError as e:
             # Same translation as MCP: ValueError → VALIDATION_ERROR
             logger.error(f"ValueError in skill handler {skill_name}: {e}")
-            raise ServerError(InvalidParamsError(message=str(e)))
+            raise InvalidParamsError(message=str(e))
         except PermissionError as e:
             # Same translation as MCP: PermissionError → AUTHORIZATION_ERROR
             logger.error(f"PermissionError in skill handler {skill_name}: {e}")
-            raise ServerError(InvalidRequestError(message=str(e)))
+            raise InvalidRequestError(message=str(e))
         except Exception as e:
             logger.error(f"Error in skill handler {skill_name}: {e}")
-            raise ServerError(InternalError(message=f"Skill {skill_name} failed: {str(e)}"))
+            raise InternalError(message=f"Skill {skill_name} failed: {str(e)}")
 
     async def _handle_get_products_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_products skill invocation.
@@ -1412,8 +1429,6 @@ class AdCPRequestHandler(RequestHandler):
                 brand=brand,
                 filters=filters,
                 property_list=parameters.get("property_list"),
-                min_exposures=parameters.get("min_exposures"),
-                strategy_id=parameters.get("strategy_id"),
                 context=parameters.get("context"),
                 identity=identity,
             )
@@ -1439,7 +1454,7 @@ class AdCPRequestHandler(RequestHandler):
             raise
         except Exception as e:
             logger.error(f"Error in get_products skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to retrieve products: {str(e)}"))
+            raise InternalError(message=f"Unable to retrieve products: {str(e)}")
 
     async def _handle_create_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit create_media_buy skill invocation.
@@ -1469,48 +1484,48 @@ class AdCPRequestHandler(RequestHandler):
             params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
             # buyer_ref removed in adcp 3.12
 
+            # Coerce string brand shorthand to BrandReference dict (A2A may send "acme.com")
+            if isinstance(params.get("brand"), str):
+                params["brand"] = {"domain": params["brand"]}
+
             # Validate required AdCP parameters (packages is optional in model but required by spec)
             required_params = ["brand", "packages", "start_time", "end_time"]
             missing_params = [p for p in required_params if p not in params]
             if missing_params:
+                from adcp.server.helpers import adcp_error
+
+                error_body = adcp_error("VALIDATION_ERROR", f"Missing required AdCP parameters: {missing_params}")
                 return {
                     "success": False,
                     "message": f"Missing required AdCP parameters: {missing_params}",
                     "required_parameters": required_params,
                     "received_parameters": list(parameters.keys()),
-                    "errors": [
-                        {
-                            "code": "validation_error",
-                            "message": f"Missing required AdCP parameters: {missing_params}",
-                        }
-                    ],
+                    **error_body,
                 }
 
             try:
                 req = CreateMediaBuyRequest.model_validate(params)
             except ValidationError as e:
+                from adcp.server.helpers import adcp_error
+
+                error_body = adcp_error("VALIDATION_ERROR", str(e))
                 return {
                     "success": False,
                     "message": f"Invalid parameters: {e}",
                     "required_parameters": required_params,
                     "received_parameters": list(parameters.keys()),
-                    "errors": [
-                        {
-                            "code": "validation_error",
-                            "message": str(e),
-                        }
-                    ],
+                    **error_body,
                 }
 
-            # Call core function with validated parameters and identity
+            # Call core function with validated parameters and identity.
+            # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
+            # PackageRequest; only request-level spec fields are forwarded here.
             response = await core_create_media_buy_tool(
                 brand=params.get("brand"),
                 po_number=req.po_number,
                 packages=params["packages"],  # Required — validated above
                 start_time=params.get("start_time"),
                 end_time=params.get("end_time"),
-                budget=params.get("budget"),
-                targeting_overlay=params.get("targeting_overlay", {}),
                 push_notification_config=params.get("push_notification_config"),
                 reporting_webhook=params.get("reporting_webhook"),
                 context=params.get("context"),
@@ -1523,7 +1538,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in create_media_buy skill: {e}")
-            raise ServerError(InternalError(message=f"Failed to create media buy: {str(e)}"))
+            raise InternalError(message=f"Failed to create media buy: {str(e)}")
 
     async def _handle_sync_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit sync_creatives skill invocation (AdCP spec endpoint)."""
@@ -1569,9 +1584,7 @@ class AdCPRequestHandler(RequestHandler):
                 validation_mode=parameters.get("validation_mode", "strict"),
                 push_notification_config=parameters.get("push_notification_config"),
                 context=context,
-                account=LibraryAccountReference.model_validate(parameters["account"])
-                if isinstance(parameters.get("account"), dict)
-                else parameters.get("account"),
+                account=_coerce_account_reference(parameters.get("account")),
                 identity=identity,
             )
 
@@ -1581,7 +1594,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in sync_creatives skill: {e}")
-            raise ServerError(InternalError(message=f"Failed to sync creatives: {str(e)}"))
+            raise InternalError(message=f"Failed to sync creatives: {str(e)}")
 
     async def _handle_list_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit list_creatives skill invocation (AdCP spec endpoint)."""
@@ -1612,7 +1625,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in list_creatives skill: {e}")
-            raise ServerError(InternalError(message=f"Failed to list creatives: {str(e)}"))
+            raise InternalError(message=f"Failed to list creatives: {str(e)}")
 
     async def _handle_create_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit create_creative skill invocation."""
@@ -1634,13 +1647,13 @@ class AdCPRequestHandler(RequestHandler):
             # TODO: Implement create_creative tool
             # Call core function with individual parameters
             # response = core_create_creative_tool(...)
-            raise ServerError(UnsupportedOperationError(message="create_creative skill not yet implemented"))
+            raise UnsupportedOperationError(message="create_creative skill not yet implemented")
 
         except AdCPError:
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in create_creative skill: {e}")
-            raise ServerError(InternalError(message=f"Failed to create creative: {str(e)}"))
+            raise InternalError(message=f"Failed to create creative: {str(e)}")
 
     async def _handle_get_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_creatives skill invocation."""
@@ -1657,13 +1670,13 @@ class AdCPRequestHandler(RequestHandler):
             #     include_assignments=parameters.get("include_assignments", False),
             #     identity=identity,
             # )
-            raise ServerError(UnsupportedOperationError(message="get_creatives skill not yet implemented"))
+            raise UnsupportedOperationError(message="get_creatives skill not yet implemented")
 
         except AdCPError:
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in get_creatives skill: {e}")
-            raise ServerError(InternalError(message=f"Failed to get creatives: {str(e)}"))
+            raise InternalError(message=f"Failed to get creatives: {str(e)}")
 
     async def _handle_assign_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit assign_creative skill invocation."""
@@ -1694,33 +1707,27 @@ class AdCPRequestHandler(RequestHandler):
             #     override_click_url=parameters.get("override_click_url"),
             #     identity=identity,
             # )
-            raise ServerError(UnsupportedOperationError(message="assign_creative skill not yet implemented"))
+            raise UnsupportedOperationError(message="assign_creative skill not yet implemented")
 
         except AdCPError:
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in assign_creative skill: {e}")
-            raise ServerError(InternalError(message=f"Failed to assign creative: {str(e)}"))
+            raise InternalError(message=f"Failed to assign creative: {str(e)}")
 
     async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit approve_creative skill invocation."""
-        from a2a.types import UnsupportedOperationError
-
-        raise ServerError(UnsupportedOperationError(message="approve_creative skill not yet implemented"))
+        raise UnsupportedOperationError(message="approve_creative skill not yet implemented")
 
     # Signals skill handlers removed - should come from dedicated signals agents
 
     async def _handle_get_media_buy_status_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_status skill invocation."""
-        from a2a.types import UnsupportedOperationError
-
-        raise ServerError(UnsupportedOperationError(message="get_media_buy_status skill not yet implemented"))
+        raise UnsupportedOperationError(message="get_media_buy_status skill not yet implemented")
 
     async def _handle_optimize_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit optimize_media_buy skill invocation."""
-        from a2a.types import UnsupportedOperationError
-
-        raise ServerError(UnsupportedOperationError(message="optimize_media_buy skill not yet implemented"))
+        raise UnsupportedOperationError(message="optimize_media_buy skill not yet implemented")
 
     async def _handle_get_adcp_capabilities_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).
@@ -1746,7 +1753,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in get_adcp_capabilities skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to retrieve AdCP capabilities: {str(e)}"))
+            raise InternalError(message=f"Unable to retrieve AdCP capabilities: {str(e)}")
 
     async def _handle_list_creative_formats_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_creative_formats skill invocation (CRITICAL AdCP endpoint).
@@ -1783,7 +1790,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in list_creative_formats skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to retrieve creative formats: {str(e)}"))
+            raise InternalError(message=f"Unable to retrieve creative formats: {str(e)}")
 
     async def _handle_list_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_accounts skill invocation.
@@ -1851,7 +1858,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in list_authorized_properties skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to retrieve authorized properties: {str(e)}"))
+            raise InternalError(message=f"Unable to retrieve authorized properties: {str(e)}")
 
     async def _handle_update_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_media_buy skill invocation (CRITICAL for campaign management)."""
@@ -1872,7 +1879,7 @@ class AdCPRequestHandler(RequestHandler):
 
             # media_buy_id is required
             if "media_buy_id" not in params:
-                raise ServerError(InvalidParamsError(message="Missing required parameter: 'media_buy_id'"))
+                raise InvalidParamsError(message="Missing required parameter: 'media_buy_id'")
 
             # Validate top-level fields via typed model (packages validated by _raw
             # which handles legacy formats with extra fields like 'status')
@@ -1885,7 +1892,7 @@ class AdCPRequestHandler(RequestHandler):
                     context=params.get("context"),
                 )
             except ValidationError as e:
-                raise ServerError(InvalidParamsError(message=f"Invalid parameters: {e}"))
+                raise InvalidParamsError(message=f"Invalid parameters: {e}")
 
             # Call core function with validated fields + raw nested structures and identity
             response = core_update_media_buy_tool(
@@ -1906,7 +1913,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in update_media_buy skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to update media buy: {str(e)}"))
+            raise InternalError(message=f"Unable to update media buy: {str(e)}")
 
     async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> Any:
         """Handle get_media_buys skill invocation."""
@@ -1925,7 +1932,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in get_media_buys skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to get media buys: {str(e)}"))
+            raise InternalError(message=f"Unable to get media buys: {str(e)}")
 
     async def _handle_get_media_buy_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_delivery skill invocation (CRITICAL for monitoring).
@@ -1970,7 +1977,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to get media buy delivery: {str(e)}"))
+            raise InternalError(message=f"Unable to get media buy delivery: {str(e)}")
 
     async def _handle_update_performance_index_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
@@ -2006,7 +2013,7 @@ class AdCPRequestHandler(RequestHandler):
             raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in update_performance_index skill: {e}")
-            raise ServerError(InternalError(message=f"Unable to update performance index: {str(e)}"))
+            raise InternalError(message=f"Unable to update performance index: {str(e)}")
 
     async def _get_products(self, query: str, identity: ResolvedIdentity | None) -> dict:
         """Get available advertising products by calling core functions directly.
@@ -2116,7 +2123,7 @@ class AdCPRequestHandler(RequestHandler):
             }
         except Exception as e:
             logger.error(f"Error in media buy creation: {e}")
-            raise ServerError(InternalError(message=f"Authentication failed: {str(e)}"))
+            raise InternalError(message=f"Authentication failed: {str(e)}")
 
 
 def create_agent_card() -> AgentCard:
@@ -2131,22 +2138,24 @@ def create_agent_card() -> AgentCard:
     server_url = get_a2a_server_url() or "http://localhost:8091/a2a"
 
     from a2a.types import AgentCapabilities, AgentSkill
-    from adcp import get_adcp_version
+    from adcp import get_adcp_spec_version
 
     # Get sales agent version from package metadata or pyproject.toml
     sales_agent_version = get_version()
 
     # Create AdCP extension (AdCP 2.5 spec)
-    # As of adcp 2.12.1, get_adcp_version() returns the protocol version (e.g., "2.5.0")
+    # As of adcp 2.12.1, get_adcp_spec_version() returns the protocol version (e.g., "2.5.0")
     # Previously it returned the schema version (e.g., "v1"), but this was fixed upstream
-    protocol_version = get_adcp_version()
+    protocol_version = get_adcp_spec_version()
     adcp_extension = AgentExtension(
         uri=f"https://adcontextprotocol.org/schemas/{protocol_version}/protocols/adcp-extension.json",
         description="AdCP protocol version and supported domains",
-        params={
-            "adcp_version": protocol_version,
-            "protocols_supported": ["media_buy"],  # Only media_buy protocol is currently supported
-        },
+        params=_dict_to_struct(
+            {
+                "adcp_version": protocol_version,
+                "protocols_supported": ["media_buy"],  # Only media_buy protocol is currently supported
+            }
+        ),
     )
 
     # Create the agent card with minimal required fields
@@ -2154,7 +2163,9 @@ def create_agent_card() -> AgentCard:
         name="Prebid Sales Agent",
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
         version=sales_agent_version,
-        protocol_version="1.0",
+        supported_interfaces=[
+            AgentInterface(url=server_url, protocol_version="1.0"),
+        ],
         capabilities=AgentCapabilities(
             push_notifications=True,
             extensions=[adcp_extension],
@@ -2267,7 +2278,6 @@ def create_agent_card() -> AgentCard:
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         ],
-        url=server_url,
         documentation_url="https://github.com/your-org/adcp-sales-agent",
     )
 

@@ -182,11 +182,11 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
     """
 
     media_buy_id: str = Field(description="Publisher's media buy identifier")
-    # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_activation``
+    # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_start``
     # where salesagent uses ``ready``. Align naming to spec when updating
     # _compute_media_buy_status and all status references.
     status: Literal["ready", "active", "paused", "completed", "failed", "reporting_delayed"] = Field(
-        description="Current media buy status. 'ready' means scheduled to go live at flight start date (spec: pending_activation)."
+        description="Current media buy status. 'ready' means scheduled to go live at flight start date (spec: pending_start)."
     )
     expected_availability: str | None = Field(
         default=None,

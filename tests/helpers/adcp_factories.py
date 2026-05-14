@@ -12,11 +12,12 @@ from typing import Any
 
 # Import types from adcp library - use public API when available
 from adcp import Format, Property
-from adcp.types import CreativeAsset, FormatId, Product
+from adcp.types import CreativeAsset, FormatId
 from adcp.types.generated_poc.brand import Brand
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url
+from src.core.schemas.product import Product
 
 
 def create_test_product(
@@ -90,6 +91,10 @@ def create_test_product(
     # Must be proper discriminated union (CpmFixedRatePricingOption, etc.)
     if pricing_options is None:
         pricing_options = [create_test_cpm_pricing_option()]
+
+    # Default reporting_capabilities if not provided (required in adcp 4.3)
+    if "reporting_capabilities" not in kwargs:
+        kwargs["reporting_capabilities"] = {"metrics": ["impressions", "clicks"]}
 
     return Product(
         product_id=product_id,

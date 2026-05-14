@@ -15,8 +15,8 @@ import pytest
 from adcp.types.generated_poc.core.format import (
     Accessibility,
     Assets,
-    Assets5,
-    Assets9,
+    Assets81,
+    Assets85,
 )
 from adcp.types.generated_poc.enums.wcag_level import WcagLevel
 
@@ -71,7 +71,7 @@ class TestAssetTypesFilter:
                 "vid_player",
                 "Video Player",
                 type="video",
-                assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+                assets=[Assets81(asset_id="video", asset_type="video", item_type="individual", required=True)],
             ),
         ]
         with CreativeFormatsEnv() as env:
@@ -95,7 +95,7 @@ class TestAssetTypesFilter:
                 "vid_player",
                 "Video Player",
                 type="video",
-                assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+                assets=[Assets81(asset_id="video", asset_type="video", item_type="individual", required=True)],
             ),
         ]
         with CreativeFormatsEnv() as env:
@@ -119,12 +119,12 @@ class TestAssetTypesFilter:
                 "vid_player",
                 "Video Player",
                 type="video",
-                assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+                assets=[Assets81(asset_id="video", asset_type="video", item_type="individual", required=True)],
             ),
             _fmt(
                 "html_widget",
                 "HTML Widget",
-                assets=[Assets9(asset_id="code", asset_type="html", item_type="individual", required=True)],
+                assets=[Assets85(asset_id="code", asset_type="html", item_type="individual", required=True)],
             ),
         ]
         with CreativeFormatsEnv() as env:

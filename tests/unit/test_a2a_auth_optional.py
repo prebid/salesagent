@@ -9,10 +9,10 @@ After the identity-at-transport-boundary refactor (salesagent-anjp), handlers re
 a pre-resolved identity parameter rather than resolving auth internally.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from a2a.utils.errors import ServerError
+from a2a.types import InvalidRequestError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.resolved_identity import ResolvedIdentity
@@ -109,7 +109,7 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_create_media_buy_requires_auth(self):
         """create_media_buy should reject None identity (not a discovery endpoint)."""
-        with pytest.raises(ServerError) as exc_info:
+        with pytest.raises(InvalidRequestError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy", parameters={"product_ids": ["prod_1"]}, identity=None
             )
@@ -119,7 +119,7 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_update_media_buy_requires_auth(self):
         """update_media_buy should reject None identity."""
-        with pytest.raises(ServerError) as exc_info:
+        with pytest.raises(InvalidRequestError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="update_media_buy", parameters={"media_buy_id": "mb_1"}, identity=None
             )
@@ -144,7 +144,7 @@ class TestAuthOptionalSkills:
                         parameters={"brief": "test"} if skill_name == "get_products" else {},
                         identity=self.anon_identity,
                     )
-                except ServerError as e:
+                except InvalidRequestError as e:
                     assert "Authentication required" not in str(e)
 
     @pytest.mark.asyncio
@@ -155,20 +155,17 @@ class TestAuthOptionalSkills:
         identity at the transport boundary. NL requests with no auth get
         requires_auth=False, so identity resolution succeeds with anonymous identity.
         """
-        # Mock the MessageSendParams with a text-only message (no explicit skill)
-        params = MagicMock()
-        params.message = MagicMock()
-        params.message.message_id = "test_msg_1"
-        params.message.context_id = "test_ctx_1"
-        params.message.role = "user"
+        # Build a real protobuf SendMessageRequest with NL text
+        from a2a.server.routes.common import ServerCallContext
+        from a2a.types import Message, Part, Role, SendMessageRequest
 
-        # Create a mock part with text attribute that matches a natural language pattern
-        text_part = MagicMock()
-        text_part.text = "show me available products"
-        text_part.data = None
-        text_part.root = None
-        params.message.parts = [text_part]
-        params.configuration = None
+        message = Message(
+            message_id="test_msg_1",
+            context_id="test_ctx_1",
+            role=Role.ROLE_USER,
+        )
+        message.parts.append(Part(text="show me available products"))
+        params = SendMessageRequest(message=message)
 
         # Mock _get_auth_token to return None (no auth)
         with patch.object(self.handler, "_get_auth_token", return_value=None):
@@ -179,9 +176,9 @@ class TestAuthOptionalSkills:
                     mock_products.return_value = {"products": []}
 
                     try:
-                        result = await self.handler.on_message_send(params)
+                        result = await self.handler.on_message_send(params, context=ServerCallContext())
                         assert result is not None
-                    except ServerError as e:
+                    except InvalidRequestError as e:
                         if "Authentication" in str(e) or "authentication" in str(e):
                             pytest.fail(f"Natural language request without auth should not require auth: {e}")
                         else:

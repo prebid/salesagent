@@ -54,6 +54,15 @@ def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
     return call_kwargs.get("headers", {})
 
 
+def _resolve_media_buy_id(ctx: dict, mb_id: str) -> str:
+    """Resolve a Gherkin media-buy alias (e.g., 'mb-001') to its DB id.
+
+    Currently identity since _ensure_media_buy_in_db stores the alias as-is.
+    Indirection retained for future tests that may need separate aliasing.
+    """
+    return ctx.get("media_buy_id_aliases", {}).get(mb_id, mb_id)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — media buy setup and adapter configuration
 # ═══════════════════════════════════════════════════════════════════════
@@ -232,11 +241,42 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
     }
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
-        _persist_webhook_config_if_needed(env)
+        _persist_webhook_config_if_needed(ctx, env)
 
 
-def _persist_webhook_config_if_needed(env: Any) -> None:
-    """Idempotently create Tenant, Principal, PushNotificationConfig in DB."""
+def _auth_scheme_to_db_fields(scheme: str | None, ctx: dict) -> dict[str, Any]:
+    """Translate a Gherkin auth scheme to the PushNotificationConfig DB columns.
+
+    The ORM model exposes ``authentication_type`` (``"bearer"`` / ``"basic"`` /
+    ``None``) plus a separate ``webhook_secret`` column for HMAC. Each scheme
+    populates a different combination.
+    """
+    fields: dict[str, Any] = {}
+    if scheme is None:
+        return fields
+    normalized = scheme.lower()
+    if normalized in {"hmac-sha256", "hmac_sha256", "hmac"}:
+        secret = ctx.get("webhook_secret")
+        if secret:
+            fields["webhook_secret"] = secret
+    elif normalized == "bearer":
+        token = ctx.get("webhook_bearer_token")
+        if token:
+            fields["authentication_type"] = "bearer"
+            fields["authentication_token"] = token
+    return fields
+
+
+def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
+    """Idempotently create or update the PushNotificationConfig DB row.
+
+    Reads ``ctx['webhook_config']`` and ``ctx['webhook_secret']`` /
+    ``ctx['webhook_bearer_token']`` so subsequent Given-steps that set the
+    secret/token can re-run persistence and pick up the new values.
+    Sister-task ``salesagent-oy9`` ensured the
+    ``push_notification_configs`` table exists per-test, so this is safe to
+    call from any Given step.
+    """
     from sqlalchemy import select
 
     from src.core.database.models import Principal, PushNotificationConfig, Tenant
@@ -245,14 +285,33 @@ def _persist_webhook_config_if_needed(env: Any) -> None:
     tenant_id = env._tenant_id
     principal_id = env._principal_id
 
-    # Fast path: config already exists
-    if session.scalars(
+    # Derive the auth columns from the most recently configured scheme. Multiple
+    # mb_ids share a single PushNotificationConfig row keyed on the env's
+    # tenant+principal+url, so we pick the latest scheme set on any mb_id.
+    scheme: str | None = None
+    for cfg in ctx.get("webhook_config", {}).values():
+        cfg_scheme = cfg.get("auth_scheme")
+        if cfg_scheme:
+            scheme = cfg_scheme  # last one wins
+    auth_fields = _auth_scheme_to_db_fields(scheme, ctx)
+
+    existing = session.scalars(
         select(PushNotificationConfig).where(
             PushNotificationConfig.tenant_id == tenant_id,
             PushNotificationConfig.principal_id == principal_id,
             PushNotificationConfig.url == _WEBHOOK_URL,
         )
-    ).first():
+    ).first()
+    if existing is not None:
+        # Update auth fields if new ones are present (e.g., a later Given-step
+        # added webhook_secret/authentication_token after the row was created).
+        changed = False
+        for col, value in auth_fields.items():
+            if getattr(existing, col, None) != value:
+                setattr(existing, col, value)
+                changed = True
+        if changed:
+            session.commit()
         return
 
     from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
@@ -270,6 +329,7 @@ def _persist_webhook_config_if_needed(env: Any) -> None:
         principal=principal,
         url=_WEBHOOK_URL,
         is_active=True,
+        **auth_fields,
     )
 
 
@@ -307,23 +367,42 @@ def given_reporting_frequency(ctx: dict, frequency: str) -> None:
 
 @given(parsers.parse('a media buy "{mb_id}" with webhook authentication scheme "{scheme}"'))
 def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
-    """Configure webhook with specific auth scheme."""
+    """Configure webhook with specific auth scheme.
+
+    Also creates the ``PushNotificationConfig`` DB row so a subsequent
+    ``given_shared_secret_valid`` / ``given_bearer_token_valid`` step can
+    update the same row in-place with the auth credentials.
+    """
     wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
     wh["auth_scheme"] = scheme
     wh["active"] = True
-    wh["url"] = "https://buyer.example.com/webhook"
+    wh["url"] = _WEBHOOK_URL
+    env = ctx["env"]
+    if getattr(env, "_session", None) is not None:
+        _persist_webhook_config_if_needed(ctx, env)
 
 
 @given("the shared secret is a valid 32+ character string")
 def given_shared_secret_valid(ctx: dict) -> None:
     """A valid shared secret for HMAC."""
-    ctx["webhook_secret"] = "a" * 32
+    secret = "a" * 32
+    ctx["webhook_secret"] = secret
+    # ``then_hmac_computation`` reproduces the signature from
+    # ``ctx['signing_secret']`` (the production code uses the same value to
+    # generate the header). Mirror it here so both keys stay in lockstep.
+    ctx["signing_secret"] = secret
+    env = ctx["env"]
+    if getattr(env, "_session", None) is not None:
+        _persist_webhook_config_if_needed(ctx, env)
 
 
 @given("the bearer token is a valid 32+ character string")
 def given_bearer_token_valid(ctx: dict) -> None:
     """A valid bearer token."""
     ctx["webhook_bearer_token"] = "b" * 32
+    env = ctx["env"]
+    if getattr(env, "_session", None) is not None:
+        _persist_webhook_config_if_needed(ctx, env)
 
 
 @given(parsers.parse("a media buy webhook configuration with credentials of {n:d} characters"))
@@ -344,9 +423,18 @@ def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> No
 
 @given("the webhook endpoint is unreachable (connection timeout)")
 def given_webhook_unreachable(ctx: dict) -> None:
-    """Configure webhook endpoint to timeout."""
+    """Configure webhook endpoint to timeout.
+
+    Uses ``httpx.ConnectError`` (a subclass of ``httpx.RequestError``) so
+    :class:`WebhookDeliveryService`, which catches ``httpx.RequestError`` and
+    retries with backoff, exercises the network-error retry path. Plain
+    builtin ``ConnectionError`` would fall through to the catch-all
+    ``except Exception`` branch and skip retries.
+    """
+    import httpx
+
     env = ctx["env"]
-    env.mock["post"].side_effect = ConnectionError("Connection timeout")
+    env.mock["post"].side_effect = httpx.ConnectError("Connection timeout")
 
 
 @given(parsers.parse("the webhook endpoint returns {status_code:d} Unauthorized"))

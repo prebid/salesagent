@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from src.core.tenant_context import TenantContext
-from src.core.tools.accounts import _build_setup_for_approval, _check_billing_policy
+from src.core.tools.accounts import _build_setup_for_approval, _build_sync_result, _check_billing_policy
 from tests.factories import PrincipalFactory
 
 
@@ -47,7 +47,7 @@ class TestCheckBillingPolicy:
         errors = _check_billing_policy("operator", identity)
         assert errors is not None
         assert len(errors) == 1
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert errors[0].code == "UNSUPPORTED_FEATURE"
 
     def test_error_message_includes_supported_list(self):
         identity = _identity_with(supported_billing=["agent", "operator"])
@@ -67,7 +67,7 @@ class TestCheckBillingPolicy:
         identity = _identity_with(supported_billing=[])
         errors = _check_billing_policy("agent", identity)
         assert errors is not None
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert errors[0].code == "UNSUPPORTED_FEATURE"
 
     def test_tenant_none_accepts(self):
         identity = PrincipalFactory.make_identity(tenant_id="t1", tenant=None)
@@ -79,7 +79,7 @@ class TestCheckBillingPolicy:
         assert _check_billing_policy("agent", identity) is None
         errors = _check_billing_policy("operator", identity)
         assert errors is not None
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert errors[0].code == "UNSUPPORTED_FEATURE"
 
     def test_dict_access_works(self):
         """When identity.tenant is a raw dict (IMPL transport), same behavior."""
@@ -123,3 +123,57 @@ class TestBuildSetupForApproval:
 
     def test_empty_string_mode_returns_none(self):
         assert _build_setup_for_approval("", "tenant_a") is None
+
+
+class TestBuildSyncResult:
+    """BR-UC-011 POST-S5: seller-assigned account_id round-trips through sync responses.
+
+    Regression guard for salesagent-8c5: _build_sync_result previously dropped
+    account_id, leaving buyers without the seller-assigned identifier they need
+    for subsequent account-scoped operations.
+    """
+
+    def _brand(self):
+        # Minimal brand object; SyncResponseAccount accepts the AdCP brand shape.
+        return {"domain": "example.com"}
+
+    def test_account_id_round_trips_for_created(self):
+        result = _build_sync_result(
+            brand=self._brand(),
+            operator="op_1",
+            action="created",
+            status="active",
+            account_id="acct_123",
+            name="Example",
+        )
+        assert result.account_id == "acct_123"
+
+    def test_account_id_round_trips_for_updated(self):
+        result = _build_sync_result(
+            brand=self._brand(),
+            operator="op_1",
+            action="updated",
+            status="active",
+            account_id="acct_456",
+        )
+        assert result.account_id == "acct_456"
+
+    def test_account_id_round_trips_for_unchanged(self):
+        result = _build_sync_result(
+            brand=self._brand(),
+            operator="op_1",
+            action="unchanged",
+            status="active",
+            account_id="acct_789",
+        )
+        assert result.account_id == "acct_789"
+
+    def test_account_id_omitted_for_failed(self):
+        """Failed accounts have no provisioned id — account_id stays None."""
+        result = _build_sync_result(
+            brand=self._brand(),
+            operator="op_1",
+            action="failed",
+            status="rejected",
+        )
+        assert result.account_id is None

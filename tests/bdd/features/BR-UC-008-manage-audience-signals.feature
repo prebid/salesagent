@@ -226,7 +226,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "APPROVAL_REQUIRED"
+    And the error code is "VALIDATION_ERROR"
     And the error message contains "requires manual approval"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
@@ -243,7 +243,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "APPROVAL_REQUIRED"
+    And the error code is "VALIDATION_ERROR"
     And the error message contains "requires manual approval"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
@@ -261,7 +261,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "ACTIVATION_FAILED"
+    And the error code is "SERVICE_UNAVAILABLE"
     And the error message contains "provider unavailable"
     And the error should include "suggestion" field
     And the suggestion should contain "retry later or contact support"
@@ -278,7 +278,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
-    And the error code is "ACTIVATION_FAILED"
+    And the error code is "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     And the suggestion should contain "retry later or contact support"
     # POST-F1, POST-F2
@@ -292,7 +292,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "ACTIVATION_ERROR"
+    And the error code is "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     And the suggestion should contain "retry or contact support"
     # POST-F1, POST-F2
@@ -305,7 +305,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
-    And the error code is "ACTIVATION_ERROR"
+    And the error code is "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     And the suggestion should contain "retry or contact support"
     # POST-F1, POST-F2
@@ -318,7 +318,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the request includes context {"trace_id": "fail-context"}
     When the Buyer Agent sends an activate_signal request
     Then the response context equals {"trace_id": "fail-context"}
-    And the error code is "APPROVAL_REQUIRED"
+    And the error code is "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     # POST-F3: Context echoed
@@ -381,7 +381,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the Buyer Agent provides signal_agent_segment_id "premium_luxury_auto"
     And destinations include "dv360"
     When the Buyer Agent sends an activate_signal request
-    Then the error code is "APPROVAL_REQUIRED"
+    Then the error code is "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
 
@@ -704,13 +704,13 @@ Feature: BR-UC-008 Manage Audience Signals
     Examples: Valid partitions
       | partition          | auth_state    | signal_id                   | outcome                   |
       | standard_signal    | authenticated | auto_intenders_q1_2025      | success with deployments  |
-      | premium_signal     | authenticated | premium_luxury_auto         | APPROVAL_REQUIRED error   |
+      | premium_signal     | authenticated | premium_luxury_auto         | VALIDATION_ERROR error   |
 
     Examples: Invalid partitions
       | partition            | auth_state      | signal_id                   | outcome                   |
       | no_auth              | unauthenticated | auto_intenders_q1_2025      | authentication error      |
-      | provider_unavailable | authenticated   | unavailable_provider_signal | ACTIVATION_FAILED error   |
-      | unexpected_error     | authenticated   | error_trigger_signal        | ACTIVATION_ERROR error    |
+      | provider_unavailable | authenticated   | unavailable_provider_signal | SERVICE_UNAVAILABLE error   |
+      | unexpected_error     | authenticated   | error_trigger_signal        | SERVICE_UNAVAILABLE error    |
 
   @T-UC-008-partition-pricing @partition @pricing
   Scenario Outline: Signal pricing model partition validation -- <partition>
@@ -898,9 +898,9 @@ Feature: BR-UC-008 Manage Audience Signals
     Examples: Boundary values
       | boundary_point                             | auth_state      | signal_id                   | outcome                   |
       | standard signal ID with auth               | authenticated   | auto_intenders_q1_2025      | success with deployments  |
-      | premium_ prefixed signal ID                | authenticated   | premium_luxury_auto         | APPROVAL_REQUIRED error   |
+      | premium_ prefixed signal ID                | authenticated   | premium_luxury_auto         | VALIDATION_ERROR error   |
       | activation without authentication          | unauthenticated | auto_intenders_q1_2025      | authentication error      |
-      | provider unavailable during activation     | authenticated   | unavailable_provider_signal | ACTIVATION_FAILED error   |
+      | provider unavailable during activation     | authenticated   | unavailable_provider_signal | SERVICE_UNAVAILABLE error   |
 
   @T-UC-008-boundary-pricing @boundary @pricing
   Scenario Outline: Signal pricing boundary validation -- <boundary_point>

@@ -23,6 +23,7 @@ from src.core.schemas import GetSignalsResponse, Signal, SignalDeployment
 def _make_signal(signal_agent_segment_id: str = "signal_123", **overrides) -> Signal:
     """Build a valid Signal with adcp 3.9 pricing_options."""
     defaults = {
+        "signal_id": {"source": "catalog", "data_provider_domain": "testprovider.com", "id": signal_agent_segment_id},
         "signal_agent_segment_id": signal_agent_segment_id,
         "name": "Test Signal",
         "description": "Test signal description",
