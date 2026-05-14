@@ -23,9 +23,9 @@ import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import scoped_session, sessionmaker
-
-_PG_URL_PATTERN = re.compile(r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)")
 
 
 class _PgConnInfo(NamedTuple):
@@ -36,11 +36,16 @@ class _PgConnInfo(NamedTuple):
 
 
 def _parse_postgres_url(url: str) -> _PgConnInfo:
-    match = _PG_URL_PATTERN.match(url)
-    if not match:
-        pytest.fail(f"Failed to parse DATABASE_URL: {url}\nExpected format: postgresql://user:pass@host:port/dbname")
-    user, password, host, port_str, _ = match.groups()
-    return _PgConnInfo(user=user, password=password, host=host, port=int(port_str))
+    try:
+        parsed = make_url(url)
+    except ArgumentError as exc:
+        pytest.fail(f"Failed to parse DATABASE_URL: {url}\n{exc}")
+    return _PgConnInfo(
+        user=parsed.username or "",
+        password=str(parsed.password) if parsed.password else "",
+        host=parsed.host or "",
+        port=parsed.port or 5432,
+    )
 
 
 def _import_all_models() -> None:
@@ -70,7 +75,11 @@ def make_integration_db(
     """
     # ── Require PostgreSQL ──────────────────────────────────────────────
     postgres_url = os.environ.get("DATABASE_URL")
-    if not postgres_url or not postgres_url.startswith("postgresql://"):
+    try:
+        _parsed = make_url(postgres_url or "")
+        if not _parsed.drivername.startswith(("postgresql", "postgres")):
+            raise ArgumentError(None, "Not a PostgreSQL URL")
+    except ArgumentError:
         pytest.skip(
             "Integration tests require PostgreSQL DATABASE_URL (e.g., postgresql://user:pass@localhost:5432/any_db)"
         )
@@ -101,7 +110,7 @@ def make_integration_db(
         cur.close()
         conn.close()
 
-    test_db_url = f"postgresql://{pg.user}:{pg.password}@{pg.host}:{pg.port}/{unique_db_name}"
+    test_db_url = str(make_url(postgres_url).set(database=unique_db_name))
     os.environ["DATABASE_URL"] = test_db_url
     os.environ["DB_TYPE"] = "postgresql"
 

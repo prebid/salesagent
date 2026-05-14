@@ -9,8 +9,9 @@ from alembic import context
 # Add the parent directory to the Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import our database configuration and models
-from src.core.database.db_config import DatabaseConfig
+# Import our database models
+import os
+
 from src.core.database.models import Base
 
 # this is the Alembic Config object, which provides
@@ -26,8 +27,8 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 target_metadata = Base.metadata
 
-# Get database URL from our configuration
-db_url = DatabaseConfig.get_connection_string()
+# Get database URL directly from environment
+db_url = os.environ["DATABASE_URL"]
 config.set_main_option("sqlalchemy.url", db_url)
 
 # other values from the config, defined by the needs of env.py,

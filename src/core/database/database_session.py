@@ -17,8 +17,6 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
-from src.core.database.db_config import DatabaseConfig
-
 logger = logging.getLogger(__name__)
 
 # Module-level globals for lazy initialization
@@ -81,8 +79,8 @@ def get_engine():
                 "Use @pytest.mark.requires_db for integration tests."
             )
 
-        # Get connection string from config
-        connection_string = DatabaseConfig.get_connection_string()
+        # Get connection string from environment
+        connection_string = os.environ["DATABASE_URL"]
 
         if "postgresql" not in connection_string:
             raise ValueError("Only PostgreSQL is supported. Use DATABASE_URL=postgresql://...")
