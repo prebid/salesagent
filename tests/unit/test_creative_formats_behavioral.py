@@ -13,15 +13,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types.generated_poc.core.format import (
     Assets,
-    Assets5,
+    Assets81,
     Dimensions,
     Renders,
 )
 
-# adcp 3.9: Assets classes are type-discriminated by asset_type + item_type.
-# Assets = individual image, Assets5 = individual video
-# Assets18 = repeatable_group (has nested assets, no asset_type)
-# Nested group assets: Assets19 (image), Assets20 (video), Assets22 (text), etc.
+# adcp 4.3: Assets classes are type-discriminated by asset_type + item_type.
+# Assets = individual image, Assets81 = individual video
+# Assets94 = repeatable_group (has nested assets, no asset_type)
+# Nested group assets: Assets95 (image), Assets96 (video), Assets98 (text), etc.
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import PrincipalFactory
 
@@ -155,9 +155,11 @@ class TestSortOrderByName:
         result = _call_impl(formats)
 
         names = [f.name for f in result]
-        assert names == ["Alpha Video", "Display Ad", "Zebra Video"], (
-            f"Results should be sorted alphabetically: {names}"
-        )
+        assert names == [
+            "Alpha Video",
+            "Display Ad",
+            "Zebra Video",
+        ], f"Results should be sorted alphabetically: {names}"
 
 
 # ---------------------------------------------------------------------------
@@ -195,21 +197,21 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_finds_type_in_group_assets(self):
         """Format with group assets containing requested type should be included."""
-        # adcp 3.9: repeatable_group uses Assets18, nested items use Assets19+ variants
-        from adcp.types.generated_poc.core.format import Assets18, Assets19, Assets22
+        # adcp 3.9: repeatable_group uses Assets94, nested items use Assets95+ variants
+        from adcp.types.generated_poc.core.format import Assets94, Assets95, Assets98
 
-        group_asset = Assets18(
+        group_asset = Assets94(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=True,
             min_count=1,
             max_count=5,
             assets=[
-                Assets19(
+                Assets95(
                     asset_id="product_image",
                     required=True,
                 ),
-                Assets22(
+                Assets98(
                     asset_id="product_title",
                     required=True,
                 ),
@@ -232,17 +234,17 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_excludes_group_without_match(self):
         """Format with group assets NOT containing requested type should be excluded."""
-        # adcp 3.9: repeatable_group uses Assets18, nested text items use Assets22
-        from adcp.types.generated_poc.core.format import Assets18, Assets22
+        # adcp 3.9: repeatable_group uses Assets94, nested text items use Assets98
+        from adcp.types.generated_poc.core.format import Assets94, Assets98
 
-        group_asset = Assets18(
+        group_asset = Assets94(
             item_type="repeatable_group",
             asset_group_id="text_group",
             required=True,
             min_count=1,
             max_count=3,
             assets=[
-                Assets22(
+                Assets98(
                     asset_id="headline",
                     required=True,
                 ),
@@ -264,22 +266,22 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_mixed_individual_and_group(self):
         """Format with both individual and group assets: filter checks both."""
-        # adcp 3.9: Assets5 = individual video, Assets18 = repeatable_group
-        # Assets18 nested assets use Assets19+ classes (image=Assets19)
-        from adcp.types.generated_poc.core.format import Assets18, Assets19
+        # adcp 3.9: Assets81 = individual video, Assets94 = repeatable_group
+        # Assets94 nested assets use Assets95+ classes (image=Assets95)
+        from adcp.types.generated_poc.core.format import Assets94, Assets95
 
-        individual_asset = Assets5(
+        individual_asset = Assets81(
             asset_id="hero_video",
             required=True,
         )
-        group_asset = Assets18(
+        group_asset = Assets94(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=False,
             min_count=0,
             max_count=5,
             assets=[
-                Assets19(
+                Assets95(
                     asset_id="product_image",
                     required=True,
                 ),
@@ -442,8 +444,8 @@ class TestAssetTypesFilterExclusion:
 
     def test_format_with_non_matching_assets_excluded(self):
         """Format with assets that do not match any requested type is excluded."""
-        # adcp 3.6.0: use typed asset classes - Assets (image), Assets9 (html)
-        from adcp.types.generated_poc.core.format import Assets9
+        # adcp 3.6.0: use typed asset classes - Assets (image), Assets85 (html)
+        from adcp.types.generated_poc.core.format import Assets85
 
         formats = [
             _make_format(
@@ -460,7 +462,7 @@ class TestAssetTypesFilterExclusion:
                 "html_widget",
                 "HTML Widget",
                 assets=[
-                    Assets9(
+                    Assets85(
                         asset_id="code",
                         required=True,
                     ),
@@ -476,7 +478,7 @@ class TestAssetTypesFilterExclusion:
 
     def test_format_with_assets_of_wrong_type_excluded_while_match_kept(self):
         """Only formats with at least one matching asset type are kept."""
-        # adcp 3.6.0: Assets (image), Assets5 (video)
+        # adcp 3.6.0: Assets (image), Assets81 (video)
         formats = [
             _make_format(
                 "image_only",
@@ -492,7 +494,7 @@ class TestAssetTypesFilterExclusion:
                 "video_format",
                 "Video Format",
                 assets=[
-                    Assets5(
+                    Assets81(
                         asset_id="clip",
                         required=True,
                     ),
@@ -511,7 +513,7 @@ class TestBroadstreetTemplateAssetParsing:
     """Regression: Broadstreet templates must parse with real assets.
 
     The production code uses _make_asset() to construct the correct Assets
-    variant class (Assets for image, Assets5 for video, etc.) for each
+    variant class (Assets for image, Assets81 for video, etc.) for each
     template asset. Previously, the code used Assets(asset_type=AssetContentType(...))
     which failed because Assets.asset_type is Literal['image'], not an enum.
     """
@@ -537,9 +539,9 @@ class TestBroadstreetTemplateAssetParsing:
                 is_standard=False,
             )
             assert fmt.assets, f"Template {tid} must have non-empty assets list"
-            assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(tmpl.get("optional_assets", [])), (
-                f"Template {tid} asset count mismatch"
-            )
+            assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(
+                tmpl.get("optional_assets", [])
+            ), f"Template {tid} asset count mismatch"
 
     def test_asset_type_literals_match_inferred_type(self):
         """Each constructed asset must have asset_type matching the inferred string."""
@@ -556,9 +558,9 @@ class TestBroadstreetTemplateAssetParsing:
             inferred = _infer_asset_type(asset_id)
             assert inferred == expected_type, f"{asset_id}: expected {expected_type}, got {inferred}"
             asset = _make_asset(asset_id, inferred, required=True)
-            assert asset.asset_type == expected_type, (
-                f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
-            )
+            assert (
+                asset.asset_type == expected_type
+            ), f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
 
 
 class TestMCPWrapperStringCoercion:
@@ -811,9 +813,9 @@ class TestSuccessfulDiscoveryHasNoErrors:
         response = _call_impl_raw(formats)
 
         assert len(response.formats) == 2
-        assert response.errors is None or response.errors == [], (
-            f"Successful discovery must have no errors, got {response.errors}"
-        )
+        assert (
+            response.errors is None or response.errors == []
+        ), f"Successful discovery must have no errors, got {response.errors}"
 
 
 class TestAgentReferralFailureLogsWarning:
@@ -869,6 +871,6 @@ class TestAgentReferralFailureLogsWarning:
 
         # After fix: should log a warning about the referral failure
         warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs), (
-            f"Expected a warning about agent referral failure, got: {warning_msgs}"
-        )
+        assert any(
+            "referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs
+        ), f"Expected a warning about agent referral failure, got: {warning_msgs}"

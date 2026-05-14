@@ -21,6 +21,19 @@ _active_approval_tasks: dict[str, threading.Thread] = {}
 _approval_lock = threading.Lock()
 
 
+def _reap_dead_approval_tasks() -> None:
+    """Drop ``_active_approval_tasks`` entries whose threads are no longer alive.
+
+    Same defensive cleanup pattern as
+    ``background_sync_service._reap_dead_syncs`` — see that docstring
+    for the rationale (production memory-leak triage #5). Caller MUST
+    hold ``_approval_lock``.
+    """
+    dead = [tid for tid, t in _active_approval_tasks.items() if not t.is_alive()]
+    for tid in dead:
+        _active_approval_tasks.pop(tid, None)
+
+
 def start_order_approval_polling(
     tenant_id: str,
     order_id: str,
@@ -261,12 +274,20 @@ def _send_approval_webhook(tenant_id: str, order_id: str, workflow_step_id: str,
 
 
 def get_active_approval_tasks() -> list[str]:
-    """Get list of approval task IDs currently running in background threads."""
+    """Get list of approval task IDs currently running in background threads.
+
+    Reaps dead threads on read so the returned list reflects live state.
+    """
     with _approval_lock:
+        _reap_dead_approval_tasks()
         return list(_active_approval_tasks.keys())
 
 
 def is_approval_task_running(order_id: str) -> bool:
-    """Check if approval polling is running for a specific order."""
+    """Check if approval polling is running for a specific order.
+
+    Reaps dead threads on read.
+    """
     with _approval_lock:
+        _reap_dead_approval_tasks()
         return any(order_id in task_id for task_id in _active_approval_tasks)

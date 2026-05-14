@@ -1097,9 +1097,9 @@ class TestFilteredDiscovery:
         # restricted_product, global_audio) and 1 auction (auction_video).
         # With is_fixed_price=true, we should get at least the fixed ones.
         fixed_ids = {p.product_id for p in result.products}
-        assert len(fixed_ids) > 0, (
-            "is_fixed_price=True filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
-        )
+        assert (
+            len(fixed_ids) > 0
+        ), "is_fixed_price=True filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
         assert "guaranteed_display" in fixed_ids
 
     @pytest.mark.asyncio
@@ -1116,9 +1116,9 @@ class TestFilteredDiscovery:
             filters={"is_fixed_price": False},
         )
         auction_ids = {p.product_id for p in result.products}
-        assert len(auction_ids) > 0, (
-            "is_fixed_price=False filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
-        )
+        assert (
+            len(auction_ids) > 0
+        ), "is_fixed_price=False filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
         assert "auction_video" in auction_ids
 
 

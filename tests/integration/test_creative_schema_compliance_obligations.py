@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 from adcp.types import CreativeAction
+from adcp.types import FormatId as AdcpFormatId
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
 
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 
@@ -86,9 +86,9 @@ class TestAllAssetTypesAcceptedThroughSync:
             for asset_type in self.ASSET_TYPES:
                 cid = f"c_{asset_type}"
                 assert cid in actions, f"Missing result for creative with {asset_type} asset"
-                assert actions[cid] == CreativeAction.created, (
-                    f"Creative with {asset_type} asset should be created, got {actions[cid]}"
-                )
+                assert (
+                    actions[cid] == CreativeAction.created
+                ), f"Creative with {asset_type} asset should be created, got {actions[cid]}"
 
     def test_asset_data_preserved_through_roundtrip(self, integration_db):
         """Verify that asset data survives the sync -> list round-trip for each type.
@@ -231,9 +231,9 @@ class TestCreativeExtendsListingBase:
             assert len(matched) == 1
 
             # The Creative schema class must extend ListingCreative
-            assert isinstance(matched[0], ListingCreative), (
-                f"Creative in list response must be an instance of listing Creative, got {type(matched[0]).__mro__}"
-            )
+            assert isinstance(
+                matched[0], ListingCreative
+            ), f"Creative in list response must be an instance of listing Creative, got {type(matched[0]).__mro__}"
 
     def test_listing_creative_not_delivery_creative(self, integration_db):
         """Listed creative must NOT be an instance of delivery Creative.
@@ -254,9 +254,9 @@ class TestCreativeExtendsListingBase:
 
             matched = [c for c in list_response.creatives if c.creative_id == "c_not_delivery"]
             assert len(matched) == 1
-            assert not isinstance(matched[0], DeliveryCreative), (
-                "Creative in list response must NOT be an instance of delivery Creative"
-            )
+            assert not isinstance(
+                matched[0], DeliveryCreative
+            ), "Creative in list response must NOT be an instance of delivery Creative"
 
 
 # ---------------------------------------------------------------------------

@@ -788,4 +788,3 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     Then the response includes validated_at as an ISO 8601 timestamp
     And the response may include list_resolved_at showing when the list was last resolved
     # POST-S6: Buyer knows when validation was performed
-

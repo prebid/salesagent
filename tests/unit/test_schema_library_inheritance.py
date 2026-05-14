@@ -41,9 +41,9 @@ class TestSchemaLibraryInheritance:
 
         from src.core.schemas import GetProductsResponse
 
-        assert issubclass(GetProductsResponse, LibraryResponse), (
-            "GetProductsResponse must extend library type to inherit correct field types."
-        )
+        assert issubclass(
+            GetProductsResponse, LibraryResponse
+        ), "GetProductsResponse must extend library type to inherit correct field types."
 
     def test_simple_types_extend_library(self):
         """Simple types with matching fields must extend library types."""
@@ -59,9 +59,9 @@ class TestSchemaLibraryInheritance:
         from src.core.schemas import AggregatedTotals, DeliveryMeasurement, Measurement, Pagination
 
         assert issubclass(Measurement, LibraryMeasurement), "Measurement must extend library type."
-        assert issubclass(DeliveryMeasurement, LibraryDeliveryMeasurement), (
-            "DeliveryMeasurement must extend library type."
-        )
+        assert issubclass(
+            DeliveryMeasurement, LibraryDeliveryMeasurement
+        ), "DeliveryMeasurement must extend library type."
         assert issubclass(AggregatedTotals, LibraryAggregatedTotals), "AggregatedTotals must extend library type."
         # Pagination for list responses uses page-based pagination (has_more, cursor, total_count)
         assert issubclass(Pagination, LibraryResponsePagination), "Pagination must extend library response pagination."
@@ -86,9 +86,9 @@ class TestSchemaLibraryInheritance:
         from src.core.schemas import PropertyIdentifier
 
         # PropertyIdentifier should be the property-specific library type (alias)
-        assert PropertyIdentifier is PropertySpecificIdentifier, (
-            "PropertyIdentifier must be the property-specific Identifier type."
-        )
+        assert (
+            PropertyIdentifier is PropertySpecificIdentifier
+        ), "PropertyIdentifier must be the property-specific Identifier type."
 
     def test_document_schemas_not_extending_library(self):
         """Document which schemas exist in library but aren't extended locally.

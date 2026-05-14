@@ -757,4 +757,3 @@ Feature: BR-UC-007 Discover Publisher Properties
       | website (first enum value)           | website         | accepted         |
       | streaming_audio (last enum value)    | streaming_audio | accepted         |
       | Unknown string not in enum           | hologram        | validation error |
-

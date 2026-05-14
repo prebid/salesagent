@@ -1,7 +1,8 @@
-"""Cross-mode validation and field-name normalization on GetProductsRequest.
+"""Cross-mode validation on GetProductsRequest.
 
-Covers the AdCP 3.0 three-mode contract (brief / wholesale / refine) and the rc.3 -> 3.0.6
-wire-rename compatibility for refine entry id fields. See
+Covers the AdCP 3.0 three-mode contract (brief / wholesale / refine). The library handles
+basic schema validation (buying_mode required, enum values, refine entry shape); our
+validator adds the cross-mode invariants the library does not enforce. See
 .claude/notes/buying-mode-refine-wireup/PLAN.md Layer 1 for context.
 
 Covers: UC-001-MODE-VALIDATION-01
@@ -28,14 +29,14 @@ class TestCrossModeHappyPaths:
     def test_brief_mode_with_brief_only_is_valid(self):
         req = GetProductsRequest(buying_mode="brief", brief="video ads for sports fans")
 
-        assert req.buying_mode == "brief"
+        assert req.buying_mode.value == "brief"
         assert req.brief == "video ads for sports fans"
         assert req.refine is None
 
     def test_wholesale_mode_minimal_is_valid(self):
         req = GetProductsRequest(buying_mode="wholesale")
 
-        assert req.buying_mode == "wholesale"
+        assert req.buying_mode.value == "wholesale"
         assert req.brief is None
         assert req.refine is None
 
@@ -45,7 +46,7 @@ class TestCrossModeHappyPaths:
             refine=[{"scope": "request", "ask": "more video, less display"}],
         )
 
-        assert req.buying_mode == "refine"
+        assert req.buying_mode.value == "refine"
         assert req.brief is None
         assert req.refine is not None
         assert len(req.refine) == 1
@@ -55,12 +56,15 @@ class TestCrossModeViolations:
     """The seven rules from BR-UC-001-discover-available-inventory.feature:313-319."""
 
     def test_missing_buying_mode_v3_rejected(self):
-        # buying_mode required when no pre-v3 default-to-brief has been applied
-        with pytest.raises(ValidationError, match="buying_mode is required"):
+        # The library's required-field validator catches this — message is the standard
+        # pydantic "Field required". The pre-v3 default shim runs at the wrapper, not here.
+        with pytest.raises(ValidationError, match="buying_mode"):
             GetProductsRequest(brief="video ads")
 
     def test_invalid_buying_mode_value_rejected(self):
-        with pytest.raises(ValidationError, match="buying_mode must be one of"):
+        # The library's enum validator catches this — message is "Input should be 'brief',
+        # 'wholesale' or 'refine'".
+        with pytest.raises(ValidationError, match="brief.*wholesale.*refine"):
             GetProductsRequest(buying_mode="bogus", brief="video ads")
 
     def test_brief_mode_without_brief_rejected(self):
@@ -112,97 +116,57 @@ class TestCrossModeViolations:
 
 
 # ---------------------------------------------------------------------------
-# Refine entry field-name normalization (Layer 1.1)
-#
-# Bridges the rc.3 (id) <-> 3.0.6 (product_id, proposal_id) skew so storyboard
-# requests parse against our installed library types.
+# Refine entry wire shape — adcp library 4.3+ accepts product_id / proposal_id natively.
+# These tests pin our integration against that shape so a future library regression that
+# renames the field surfaces here.
 # ---------------------------------------------------------------------------
 
 
-class TestRefineEntryFieldNameNormalizer:
-    """Storyboard 3.0.6 wire format -> rc.3 library field name."""
+class TestRefineEntryParsing:
+    """Refine entries parse via the library's discriminated-union (Refine1/2/3)."""
 
-    def test_request_scope_passthrough(self):
+    def test_request_scope_parses(self):
         req = GetProductsRequest(
             buying_mode="refine",
             refine=[{"scope": "request", "ask": "narrow to guaranteed only"}],
         )
-        # Request scope has no id field on either side
-        entry = req.refine[0]
-        assert entry.scope == "request"
-        assert entry.ask == "narrow to guaranteed only"
+        inner = req.refine[0].root
+        assert inner.scope == "request"
+        assert inner.ask == "narrow to guaranteed only"
 
-    def test_product_scope_product_id_renamed_to_id(self):
+    def test_product_scope_with_product_id_parses(self):
         req = GetProductsRequest(
             buying_mode="refine",
-            refine=[{"scope": "product", "product_id": "sports_preroll_q2", "action": "include"}],
+            refine=[{"scope": "product", "product_id": "sports_preroll_q2"}],
         )
-        assert req.refine[0].id == "sports_preroll_q2"
+        inner = req.refine[0].root
+        assert inner.scope == "product"
+        assert inner.product_id == "sports_preroll_q2"
 
-    def test_proposal_scope_proposal_id_renamed_to_id(self):
+    def test_proposal_scope_with_proposal_id_parses(self):
         req = GetProductsRequest(
             buying_mode="refine",
-            refine=[{"scope": "proposal", "proposal_id": "prop_abc", "action": "include"}],
+            refine=[{"scope": "proposal", "proposal_id": "prop_abc"}],
         )
-        assert req.refine[0].id == "prop_abc"
+        inner = req.refine[0].root
+        assert inner.scope == "proposal"
+        assert inner.proposal_id == "prop_abc"
 
-    def test_both_id_forms_present_and_equal_accepted(self):
-        # Equivalent values: drop the wire-name form, keep id
+    def test_product_scope_action_defaults_to_include(self):
+        # Spec 3.0.6 default; the library carries it.
         req = GetProductsRequest(
             buying_mode="refine",
-            refine=[
-                {
-                    "scope": "product",
-                    "product_id": "p1",
-                    "id": "p1",
-                    "action": "include",
-                }
-            ],
+            refine=[{"scope": "product", "product_id": "p1"}],
         )
-        assert req.refine[0].id == "p1"
+        assert req.refine[0].root.action.value == "include"
 
-    def test_both_id_forms_present_and_different_rejected(self):
-        # Mismatch: the wire is internally inconsistent — reject deterministically
-        with pytest.raises(
-            ValidationError,
-            match="refine entry has both 'id' .* and 'product_id' .* with different values",
-        ):
+    def test_product_scope_without_product_id_rejected(self):
+        # Library catches missing required field on the discriminated variant.
+        with pytest.raises(ValidationError, match="product_id"):
             GetProductsRequest(
                 buying_mode="refine",
-                refine=[
-                    {
-                        "scope": "product",
-                        "product_id": "p1",
-                        "id": "p2",
-                        "action": "include",
-                    }
-                ],
+                refine=[{"scope": "product"}],
             )
-
-    def test_proposal_scope_both_ids_different_rejected(self):
-        with pytest.raises(
-            ValidationError,
-            match="refine entry has both 'id' .* and 'proposal_id' .* with different values",
-        ):
-            GetProductsRequest(
-                buying_mode="refine",
-                refine=[
-                    {
-                        "scope": "proposal",
-                        "proposal_id": "pp1",
-                        "id": "pp2",
-                        "action": "include",
-                    }
-                ],
-            )
-
-    def test_id_only_no_renamed_form_passes_through(self):
-        # If only `id` is supplied (rc.3 native form), pass through
-        req = GetProductsRequest(
-            buying_mode="refine",
-            refine=[{"scope": "product", "id": "p1", "action": "include"}],
-        )
-        assert req.refine[0].id == "p1"
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +200,8 @@ class TestStoryboardCompliance:
             ],
         )
 
-        assert req.buying_mode == "refine"
+        assert req.buying_mode.value == "refine"
         assert len(req.refine) == 2
-        assert req.refine[0].scope == "request"
-        # Renamed: product_id -> id
-        assert req.refine[1].id == "sports_preroll_q2"
+        assert req.refine[0].root.scope == "request"
+        # Library 4.3 keeps the spec wire field name: product_id (no rename needed)
+        assert req.refine[1].root.product_id == "sports_preroll_q2"

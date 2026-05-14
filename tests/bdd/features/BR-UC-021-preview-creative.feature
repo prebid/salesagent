@@ -867,4 +867,3 @@ Feature: BR-UC-021 Preview Creative
       | agent responds but exceeds 30-second timeout         | error "CREATIVE_AGENT_UNAVAILABLE" with suggestion "Retry"           |
       | agent returns error response                         | error "CREATIVE_AGENT_UNAVAILABLE" with suggestion "Retry"           |
       | agent returns empty previews (no renders)            | server-side error: renders must have at least 1 item                 |
-

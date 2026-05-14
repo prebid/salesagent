@@ -28,9 +28,9 @@ class TestRestResolveAuthReturnsResolvedIdentity:
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
             identity = _resolve_auth_dep(auth_ctx)
 
-        assert isinstance(identity, ResolvedIdentity), (
-            f"_resolve_auth_dep returned {type(identity).__name__}, expected ResolvedIdentity"
-        )
+        assert isinstance(
+            identity, ResolvedIdentity
+        ), f"_resolve_auth_dep returned {type(identity).__name__}, expected ResolvedIdentity"
         assert identity.principal_id == "test_principal"
 
     def test_resolve_auth_non_admin_non_default_tenant(self):
@@ -103,9 +103,9 @@ class TestVerifyPrincipalSimplified:
         context_param = sig.parameters.get("context")
         assert context_param is not None
         ann = str(context_param.annotation)
-        assert "ResolvedIdentity" in ann, (
-            f"_verify_principal context param annotation is '{ann}', should include ResolvedIdentity"
-        )
+        assert (
+            "ResolvedIdentity" in ann
+        ), f"_verify_principal context param annotation is '{ann}', should include ResolvedIdentity"
 
     def test_verify_principal_no_get_principal_id_from_context_import(self):
         """_verify_principal should not fall back to get_principal_id_from_context."""
@@ -119,6 +119,6 @@ class TestVerifyPrincipalSimplified:
         # The function should accept ResolvedIdentity without isinstance fallback chains
         # We verify by checking it doesn't have more than 2 type options (was 3: Context|ToolContext|ResolvedIdentity)
         ann = str(sig.parameters["context"].annotation)
-        assert "Context |" not in ann or ann.count("|") <= 1, (
-            f"_verify_principal still has 3-way isinstance dispatch: {ann}. Simplify to accept ResolvedIdentity only."
-        )
+        assert (
+            "Context |" not in ann or ann.count("|") <= 1
+        ), f"_verify_principal still has 3-way isinstance dispatch: {ann}. Simplify to accept ResolvedIdentity only."

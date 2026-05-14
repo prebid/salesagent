@@ -38,9 +38,9 @@ class TestMCPAuthMiddlewareExists:
 
         from src.core.mcp_auth_middleware import MCPAuthMiddleware
 
-        assert issubclass(MCPAuthMiddleware, Middleware), (
-            "MCPAuthMiddleware must inherit from fastmcp.server.middleware.Middleware"
-        )
+        assert issubclass(
+            MCPAuthMiddleware, Middleware
+        ), "MCPAuthMiddleware must inherit from fastmcp.server.middleware.Middleware"
 
     def test_has_on_call_tool(self):
         """MCPAuthMiddleware must override on_call_tool."""
@@ -59,9 +59,9 @@ class TestMCPAuthMiddlewareExists:
             "list_creative_formats",
             "list_authorized_properties",
         }
-        assert expected_discovery.issubset(AUTH_OPTIONAL_TOOLS), (
-            f"AUTH_OPTIONAL_TOOLS missing discovery tools: {expected_discovery - AUTH_OPTIONAL_TOOLS}"
-        )
+        assert expected_discovery.issubset(
+            AUTH_OPTIONAL_TOOLS
+        ), f"AUTH_OPTIONAL_TOOLS missing discovery tools: {expected_discovery - AUTH_OPTIONAL_TOOLS}"
 
 
 class TestMCPAuthMiddlewareBehavior:

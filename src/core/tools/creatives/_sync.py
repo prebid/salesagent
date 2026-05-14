@@ -19,7 +19,7 @@ from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 
 from ._assignments import _process_assignments
-from ._processing import _create_new_creative, _update_existing_creative
+from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
 from ._validation import _get_field, _validate_creative_input, check_provenance_required
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
@@ -175,18 +175,7 @@ def _sync_creatives_impl(
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
                     failed_count += 1
-                    results.append(
-                        SyncCreativeResult(
-                            creative_id=creative_id,
-                            action="failed",
-                            status=None,
-                            platform_id=None,
-                            errors=[error_msg],
-                            review_feedback=None,
-                            assigned_to=None,
-                            assignment_errors=None,
-                        )
-                    )
+                    results.append(_failed_sync_result(creative_id, error_msg))
                     continue  # Skip to next creative
 
                 # Check provenance requirement (EU AI Act Article 50)
@@ -362,18 +351,7 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(
-                    SyncCreativeResult(
-                        creative_id=creative_id,
-                        action="failed",
-                        status=None,
-                        platform_id=None,
-                        errors=[error_msg],
-                        review_feedback=None,
-                        assigned_to=None,
-                        assignment_errors=None,
-                    )
-                )
+                results.append(_failed_sync_result(creative_id, error_msg))
 
         # Archive creatives not in the sync payload when delete_missing=True
         if delete_missing:

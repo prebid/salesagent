@@ -209,18 +209,19 @@ def then_products_no_brief_relevance(ctx: dict) -> None:
     """Wholesale mode does not run the ranker, so brief_relevance is None on every product."""
     resp = ctx["response"]
     for p in resp.products:
-        assert p.brief_relevance is None, (
-            f"Product {p.product_id} has brief_relevance set in wholesale mode: {p.brief_relevance!r}"
-        )
+        assert (
+            p.brief_relevance is None
+        ), f"Product {p.product_id} has brief_relevance set in wholesale mode: {p.brief_relevance!r}"
 
 
 @then('the response should NOT contain "proposals" array')
 def then_response_no_proposals(ctx: dict) -> None:
     """Wholesale mode (and brief mode in this issue) omit proposals — generation lands in #1073."""
     resp = ctx["response"]
-    assert getattr(resp, "proposals", None) in (None, []), (
-        f"Expected proposals to be absent or empty, got {resp.proposals!r}"
-    )
+    assert getattr(resp, "proposals", None) in (
+        None,
+        [],
+    ), f"Expected proposals to be absent or empty, got {resp.proposals!r}"
 
 
 @then('the response should contain "refinement_applied" array')

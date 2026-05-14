@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types.generated_poc.core.error import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
 from src.core.helpers import _extract_format_info, _validate_creative_assets
@@ -21,6 +22,20 @@ if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _failed_sync_result(creative_id: str, error_msg: str) -> SyncCreativeResult:
+    """Build a SyncCreativeResult for a failed creative sync operation."""
+    return SyncCreativeResult(
+        creative_id=creative_id,
+        action="failed",
+        status=None,
+        platform_id=None,
+        errors=[AdCPErrorDetail(code="SERVICE_UNAVAILABLE", message=error_msg)],
+        review_feedback=None,
+        assigned_to=None,
+        assignment_errors=None,
+    )
 
 
 def _update_existing_creative(
@@ -403,19 +418,7 @@ def _update_existing_creative(
                     # Creative agent should have generated previews but didn't
                     error_msg = f"Preview generation failed for {existing_creative.creative_id}: no previews returned and no media_url provided"
                     logger.error(f"[sync_creatives] {error_msg}")
-                    return (
-                        SyncCreativeResult(
-                            creative_id=existing_creative.creative_id,
-                            action="failed",
-                            status=None,
-                            platform_id=None,
-                            errors=[error_msg],
-                            review_feedback=None,
-                            assigned_to=None,
-                            assignment_errors=None,
-                        ),
-                        False,
-                    )
+                    return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
 
         except Exception as validation_error:
             # Creative agent validation failed for update (network error, agent down, etc.)
@@ -428,19 +431,7 @@ def _update_existing_creative(
                 f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id}",
                 exc_info=True,
             )
-            return (
-                SyncCreativeResult(
-                    creative_id=existing_creative.creative_id,
-                    action="failed",
-                    status=None,
-                    platform_id=None,
-                    errors=[error_msg],
-                    review_feedback=None,
-                    assigned_to=None,
-                    assignment_errors=None,
-                ),
-                False,
-            )
+            return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
 
     # In full upsert, consider all fields as changed
     changes.extend(["url", "click_url", "width", "height", "duration"])
@@ -722,19 +713,7 @@ def _create_new_creative(
                         # Creative agent should have generated previews but didn't
                         error_msg = f"Preview generation failed for {creative_id}: no previews returned and no media_url provided"
                         logger.error(f"[sync_creatives] {error_msg}")
-                        return (
-                            SyncCreativeResult(
-                                creative_id=creative_id,
-                                action="failed",
-                                status=None,
-                                platform_id=None,
-                                errors=[error_msg],
-                                review_feedback=None,
-                                assigned_to=None,
-                                assignment_errors=None,
-                            ),
-                            False,
-                        )
+                        return (_failed_sync_result(creative_id, error_msg), False)
 
         except Exception as validation_error:
             # Creative agent validation failed (network error, agent down, etc.)
@@ -747,19 +726,7 @@ def _create_new_creative(
                 f"[sync_creatives] {error_msg} - rejecting creative {creative_id}",
                 exc_info=True,
             )
-            return (
-                SyncCreativeResult(
-                    creative_id=creative_id,
-                    action="failed",
-                    status=None,
-                    platform_id=None,
-                    errors=[error_msg],
-                    review_feedback=None,
-                    assigned_to=None,
-                    assignment_errors=None,
-                ),
-                False,
-            )
+            return (_failed_sync_result(creative_id, error_msg), False)
 
     # Determine creative status based on approval mode
 

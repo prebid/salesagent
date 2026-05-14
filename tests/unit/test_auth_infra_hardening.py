@@ -32,9 +32,9 @@ class TestAuthContextStateKey:
         """AUTH_CONTEXT_STATE_KEY must be defined in auth_context module."""
         from src.core import auth_context
 
-        assert hasattr(auth_context, "AUTH_CONTEXT_STATE_KEY"), (
-            "AUTH_CONTEXT_STATE_KEY constant must be defined in src.core.auth_context"
-        )
+        assert hasattr(
+            auth_context, "AUTH_CONTEXT_STATE_KEY"
+        ), "AUTH_CONTEXT_STATE_KEY constant must be defined in src.core.auth_context"
 
     def test_context_builder_uses_constant(self):
         """context_builder.py must import and use AUTH_CONTEXT_STATE_KEY."""

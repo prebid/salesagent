@@ -80,6 +80,7 @@ class TestMCPContractValidation:
         request = ActivateSignalRequest(
             signal_agent_segment_id="test_signal_123",
             destinations=[{"platform": "google_ad_manager", "type": "platform"}],
+            idempotency_key="test-idem-key-001",
         )
 
         assert request.signal_agent_segment_id == "test_signal_123"

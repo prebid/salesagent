@@ -688,7 +688,7 @@ def extract_media_url_and_dimensions(
     # Priority 1: Use format spec to find media assets
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         for asset_spec in get_individual_assets(format_spec):
-            # Type guard: get_individual_assets only returns Assets, not Assets5 (repeatable groups)
+            # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
             if not isinstance(asset_spec, Assets):
                 continue
             asset_type = str(asset_spec.asset_type).lower()

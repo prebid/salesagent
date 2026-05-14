@@ -114,9 +114,9 @@ class TestTransportBoundariesSetTenant:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_resolve_a2a_identity":
                 func_source = ast.get_source_segment(source, node)
                 assert func_source is not None
-                assert "set_current_tenant" in func_source, (
-                    "_resolve_a2a_identity must call set_current_tenant() at the transport boundary"
-                )
+                assert (
+                    "set_current_tenant" in func_source
+                ), "_resolve_a2a_identity must call set_current_tenant() at the transport boundary"
                 return
 
         pytest.fail("_resolve_a2a_identity function not found")

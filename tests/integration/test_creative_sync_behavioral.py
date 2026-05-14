@@ -13,8 +13,8 @@ from datetime import UTC
 
 import pytest
 from adcp.types import CreativeAction
+from adcp.types import FormatId as AdcpFormatId
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
@@ -23,6 +23,13 @@ from tests.harness import CreativeSyncEnv, make_identity
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+def _error_messages(errors: list | None) -> list[str]:
+    """Extract message strings from Error objects or plain strings."""
+    if not errors:
+        return []
+    return [e.message if hasattr(e, "message") else str(e) for e in errors]
 
 
 def _make_creative_asset(**overrides) -> CreativeAsset:
@@ -763,7 +770,7 @@ class TestSchemaCompleteness:
         assert result.creative_id == "c_fields"
         assert result.action in list(CreativeAction)
         assert isinstance(result.changes, list)
-        assert isinstance(result.errors, list)
+        assert result.errors is None or isinstance(result.errors, list)
 
 
 # ---------------------------------------------------------------------------
@@ -857,7 +864,7 @@ class TestSyncExtensions:
         assert len(response.creatives) == 1
         result = response.creatives[0]
         assert result.action == CreativeAction.failed
-        assert any("list_creative_formats" in e for e in (result.errors or []))
+        assert any("list_creative_formats" in e for e in _error_messages(result.errors))
 
     def test_unreachable_agent_fails_with_retry(self, integration_db):
         """Covers: UC-006-EXT-G-01 — agent unreachable → failed with retry suggestion."""
@@ -878,7 +885,7 @@ class TestSyncExtensions:
         assert len(response.creatives) == 1
         result = response.creatives[0]
         assert result.action == CreativeAction.failed
-        assert any("unreachable" in e.lower() for e in (result.errors or []))
+        assert any("unreachable" in e.lower() for e in _error_messages(result.errors))
 
     def test_package_not_found_lenient_logs_error(self, integration_db):
         """Covers: UC-006-EXT-J-02 — lenient: missing package → assignment_errors."""

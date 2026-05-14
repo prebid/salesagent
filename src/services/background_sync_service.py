@@ -22,6 +22,28 @@ _active_syncs: dict[str, threading.Thread] = {}
 _sync_lock = threading.Lock()
 
 
+def _reap_dead_syncs() -> None:
+    """Drop ``_active_syncs`` entries whose threads are no longer alive.
+
+    Defensive against any path where the worker's ``finally`` block in
+    ``_run_sync_thread`` doesn't run — e.g. ``KeyboardInterrupt`` /
+    ``SystemExit`` raised during sync, or a bug that lets the thread
+    exit before the cleanup. Without this reap, dead threads keep
+    references to their captured DB sessions, GAM clients, and result
+    payloads — slow growth as syncs fail abnormally over weeks of
+    uptime (leak triage #5 from the production OOM-cycle).
+
+    Called from every accessor so the dict reflects live state on read.
+    O(n) over the live + recently-dead set; n is small (one entry per
+    in-flight sync, capped by the per-tenant concurrency check upstream).
+
+    Caller MUST hold ``_sync_lock``.
+    """
+    dead = [sid for sid, t in _active_syncs.items() if not t.is_alive()]
+    for sid in dead:
+        _active_syncs.pop(sid, None)
+
+
 def start_inventory_sync_background(
     tenant_id: str,
     sync_mode: str = "incremental",
@@ -533,12 +555,24 @@ def _mark_sync_failed(sync_id: str, error_message: str):
 
 
 def get_active_syncs() -> list[str]:
-    """Get list of sync IDs currently running in background threads."""
+    """Get list of sync IDs currently running in background threads.
+
+    Reaps dead threads on read so the returned list reflects live state
+    even if the worker's ``finally`` block didn't fire (e.g. abnormal
+    exit). See :func:`_reap_dead_syncs`.
+    """
     with _sync_lock:
+        _reap_dead_syncs()
         return list(_active_syncs.keys())
 
 
 def is_sync_running(sync_id: str) -> bool:
-    """Check if a sync is currently running in a background thread."""
+    """Check if a sync is currently running in a background thread.
+
+    Reaps dead threads on read — a sync_id with a dead thread is no
+    longer running, so this returns False (and the dict entry is
+    pruned as a side effect).
+    """
     with _sync_lock:
+        _reap_dead_syncs()
         return sync_id in _active_syncs

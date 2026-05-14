@@ -30,7 +30,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("products", sa.Column("signal_targeting_allowed", sa.Boolean(), nullable=True, server_default="false"))
+    op.add_column(
+        "products", sa.Column("signal_targeting_allowed", sa.Boolean(), nullable=True, server_default="false")
+    )
     op.add_column("products", sa.Column("catalog_match", JSONType(), nullable=True))
     op.add_column("products", sa.Column("catalog_types", JSONType(), nullable=True))
     op.add_column("products", sa.Column("conversion_tracking", JSONType(), nullable=True))

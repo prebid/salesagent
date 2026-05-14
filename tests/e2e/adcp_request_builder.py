@@ -226,6 +226,8 @@ def build_creative(
         "primary": {
             "asset_type": "image",
             "url": asset_url,
+            "width": 300,
+            "height": 250,
         }
     }
 

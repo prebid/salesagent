@@ -69,7 +69,8 @@ def build_admin_test_session(base_url: str, tenant_id: str) -> requests.Session:
         allow_redirects=False,
         timeout=20,
     )
-    assert response.status_code in {302, 303}, (
-        f"/test/auth failed for tenant {tenant_id}: {response.status_code} {response.text[:200]}"
-    )
+    assert response.status_code in {
+        302,
+        303,
+    }, f"/test/auth failed for tenant {tenant_id}: {response.status_code} {response.text[:200]}"
     return session

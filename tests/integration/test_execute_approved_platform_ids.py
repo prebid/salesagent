@@ -279,12 +279,12 @@ class TestExecuteApprovedPlatformIds:
             ).first()
 
             assert pkg is not None, f"Package {package_id} not found"
-            assert "platform_line_item_id" in pkg.package_config, (
-                f"platform_line_item_id NOT persisted in package_config. Got keys: {list(pkg.package_config.keys())}"
-            )
-            assert pkg.package_config["platform_line_item_id"] == "GAM_LINE_ITEM_12345", (
-                f"Wrong platform_line_item_id value: {pkg.package_config.get('platform_line_item_id')}"
-            )
+            assert (
+                "platform_line_item_id" in pkg.package_config
+            ), f"platform_line_item_id NOT persisted in package_config. Got keys: {list(pkg.package_config.keys())}"
+            assert (
+                pkg.package_config["platform_line_item_id"] == "GAM_LINE_ITEM_12345"
+            ), f"Wrong platform_line_item_id value: {pkg.package_config.get('platform_line_item_id')}"
 
 
 class TestExecuteApprovedPlatformIdsEdgeCases:
@@ -317,9 +317,9 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
                     select(DBMediaPackage).filter_by(media_buy_id=media_buy_id, package_id=pkg_id)
                 ).first()
                 assert pkg is not None, f"Package {pkg_id} not found"
-                assert pkg.package_config.get("platform_line_item_id") == expected_lid, (
-                    f"{pkg_id}: expected {expected_lid}, got {pkg.package_config.get('platform_line_item_id')}"
-                )
+                assert (
+                    pkg.package_config.get("platform_line_item_id") == expected_lid
+                ), f"{pkg_id}: expected {expected_lid}, got {pkg.package_config.get('platform_line_item_id')}"
 
     def test_package_not_found_in_db_does_not_crash(self, pending_media_buy_with_package):
         """platform_line_item_ids references a package_id not in DB — logs warning, doesn't crash."""

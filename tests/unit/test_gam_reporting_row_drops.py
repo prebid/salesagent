@@ -47,9 +47,9 @@ class TestZeroImpressionRowRetention:
 
         result = service._process_report_data(rows, granularity="daily", requested_tz="UTC")
 
-        assert len(result) >= 1, (
-            "Zero-impression row with revenue was dropped — FLAT_RATE/SPONSORSHIP spend is silently lost"
-        )
+        assert (
+            len(result) >= 1
+        ), "Zero-impression row with revenue was dropped — FLAT_RATE/SPONSORSHIP spend is silently lost"
         assert result[0]["spend"] == 5.0
 
     def test_zero_impressions_nonzero_clicks_retained(self):
@@ -71,9 +71,9 @@ class TestZeroImpressionRowRetention:
 
         result = service._process_report_data(rows, granularity="daily", requested_tz="UTC")
 
-        assert len(result) >= 1, (
-            "Zero-impression row with clicks was dropped — click-only campaign data is silently lost"
-        )
+        assert (
+            len(result) >= 1
+        ), "Zero-impression row with clicks was dropped — click-only campaign data is silently lost"
         assert result[0]["clicks"] == 42
 
     def test_all_zeros_row_dropped(self):

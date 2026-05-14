@@ -11,12 +11,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import RootModel, ValidationError
+from pydantic import Field, RootModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -53,6 +53,8 @@ class _PackageData:
     bid_price: Decimal | None
 
 
+from adcp.server.helpers import valid_actions_for_status
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
@@ -101,14 +103,14 @@ def _get_media_buys_impl(
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "principal_id_missing", "message": "Principal ID not found in context"}],
+            errors=[{"code": "PRINCIPAL_ID_MISSING", "message": "Principal ID not found in context"}],
         )
 
     principal = get_principal_object(principal_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "principal_not_found", "message": f"Principal {principal_id} not found"}],
+            errors=[{"code": "PRINCIPAL_NOT_FOUND", "message": f"Principal {principal_id} not found"}],
         )
 
     tenant = identity.tenant
@@ -199,6 +201,7 @@ def _get_media_buys_impl(
                 media_buy_id=buy.media_buy_id,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
+                valid_actions=valid_actions_for_status(status.value),
                 currency=buy.currency or "USD",
                 total_budget=total_budget,
                 packages=response_packages,
@@ -216,8 +219,10 @@ def _get_media_buys_impl(
 async def get_media_buys(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    include_snapshot: bool = False,
-    account: dict | None = None,
+    include_snapshot: Annotated[
+        bool, Field(description="When true, include near-real-time delivery stats per package")
+    ] = False,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -255,7 +260,7 @@ def get_media_buys_raw(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
-    account: dict | None = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -347,7 +352,7 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
 
     if today < start:
-        return MediaBuyStatus.pending_activation
+        return MediaBuyStatus.pending_start
     if today > end:
         return MediaBuyStatus.completed
     return MediaBuyStatus.active

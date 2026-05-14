@@ -378,17 +378,17 @@ class TestPropertyListResolution:
             product_ids = [p.product_id for p in response.products]
 
             # US product matches (all its IDs are in the resolved set)
-            assert "us_sites_product" in product_ids, (
-                "US product should match: its property IDs are in the resolved set"
-            )
+            assert (
+                "us_sites_product" in product_ids
+            ), "US product should match: its property IDs are in the resolved set"
             # EU product excluded (no overlap with resolved US identifiers)
-            assert "eu_sites_product" not in product_ids, (
-                "EU product should be excluded: no property ID overlap with US identifiers"
-            )
+            assert (
+                "eu_sites_product" not in product_ids
+            ), "EU product should be excluded: no property ID overlap with US identifiers"
             # Mixed product included (property_targeting_allowed=True, has partial overlap)
-            assert "mixed_sites_product" in product_ids, (
-                "Mixed product should match: property_targeting_allowed=True and has overlap with us_site_1"
-            )
+            assert (
+                "mixed_sites_product" in product_ids
+            ), "Mixed product should match: property_targeting_allowed=True and has overlap with us_site_1"
 
     @pytest.mark.asyncio
     async def test_resolve_no_identifiers_filters_to_all_selector_only(self, integration_db):
@@ -441,6 +441,6 @@ class TestPropertyListResolution:
 
             product_ids = [p.product_id for p in response.products]
             assert "all_selector_product" in product_ids, "All-selector product should survive empty property list"
-            assert "specific_product" not in product_ids, (
-                "Specific-ID product should be excluded with empty resolved set"
-            )
+            assert (
+                "specific_product" not in product_ids
+            ), "Specific-ID product should be excluded with empty resolved set"

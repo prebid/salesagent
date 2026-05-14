@@ -105,13 +105,21 @@ class TestInventoryProfileList:
         assert response.status_code == 200
 
     def test_list_shows_profile_names(self, client, test_tenant):
-        """List page includes names of existing profiles."""
+        """JSON API list endpoint includes names of existing profiles.
+
+        The /tenant/<tid>/inventory-profiles/ HTML page is client-side rendered
+        via JavaScript that fetches /api/list, so profile names never appear in
+        the server-rendered HTML. This test verifies the JSON API contract that
+        backs the page, not the rendered markup.
+        """
         _auth_session(client, test_tenant)
         _create_sample_profile(test_tenant, name="Visible Profile", profile_id="visible_profile")
 
-        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/")
-        html = response.data.decode()
-        assert "Visible Profile" in html
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/api/list")
+        assert response.status_code == 200
+        payload = response.get_json()
+        names = [p["name"] for p in payload["profiles"]]
+        assert "Visible Profile" in names
 
 
 class TestInventoryProfileCreate:
@@ -217,9 +225,9 @@ class TestInventoryProfileDelete:
         assert profile is None
 
     def test_delete_nonexistent_profile_returns_404(self, client, test_tenant):
-        """POST delete for a nonexistent profile returns 404."""
+        """DELETE for a nonexistent profile returns 404."""
         _auth_session(client, test_tenant)
-        response = client.post(
+        response = client.delete(
             f"/tenant/{test_tenant}/inventory-profiles/999999/delete",
             follow_redirects=False,
         )

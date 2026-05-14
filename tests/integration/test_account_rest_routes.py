@@ -37,9 +37,9 @@ class TestListAccountsRestRoute:
             # REST should return the same
             client = env.get_rest_client()
             rest_response = client.post("/api/v1/accounts", json={})
-            assert rest_response.status_code == 200, (
-                f"Expected 200, got {rest_response.status_code}: {rest_response.text}"
-            )
+            assert (
+                rest_response.status_code == 200
+            ), f"Expected 200, got {rest_response.status_code}: {rest_response.text}"
             data = rest_response.json()
             assert "accounts" in data
             assert len(data["accounts"]) == len(impl_response.accounts)
@@ -69,9 +69,9 @@ class TestSyncAccountsRestRoute:
                     ]
                 },
             )
-            assert rest_response.status_code == 200, (
-                f"Expected 200, got {rest_response.status_code}: {rest_response.text}"
-            )
+            assert (
+                rest_response.status_code == 200
+            ), f"Expected 200, got {rest_response.status_code}: {rest_response.text}"
             data = rest_response.json()
             assert "accounts" in data
             assert len(data["accounts"]) == 1

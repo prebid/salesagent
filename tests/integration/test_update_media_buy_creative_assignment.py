@@ -453,7 +453,7 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.errors is not None
     assert len(response.errors) > 0
-    assert response.errors[0].code == "creatives_not_found"
+    assert response.errors[0].code == "CREATIVE_REJECTED"
     assert "nonexistent_creative" in response.errors[0].message
 
 

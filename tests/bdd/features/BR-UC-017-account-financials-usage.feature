@@ -1201,4 +1201,3 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | sandbox: true (sandbox account)    | accepted with sandbox: true, no billing      |
       | sandbox field absent (production)  | accepted without sandbox flag                |
       | sandbox: true with errors          | partial acceptance with sandbox: true         |
-

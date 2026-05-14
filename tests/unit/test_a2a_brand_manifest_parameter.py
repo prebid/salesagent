@@ -52,7 +52,12 @@ async def test_handle_get_products_skill_passes_brand():
 
 @pytest.mark.asyncio
 async def test_handle_get_products_skill_extracts_all_parameters():
-    """Test that _handle_get_products_skill extracts all optional parameters."""
+    """Test that _handle_get_products_skill extracts spec parameters and ignores non-spec ones.
+
+    Non-spec parameters (min_exposures, strategy_id, adcp_version) MUST NOT be forwarded
+    to the core tool — they are not in the AdCP GetProductsRequest schema. adcp_version is
+    used at the transport boundary for version compat, not forwarded to the wrapper.
+    """
     handler = AdCPRequestHandler()
 
     with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
@@ -77,10 +82,9 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         assert call_kwargs["brand"] == {"domain": "nike.com"}
         assert call_kwargs["brief"] == "Athletic footwear"
         assert call_kwargs["filters"] == {"delivery_type": "guaranteed"}
-        assert call_kwargs["min_exposures"] == 10000
-        assert call_kwargs["strategy_id"] == "test_strategy_123"
-        # adcp_version IS forwarded to the raw function so it can apply pre-v3
-        # default-to-brief; the helper does not receive it.
+        assert "min_exposures" not in call_kwargs, "min_exposures is not in AdCP spec — must not be forwarded"
+        assert "strategy_id" not in call_kwargs, "strategy_id is not in AdCP spec — must not be forwarded"
+        # adcp_version IS forwarded so the raw function can apply the pre-v3 default-to-brief shim.
         assert call_kwargs["adcp_version"] == "3.6.0"
         assert "brand_manifest" not in call_kwargs
 

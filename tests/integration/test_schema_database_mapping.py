@@ -71,6 +71,10 @@ class TestSchemaFieldMapping:
             "material_submission",  # Material submission config from adcp 3.12 spec
             "measurement_readiness",  # Measurement readiness from adcp 3.12 spec
             "trusted_match",  # Trusted match config from adcp 3.12 spec
+            # AdCP 4.3+ fields - inherited from library Product, not yet stored in database
+            "measurement_terms",  # Measurement terms from adcp 4.3 spec
+            "cancellation_policy",  # Cancellation policy from adcp 4.3 spec
+            "performance_standards",  # Performance standards from adcp 4.3 spec
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)
@@ -238,9 +242,9 @@ class TestSchemaFieldMapping:
             db_columns = {column.name for column in model_class.__table__.columns}
 
             for field in required_fields:
-                assert field in db_columns, (
-                    f"Required field '{field}' missing from {model_class.__name__} database model"
-                )
+                assert (
+                    field in db_columns
+                ), f"Required field '{field}' missing from {model_class.__name__} database model"
 
     def test_pydantic_model_field_access_patterns(self):
         """Test patterns for safely accessing Pydantic model fields."""

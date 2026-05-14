@@ -124,9 +124,9 @@ class TestGAMManualApprovalPath:
                 # Assert - Package IDs must match input packages
                 returned_ids = {pkg.package_id for pkg in response.packages}
                 expected_ids = {pkg.package_id for pkg in sample_packages}
-                assert returned_ids == expected_ids, (
-                    f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-                )
+                assert (
+                    returned_ids == expected_ids
+                ), f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
 
                 # Assert - Other required fields
                 # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
@@ -169,7 +169,7 @@ class TestGAMManualApprovalPath:
 
             assert isinstance(response, CreateMediaBuyError), "Workflow failure should return error response"
             assert len(response.errors) > 0, "Error response must have errors"
-            assert response.errors[0].code == "workflow_creation_failed", "Error code should indicate workflow failure"
+            assert response.errors[0].code == "WORKFLOW_CREATION_FAILED", "Error code should indicate workflow failure"
 
 
 class TestGAMActivationWorkflowPath:

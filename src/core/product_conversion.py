@@ -82,11 +82,15 @@ def resolve_pre_v3_buying_mode(
 ) -> tuple[str | None, bool]:
     """Resolve buying_mode for pre-v3 clients that omitted the field.
 
-    AdCP 3.0 spec: sellers SHOULD default pre-v3 clients without buying_mode to a sensible
-    mode. We pick from what they sent: a non-empty brief implies brief mode (curated
-    discovery); absence implies wholesale (raw inventory). This matches existing v2 client
-    behavior — they could send either {brief: "..."} or {brand: ...} alone and get a
-    sensible response.
+    AdCP 3.0 spec text: "Sellers receiving requests from pre-v3 clients without
+    buying_mode SHOULD default to 'brief'." Our implementation deliberately deviates from
+    that text in one direction: if the pre-v3 client also sent no brief, we default to
+    'wholesale' instead of 'brief'. Reasoning — defaulting to 'brief' on an empty brief
+    would immediately fail the cross-mode validator ("brief is required when buying_mode
+    is 'brief'") and break v2 clients that legitimately discover raw inventory by sending
+    only {brand: ...} or {filters: ...}. The deviation is observable: every defaulted
+    request records `pre_v3_defaulted=True` in the audit log so operations can quantify
+    how many requests took the deviation path.
 
     Args:
         buying_mode: Client-supplied mode (None means it was omitted).
@@ -416,6 +420,16 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         product_data["placements"] = product_model.placements
     if product_model.reporting_capabilities:
         product_data["reporting_capabilities"] = product_model.reporting_capabilities
+    else:
+        # adcp 4.3 makes reporting_capabilities required — provide minimal default
+        product_data["reporting_capabilities"] = {
+            "available_reporting_frequencies": ["daily"],
+            "expected_delay_minutes": 1440,
+            "timezone": "UTC",
+            "supports_webhooks": False,
+            "available_metrics": ["impressions"],
+            "date_range_support": "date_range",
+        }
 
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False

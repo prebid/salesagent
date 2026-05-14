@@ -192,7 +192,7 @@ class TestProtocolEnvelope:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
-            errors=[{"code": "INVALID_BUDGET", "message": "Budget too low"}],
+            errors=[{"code": "VALIDATION_ERROR", "message": "Budget too low"}],
         )
 
         envelope = ProtocolEnvelope.wrap(payload=response, status="failed", message="Media buy creation failed")
@@ -218,7 +218,7 @@ class TestProtocolEnvelopeStatusLogic:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
-            errors=[{"code": "validation_error", "message": "Currency EUR is not supported"}],
+            errors=[{"code": "VALIDATION_ERROR", "message": "Currency EUR is not supported"}],
         )
 
         envelope = ProtocolEnvelope.wrap(payload=response, status="failed")
@@ -226,7 +226,7 @@ class TestProtocolEnvelopeStatusLogic:
         assert envelope.status == "failed"
         assert envelope.payload.get("media_buy_id") is None
         assert len(envelope.payload["errors"]) == 1
-        assert envelope.payload["errors"][0]["code"] == "validation_error"
+        assert envelope.payload["errors"][0]["code"] == "VALIDATION_ERROR"
 
     def test_validation_error_can_use_input_required_status(self):
         """Test that validation errors can also use status='input-required' for fixable issues."""
@@ -247,14 +247,14 @@ class TestProtocolEnvelopeStatusLogic:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
-            errors=[{"code": "authentication_error", "message": "Principal not found"}],
+            errors=[{"code": "AUTH_REQUIRED", "message": "Principal not found"}],
         )
 
         envelope = ProtocolEnvelope.wrap(payload=response, status="rejected")
 
         assert envelope.status == "rejected"
         assert envelope.payload.get("media_buy_id") is None
-        assert envelope.payload["errors"][0]["code"] == "authentication_error"
+        assert envelope.payload["errors"][0]["code"] == "AUTH_REQUIRED"
 
     def test_auth_error_can_use_auth_required_status(self):
         """Test that auth errors can also use status='auth-required' per AdCP spec."""

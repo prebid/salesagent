@@ -7,8 +7,8 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 from typing import Any
 
 from adcp.types import Catalog as LibraryCatalog
+from adcp.types import GetProductsRequest as LibraryGetProductsRequest
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
-from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 from adcp.types import Placement as LibraryPlacement
 from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
@@ -77,6 +77,10 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
+    # adcp 4.3 makes reporting_capabilities required.  Override as optional
+    # — our product builder sets it when available from the adapter.
+    reporting_capabilities: Any | None = None  # type: ignore[assignment]
+
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
         default=None,
@@ -144,6 +148,9 @@ class Product(LibraryProduct):
         if isinstance(kwargs["exclude"], set):
             kwargs["exclude"].update({"implementation_config", "expires_at"})
 
+        # Override exclude_none so we can handle core-field None values ourselves
+        # (AdCPBaseModel defaults exclude_none=True which would strip required fields)
+        kwargs["exclude_none"] = False
         data = super().model_dump(**kwargs)
 
         # Convert formats to format_ids per AdCP spec
@@ -159,6 +166,7 @@ class Product(LibraryProduct):
             "format_ids",
             "delivery_type",
             "delivery_measurement",
+            "reporting_capabilities",
             "is_custom",
         }
 
@@ -222,41 +230,27 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest into a single class spanning all three modes.
+    """Extends library GetProductsRequest with cross-mode invariants and internal fields.
 
-    Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
-    We widen buying_mode to str|None so a single class covers brief/wholesale/refine modes
-    without forcing callers through the library's discriminated union.
-
-    Library provides: account, brand, brief, catalog, context, ext, fields, filters,
-    pagination, property_list, refine.
+    Library provides: account, adcp_major_version, brand, brief, buying_mode, catalog,
+    context, ext, fields, filters, pagination, preferred_delivery_types, property_list,
+    refine, required_policies, time_budget. The library declares buying_mode as required
+    and validates the wire shape of refine entries (Refine1=request, Refine2=product with
+    product_id, Refine3=proposal with proposal_id) — both align with the released spec.
 
     Internal-only: product_selectors (excluded from external serialization).
 
-    Validators:
-    - _normalize_refine_entry_id_field (mode='before'): bridges the rc.3 -> 3.0.6 wire
-      rename of refine entry id fields (product_id / proposal_id <-> id). Removable when
-      the installed adcp library targets spec 3.0.6+; detected by
-      tests/unit/test_architecture_adcp_library_field_skew.py.
-    - _validate_buying_mode_invariants (mode='after'): enforces AdCP cross-mode rules
-      (brief required for brief mode, refine forbidden in brief/wholesale, etc.). Mirrors
-      the seven rule rows at tests/bdd/features/BR-UC-001-discover-available-inventory.feature:313-319.
+    The `_validate_buying_mode_invariants` validator (mode='after') enforces the AdCP
+    cross-mode rules the library does not enforce itself (brief required for brief mode,
+    refine forbidden in brief/wholesale, etc.). Mirrors the seven rule rows at
+    tests/bdd/features/BR-UC-001-discover-available-inventory.feature:313-319.
+
+    Wire-format compatibility note: the rc.3 <-> 3.0.6 refine-entry id rename shim that
+    previously lived in this class is gone — adcp library 4.3 already speaks the released
+    spec wire format natively, so the shim is dead code (see PR conversation).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    # Widen buying_mode from Literal['wholesale'] to str|None to span all three modes.
-    # The cross-mode invariants below enforce which combinations are valid.
-    buying_mode: str | None = Field(  # type: ignore[assignment]
-        None,
-        description=(
-            "Buyer intent: 'brief' (publisher curates from the natural-language brief), "
-            "'wholesale' (buyer requests raw inventory and applies their own audiences; "
-            "brief and refine forbidden), or 'refine' (iterate on a previous response via "
-            "the refine array; brief forbidden). v3 clients MUST include buying_mode; "
-            "pre-v3 clients are defaulted to 'brief' at the transport boundary."
-        ),
-    )
 
     # Internal-only fields (not in AdCP spec)
     product_selectors: LibraryCatalog | None = Field(
@@ -265,77 +259,21 @@ class GetProductsRequest(LibraryGetProductsRequest):
         exclude=True,
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_refine_entry_id_field(cls, values: Any) -> Any:
-        """Bridge rc.3 <-> 3.0.6 wire shape on refine entries.
-
-        The installed adcp Python library targets spec rc.3; the released spec 3.0.6 (and
-        the @adcp/sdk storyboard runner) ship two changes for product- and proposal-scope
-        refine entries that the library variants reject under extra='forbid':
-
-        1. Id field renamed: rc.3 uses `id`; 3.0.6 uses `product_id` / `proposal_id`.
-        2. `action` is required in rc.3 but defaulted to 'include' in 3.0.6.
-
-        This pre-validator normalizes inbound dicts to rc.3 shape before discriminated
-        union routing, so storyboard payloads parse against the installed library.
-
-        Rules:
-        - scope='product' with product_id -> rewrite to id
-        - scope='proposal' with proposal_id -> rewrite to id
-        - both id and product_id/proposal_id present and equal -> drop the wire-name form
-        - both present and different -> raise (the wire payload is internally inconsistent)
-        - product/proposal scope without action -> default to 'include' (3.0.6 default)
-        - scope='request' or unknown scope -> pass through untouched
-        """
-        if not isinstance(values, dict):
-            return values
-        refine = values.get("refine")
-        if not isinstance(refine, list):
-            return values
-
-        normalized: list[Any] = []
-        for entry in refine:
-            if not isinstance(entry, dict):
-                normalized.append(entry)
-                continue
-            scope = entry.get("scope")
-            wire_key = "product_id" if scope == "product" else "proposal_id" if scope == "proposal" else None
-
-            new_entry: dict = dict(entry)
-            if wire_key is not None and wire_key in new_entry:
-                wire_val = new_entry[wire_key]
-                if "id" in new_entry and new_entry["id"] != wire_val:
-                    raise ValueError(
-                        f"refine entry has both 'id' ({new_entry['id']!r}) and {wire_key!r} "
-                        f"({wire_val!r}) with different values; provide only one"
-                    )
-                del new_entry[wire_key]
-                new_entry["id"] = wire_val
-
-            # 3.0.6 defaults action to 'include' on product/proposal scope; rc.3 lib requires it.
-            if scope in {"product", "proposal"} and "action" not in new_entry:
-                new_entry["action"] = "include"
-
-            normalized.append(new_entry)
-
-        return {**values, "refine": normalized}
-
     @model_validator(mode="after")
     def _validate_buying_mode_invariants(self) -> "GetProductsRequest":
-        """Enforce AdCP cross-mode rules.
+        """Enforce AdCP cross-mode rules the library does not check itself.
 
         Rule sources: AdCP 3.0 spec (description on each variant's buying_mode Literal) and
         tests/bdd/features/BR-UC-001-discover-available-inventory.feature:313-319.
 
-        The transport wrapper is responsible for defaulting pre-v3 clients to 'brief' before
-        the request reaches this validator. If buying_mode is None at this point, the client
-        is a v3 client that omitted the required field.
+        The transport wrapper is responsible for defaulting pre-v3 clients to 'brief' (or
+        'wholesale' when no brief is provided) before the request reaches this validator.
         """
-        mode = self.buying_mode
+        # The library types buying_mode as the BuyingMode enum; normalize to a plain string
+        # so the rule comparisons below stay readable.
+        raw_mode: Any = self.buying_mode
+        mode = raw_mode.value if hasattr(raw_mode, "value") else raw_mode
 
-        if mode is None:
-            raise ValueError("buying_mode is required (must be one of 'brief', 'wholesale', 'refine')")
         if mode not in {"brief", "wholesale", "refine"}:
             raise ValueError(f"buying_mode must be one of 'brief', 'wholesale', 'refine'; got {mode!r}")
 
@@ -367,15 +305,6 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
-
-    Outbound wire compatibility (rc.3 -> 3.0.6):
-    - The installed adcp library (rc.3) serializes RefinementAppliedItem.id as `id`.
-    - Spec 3.0.6 (and the @adcp/sdk@6.11.0 storyboard validator) expect `product_id`
-      / `proposal_id` based on the item's scope.
-    - model_dump() below renames `id` -> `product_id` for product-scope items and
-      `id` -> `proposal_id` for proposal-scope items in refinement_applied. Removable
-      when the installed adcp library targets 3.0.6+; detected by the rc.3 <-> 3.0.6
-      skew fitness function.
     """
 
     def __str__(self) -> str:
@@ -404,74 +333,6 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
             return f"{base_msg} Please connect through an authorized buying agent for pricing data."
 
         return base_msg
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_refinement_applied_inbound(cls, values: Any) -> Any:
-        """Inbound mirror of the rc.3 -> 3.0.6 wire shim on refinement_applied.
-
-        When a serialized response is round-tripped (e.g., A2A test harness parses the
-        artifact dict back into the response model), each refinement_applied item carries
-        the 3.0.6 wire field name (`product_id` / `proposal_id`). The library
-        RefinementAppliedItem declares extra='forbid' on the rc.3 `id` field, so without
-        this normalization the parse fails. Removable alongside the outbound rename in
-        model_dump when the installed adcp library targets spec 3.0.6+.
-        """
-        if not isinstance(values, dict):
-            return values
-        applied = values.get("refinement_applied")
-        if not isinstance(applied, list):
-            return values
-
-        normalized: list[Any] = []
-        for item in applied:
-            if not isinstance(item, dict):
-                normalized.append(item)
-                continue
-            scope = item.get("scope")
-            wire_key = "product_id" if scope == "product" else "proposal_id" if scope == "proposal" else None
-            if wire_key is not None and wire_key in item:
-                wire_val = item[wire_key]
-                if "id" in item and item["id"] != wire_val:
-                    raise ValueError(
-                        f"refinement_applied item has both 'id' ({item['id']!r}) and "
-                        f"{wire_key!r} ({wire_val!r}) with different values; provide only one"
-                    )
-                item = {k: v for k, v in item.items() if k != wire_key}
-                item["id"] = wire_val
-            normalized.append(item)
-
-        return {**values, "refinement_applied": normalized}
-
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """Serialize the response with rc.3 -> 3.0.6 wire compatibility for refinement_applied.
-
-        The library's RefinementAppliedItem.id field becomes `product_id` (scope=product)
-        or `proposal_id` (scope=proposal) on the wire to satisfy spec 3.0.6 schema
-        validation. Items with scope=request have no id and pass through unchanged.
-        """
-        result = super().model_dump(**kwargs)
-        applied = result.get("refinement_applied")
-        if not applied:
-            return result
-
-        for item in applied:
-            if not isinstance(item, dict):
-                continue
-            scope = item.get("scope")
-            entry_id = item.get("id")
-            if entry_id is None:
-                # Drop empty id field for cleaner output
-                item.pop("id", None)
-                continue
-            if scope == "product":
-                item["product_id"] = entry_id
-                item.pop("id", None)
-            elif scope == "proposal":
-                item["proposal_id"] = entry_id
-                item.pop("id", None)
-            # scope == "request" or unknown -> id stays as-is (request scope has no id field)
-        return result
 
 
 class ProductCatalog(SalesAgentBaseModel):

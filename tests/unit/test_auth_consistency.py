@@ -104,9 +104,9 @@ class TestMissingTokenConsistency:
         assert len(result.errors) > 0
         # Check that the error message mentions the missing principal
         error_messages = [str(e.message).lower() for e in result.errors]
-        assert any("principal" in msg for msg in error_messages), (
-            f"Expected error about missing principal, got: {error_messages}"
-        )
+        assert any(
+            "principal" in msg for msg in error_messages
+        ), f"Expected error about missing principal, got: {error_messages}"
 
     @pytest.mark.asyncio
     async def test_all_authenticated_tools_reject_none_identity(self):
@@ -331,9 +331,7 @@ class TestDiscoveryEndpointsInvalidAuth:
             tenant=mock_tenant,
         )
 
-        with (
-            patch("src.core.database.repositories.uow.get_db_session") as mock_db,
-        ):
+        with (patch("src.core.database.repositories.uow.get_db_session") as mock_db,):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
@@ -364,9 +362,7 @@ class TestDiscoveryEndpointsInvalidAuth:
         mock_tenant = {"tenant_id": "test-tenant"}
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
-        with (
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
-        ):
+        with (patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,):
             mock_reg = MagicMock()
 
             async def mock_list_formats(**kwargs):

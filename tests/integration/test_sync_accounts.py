@@ -289,9 +289,9 @@ class TestSyncAccountsDryRun:
         assert len(response.accounts) == 1
         result = response.accounts[0]
         assert _action_value(result.action) == "created"
-        assert _status_value(result.status) == "pending_approval", (
-            "dry_run must preview the approval-mode-derived status, not hardcoded 'active'"
-        )
+        assert (
+            _status_value(result.status) == "pending_approval"
+        ), "dry_run must preview the approval-mode-derived status, not hardcoded 'active'"
         assert result.setup is not None, "dry_run must preview the setup object"
         assert result.setup.message is not None
         assert result.setup.url is not None
@@ -328,7 +328,7 @@ class TestSyncAccountsBillingPolicy:
         assert _status_value(result.status) == "rejected"
         assert result.errors is not None
         assert len(result.errors) >= 1
-        assert result.errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
 
     @pytest.mark.asyncio
     async def test_mixed_billing_partial_success(self, integration_db):
@@ -418,9 +418,9 @@ class TestSyncAccountsApproval:
                 tenant = fresh_session.scalars(select(Tenant).filter_by(tenant_id="harness_audit_t")).first()
                 assert tenant is not None
                 # MUST be written to account_approval_mode (BR-RULE-060)
-                assert tenant.account_approval_mode == "credit_review", (
-                    "set_approval_mode writes to wrong DB column; MCP auth chain won't see it"
-                )
+                assert (
+                    tenant.account_approval_mode == "credit_review"
+                ), "set_approval_mode writes to wrong DB column; MCP auth chain won't see it"
 
             # And the serialized tenant dict used by resolve_identity must include it
             tenant_dict = get_tenant_by_id("harness_audit_t")
@@ -459,7 +459,7 @@ class TestSyncAccountsBillingPolicyTransport:
         assert _action_value(acct.action) == "failed"
         assert _status_value(acct.status) == "rejected"
         assert acct.errors is not None
-        assert acct.errors[0].code == "BILLING_NOT_SUPPORTED"
+        assert acct.errors[0].code == "UNSUPPORTED_FEATURE"
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_billing_rejection_error_includes_suggestion(self, integration_db, transport):

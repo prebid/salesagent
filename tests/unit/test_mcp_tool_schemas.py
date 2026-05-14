@@ -20,19 +20,19 @@ class TestMCPToolTypedSchemas:
         # adcp 3.6.0: brand_manifest replaced by brand (BrandReference)
         assert "brand" in params, "get_products should have 'brand' parameter (adcp 3.6.0)"
         assert "brand_manifest" not in params, "brand_manifest was removed in adcp 3.6.0"
-        assert "BrandReference" in str(params["brand"].annotation), (
-            f"brand should use BrandReference type, got {params['brand'].annotation}"
-        )
+        assert "BrandReference" in str(
+            params["brand"].annotation
+        ), f"brand should use BrandReference type, got {params['brand'].annotation}"
 
         # Check filters uses ProductFilters type
-        assert "ProductFilters" in str(params["filters"].annotation), (
-            f"filters should use ProductFilters type, got {params['filters'].annotation}"
-        )
+        assert "ProductFilters" in str(
+            params["filters"].annotation
+        ), f"filters should use ProductFilters type, got {params['filters'].annotation}"
 
         # Check context uses ContextObject type
-        assert "ContextObject" in str(params["context"].annotation), (
-            f"context should use ContextObject type, got {params['context'].annotation}"
-        )
+        assert "ContextObject" in str(
+            params["context"].annotation
+        ), f"context should use ContextObject type, got {params['context'].annotation}"
 
     def test_sync_creatives_uses_typed_parameters(self):
         """sync_creatives should use CreativeAsset, ValidationMode, etc."""
@@ -42,19 +42,19 @@ class TestMCPToolTypedSchemas:
         params = sig.parameters
 
         # Check creatives uses CreativeAsset type
-        assert "CreativeAsset" in str(params["creatives"].annotation), (
-            f"creatives should use CreativeAsset type, got {params['creatives'].annotation}"
-        )
+        assert "CreativeAsset" in str(
+            params["creatives"].annotation
+        ), f"creatives should use CreativeAsset type, got {params['creatives'].annotation}"
 
         # Check validation_mode uses ValidationMode type
-        assert "ValidationMode" in str(params["validation_mode"].annotation), (
-            f"validation_mode should use ValidationMode type, got {params['validation_mode'].annotation}"
-        )
+        assert "ValidationMode" in str(
+            params["validation_mode"].annotation
+        ), f"validation_mode should use ValidationMode type, got {params['validation_mode'].annotation}"
 
         # Check context uses ContextObject type
-        assert "ContextObject" in str(params["context"].annotation), (
-            f"context should use ContextObject type, got {params['context'].annotation}"
-        )
+        assert "ContextObject" in str(
+            params["context"].annotation
+        ), f"context should use ContextObject type, got {params['context'].annotation}"
 
     def test_list_creatives_uses_typed_parameters(self):
         """list_creatives should use CreativeFilters, Sort, Pagination types."""
@@ -64,22 +64,23 @@ class TestMCPToolTypedSchemas:
         params = sig.parameters
 
         # Check filters uses CreativeFilters type
-        assert "CreativeFilters" in str(params["filters"].annotation), (
-            f"filters should use CreativeFilters type, got {params['filters'].annotation}"
-        )
+        assert "CreativeFilters" in str(
+            params["filters"].annotation
+        ), f"filters should use CreativeFilters type, got {params['filters'].annotation}"
 
         # Check sort uses Sort type
         assert "Sort" in str(params["sort"].annotation), f"sort should use Sort type, got {params['sort'].annotation}"
 
         # Check pagination uses Pagination type
-        assert "Pagination" in str(params["pagination"].annotation), (
-            f"pagination should use Pagination type, got {params['pagination'].annotation}"
-        )
+        assert "Pagination" in str(
+            params["pagination"].annotation
+        ), f"pagination should use Pagination type, got {params['pagination'].annotation}"
 
     def test_create_media_buy_uses_typed_parameters(self):
         """create_media_buy should use BrandReference (brand), PackageRequest, etc.
 
         adcp 3.6.0: brand_manifest renamed to brand (BrandReference with domain field).
+        adcp 4.3 (commit 3c604130): targeting_overlay and creatives moved to PackageRequest.
         """
         from src.core.tools.media_buy_create import create_media_buy
 
@@ -87,21 +88,25 @@ class TestMCPToolTypedSchemas:
         params = sig.parameters
 
         # adcp 3.6.0: brand_manifest → brand (BrandReference)
-        assert "brand" in params, (
-            f"create_media_buy should have 'brand' parameter (adcp 3.6.0). Got parameters: {list(params.keys())}"
-        )
+        assert (
+            "brand" in params
+        ), f"create_media_buy should have 'brand' parameter (adcp 3.6.0). Got parameters: {list(params.keys())}"
         # brand_manifest is no longer in the signature
         assert "brand_manifest" not in params, "brand_manifest was removed in adcp 3.6.0, use 'brand' instead"
 
         # Check packages uses PackageRequest type
-        assert "PackageRequest" in str(params["packages"].annotation), (
-            f"packages should use PackageRequest type, got {params['packages'].annotation}"
-        )
+        assert "PackageRequest" in str(
+            params["packages"].annotation
+        ), f"packages should use PackageRequest type, got {params['packages'].annotation}"
 
-        # Check targeting_overlay uses TargetingOverlay type
-        assert "TargetingOverlay" in str(params["targeting_overlay"].annotation), (
-            f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
+        # adcp 4.3: targeting_overlay and creatives are package-level, not request-level
+        assert "targeting_overlay" not in params, (
+            "targeting_overlay was moved to PackageRequest in adcp 4.3 (commit 3c604130); "
+            "use packages[].targeting_overlay instead"
         )
+        assert (
+            "creatives" not in params
+        ), "creatives was moved to PackageRequest in adcp 4.3 (commit 3c604130); use packages[].creatives instead"
 
     def test_update_media_buy_uses_typed_parameters(self):
         """update_media_buy should use TargetingOverlay, PackageUpdate types.
@@ -114,14 +119,14 @@ class TestMCPToolTypedSchemas:
         params = sig.parameters
 
         # Check targeting_overlay uses TargetingOverlay type
-        assert "TargetingOverlay" in str(params["targeting_overlay"].annotation), (
-            f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
-        )
+        assert "TargetingOverlay" in str(
+            params["targeting_overlay"].annotation
+        ), f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
 
         # Check packages uses PackageUpdate type (V3: was Packages)
-        assert "PackageUpdate" in str(params["packages"].annotation), (
-            f"packages should use PackageUpdate type (V3), got {params['packages'].annotation}"
-        )
+        assert "PackageUpdate" in str(
+            params["packages"].annotation
+        ), f"packages should use PackageUpdate type (V3), got {params['packages'].annotation}"
 
     def test_list_creative_formats_uses_typed_parameters(self):
         """list_creative_formats should use FormatId, etc."""
@@ -132,10 +137,11 @@ class TestMCPToolTypedSchemas:
 
         # type parameter removed in adcp 3.12
 
-        # Check format_ids uses FormatId type
-        assert "FormatId" in str(params["format_ids"].annotation), (
-            f"format_ids should use FormatId type, got {params['format_ids'].annotation}"
-        )
+        # Check format_ids uses FormatId type (alias for FormatReferenceStructuredObject in adcp 4.3)
+        annotation_str = str(params["format_ids"].annotation)
+        assert (
+            "FormatId" in annotation_str or "FormatReference" in annotation_str
+        ), f"format_ids should use FormatId type, got {annotation_str}"
 
         # Check asset_types uses AssetContentType type (if still present)
         if "asset_types" in params:
@@ -151,9 +157,9 @@ class TestMCPToolTypedSchemas:
         params = sig.parameters
 
         # Check context uses ContextObject type
-        assert "ContextObject" in str(params["context"].annotation), (
-            f"context should use ContextObject type, got {params['context'].annotation}"
-        )
+        assert "ContextObject" in str(
+            params["context"].annotation
+        ), f"context should use ContextObject type, got {params['context'].annotation}"
 
     def test_update_performance_index_uses_typed_parameters(self):
         """update_performance_index should use ContextObject type."""
@@ -163,9 +169,9 @@ class TestMCPToolTypedSchemas:
         params = sig.parameters
 
         # Check context uses ContextObject type
-        assert "ContextObject" in str(params["context"].annotation), (
-            f"context should use ContextObject type, got {params['context'].annotation}"
-        )
+        assert "ContextObject" in str(
+            params["context"].annotation
+        ), f"context should use ContextObject type, got {params['context'].annotation}"
 
     def test_list_authorized_properties_uses_typed_parameters(self):
         """list_authorized_properties should use ContextObject type."""
@@ -175,9 +181,9 @@ class TestMCPToolTypedSchemas:
         params = sig.parameters
 
         # Check context uses ContextObject type
-        assert "ContextObject" in str(params["context"].annotation), (
-            f"context should use ContextObject type, got {params['context'].annotation}"
-        )
+        assert "ContextObject" in str(
+            params["context"].annotation
+        ), f"context should use ContextObject type, got {params['context'].annotation}"
 
 
 class TestMCPToolSchemaNotUntyped:
@@ -188,9 +194,9 @@ class TestMCPToolSchemaNotUntyped:
         from src.core.tools.products import get_products
 
         sig = inspect.signature(get_products)
-        assert "brand_manifest" not in sig.parameters, (
-            "brand_manifest was removed in adcp 3.6.0 — get_products must use 'brand' instead"
-        )
+        assert (
+            "brand_manifest" not in sig.parameters
+        ), "brand_manifest was removed in adcp 3.6.0 — get_products must use 'brand' instead"
 
     def test_no_untyped_dict_for_filters(self):
         """filters should NOT be dict."""

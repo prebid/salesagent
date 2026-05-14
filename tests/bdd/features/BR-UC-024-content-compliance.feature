@@ -1137,4 +1137,3 @@ Feature: BR-UC-024 Content Compliance
       | second turn with invalid contextId                   | error "CONTEXT_NOT_FOUND" with suggestion                |
       | follow-up with different artifact in same conversation | artifact evaluated in accumulated context              |
       | text-only follow-up question (no new artifact)       | question answered in conversation context                |
-

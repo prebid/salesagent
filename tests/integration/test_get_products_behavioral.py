@@ -235,9 +235,9 @@ class TestRankingThresholdBehavior:
                 response = await env.call_impl(brief="campaign")
 
         for product in response.products:
-            assert product.brief_relevance == "Good", (
-                "brief_relevance should be plumbed from ranker.reason in brief mode"
-            )
+            assert (
+                product.brief_relevance == "Good"
+            ), "brief_relevance should be plumbed from ranker.reason in brief mode"
 
 
 class TestRankingFailureFailopen:

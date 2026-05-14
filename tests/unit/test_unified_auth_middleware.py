@@ -31,9 +31,9 @@ class TestUnifiedAuthMiddlewareExists:
 
         from src.core.auth_middleware import UnifiedAuthMiddleware
 
-        assert not issubclass(UnifiedAuthMiddleware, BaseHTTPMiddleware), (
-            "UnifiedAuthMiddleware must be a pure ASGI class, not inherit from BaseHTTPMiddleware (ContextVar bug)"
-        )
+        assert not issubclass(
+            UnifiedAuthMiddleware, BaseHTTPMiddleware
+        ), "UnifiedAuthMiddleware must be a pure ASGI class, not inherit from BaseHTTPMiddleware (ContextVar bug)"
 
     def test_middleware_has_call_method(self):
         """UnifiedAuthMiddleware must implement __call__(scope, receive, send)."""
@@ -53,9 +53,9 @@ class TestOldMiddlewaresDeleted:
 
         tree = ast.parse(source)
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        assert "auth_context_middleware" not in func_names, (
-            "auth_context_middleware still exists in app.py — should be replaced by UnifiedAuthMiddleware"
-        )
+        assert (
+            "auth_context_middleware" not in func_names
+        ), "auth_context_middleware still exists in app.py — should be replaced by UnifiedAuthMiddleware"
 
     def test_no_a2a_auth_middleware_function(self):
         """a2a_auth_middleware function must not exist in app.py."""
@@ -65,9 +65,9 @@ class TestOldMiddlewaresDeleted:
 
         tree = ast.parse(source)
         func_names = [node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        assert "a2a_auth_middleware" not in func_names, (
-            "a2a_auth_middleware still exists in app.py — should be replaced by UnifiedAuthMiddleware"
-        )
+        assert (
+            "a2a_auth_middleware" not in func_names
+        ), "a2a_auth_middleware still exists in app.py — should be replaced by UnifiedAuthMiddleware"
 
 
 class TestA2AHandlerUsesNewContextVar:

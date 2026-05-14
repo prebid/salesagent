@@ -124,7 +124,14 @@ class TestA2AMessageFieldValidation:
                         "creative_id": "creative_test_001",  # Changed from buyer_ref to creative_id per adcp library
                         "format_id": "display_300x250",
                         "name": "Test Creative",
-                        "assets": {"main_image": {"asset_type": "image", "url": "https://example.com/image.jpg"}},
+                        "assets": {
+                            "main_image": {
+                                "asset_type": "image",
+                                "url": "https://example.com/image.jpg",
+                                "width": 300,
+                                "height": 250,
+                            }
+                        },
                     }
                 ],
                 "validation_mode": "strict",
@@ -316,9 +323,9 @@ class TestA2AResponseDictConstruction:
             # For now, just check the class definition
             has_message_field = "message" in response_cls.model_fields
 
-            assert has_str_method or has_message_field, (
-                f"{response_cls.__name__} must have either __str__ method or .message field for A2A compatibility"
-            )
+            assert (
+                has_str_method or has_message_field
+            ), f"{response_cls.__name__} must have either __str__ method or .message field for A2A compatibility"
 
 
 @pytest.mark.integration
@@ -348,6 +355,6 @@ class TestA2AErrorHandling:
                     assert "message" in result or "error" in result, "Error response must have message or error field"
             except Exception as e:
                 # Errors are expected for invalid params
-                assert "message" not in str(e) or "AttributeError" not in str(e), (
-                    "Should not get AttributeError when handling skill errors"
-                )
+                assert "message" not in str(e) or "AttributeError" not in str(
+                    e
+                ), "Should not get AttributeError when handling skill errors"

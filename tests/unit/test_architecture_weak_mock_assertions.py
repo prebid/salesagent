@@ -211,7 +211,6 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_naming_agent.py", "test_generates_name_successfully"),
     ("tests/unit/test_no_model_dump_in_impl_fixes.py", "test_create_from_request_adds_to_session"),
     ("tests/unit/test_performance_index_behavioral.py", "test_a2a_happy_path_correct_params"),
-    ("tests/unit/test_products_transport_wrappers.py", "test_mcp_wrapper_version_compat_v2"),
     ("tests/unit/test_products_transport_wrappers.py", "test_rest_applies_version_compat"),
     ("tests/unit/test_review_agent.py", "test_returns_approval"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_db_queried_only_once"),

@@ -54,9 +54,9 @@ class TestMediaBuyUoWCommitFailureCleanup:
 
         # THIS IS THE BUG: cm_exit_called is False because commit() raised
         # and __exit__ never reached self._session_cm.__exit__()
-        assert cm_exit_called, (
-            "get_db_session()'s context manager __exit__ was never called — session leaked after commit failure"
-        )
+        assert (
+            cm_exit_called
+        ), "get_db_session()'s context manager __exit__ was never called — session leaked after commit failure"
 
     def test_session_ref_cleared_on_commit_failure(self):
         """UoW.session must be None after commit failure (no stale reference)."""
@@ -113,9 +113,9 @@ class TestProductUoWCommitFailureCleanup:
                 with ProductUoW("test_tenant") as uow:
                     pass
 
-        assert cm_exit_called, (
-            "get_db_session()'s context manager __exit__ was never called — session leaked after commit failure"
-        )
+        assert (
+            cm_exit_called
+        ), "get_db_session()'s context manager __exit__ was never called — session leaked after commit failure"
 
     def test_repos_cleared_on_commit_failure(self):
         """UoW.products must be None after commit failure."""

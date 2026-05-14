@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
+# Strong references to in-flight fire-and-forget webhook tasks. asyncio only
+# keeps weak references to tasks, so a task whose only strong reference is a
+# local variable can be garbage-collected mid-execution if the calling
+# function returns before the task finishes — silently dropping webhooks.
+# Push tasks here on create, remove via add_done_callback. (Leak triage #6
+# from the production OOM-cycle investigation: untracked create_task at
+# context_manager.py was the smoking gun.)
+_pending_webhook_tasks: set[asyncio.Task] = set()
+
 
 class ContextManager(DatabaseManager):
     """Manages persistent context for conversations and tasks.
@@ -734,9 +743,18 @@ class ContextManager(DatabaseManager):
                                 )
                             )
 
+                            # Strong-ref pin to the module-level set so asyncio's
+                            # weak-ref task tracker doesn't GC the task before it
+                            # completes — see _pending_webhook_tasks docstring.
+                            _pending_webhook_tasks.add(task)
+
                             def _log_task_result(
                                 t: asyncio.Task, config_url: str = push_notification_config.url
                             ) -> None:
+                                # Always remove from pending set first so the
+                                # log-and-swallow below can't hold the ref past
+                                # completion.
+                                _pending_webhook_tasks.discard(t)
                                 try:
                                     t.result()
                                     console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")

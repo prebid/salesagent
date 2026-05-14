@@ -6,21 +6,22 @@ implementation pattern from CLAUDE.md.
 
 import logging
 import time
-from typing import TypeVar
+from typing import Annotated, TypeVar
 
 from adcp import FormatId
 from adcp.types import Format as AdcpFormat
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.format import (
     Assets,
-    Assets5,
-    Assets6,
-    Assets7,
-    Assets9,
-    Assets14,
+    Assets81,
+    Assets82,
+    Assets83,
+    Assets85,
+    Assets90,
 )
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from adcp.utils.format_assets import get_format_assets
+from pydantic import Field
 
 # TypeVar for Format to preserve subclass type through backward compatibility function
 FormatT = TypeVar("FormatT", bound=AdcpFormat)
@@ -82,19 +83,19 @@ def _infer_asset_type(asset_id: str) -> str:
 # Map asset type strings to the correct class.
 _ASSET_TYPE_TO_CLASS: dict[str, type] = {
     "image": Assets,
-    "video": Assets5,
-    "audio": Assets6,
-    "text": Assets7,
-    "html": Assets9,
-    "url": Assets14,
+    "video": Assets81,
+    "audio": Assets82,
+    "text": Assets83,
+    "html": Assets85,
+    "url": Assets90,
 }
 
 
 def _make_asset(
     asset_id: str, asset_type: str, required: bool
-) -> Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14:
+) -> Assets | Assets81 | Assets82 | Assets83 | Assets85 | Assets90:
     """Build the correct Assets variant for a given asset type string."""
-    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, Assets7)  # default to text
+    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, Assets83)  # default to text
     return cls(
         item_type="individual",
         asset_id=asset_id,
@@ -142,7 +143,7 @@ def _list_creative_formats_impl(
             formats=[],
             errors=[
                 AdCPResponseError(
-                    code="REGISTRY_ERROR",
+                    code="SERVICE_UNAVAILABLE",
                     message=f"Creative agent registry initialization failed: {e}",
                 )
             ],
@@ -195,7 +196,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14] = []
+                        assets_list: list[Assets | Assets81 | Assets82 | Assets83 | Assets85 | Assets90] = []
                         for asset_id in template.get("required_assets", []):
                             asset_type = _infer_asset_type(asset_id)
                             assets_list.append(_make_asset(asset_id, asset_type, required=True))
@@ -438,13 +439,13 @@ def _list_creative_formats_impl(
 
 async def list_creative_formats(
     format_ids: list[FormatId] | None = None,
-    is_responsive: bool | None = None,
-    name_search: str | None = None,
+    is_responsive: Annotated[bool | None, Field(description="Filter for responsive formats only")] = None,
+    name_search: Annotated[str | None, Field(description="Search formats by name substring")] = None,
     asset_types: list[AssetContentType] | None = None,
-    min_width: int | None = None,
-    max_width: int | None = None,
-    min_height: int | None = None,
-    max_height: int | None = None,
+    min_width: Annotated[int | None, Field(description="Minimum format width in pixels")] = None,
+    max_width: Annotated[int | None, Field(description="Maximum format width in pixels")] = None,
+    min_height: Annotated[int | None, Field(description="Minimum format height in pixels")] = None,
+    max_height: Annotated[int | None, Field(description="Maximum format height in pixels")] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):

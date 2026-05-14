@@ -706,4 +706,3 @@ Feature: BR-UC-013 Manage Property Lists
     # Step 4: Get (verify omitted fields retained)
     # Step 5: Delete
     # Step 6: Verify deletion
-

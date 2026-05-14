@@ -77,9 +77,9 @@ class TestTimestamptzMigration:
         # Verify columns are naive TIMESTAMP before our migration
         for table, column in SPOT_CHECK_COLUMNS:
             col_type = _get_column_type(engine, table, column)
-            assert col_type == "timestamp without time zone", (
-                f"{table}.{column} should be TIMESTAMP before migration, got: {col_type}"
-            )
+            assert (
+                col_type == "timestamp without time zone"
+            ), f"{table}.{column} should be TIMESTAMP before migration, got: {col_type}"
 
         # Step 2: Insert test data with a naive timestamp
         test_time = datetime(2025, 6, 15, 12, 30, 0)
@@ -91,9 +91,9 @@ class TestTimestamptzMigration:
         # Step 4: Verify columns are now TIMESTAMPTZ
         for table, column in SPOT_CHECK_COLUMNS:
             col_type = _get_column_type(engine, table, column)
-            assert col_type == "timestamp with time zone", (
-                f"{table}.{column} should be TIMESTAMPTZ after upgrade, got: {col_type}"
-            )
+            assert (
+                col_type == "timestamp with time zone"
+            ), f"{table}.{column} should be TIMESTAMPTZ after upgrade, got: {col_type}"
 
         # Step 5: Verify data is preserved and correctly converted
         with engine.connect() as conn:
@@ -124,9 +124,9 @@ class TestTimestamptzMigration:
         # Step 2: Verify columns are back to TIMESTAMP
         for table, column in SPOT_CHECK_COLUMNS:
             col_type = _get_column_type(engine, table, column)
-            assert col_type == "timestamp without time zone", (
-                f"{table}.{column} should be TIMESTAMP after downgrade, got: {col_type}"
-            )
+            assert (
+                col_type == "timestamp without time zone"
+            ), f"{table}.{column} should be TIMESTAMP after downgrade, got: {col_type}"
 
         # Step 3: Verify data survives the roundtrip
         with engine.connect() as conn:

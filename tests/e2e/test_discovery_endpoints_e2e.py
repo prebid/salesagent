@@ -91,9 +91,9 @@ class TestListCreativeFormatsE2E:
             data = parse_tool_result(result)
 
             assert "formats" in data, "Response must contain formats"
-            assert data.get("context") == test_context, (
-                f"Context should be echoed back. Expected {test_context}, got {data.get('context')}"
-            )
+            assert (
+                data.get("context") == test_context
+            ), f"Context should be echoed back. Expected {test_context}, got {data.get('context')}"
 
 
 class TestListAuthorizedPropertiesE2E:
@@ -117,9 +117,9 @@ class TestListAuthorizedPropertiesE2E:
             result = await client.call_tool("list_authorized_properties", {})
             data = parse_tool_result(result)
 
-            assert "publisher_domains" in data, (
-                f"Response must contain 'publisher_domains' key, got: {sorted(data.keys())}"
-            )
+            assert (
+                "publisher_domains" in data
+            ), f"Response must contain 'publisher_domains' key, got: {sorted(data.keys())}"
             assert isinstance(data["publisher_domains"], list), "publisher_domains must be a list"
 
     @pytest.mark.asyncio
@@ -142,6 +142,6 @@ class TestListAuthorizedPropertiesE2E:
             data = parse_tool_result(result)
 
             assert "publisher_domains" in data, "Response must contain publisher_domains"
-            assert data.get("context") == test_context, (
-                f"Context should be echoed back. Expected {test_context}, got {data.get('context')}"
-            )
+            assert (
+                data.get("context") == test_context
+            ), f"Context should be echoed back. Expected {test_context}, got {data.get('context')}"

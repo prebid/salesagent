@@ -914,9 +914,9 @@ class TestMiddlewareAdversarial:
                             ),
                         )
                         for i, r in enumerate(results):
-                            assert not r.is_error, (
-                                f"Concurrent call {i} failed: {r.content[:200] if r.content else 'no content'}"
-                            )
+                            assert (
+                                not r.is_error
+                            ), f"Concurrent call {i} failed: {r.content[:200] if r.content else 'no content'}"
                 finally:
                     for p in patches:
                         p.stop()

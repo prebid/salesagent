@@ -130,9 +130,9 @@ class TestPerFilterFormatSemantics:
 
         # Verify all results contain the search term (case-insensitive)
         for f in result.formats:
-            assert search_term.lower() in f.name.lower(), (
-                f"format {f.name} should contain '{search_term}' (case-insensitive)"
-            )
+            assert (
+                search_term.lower() in f.name.lower()
+            ), f"format {f.name} should contain '{search_term}' (case-insensitive)"
 
     def test_is_responsive_filter_true(self, identity):
         """is_responsive=true returns only responsive formats.
@@ -148,9 +148,9 @@ class TestPerFilterFormatSemantics:
         non_responsive_ids = {f.format_id.id for f in non_responsive.formats}
 
         # No overlap between responsive and non-responsive
-        assert not responsive_ids & non_responsive_ids, (
-            "is_responsive is bidirectional: no format should be in both sets"
-        )
+        assert (
+            not responsive_ids & non_responsive_ids
+        ), "is_responsive is bidirectional: no format should be in both sets"
 
     def test_is_responsive_filter_false(self, identity):
         """is_responsive=false returns only non-responsive formats.
@@ -170,9 +170,9 @@ class TestPerFilterFormatSemantics:
                         if responsive:
                             w_fluid = getattr(responsive, "width", False)
                             h_fluid = getattr(responsive, "height", False)
-                            assert not (w_fluid or h_fluid), (
-                                f"format {f.name} should not be responsive when is_responsive=false"
-                            )
+                            assert not (
+                                w_fluid or h_fluid
+                            ), f"format {f.name} should not be responsive when is_responsive=false"
 
 
 # ---------------------------------------------------------------------------
@@ -274,9 +274,9 @@ class TestDimensionFilter:
         narrow = _call_list_formats(identity, min_width=300, max_width=300)
 
         # Should have fewer formats (or same, but not more)
-        assert len(narrow.formats) <= len(all_formats.formats), (
-            "Dimension filter should not return more formats than unfiltered"
-        )
+        assert len(narrow.formats) <= len(
+            all_formats.formats
+        ), "Dimension filter should not return more formats than unfiltered"
 
 
 # ---------------------------------------------------------------------------
@@ -317,9 +317,10 @@ class TestPerFilterSignalSemantics:
         assert len(both_result.signals) >= len(owned_result.signals)
 
         for s in both_result.signals:
-            assert s.signal_type in ("marketplace", "owned"), (
-                f"Signal {s.name} has type {s.signal_type}, expected marketplace or owned"
-            )
+            assert s.signal_type in (
+                "marketplace",
+                "owned",
+            ), f"Signal {s.name} has type {s.signal_type}, expected marketplace or owned"
 
     @pytest.mark.asyncio
     async def test_data_providers_or_within_filter(self, identity):
@@ -337,9 +338,9 @@ class TestPerFilterSignalSemantics:
 
         assert len(result.signals) >= 2, "Should return signals from at least 2 providers"
         for s in result.signals:
-            assert s.data_provider in provider_list, (
-                f"Signal {s.name} from provider {s.data_provider}, expected one of {provider_list}"
-            )
+            assert (
+                s.data_provider in provider_list
+            ), f"Signal {s.name} from provider {s.data_provider}, expected one of {provider_list}"
 
     @pytest.mark.asyncio
     async def test_max_cpm_threshold(self, identity):
@@ -369,9 +370,9 @@ class TestPerFilterSignalSemantics:
         )
 
         for s in result.signals:
-            assert s.coverage_percentage >= min_coverage, (
-                f"Signal {s.name} has coverage={s.coverage_percentage}%, but min_coverage={min_coverage}%"
-            )
+            assert (
+                s.coverage_percentage >= min_coverage
+            ), f"Signal {s.name} has coverage={s.coverage_percentage}%, but min_coverage={min_coverage}%"
 
         all_result = await _get_signals_impl(self._make_signal_req(), identity)
         assert len(result.signals) < len(all_result.signals), "min_coverage should exclude some signals"

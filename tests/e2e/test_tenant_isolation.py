@@ -57,9 +57,9 @@ class TestMultiTenantIsolation:
             # Verify ALL returned products belong to ci-test (product IDs start with prod_)
             product_ids = [p["product_id"] for p in products]
             for pid in product_ids:
-                assert not pid.startswith("iso_"), (
-                    f"ci-test tenant received iso-test product: {pid}. Tenant isolation breach detected."
-                )
+                assert not pid.startswith(
+                    "iso_"
+                ), f"ci-test tenant received iso-test product: {pid}. Tenant isolation breach detected."
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -91,9 +91,9 @@ class TestMultiTenantIsolation:
             # Verify ALL returned products belong to iso-test (product IDs start with iso_)
             product_ids = [p["product_id"] for p in products]
             for pid in product_ids:
-                assert pid.startswith("iso_"), (
-                    f"iso-test tenant received non-iso product: {pid}. Tenant isolation breach detected."
-                )
+                assert pid.startswith(
+                    "iso_"
+                ), f"iso-test tenant received non-iso product: {pid}. Tenant isolation breach detected."
 
     @pytest.mark.asyncio
     @pytest.mark.integration

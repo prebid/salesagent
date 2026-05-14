@@ -556,4 +556,3 @@ Feature: BR-UC-012 Manage Content Standards
     When the Buyer Agent sends a list_content_standards request
     Then the priced standard includes pricing_options in the response
     And the unpriced standard does not include pricing_options in the response
-

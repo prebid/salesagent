@@ -128,9 +128,9 @@ class TestAdCPFullLifecycle:
             )
             delivery_data = parse_tool_result(delivery_result)
 
-            assert "deliveries" in delivery_data or "media_buy_deliveries" in delivery_data, (
-                f"Response must contain deliveries, got: {list(delivery_data.keys())}"
-            )
+            assert (
+                "deliveries" in delivery_data or "media_buy_deliveries" in delivery_data
+            ), f"Response must contain deliveries, got: {list(delivery_data.keys())}"
 
             # Delivery may be empty for freshly created media buys (mock adapter
             # delivery simulator needs a cycle to generate metrics). Verify structure only.

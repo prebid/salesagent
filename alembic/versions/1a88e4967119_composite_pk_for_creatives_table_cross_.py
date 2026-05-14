@@ -43,7 +43,8 @@ def upgrade() -> None:
     # Query ALL tables, not just creative_reviews/creative_assignments.
     # The legacy creative_associations table also has a FK here.
     result = conn.execute(
-        text("""
+        text(
+            """
             SELECT tc.constraint_name, tc.table_name
             FROM information_schema.table_constraints tc
             JOIN information_schema.constraint_column_usage ccu
@@ -52,7 +53,8 @@ def upgrade() -> None:
             WHERE tc.constraint_type = 'FOREIGN KEY'
                 AND ccu.table_name = 'creatives'
                 AND ccu.column_name = 'creative_id'
-        """)
+        """
+        )
     )
     for row in result:
         op.drop_constraint(row[0], row[1], type_="foreignkey")
@@ -70,13 +72,15 @@ def upgrade() -> None:
 
     # --- Step 5: Backfill principal_id from creatives table ---
     conn.execute(
-        text("""
+        text(
+            """
             UPDATE creative_reviews cr
             SET principal_id = c.principal_id
             FROM creatives c
             WHERE cr.creative_id = c.creative_id
                 AND cr.tenant_id = c.tenant_id
-        """)
+        """
+        )
     )
 
     # Delete orphan reviews where the creative no longer exists.
@@ -84,10 +88,12 @@ def upgrade() -> None:
     # Setting principal_id='unknown' doesn't help because the composite FK
     # requires (creative_id, tenant_id, principal_id) to exist in creatives.
     conn.execute(
-        text("""
+        text(
+            """
             DELETE FROM creative_reviews
             WHERE principal_id IS NULL
-        """)
+        """
+        )
     )
 
     # --- Step 6: Set principal_id NOT NULL on creative_reviews ---
@@ -98,21 +104,25 @@ def upgrade() -> None:
 
     # Backfill principal_id from creatives table
     conn.execute(
-        text("""
+        text(
+            """
             UPDATE creative_assignments ca
             SET principal_id = c.principal_id
             FROM creatives c
             WHERE ca.creative_id = c.creative_id
                 AND ca.tenant_id = c.tenant_id
-        """)
+        """
+        )
     )
 
     # Delete orphan assignments where the creative no longer exists.
     conn.execute(
-        text("""
+        text(
+            """
             DELETE FROM creative_assignments
             WHERE principal_id IS NULL
-        """)
+        """
+        )
     )
 
     # Set NOT NULL
