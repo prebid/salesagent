@@ -40,22 +40,33 @@ class DeprecationFilter(logging.Filter):
 
 
 class UvicornAccessNoiseFilter(logging.Filter):
-    """Drop ``uvicorn.access`` lines for /mcp[/] and /health on 2xx responses.
+    """Drop ``uvicorn.access`` lines for the two endpoints that dominate
+    access-log volume: ``/mcp[/]`` (MCP pollers) and ``/health`` (Fly's
+    TCP+HTTP health checks). 1000s of lines per minute per machine on the
+    canonical-case 200 path.
 
-    These two paths are hit constantly: storefront clients long-poll /mcp
-    every second or so, and Fly's TCP+HTTP health checks hit /health from
-    two regions on a 15s interval. The result is 1000s of "200 OK" access
-    lines per minute on every machine.
+    Status-code policy differs per surface:
 
-    The filter only suppresses successful (2xx) responses — 4xx/5xx still
-    log so real failures don't get buried. Any other path (admin UI POSTs,
-    AdCP tool calls, etc.) is unaffected.
+    * ``/mcp[/]`` — drop ``2xx`` AND ``401``. The 401 carve-out matters
+      because anonymous internet traffic hammers ``/mcp`` constantly (bot
+      probes, misconfigured clients) and every rejection emits a 401
+      access line + a paired structured ``adcp.server.auth`` log. The
+      structured log is the actual signal; the access line is dupe noise.
+      Other 4xx (403/404/422/...) and all 5xx still log — those indicate
+      a real problem worth investigating.
+    * ``/health`` — drop ``2xx`` only. A 4xx/5xx on the health check
+      surface always means a config or platform bug worth seeing.
+
+    Any other path (admin UI, ``/a2a``, ``/.well-known/*``, etc.) is
+    unaffected regardless of status code.
     """
 
-    _NOISE_PATTERN = re.compile(r'"(?:GET|POST|HEAD|OPTIONS) /(?:mcp/?|health)(?:\?\S*)? HTTP/[\d.]+" 2\d\d')
+    _MCP_NOISE = re.compile(r'"(?:GET|POST|HEAD|OPTIONS) /mcp/?(?:\?\S*)? HTTP/[\d.]+" (?:2\d\d|401)')
+    _HEALTH_NOISE = re.compile(r'"(?:GET|POST|HEAD|OPTIONS) /health(?:\?\S*)? HTTP/[\d.]+" 2\d\d')
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return not self._NOISE_PATTERN.search(record.getMessage())
+        msg = record.getMessage()
+        return not (self._MCP_NOISE.search(msg) or self._HEALTH_NOISE.search(msg))
 
 
 class JSONFormatter(logging.Formatter):

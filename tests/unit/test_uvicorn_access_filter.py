@@ -1,8 +1,15 @@
 """Unit tests for the uvicorn.access noise filter.
 
-The filter drops 2xx access-log lines for /mcp[/] and /health (the two
-endpoints hit constantly by MCP pollers and Fly health checks) so 1000s
-of "200 OK" lines don't bury real signal. 4xx/5xx still surface.
+The filter drops access-log lines for the two highest-volume endpoints:
+
+* ``/mcp[/]`` — drops 2xx AND 401. The 401 carve-out targets anonymous
+  probe traffic, which generates one access line plus one paired
+  ``adcp.server.auth`` structured log per request. The structured log
+  is the actual signal; the access line is duplicate noise.
+* ``/health`` — drops 2xx only. A 4xx on /health always means a bug.
+
+Other 4xx and all 5xx on /mcp still surface, and every other path is
+unaffected.
 """
 
 from __future__ import annotations
@@ -37,33 +44,56 @@ class TestUvicornAccessNoiseFilter:
     @pytest.mark.parametrize(
         "message",
         [
+            # /mcp 2xx — the canonical polling baseline.
             '172.16.7.138:55934 - "GET /mcp HTTP/1.1" 200 OK',
             '172.16.7.138:55934 - "GET /mcp/ HTTP/1.1" 200 OK',
             '172.16.7.138:55934 - "POST /mcp HTTP/1.1" 202 Accepted',
             '172.16.7.138:55934 - "POST /mcp/ HTTP/1.1" 200 OK',
-            '172.19.13.249:48886 - "GET /health HTTP/1.1" 200 OK',
             '172.16.7.138:0 - "HEAD /mcp HTTP/1.1" 200 OK',
+            # /mcp 401 — anonymous-probe noise. The auth rejection is also
+            # captured in the structured ``adcp.server.auth`` log, so the
+            # access line is dupe.
+            '172.16.7.138:55934 - "POST /mcp HTTP/1.1" 401 Unauthorized',
+            '172.16.7.138:55934 - "POST /mcp/ HTTP/1.1" 401 Unauthorized',
+            '172.16.13.250:45036 - "POST /mcp HTTP/1.1" 401 Unauthorized',
+            # /health 2xx — Fly's health checks at 15s × two regions.
+            '172.19.13.249:48886 - "GET /health HTTP/1.1" 200 OK',
         ],
     )
-    def test_drops_2xx_mcp_and_health(self, filter_, message):
-        """The polling baseline — /mcp and /health 2xx must be suppressed."""
+    def test_drops_noise(self, filter_, message):
+        """The high-volume baselines that bury real signal."""
         record = _make_record(message)
         assert filter_.filter(record) is False, f"Expected to drop: {message!r}"
 
     @pytest.mark.parametrize(
         "message",
         [
-            # 4xx — auth failures, missing routes — must still log.
-            '172.16.7.138:55934 - "POST /mcp HTTP/1.1" 401 Unauthorized',
-            '172.16.13.250:39132 - "GET /.well-known/oauth-protected-resource/mcp/ HTTP/1.1" 401 Unauthorized',
+            # /mcp non-401 4xx — different failure modes worth seeing.
+            '172.16.7.138:55934 - "POST /mcp HTTP/1.1" 403 Forbidden',
             '172.16.7.138:55934 - "GET /mcp HTTP/1.1" 404 Not Found',
-            # 5xx — server errors — must still log.
+            '172.16.7.138:55934 - "POST /mcp HTTP/1.1" 422 Unprocessable Entity',
+            # /mcp 5xx — server errors always survive.
             '172.16.7.138:55934 - "POST /mcp HTTP/1.1" 500 Internal Server Error',
+            # /health non-2xx — config/platform bugs, must surface.
+            '172.16.7.138:55934 - "GET /health HTTP/1.1" 401 Unauthorized',
             '172.16.7.138:55934 - "GET /health HTTP/1.1" 503 Service Unavailable',
+            # OAuth discovery surface keeps 401s — that's the start of
+            # the OAuth dance and shows the protocol shape on first contact.
+            '172.16.13.250:39132 - "GET /.well-known/oauth-protected-resource/mcp/ HTTP/1.1" 401 Unauthorized',
+            # Path-prefix boundary: anything with /mcp as a substring but
+            # not the literal endpoint must still log. Locks the anchor so
+            # a future regex tweak can't broaden the carve-out silently.
+            '172.16.7.138:55934 - "GET /mcpattack HTTP/1.1" 401 Unauthorized',
+            '172.16.7.138:55934 - "POST /mcp/tools HTTP/1.1" 401 Unauthorized',
+            '172.16.7.138:55934 - "GET /mcp-debug HTTP/1.1" 401 Unauthorized',
+            # Same boundary check for /health: /healthz, /health/live etc.
+            # are different endpoints and must not be swept up.
+            '172.16.7.138:55934 - "GET /healthz HTTP/1.1" 200 OK',
+            '172.16.7.138:55934 - "GET /health/live HTTP/1.1" 200 OK',
         ],
     )
-    def test_keeps_non_2xx_on_noisy_paths(self, filter_, message):
-        """4xx and 5xx must survive — they're the actual signal."""
+    def test_keeps_real_signal(self, filter_, message):
+        """Non-noise responses must survive — they're the actual signal."""
         record = _make_record(message)
         assert filter_.filter(record) is True, f"Expected to keep: {message!r}"
 
