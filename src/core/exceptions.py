@@ -86,9 +86,9 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 )
 
 # Sanity check: every mapping target must be a standard code.
-assert all(v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()), (
-    "ERROR_CODE_MAPPING contains non-standard target codes"
-)
+assert all(
+    v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()
+), "ERROR_CODE_MAPPING contains non-standard target codes"
 
 
 def translate_error_code(code: str) -> str:
@@ -262,6 +262,40 @@ class AdCPGoneError(AdCPError):
 
     status_code = 410
     error_code = "INVALID_STATE"
+
+
+class AdCPInvalidStateError(AdCPError):
+    """Operation invalid for the resource's current state (409, INVALID_STATE).
+
+    Raised when a buyer attempts an operation that is not permitted for the
+    media buy's current status — e.g., pausing a canceled buy, canceling a
+    completed or rejected buy. Distinct from CONFLICT (which signals a data
+    conflict like a duplicate key).
+
+    Recovery is "correctable" per ``adcp.server.helpers.STANDARD_ERROR_CODES``
+    — the buyer can recover by retargeting a different (non-terminal) buy or
+    waiting for state to change. Storyboard ``terminal_enforcement`` documents
+    this in its ``expected:`` block.
+    """
+
+    status_code = 409
+    error_code = "INVALID_STATE"
+    recovery: RecoveryHint = "correctable"
+
+
+class AdCPNotCancellableError(AdCPInvalidStateError):
+    """Media buy cannot be canceled in its current state (409, NOT_CANCELLABLE).
+
+    Raised on re-cancel of an already-canceled buy (idempotent acceptance is
+    not conformant per AdCP) or when the seller cannot fulfill cancellation
+    (e.g., contractual obligations, ad-server rejection).
+
+    Recovery is "correctable" per the SDK's standard codes and the
+    ``invalid_transitions.double_cancel`` storyboard contract.
+    """
+
+    error_code = "NOT_CANCELLABLE"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPBudgetExhaustedError(AdCPError):

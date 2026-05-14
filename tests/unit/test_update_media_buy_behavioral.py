@@ -1957,10 +1957,14 @@ class TestUC003ExtE:
         mock_existing.start_time = datetime(2025, 3, 15, tzinfo=UTC)
         mock_existing.end_time = datetime(2025, 12, 31, tzinfo=UTC)
 
+        # Cancel work added a row-level lock at the precondition; it returns
+        # the same active buy so state-machine validation passes.
+        standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = _make_mock_media_buy(
+            "mb_end_before"
+        )
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
-            _make_mock_media_buy("mb_end_before"),  # state-machine precondition
-            _make_mock_media_buy("mb_end_before"),
-            mock_existing,
+            _make_mock_media_buy("mb_end_before"),  # currency check inside date-update flow
+            mock_existing,  # existing_mb for date-range validation
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.return_value = _make_mock_currency_limit()
@@ -1989,10 +1993,14 @@ class TestUC003ExtE:
         mock_existing.start_time = datetime(2025, 1, 1, tzinfo=UTC)
         mock_existing.end_time = datetime(2025, 3, 31, tzinfo=UTC)
 
+        # Cancel work added a row-level lock at the precondition; it returns
+        # the same active buy so state-machine validation passes.
+        standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = _make_mock_media_buy(
+            "mb_start_after"
+        )
         standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
-            _make_mock_media_buy("mb_start_after"),  # state-machine precondition
-            _make_mock_media_buy("mb_start_after"),
-            mock_existing,
+            _make_mock_media_buy("mb_start_after"),  # currency check inside date-update flow
+            mock_existing,  # existing_mb for date-range validation
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.return_value = _make_mock_currency_limit()
@@ -2589,6 +2597,173 @@ class TestUC003ExtO:
 
 
 # ---------------------------------------------------------------------------
+# UC-003-EXT-P: Cancel media buy + terminal-status enforcement
+# ---------------------------------------------------------------------------
+
+
+def _setup_cancel_mocks(standard_mocks, *, status="active", canceled_at=None):
+    """Configure standard_mocks for the cancel branch with a locked media buy."""
+    mock_session = _setup_db_session(standard_mocks)
+    mock_locked = _make_mock_media_buy("mb_cancel_test")
+    mock_locked.status = status
+    mock_locked.canceled_at = canceled_at
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = mock_locked
+    # The currency-validation path (only fires when other fields set) reads
+    # a separate get_by_id; configure it defensively.
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_locked
+    # Adapter returns success on cancel.
+    standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+        media_buy_id="mb_cancel_test", affected_packages=[]
+    )
+    standard_mocks["uow_instance"].assignments.release_all_for_media_buy.return_value = 0
+    standard_mocks["uow_instance"].media_buys.get_packages.return_value = []
+    standard_mocks["uow_instance"].media_buys.has_pending_creatives.return_value = False
+    return mock_locked, mock_session
+
+
+class TestUC003ExtPCancellation:
+    """Cancellation contract per AdCP spec 3.0.6.
+
+    Covers terminal-status enforcement, the §292 ignore-and-warn rule, and
+    the spec-shaped success response.
+    """
+
+    def test_cancel_only_request_persists_and_returns_canceled(self, standard_mocks):
+        """Buyer sends `canceled=true` alone; impl persists status=canceled
+        and returns spec-shaped success.
+
+        Covers: UC-003-EXT-P-01
+        Covers: BR-RULE-080-01
+        """
+        _setup_cancel_mocks(standard_mocks)
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_cancel_test", canceled=True, cancellation_reason="Buyer no longer needs"
+        )
+
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+        # status field is the spec MediaBuyStatus enum
+        assert result.status is not None and result.status.value == "canceled"
+        # valid_actions is empty for terminal state
+        assert result.valid_actions == []
+        # Repository .cancel() is the only path that writes the canceled status.
+        # Use ANY for `when` (datetime.now) and assert_called_once_with for the
+        # other kwargs — no split assert_called_once + call_args inspection.
+        standard_mocks["uow_instance"].media_buys.cancel.assert_called_once_with(
+            "mb_cancel_test", when=ANY, canceled_by="buyer", reason="Buyer no longer needs"
+        )
+        # Assignments are soft-released
+        standard_mocks["uow_instance"].assignments.release_all_for_media_buy.assert_called_once_with(
+            "mb_cancel_test", when=ANY
+        )
+        # Adapter is invoked with the cancel action
+        standard_mocks["adapter_instance"].update_media_buy.assert_called_once_with(
+            media_buy_id="mb_cancel_test",
+            action="cancel_media_buy",
+            package_id=None,
+            budget=None,
+            today=ANY,
+            cancellation_reason="Buyer no longer needs",
+        )
+
+    def test_canceled_field_default_quirk(self):
+        """The library declares `canceled: Literal[True] = True`. Without the
+        `model_fields_set` discriminator, every constructed request would
+        falsely report cancel intent.
+
+        Covers: UC-003-EXT-P-06
+        """
+        bare = UpdateMediaBuyRequest(media_buy_id="mb_x")
+        assert bare.canceled is True, "library default makes the field always truthy"
+        assert "canceled" not in bare.model_fields_set, "but absent from input → not in fields_set"
+        assert bare.canceled_explicitly_set() is False
+        assert not bare.has_updatable_fields()
+
+        explicit = UpdateMediaBuyRequest(media_buy_id="mb_x", canceled=True)
+        assert "canceled" in explicit.model_fields_set
+        assert explicit.canceled_explicitly_set() is True
+        assert explicit.has_updatable_fields()
+
+    def test_recancel_returns_not_cancellable(self, standard_mocks):
+        """Re-cancel of an already-canceled buy returns UpdateMediaBuyError with
+        NOT_CANCELLABLE (idempotent acceptance is NOT conformant per spec).
+
+        Covers: UC-003-EXT-P-02
+        """
+        from src.core.schemas import UpdateMediaBuyError
+
+        _setup_cancel_mocks(standard_mocks, status="canceled", canceled_at=datetime(2025, 6, 1, tzinfo=UTC))
+        identity = _make_identity()
+        from adcp.types.generated_poc.core.context import ContextObject
+
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_cancel_test",
+            canceled=True,
+            context=ContextObject(correlation_id="recancel-corr-id"),
+        )
+
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuyError)
+        assert result.errors[0].code == "NOT_CANCELLABLE"
+        assert (
+            result.errors[0].recovery is not None
+            and getattr(result.errors[0].recovery, "value", result.errors[0].recovery) == "correctable"
+        )
+        # Storyboard contract: context.correlation_id echoed on error response
+        assert result.context is not None
+        assert result.context.correlation_id == "recancel-corr-id"
+        # No DB writes when guard rejects the request
+        standard_mocks["uow_instance"].media_buys.cancel.assert_not_called()
+
+    def test_pause_canceled_buy_returns_invalid_state(self, standard_mocks):
+        """Updating a canceled buy with anything other than cancel returns
+        UpdateMediaBuyError with INVALID_STATE.
+
+        Covers: UC-003-EXT-P-03
+        """
+        from src.core.schemas import UpdateMediaBuyError
+
+        _setup_cancel_mocks(standard_mocks, status="canceled", canceled_at=datetime(2025, 6, 1, tzinfo=UTC))
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(media_buy_id="mb_cancel_test", paused=True)
+
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuyError)
+        assert result.errors[0].code == "INVALID_STATE"
+
+    def test_cancel_completed_buy_returns_invalid_state(self, standard_mocks):
+        """Cancelling a completed buy returns INVALID_STATE, not NOT_CANCELLABLE —
+        the latter is reserved for re-cancel of canceled.
+
+        Covers: UC-003-EXT-P-04
+        """
+        from src.core.schemas import UpdateMediaBuyError
+
+        _setup_cancel_mocks(standard_mocks, status="completed")
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(media_buy_id="mb_cancel_test", canceled=True)
+
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuyError)
+        assert result.errors[0].code == "INVALID_STATE"
+
+    def test_cancellation_reason_without_canceled_rejected_at_schema(self):
+        """Schema validator rejects `cancellation_reason` without explicit
+        `canceled` to prevent buyers from accidentally suggesting a reason
+        for a non-cancel update.
+
+        Covers: UC-003-EXT-P-05
+        """
+        with pytest.raises(ValidationError):
+            UpdateMediaBuyRequest(media_buy_id="mb_x", cancellation_reason="oops")
+
+
+# ---------------------------------------------------------------------------
 # State-machine precondition (salesagent-ljz0)
 # ---------------------------------------------------------------------------
 
@@ -2599,33 +2774,51 @@ class TestUC003StateMachine:
     BR-UC-003: update_media_buy MUST refuse mutations on terminal states
     (rejected, canceled, completed) and MUST refuse actions outside
     valid_actions_for_status(current_status).
+
+    The impl RETURNS UpdateMediaBuyError (not raise) on these guards so the
+    response envelope matches the spec's UpdateMediaBuyResponse2 discriminated
+    union variant and the buyer's context.correlation_id is echoed back.
+    Storyboards under invalid_transitions/terminal_enforcement assert
+    ``context.correlation_id`` on the error response.
     """
 
     @pytest.mark.parametrize("terminal_status", ["rejected", "canceled", "completed"])
     def test_terminal_status_rejects_pause(self, standard_mocks, terminal_status):
-        """Pausing a buy in any terminal status raises INVALID_STATE."""
-        from src.core.exceptions import AdCPGoneError
+        """Pausing a buy in any terminal status returns INVALID_STATE with context echo."""
+        from src.core.schemas import UpdateMediaBuyError
 
         terminal_mb = _make_mock_media_buy("mb_terminal", status=terminal_status)
+        standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = terminal_mb
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = terminal_mb
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(media_buy_id="mb_terminal", paused=True)
+        from adcp.types.generated_poc.core.context import ContextObject
 
-        with pytest.raises(AdCPGoneError) as exc_info:
-            _update_media_buy_impl(req=req, identity=identity)
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_terminal",
+            paused=True,
+            context=ContextObject(correlation_id="test-corr-id-pause-terminal"),
+        )
 
-        assert exc_info.value.error_code == "INVALID_STATE"
-        assert terminal_status in exc_info.value.message
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuyError)
+        assert len(result.errors) == 1
+        assert result.errors[0].code == "INVALID_STATE"
+        assert terminal_status in result.errors[0].message
+        # Context echo for storyboard compliance
+        assert result.context is not None
+        assert result.context.correlation_id == "test-corr-id-pause-terminal"
         # No adapter call when precondition rejects
         standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
 
     @pytest.mark.parametrize("terminal_status", ["rejected", "canceled", "completed"])
     def test_terminal_status_rejects_budget_update(self, standard_mocks, terminal_status):
-        """Updating package budget in any terminal status raises INVALID_STATE."""
-        from src.core.exceptions import AdCPGoneError
+        """Updating package budget in any terminal status returns INVALID_STATE."""
+        from src.core.schemas import UpdateMediaBuyError
 
         terminal_mb = _make_mock_media_buy("mb_terminal_budget", status=terminal_status)
+        standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = terminal_mb
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = terminal_mb
 
         identity = _make_identity()
@@ -2634,10 +2827,10 @@ class TestUC003StateMachine:
             packages=[{"package_id": "pkg_001", "budget": 5000.0}],
         )
 
-        with pytest.raises(AdCPGoneError) as exc_info:
-            _update_media_buy_impl(req=req, identity=identity)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert exc_info.value.error_code == "INVALID_STATE"
+        assert isinstance(result, UpdateMediaBuyError)
+        assert result.errors[0].code == "INVALID_STATE"
         # No adapter call when precondition rejects
         standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
         # No DB writes when precondition rejects
@@ -2646,6 +2839,7 @@ class TestUC003StateMachine:
     def test_active_status_accepts_pause(self, standard_mocks):
         """A non-terminal status (active) accepts pause (state machine allows it)."""
         active_mb = _make_mock_media_buy("mb_active", status="active")
+        standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = active_mb
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = active_mb
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
@@ -2661,25 +2855,27 @@ class TestUC003StateMachine:
 
     def test_paused_status_rejects_pause(self, standard_mocks):
         """A paused buy rejects another pause — 'pause' is not in valid_actions for 'paused'."""
-        from src.core.exceptions import AdCPGoneError
+        from src.core.schemas import UpdateMediaBuyError
 
         paused_mb = _make_mock_media_buy("mb_paused", status="paused")
+        standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = paused_mb
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = paused_mb
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(media_buy_id="mb_paused", paused=True)
 
-        with pytest.raises(AdCPGoneError) as exc_info:
-            _update_media_buy_impl(req=req, identity=identity)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
         # Action validation, not terminal-state: still INVALID_STATE
-        assert exc_info.value.error_code == "INVALID_STATE"
-        assert "pause" in exc_info.value.message
-        assert "paused" in exc_info.value.message
+        assert isinstance(result, UpdateMediaBuyError)
+        assert result.errors[0].code == "INVALID_STATE"
+        assert "pause" in result.errors[0].message
+        assert "paused" in result.errors[0].message
 
     def test_paused_status_accepts_resume(self, standard_mocks):
         """A paused buy accepts resume — 'resume' is in valid_actions for 'paused'."""
         paused_mb = _make_mock_media_buy("mb_paused_resume", status="paused")
+        standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = paused_mb
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = paused_mb
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
@@ -2703,16 +2899,11 @@ class TestUC003StateMachine:
         # Initial DB state: active (passes precondition).
         active_mb = _make_mock_media_buy("mb_post_action", status="active")
         # Post-pause DB state: a publisher-specific status the hardcode would never produce.
-        # ``valid_actions_for_status('pending_creatives')`` returns
-        # ``['cancel', 'update_budget', 'update_dates', 'update_packages',
-        #    'add_packages', 'sync_creatives']`` (no 'pause' or 'resume') — the
-        # hardcode would return ``valid_actions_for_status('paused')`` and miss
-        # 'sync_creatives' and 'add_packages'.
         post_action_mb = _make_mock_media_buy("mb_post_action", status="pending_creatives")
-        standard_mocks["uow_instance"].media_buys.get_by_id.side_effect = [
-            active_mb,  # state-machine precondition
-            post_action_mb,  # post-action status lookup (the line-421 fix)
-        ]
+        # Precondition reads via get_by_id_for_update (row-level lock for cancel
+        # serialization); post-action lookup reads via get_by_id.
+        standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = active_mb
+        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = post_action_mb
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
             media_buy_id="mb_post_action",

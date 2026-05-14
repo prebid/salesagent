@@ -462,8 +462,14 @@ class AdServerAdapter(ABC):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        cancellation_reason: str | None = None,
     ) -> UpdateMediaBuyResponse:
-        """Updates a media buy with a specific action."""
+        """Updates a media buy with a specific action.
+
+        `cancellation_reason` is used only when `action == "cancel_media_buy"`.
+        Adapters that don't support cancellation should return
+        UpdateMediaBuyError with code="UNSUPPORTED_FEATURE".
+        """
         pass
 
     def get_config_ui_endpoint(self) -> str | None:

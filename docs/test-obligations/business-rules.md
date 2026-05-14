@@ -1378,3 +1378,39 @@ Then the ValueError propagates (core path — never fail open)
 **Priority:** P1
 **Affected by 3.6:** No
 **Cross-references:** UC-001-MAIN-41, UC-001-MAIN-42, UC-001-MAIN-32, UC-001-MAIN-43, UC-001-EXT-A-03
+
+### BR-RULE-080: Media Buy Terminal-State Enforcement and Cancellation Semantics
+**Obligation ID** BR-RULE-080-01
+**Layer** behavioral
+**Origin** AdCP spec 3.0.6 (`media-buy/specification` §state-transitions, storyboards `media_buy_seller/invalid_transitions/double_cancel` and `media_buy_state_machine/terminal_enforcement`)
+**Invariant:** A media buy in `canceled`, `completed`, or `rejected` status is terminal and accepts no further state transitions. Buyer-initiated cancellation via `update_media_buy(canceled=true)` is irreversible and exclusive of every other update. Spec §292 dictates ignore-and-warn semantics when cancel arrives alongside other fields. Re-cancel of a canceled buy returns `NOT_CANCELLABLE` (idempotent acceptance is NOT conformant); pause/resume or any other update on a terminal buy returns `INVALID_STATE`. Cancellation precedence over pause: a canceled buy is never paused — `is_paused` is cleared on every package on cancel.
+**Scenario:**
+```gherkin
+Given an active media buy
+When the buyer calls update_media_buy(canceled=true, cancellation_reason="...")
+Then the system persists status="canceled", canceled_at, canceled_by="buyer", cancellation_reason
+And soft-releases all creative assignments
+And invokes adapter.update_media_buy(action="cancel_media_buy")
+And returns UpdateMediaBuySuccess with status=canceled and valid_actions=[]
+
+Given a canceled media buy
+When the buyer calls update_media_buy(canceled=true) again
+Then the system raises AdCPNotCancellableError with code NOT_CANCELLABLE
+
+Given a canceled media buy
+When the buyer calls update_media_buy(paused=true)
+Then the system raises AdCPInvalidStateError with code INVALID_STATE
+
+Given a completed or rejected media buy
+When the buyer calls update_media_buy(canceled=true)
+Then the system raises AdCPInvalidStateError with code INVALID_STATE
+And NOT NOT_CANCELLABLE (that code is reserved for re-cancel of canceled)
+
+Given an UpdateMediaBuyRequest constructed without canceled in input
+When the impl checks cancel intent
+Then it discriminates via "canceled" in req.model_fields_set
+And NOT via the bare attribute (library default makes req.canceled always truthy)
+```
+**Priority:** P1
+**Affected by 3.6:** Yes — adcp 3.0.6 introduces `Cancellation` block on MediaBuy / Package and adds `canceled` / `cancellation_reason` to UpdateMediaBuyRequest.
+**Cross-references:** UC-003-EXT-P-01, UC-003-EXT-P-02, UC-003-EXT-P-03, UC-003-EXT-P-04, UC-003-EXT-P-05, UC-003-EXT-P-06

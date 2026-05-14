@@ -14,6 +14,7 @@ UPDATE_ACTIONS = {
     "submit_for_approval": "Submit guaranteed orders for manual approval",
     "approve_order": "Approve orders (admin only)",
     "archive_order": "Archive completed campaigns",
+    "cancel_media_buy": "Cancel the entire media buy (terminal, irreversible)",
 }
 
 # All adapters must support these standard actions

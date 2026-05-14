@@ -600,7 +600,13 @@ class BroadstreetAdapter(AdServerAdapter):
         return True
 
     def update_media_buy(
-        self, media_buy_id: str, action: str, package_id: str | None, budget: int | None, today: datetime
+        self,
+        media_buy_id: str,
+        action: str,
+        package_id: str | None,
+        budget: int | None,
+        today: datetime,
+        cancellation_reason: str | None = None,
     ) -> UpdateMediaBuyResponse:
         """Update a media buy with a specific action.
 
@@ -614,6 +620,8 @@ class BroadstreetAdapter(AdServerAdapter):
             package_id: Package ID (for package-level actions)
             budget: New budget or impressions (for budget/impression updates)
             today: Current date
+            cancellation_reason: Reason supplied with `cancel_media_buy` (Broadstreet
+                does not support cancellation; ignored).
 
         Returns:
             Update response
@@ -632,6 +640,17 @@ class BroadstreetAdapter(AdServerAdapter):
                         code="UNSUPPORTED_FEATURE",
                         message=f"Action '{action}' not supported. Supported: {REQUIRED_UPDATE_ACTIONS}",
                         details=None,
+                    )
+                ]
+            )
+
+        if action == "cancel_media_buy":
+            return UpdateMediaBuyError(
+                errors=[
+                    Error(
+                        code="UNSUPPORTED_FEATURE",
+                        message="Broadstreet adapter does not support media buy cancellation",
+                        details={"adapter": "broadstreet"},
                     )
                 ]
             )

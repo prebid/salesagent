@@ -1306,6 +1306,7 @@ class MockAdServer(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        cancellation_reason: str | None = None,
     ) -> UpdateMediaBuyResponse:
         """Update media buy in database (Mock adapter implementation)."""
         import logging
@@ -1332,6 +1333,14 @@ class MockAdServer(AdServerAdapter):
                     logger.info(f"[MockAdapter] Updated package {package_id} budget to {budget} in database")
                 else:
                     logger.warning(f"[MockAdapter] Package {package_id} not found for media buy {media_buy_id}")
+
+        if action == "cancel_media_buy":
+            # No external ad server to update; the impl/UoW owns DB state.
+            # Mock returns success so the impl can proceed with its DB writes.
+            logger.info(
+                f"[MockAdapter] Acknowledging cancel of media buy {media_buy_id} "
+                f"(reason: {cancellation_reason or 'not provided'})"
+            )
 
         return UpdateMediaBuySuccess(
             media_buy_id=media_buy_id,

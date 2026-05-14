@@ -72,6 +72,8 @@ def make_media_buy(
     budget=Decimal("10000"),
     currency="USD",
     raw_request=None,
+    status="",
+    is_paused=False,
 ):
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
@@ -87,6 +89,12 @@ def make_media_buy(
     buy.raw_request = raw_request or {}
     buy.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     buy.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    # Explicit defaults for the cancel + pause-state aware _compute_status —
+    # without these, MagicMock auto-attributes return truthy and break the
+    # status-derivation precedence (canceled > rejected > completed-status >
+    # paused > date-derived).
+    buy.status = status
+    buy.is_paused = is_paused
     return buy
 
 

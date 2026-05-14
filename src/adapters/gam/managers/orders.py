@@ -155,6 +155,63 @@ class GAMOrdersManager:
             return "ERROR"
 
     @timeout(seconds=120)  # 2 minutes timeout for archiving order
+    def cancel_order(self, order_id: str, reason: str | None = None) -> bool:
+        """Cancel a GAM order to match AdCP irreversible cancellation semantics.
+
+        GAM has no single 'cancel' verb. The closest analog is pausing the
+        order (which pauses all its line items so delivery stops immediately)
+        and then archiving it (so it's removed from active views). Together
+        these match AdCP's terminal cancel: delivery stops, the order is no
+        longer active, but the historical record is preserved.
+
+        Idempotent: if the order is already paused or archived, GAM returns
+        numChanges=0 and we treat that as success — matches the existing
+        `archive_order` semantics.
+
+        Args:
+            order_id: The GAM order ID to cancel
+            reason: Optional cancellation reason. Logged for audit; not stored
+                on the GAM order (GAM has no per-order cancellation_reason
+                field).
+
+        Returns:
+            True if cancellation succeeded (or was already done), False on
+            unrecoverable failure.
+        """
+        logger.info(f"Canceling GAM Order {order_id} (reason: {reason or 'not provided'})")
+
+        if self.dry_run:
+            logger.info(f"Would call: order_service.performOrderAction(PauseOrders, {order_id})")
+            logger.info(f"Would call: order_service.performOrderAction(ArchiveOrders, {order_id})")
+            return True
+
+        try:
+            order_service = self.client_manager.get_service("OrderService")
+
+            statement_builder = ad_manager.StatementBuilder()
+            statement_builder.Where("id = :orderId")
+            statement_builder.WithBindVariable("orderId", int(order_id))
+            statement = statement_builder.ToStatement()
+
+            pause_action = {"xsi_type": "PauseOrders"}
+            pause_result = order_service.performOrderAction(pause_action, statement)
+            pause_changes = (pause_result or {}).get("numChanges", 0)
+            if pause_changes == 0:
+                logger.info(f"Order {order_id} already paused (or no line items eligible) — proceeding to archive")
+
+            archive_action = {"xsi_type": "ArchiveOrders"}
+            archive_result = order_service.performOrderAction(archive_action, statement)
+            archive_changes = (archive_result or {}).get("numChanges", 0)
+            if archive_changes == 0:
+                logger.warning(f"Order {order_id} already archived (canceled previously)")
+
+            logger.info(f"✓ Successfully canceled GAM Order {order_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to cancel GAM Order {order_id}: {str(e)}")
+            return False
+
     def archive_order(self, order_id: str) -> bool:
         """Archive a GAM order for cleanup purposes.
 

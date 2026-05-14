@@ -235,7 +235,12 @@ def _get_media_buy_delivery_impl(
 
                 buy_start_date_status = type_cast(date, buy.start_date)
                 buy_end_date_status = type_cast(date, buy.end_date)
-                if getattr(buy, "is_paused", False):
+                # Canceled buys are terminal — surface that state regardless of
+                # flight dates so a buyer querying delivery for a canceled buy
+                # never sees "active" because end_time hasn't elapsed.
+                if buy.status == "canceled":
+                    status = "canceled"
+                elif getattr(buy, "is_paused", False):
                     status = "paused"
                 elif simulation_datetime.date() < buy_start_date_status:
                     status = "ready"
@@ -245,8 +250,8 @@ def _get_media_buy_delivery_impl(
                     status = "active"
 
                 # Override status when circuit breaker is open (reporting degraded),
-                # but not for paused buys (paused takes priority)
-                if status != "paused" and _is_circuit_breaker_open(tenant["tenant_id"]):
+                # but not for paused or canceled buys (those take priority)
+                if status not in {"paused", "canceled"} and _is_circuit_breaker_open(tenant["tenant_id"]):
                     status = "reporting_delayed"
 
                 # Get delivery metrics from adapter
@@ -748,10 +753,11 @@ def _get_target_media_buys(
     reference_date: date,
 ) -> list[tuple[str, MediaBuy]]:
     # Resolve status_filter to a set of internal status strings.
-    # Internal statuses: ready, active, paused, completed, failed
-    # AdCP MediaBuyStatus: pending_start, active, paused, completed
+    # Internal statuses: ready, active, paused, completed, failed, canceled
+    # AdCP MediaBuyStatus: pending_start, active, paused, completed,
+    # rejected, canceled.
     # Map: pending_start -> ready (internal)
-    valid_internal_statuses = {"active", "ready", "paused", "completed", "failed"}
+    valid_internal_statuses = {"active", "ready", "paused", "completed", "failed", "canceled"}
 
     def _to_internal(status: MediaBuyStatus) -> str:
         """Convert AdCP MediaBuyStatus enum to internal status string."""
@@ -793,7 +799,9 @@ def _get_target_media_buys(
         else:
             end_compare = type_cast(date, buy.end_date)
 
-        if getattr(buy, "is_paused", False):
+        if buy.status == "canceled":
+            current_status = "canceled"
+        elif getattr(buy, "is_paused", False):
             current_status = "paused"
         elif reference_date < start_compare:
             current_status = "ready"

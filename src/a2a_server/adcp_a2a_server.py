@@ -1882,15 +1882,23 @@ class AdCPRequestHandler(RequestHandler):
                 raise InvalidParamsError(message="Missing required parameter: 'media_buy_id'")
 
             # Validate top-level fields via typed model (packages validated by _raw
-            # which handles legacy formats with extra fields like 'status')
+            # which handles legacy formats with extra fields like 'status').
+            # Only forward `canceled` to the model when explicitly present in input,
+            # preserving model_fields_set semantics (library default is True).
+            validation_kwargs = {
+                "media_buy_id": params.get("media_buy_id"),
+                "paused": params.get("paused"),
+                "start_time": params.get("start_time"),
+                "end_time": params.get("end_time"),
+                "context": params.get("context"),
+            }
+            if params.get("canceled") is True:
+                validation_kwargs["canceled"] = True
+            if params.get("cancellation_reason") is not None:
+                validation_kwargs["cancellation_reason"] = params.get("cancellation_reason")
+
             try:
-                req = UpdateMediaBuyRequest(
-                    media_buy_id=params.get("media_buy_id"),
-                    paused=params.get("paused"),
-                    start_time=params.get("start_time"),
-                    end_time=params.get("end_time"),
-                    context=params.get("context"),
-                )
+                req = UpdateMediaBuyRequest(**validation_kwargs)
             except ValidationError as e:
                 raise InvalidParamsError(message=f"Invalid parameters: {e}")
 
@@ -1904,6 +1912,8 @@ class AdCPRequestHandler(RequestHandler):
                 packages=params.get("packages"),
                 push_notification_config=params.get("push_notification_config"),
                 context=params.get("context"),
+                canceled=True if params.get("canceled") is True else None,
+                cancellation_reason=params.get("cancellation_reason"),
                 identity=identity,
             )
 

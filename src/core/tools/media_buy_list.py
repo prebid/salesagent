@@ -40,6 +40,11 @@ class _MediaBuyData:
     raw_request: dict | None
     created_at: datetime | None
     updated_at: datetime | None
+    status: str = ""
+    is_paused: bool = False
+    canceled_at: datetime | None = None
+    canceled_by: str | None = None
+    cancellation_reason: str | None = None
 
 
 @dataclass
@@ -323,6 +328,11 @@ def _fetch_target_media_buys(
             raw_request=buy.raw_request,
             created_at=buy.created_at,
             updated_at=buy.updated_at,
+            status=buy.status or "",
+            is_paused=bool(getattr(buy, "is_paused", False)),
+            canceled_at=getattr(buy, "canceled_at", None),
+            canceled_by=getattr(buy, "canceled_by", None),
+            cancellation_reason=getattr(buy, "cancellation_reason", None),
         )
         for buy in buys
         if _compute_status(buy, today) in filter_statuses
@@ -347,7 +357,23 @@ def _resolve_status_filter(
 
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
-    """Compute the current AdCP status of a media buy based on its dates."""
+    """Compute the AdCP status of a media buy.
+
+    Order of precedence: persisted terminal status (canceled / rejected /
+    completed) > paused (via is_paused) > date-derived. Closes the prior
+    bug where a canceled buy whose end_time hadn't elapsed surfaced as
+    `active` to buyers querying get_media_buys.
+    """
+    db_status = getattr(buy, "status", "") or ""
+    if db_status == "canceled":
+        return MediaBuyStatus.canceled
+    if db_status == "rejected":
+        return MediaBuyStatus.rejected
+    if db_status == "completed":
+        return MediaBuyStatus.completed
+    if getattr(buy, "is_paused", False):
+        return MediaBuyStatus.paused
+
     start = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
     end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
 

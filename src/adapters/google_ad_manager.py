@@ -1307,6 +1307,7 @@ class GoogleAdManager(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        cancellation_reason: str | None = None,
     ) -> UpdateMediaBuyResponse:
         """Update a media buy in GAM."""
         # Admin-only actions
@@ -1645,6 +1646,65 @@ class GoogleAdManager(AdServerAdapter):
                     )
 
             # Should not reach here - both pause/resume branches return above
+            return UpdateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                affected_packages=[],
+                implementation_date=today,
+            )
+
+        # Cancel the entire media buy (irreversible per AdCP spec)
+        if action == "cancel_media_buy":
+            from src.core.database.database_session import get_db_session
+            from src.core.database.repositories.media_buy import MediaBuyRepository
+
+            assert self.tenant_id is not None, "tenant_id required for DB operations"
+
+            with get_db_session() as session:
+                repo = MediaBuyRepository(session, self.tenant_id)
+                media_buy = repo.get_by_id(media_buy_id)
+                if media_buy is None:
+                    return UpdateMediaBuyError(
+                        errors=[
+                            Error(
+                                code="MEDIA_BUY_NOT_FOUND",
+                                message=f"Media buy {media_buy_id} not found",
+                                details={"media_buy_id": media_buy_id},
+                            )
+                        ],
+                    )
+                packages = repo.get_packages(media_buy_id)
+
+            # GAM order id is stored on each MediaPackage's package_config; all
+            # packages in a buy share the same parent order, so any one will do.
+            platform_order_id: str | None = None
+            for pkg in packages:
+                platform_order_id = pkg.package_config.get("platform_order_id")
+                if platform_order_id:
+                    break
+
+            if not platform_order_id:
+                self.log(f"[yellow]No GAM order id on media_buy {media_buy_id} packages — DB-only cancel[/yellow]")
+                return UpdateMediaBuySuccess(
+                    media_buy_id=media_buy_id,
+                    affected_packages=[],
+                    implementation_date=today,
+                )
+
+            success = self.orders_manager.cancel_order(platform_order_id, reason=cancellation_reason)
+            if not success:
+                return UpdateMediaBuyError(
+                    errors=[
+                        Error(
+                            code="NOT_CANCELLABLE",
+                            message=f"GAM rejected cancellation of order {platform_order_id}",
+                            details={
+                                "media_buy_id": media_buy_id,
+                                "platform_order_id": platform_order_id,
+                            },
+                        )
+                    ],
+                )
+
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
                 affected_packages=[],

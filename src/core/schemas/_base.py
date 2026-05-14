@@ -1637,12 +1637,26 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
         return self
 
+    def canceled_explicitly_set(self) -> bool:
+        """True iff the buyer explicitly sent `canceled` in the request body.
+
+        The library declares `canceled: Literal[True] = True`, so `self.canceled`
+        is always truthy after construction even when the field was absent from
+        input. `model_fields_set` records exactly which fields were populated
+        by the input dict, so it's the only reliable cancel-intent discriminator.
+        """
+        return "canceled" in self.model_fields_set
+
     def has_updatable_fields(self) -> bool:
         """Check whether this request includes at least one updatable field.
 
         Returns True if any field beyond the identifier (media_buy_id)
         is set. Used by _build_update_request to enforce BR-RULE-022.
+        Cancel requests count: a request whose only field is `canceled=True`
+        is a valid update.
         """
+        if self.canceled_explicitly_set():
+            return True
         return any(
             f is not None
             for f in (
@@ -1657,6 +1671,17 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
                 self.ext,
             )
         )
+
+    @model_validator(mode="after")
+    def validate_cancel_consistency(self):
+        """Reject cancellation_reason without an explicit canceled flag, and
+        reject revision until optimistic concurrency lands (separate gap).
+        """
+        if self.cancellation_reason is not None and not self.canceled_explicitly_set():
+            raise ValueError("cancellation_reason requires canceled=true")
+        if self.revision is not None:
+            raise ValueError("revision is not yet supported on update_media_buy")
+        return self
 
     # Backward compatibility properties (deprecated)
     @property

@@ -539,6 +539,7 @@ class TritonDigital(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        cancellation_reason: str | None = None,
     ) -> UpdateMediaBuyResponse:
         """Updates a media buy in Triton Digital using standardized actions."""
         from src.core.schemas import Error
@@ -552,6 +553,17 @@ class TritonDigital(AdServerAdapter):
                         code="UNSUPPORTED_FEATURE",
                         message=f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}",
                         details=None,
+                    )
+                ],
+            )
+
+        if action == "cancel_media_buy":
+            return UpdateMediaBuyError(
+                errors=[
+                    Error(
+                        code="UNSUPPORTED_FEATURE",
+                        message="Triton Digital adapter does not support media buy cancellation",
+                        details={"adapter": "triton_digital"},
                     )
                 ],
             )

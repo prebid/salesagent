@@ -735,7 +735,8 @@ class TestErrorCodeVocabularyConsistency:
         "ACCOUNT_SUSPENDED",  # adcp-req: Account is suspended (BR-RULE-080)
         "ACCOUNT_PAYMENT_REQUIRED",  # adcp-req: Account has outstanding payment (BR-RULE-080)
         "CONFLICT",  # Generic form of {ENTITY}_EXISTS
-        "INVALID_STATE",  # SDK standard: gone/expired resources
+        "INVALID_STATE",  # SDK standard: terminal-state enforcement / gone resources
+        "NOT_CANCELLABLE",  # SDK standard: re-cancel of canceled buy (BR-RULE-080)
         "BUDGET_EXHAUSTED",  # SDK standard: budget limit reached
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures

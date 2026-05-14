@@ -41,8 +41,6 @@ IMPL_REGISTRY = [
 KNOWN_VIOLATIONS = {
     # A2A wrapper for create_media_buy doesn't pass context_id
     "src.core.tools.media_buy_create::_create_media_buy_impl::a2a::context_id",
-    # A2A wrapper for update_media_buy doesn't pass context_id
-    "src.core.tools.media_buy_update::_update_media_buy_impl::a2a::context_id",
 }
 
 # Parameters resolved at the boundary, not forwarded from the caller

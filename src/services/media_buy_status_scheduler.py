@@ -89,6 +89,12 @@ class MediaBuyStatusScheduler:
                 )
 
                 for media_buy in media_buys:
+                    # Defensive: skip terminal statuses even if the query pulled
+                    # them in (e.g., a cancel committed between SELECT and our
+                    # iteration). Terminal states are immutable per spec.
+                    if media_buy.status in {"canceled", "completed", "rejected"}:
+                        continue
+
                     new_status = self._compute_new_status(media_buy, now, session)
 
                     if new_status and new_status != media_buy.status:
@@ -119,9 +125,7 @@ class MediaBuyStatusScheduler:
             else:
                 start_time = raw_start
         elif media_buy.start_date:
-            start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(  # type: ignore[arg-type]
-                tzinfo=UTC
-            )
+            start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(tzinfo=UTC)
 
         if start_time is None:
             return None  # No start time defined
@@ -134,9 +138,7 @@ class MediaBuyStatusScheduler:
             else:
                 end_time = raw_end
         elif media_buy.end_date:
-            end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(  # type: ignore[arg-type]
-                tzinfo=UTC
-            )
+            end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(tzinfo=UTC)
 
         if end_time is None:
             return None  # No end time defined

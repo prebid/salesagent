@@ -89,6 +89,8 @@ class UpdateMediaBuyBody(BaseModel):
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    canceled: bool | None = None
+    cancellation_reason: str | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -254,6 +256,8 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
             currency=body.currency,
             start_time=body.start_time,
             end_time=body.end_time,
+            canceled=body.canceled,
+            cancellation_reason=body.cancellation_reason,
             identity=identity,
         )
     except ToolError as e:

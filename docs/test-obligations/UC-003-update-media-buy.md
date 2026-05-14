@@ -4,7 +4,7 @@
 
 - Requirement: UC-003: Update Media Buy (adcp-req/docs/requirements/use-cases/UC-003-update-media-buy/UC-003.md)
 - Files analyzed: UC-003.md, UC-003-main-mcp.md, UC-003-ext-a through UC-003-ext-o, UC-003-alt-pause.md, UC-003-alt-timing.md, UC-003-alt-budget.md, UC-003-alt-creative-ids.md, UC-003-alt-creatives-inline.md, UC-003-alt-creative-assignments.md, UC-003-alt-targeting.md, UC-003-alt-manual.md
-- Business Rules: BR-RULE-008, BR-RULE-012, BR-RULE-013, BR-RULE-017, BR-RULE-018, BR-RULE-020, BR-RULE-021, BR-RULE-022, BR-RULE-024, BR-RULE-026, BR-RULE-028
+- Business Rules: BR-RULE-008, BR-RULE-012, BR-RULE-013, BR-RULE-017, BR-RULE-018, BR-RULE-020, BR-RULE-021, BR-RULE-022, BR-RULE-024, BR-RULE-026, BR-RULE-028, BR-RULE-080
 
 ## 3.6 Upgrade Impact
 
@@ -966,3 +966,63 @@ Source: UC-003-ext-o.md
 **Then** the response contains error fields only (no success fields like `affected_packages`)
 **Business Rule** BR-RULE-018 (INV-2: error response has no success fields; INV-3: mixed = schema violation)
 **Priority** P1
+
+### Extension P: Cancellation and terminal-state enforcement
+
+These obligations cover AdCP 3.0.6 cancellation: the buyer-initiated terminal
+transition via `update_media_buy(canceled=true)` and the immutability of the
+`canceled` / `completed` / `rejected` states.
+
+#### Scenario: Cancel succeeds and returns spec-shaped response
+**Obligation ID** UC-003-EXT-P-01
+**Layer** behavioral
+**Given** an active media buy
+**When** the buyer calls `update_media_buy(canceled=true, cancellation_reason="...")`
+**Then** the system persists `status="canceled"`, sets `canceled_at`/`canceled_by="buyer"`/`cancellation_reason`, soft-releases creative assignments, calls the adapter's `cancel_media_buy` action, and returns `UpdateMediaBuySuccess` with `status=MediaBuyStatus.canceled`, `valid_actions=[]`, and `affected_packages` populated with per-package `Cancellation` blocks
+**Business Rule** BR-RULE-080
+**Priority** P1
+
+#### Scenario: Re-cancel of canceled buy returns NOT_CANCELLABLE
+**Obligation ID** UC-003-EXT-P-02
+**Layer** behavioral
+**Given** a media buy in `canceled` status
+**When** the buyer calls `update_media_buy(canceled=true)` again
+**Then** the system raises `AdCPNotCancellableError` (UPPER_SNAKE_CASE error code `NOT_CANCELLABLE`)
+**Business Rule** BR-RULE-080 — idempotent acceptance is NOT conformant per AdCP storyboard `state-machine.recancel_buy`
+**Priority** P1
+
+#### Scenario: Pause/resume on canceled buy returns INVALID_STATE
+**Obligation ID** UC-003-EXT-P-03
+**Layer** behavioral
+**Given** a media buy in `canceled` status
+**When** the buyer calls `update_media_buy(paused=true)` or any other non-cancel update
+**Then** the system raises `AdCPInvalidStateError` with code `INVALID_STATE`
+**Business Rule** BR-RULE-080 — terminal states allow no further transitions
+**Priority** P1
+
+#### Scenario: Cancel of completed/rejected buy returns INVALID_STATE
+**Obligation ID** UC-003-EXT-P-04
+**Layer** behavioral
+**Given** a media buy in `completed` or `rejected` status
+**When** the buyer calls `update_media_buy(canceled=true)`
+**Then** the system raises `AdCPInvalidStateError` with code `INVALID_STATE` (NOT_CANCELLABLE is reserved for re-cancel of canceled, not for cancel of other terminal states)
+**Business Rule** BR-RULE-080
+**Priority** P2
+
+#### Scenario: cancellation_reason without canceled is rejected at the schema layer
+**Obligation ID** UC-003-EXT-P-05
+**Layer** behavioral
+**Given** an `update_media_buy` request with `cancellation_reason` set but no `canceled` field
+**When** the request is validated
+**Then** the schema validator raises a Pydantic validation error
+**Business Rule** BR-RULE-080
+**Priority** P3
+
+#### Scenario: Library Literal[True] = True default does not falsely indicate cancel intent
+**Obligation ID** UC-003-EXT-P-06
+**Layer** behavioral
+**Given** an `UpdateMediaBuyRequest` constructed without `canceled` in the input dict
+**When** the impl checks cancel intent via `canceled_explicitly_set()`
+**Then** `req.canceled` is `True` (library default) BUT `"canceled"` is not in `req.model_fields_set`, and `canceled_explicitly_set()` returns `False` — the cancel branch must use `model_fields_set` as the discriminator, not the bare attribute
+**Business Rule** BR-RULE-080 — Pydantic discriminator integrity
+**Priority** P0 — implementation correctness

@@ -37,7 +37,11 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPGoneError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPValidationError,
+)
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -137,6 +141,219 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
         raise AdCPAuthorizationError(f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.")
 
 
+# Fields that are NOT considered "ignored extras" when cancel is also set.
+# media_buy_id is the identifier; canceled and cancellation_reason are the
+# cancel intent itself; context is the buyer correlation envelope.
+_CANCEL_NEUTRAL_FIELDS: frozenset[str] = frozenset({"media_buy_id", "canceled", "cancellation_reason", "context"})
+
+
+def _execute_cancel(
+    *,
+    req: UpdateMediaBuyRequest,
+    media_buy: Any,
+    identity: ResolvedIdentity,
+    tenant: dict,
+    principal_id: str,
+    uow: "MediaBuyUoW",
+    adapter: Any,
+    today: date,
+    ctx_manager: Any,
+    step: Any,
+    testing_ctx: AdCPTestContext,
+) -> UpdateMediaBuySuccess | UpdateMediaBuyError:
+    """Execute buyer-initiated media buy cancellation.
+
+    Per AdCP spec, cancellation is irreversible and exclusive of every other
+    update. Spec §292: when other fields accompany ``canceled=true``, ignore
+    them and surface a warning in the response context. The terminal-status
+    guard in ``_update_media_buy_impl`` already filtered out re-cancel of an
+    already-canceled buy and updates of completed/rejected buys.
+
+    Side effects on success: MediaBuy.status -> "canceled", cancellation
+    metadata persisted; CreativeAssignment.released_at set; MediaPackage.is_paused
+    cleared (cancel supersedes pause); adapter ad-server cancel invoked;
+    delivery simulator stopped; workflow step completed.
+
+    All DB writes ride the outer UoW transaction so an adapter rejection or
+    later failure rolls back the buyer-visible state, matching adapter-side
+    truth.
+
+    NOTE: post-commit webhook delivery via ``uow.enqueue_webhook`` is plumbed
+    on ``BaseUoW`` but not yet wired here. Buyers subscribed to
+    ``push_notification_config`` on the cancel request do NOT currently
+    receive a status-transition webhook on cancel — tracked as follow-up.
+    """
+    from adcp.types.generated_poc.core.media_buy import Cancellation
+    from adcp.types.generated_poc.enums.canceled_by import CanceledBy
+    from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+
+    assert uow.media_buys is not None
+    assert uow.assignments is not None
+
+    media_buy_id = req.media_buy_id or ""
+    now = datetime.now(UTC)
+
+    # Spec §292: collect any other set fields and surface as a context warning.
+    # ContextObject is `extra='allow'` so we round-trip via model_dump to splice
+    # a warnings list into metadata while preserving the buyer-supplied envelope.
+    ignored_fields = sorted(req.model_fields_set - _CANCEL_NEUTRAL_FIELDS)
+    response_context: ContextObject | None = req.context
+    if ignored_fields:
+        ignored_warning = {
+            "code": "fields_ignored",
+            "ignored_fields": ignored_fields,
+            "message": "Cancellation supersedes concurrent updates; non-cancellation fields ignored.",
+        }
+        ctx_dict = response_context.model_dump(mode="json") if response_context is not None else {}
+        metadata = dict(ctx_dict.get("metadata") or {})
+        warnings_list = list(metadata.get("warnings", []))
+        warnings_list.append(ignored_warning)
+        metadata["warnings"] = warnings_list
+        ctx_dict["metadata"] = metadata
+        response_context = ContextObject(**ctx_dict)
+
+    # Dry-run: synthesize a spec-shaped response without writes or adapter call.
+    if testing_ctx.dry_run:
+        logger.info(f"[DRY_RUN] Synthesizing cancel response for media_buy_id={media_buy_id}")
+        packages = uow.media_buys.get_packages(media_buy_id)
+        simulated_cancellation = Cancellation(
+            canceled_at=now,
+            canceled_by=CanceledBy.buyer,
+            reason=req.cancellation_reason,
+        )
+        simulated_packages = [
+            AffectedPackage(
+                package_id=pkg.package_id,
+                paused=False,
+                canceled=True,
+                cancellation=simulated_cancellation,
+                buyer_package_ref=pkg.package_id,
+                changes_applied={"dry_run": True, "canceled": True},
+            )
+            for pkg in sorted(packages, key=lambda p: p.package_id)
+        ]
+        return UpdateMediaBuySuccess(
+            media_buy_id=media_buy_id,
+            affected_packages=simulated_packages,
+            status=MediaBuyStatus.canceled,
+            valid_actions=[],
+            context=response_context,
+        )
+
+    # Live cancel.
+    adapter_today = datetime.combine(today, datetime.min.time(), tzinfo=UTC)
+    result = adapter.update_media_buy(
+        media_buy_id=media_buy_id,
+        action="cancel_media_buy",
+        package_id=None,
+        budget=None,
+        today=adapter_today,
+        cancellation_reason=req.cancellation_reason,
+    )
+
+    if isinstance(result, UpdateMediaBuyError) and result.errors:
+        adapter_code = (result.errors[0].code or "").upper()
+        adapter_msg = result.errors[0].message or "Adapter rejected cancellation"
+        if step is not None:
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="failed",
+                response_data=result.model_dump(mode="json"),
+                error_message=adapter_msg,
+            )
+        # Adapter-side cancel rejection. UNSUPPORTED_FEATURE keeps its semantic;
+        # everything else maps to NOT_CANCELLABLE per spec. Return (don't raise)
+        # so the response envelope echoes context.correlation_id back to the
+        # buyer per the spec's UpdateMediaBuyResponse2 shape.
+        if adapter_code == "UNSUPPORTED_FEATURE":
+            return UpdateMediaBuyError(errors=result.errors, context=response_context)
+        return UpdateMediaBuyError(
+            errors=[
+                Error(
+                    code="NOT_CANCELLABLE",
+                    message=adapter_msg,
+                    recovery="correctable",
+                    details={"adapter_code": adapter_code},
+                )
+            ],
+            context=response_context,
+        )
+
+    # Persist cancellation metadata on MediaBuy and release assignments.
+    uow.media_buys.cancel(
+        media_buy_id,
+        when=now,
+        canceled_by=CanceledBy.buyer.value,
+        reason=req.cancellation_reason,
+    )
+    released_count = uow.assignments.release_all_for_media_buy(media_buy_id, when=now)
+    logger.info(f"Released {released_count} creative assignment(s) on cancel of {media_buy_id}")
+
+    # Cancel supersedes pause: clear is_paused on every package.
+    packages = uow.media_buys.get_packages(media_buy_id)
+    for pkg in packages:
+        if pkg.is_paused:
+            uow.media_buys.update_package_fields(media_buy_id, pkg.package_id, is_paused=False)
+
+    # Stop any in-flight delivery simulation. Idempotent — no-op if not running.
+    try:
+        from src.services.delivery_simulator import delivery_simulator
+
+        delivery_simulator.stop_simulation(media_buy_id)
+    except Exception as exc:  # noqa: BLE001 — simulator is best-effort
+        logger.warning(f"Failed to stop delivery simulator for {media_buy_id}: {exc}")
+
+    # Build response.
+    cancellation_block = Cancellation(
+        canceled_at=now,
+        canceled_by=CanceledBy.buyer,
+        reason=req.cancellation_reason,
+    )
+    affected_packages = [
+        AffectedPackage(
+            package_id=pkg.package_id,
+            paused=False,
+            canceled=True,
+            cancellation=cancellation_block,
+            buyer_package_ref=pkg.package_id,
+            changes_applied={"canceled": True, "reason": req.cancellation_reason},
+        )
+        for pkg in sorted(packages, key=lambda p: p.package_id)
+    ]
+    response = UpdateMediaBuySuccess(
+        media_buy_id=media_buy_id,
+        affected_packages=affected_packages,
+        status=MediaBuyStatus.canceled,
+        valid_actions=valid_actions_for_status("canceled"),
+        context=response_context,
+    )
+
+    # Audit (separate session — pre-existing pattern, not refactored here).
+    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger.log_operation(
+        operation="update_media_buy",
+        principal_name=principal_id,
+        principal_id=principal_id,
+        adapter_id="mcp_server",
+        success=True,
+        details={
+            "media_buy_id": media_buy_id,
+            "action": "cancel_media_buy",
+            "reason": req.cancellation_reason,
+            "ignored_fields": ignored_fields or None,
+        },
+    )
+
+    if step is not None:
+        ctx_manager.update_workflow_step(
+            step.step_id,
+            status="completed",
+            response_data=response.model_dump(mode="json"),
+        )
+
+    return response
+
+
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
@@ -189,36 +406,70 @@ def _update_media_buy_impl(
         # Verify principal owns this media buy
         _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
 
-        # State-machine precondition: terminal states reject all mutations,
-        # and non-terminal states only accept actions in their valid set.
-        # ``AdCPGoneError`` carries the spec-mandated ``INVALID_STATE`` code
-        # for both terminal states and disallowed actions — see
-        # ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` for the source of truth.
-        _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use)
-        _current_status = _current_mb.status if _current_mb else ""
-        if is_terminal_status(_current_status):
-            raise AdCPGoneError(
-                f"Cannot update media buy in terminal state: {_current_status}",
-                field="media_buy_id",
-                suggestion=(
-                    f"Media buy is {_current_status} and cannot be modified. "
-                    f"Create a new media buy to run a new campaign."
-                ),
-            )
+        # Fetch the media buy with a row-level lock for the duration of the
+        # transaction. This serializes concurrent updates (especially cancels)
+        # under PostgreSQL READ COMMITTED so two simultaneous cancels can't
+        # both succeed silently.
+        media_buy_locked = uow.media_buys.get_by_id_for_update(media_buy_id_to_use)
+        if media_buy_locked is None:
+            # _verify_principal already validated existence; reaching here means
+            # a TOCTOU race deleted the row between calls. Treat as not-found.
+            raise AdCPValidationError(f"Media buy '{media_buy_id_to_use}' was not found at lock time")
 
+        # State-machine precondition. Terminal states reject all mutations
+        # per the SDK state machine; the cancel branch gets NOT_CANCELLABLE
+        # precedence over INVALID_STATE per AdCP spec §128/§129 ("re-cancel
+        # of a canceled buy MUST return NOT_CANCELLABLE; idempotent acceptance
+        # is NOT conformant"). Other actions are validated against the
+        # ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` matrix for the
+        # current status.
+        #
+        # We RETURN UpdateMediaBuyError (not raise AdCPError) so the response
+        # envelope matches the spec's UpdateMediaBuyResponse2 discriminated
+        # union variant and the buyer's context.correlation_id is echoed.
+        # Storyboard probes ``invalid_transitions/double_cancel.second_cancel``,
+        # ``terminal_enforcement/{pause,resume,recancel}_buy`` all assert
+        # ``field_value path: context.correlation_id`` on the error response.
+        _current_status = media_buy_locked.status
+        buyer_attempted_cancel = req.canceled_explicitly_set()
+        if is_terminal_status(_current_status):
+            if buyer_attempted_cancel and _current_status == "canceled":
+                err = Error(
+                    code="NOT_CANCELLABLE",
+                    message=f"Media buy '{media_buy_id_to_use}' is already canceled",
+                    recovery="correctable",
+                    details={"current_status": _current_status},
+                )
+            else:
+                err = Error(
+                    code="INVALID_STATE",
+                    message=f"Cannot update media buy in terminal state '{_current_status}'",
+                    recovery="correctable",
+                    details={"current_status": _current_status},
+                )
+            return UpdateMediaBuyError(errors=[err], context=req.context)
+
+        # Non-terminal: validate requested actions against the per-status
+        # allowed set from the SDK state machine. Cancel is always allowed
+        # in non-terminal statuses (the matrix includes it) so this naturally
+        # admits the cancel path; other actions (pause, resume, update_*) are
+        # checked here before the buyer-action dispatch below.
         _requested = _requested_actions(req)
         _allowed = set(valid_actions_for_status(_current_status))
-        # Only enforce state machine for statuses defined in the spec.
-        # Pre-confirmation internal states (e.g., "draft") are not in the
-        # SDK state machine — allow all actions on those.
         if _allowed or _current_status in MEDIA_BUY_STATE_MACHINE:
             _disallowed = [a for a in _requested if a not in _allowed]
             if _requested and _disallowed:
-                raise AdCPGoneError(
-                    f"Action(s) {_disallowed} not allowed in status '{_current_status}'",
-                    field="media_buy_id",
-                    suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
+                err = Error(
+                    code="INVALID_STATE",
+                    message=f"Action(s) {_disallowed} not allowed in status '{_current_status}'",
+                    recovery="correctable",
+                    details={
+                        "current_status": _current_status,
+                        "disallowed_actions": _disallowed,
+                        "valid_actions": sorted(_allowed),
+                    },
                 )
+                return UpdateMediaBuyError(errors=[err], context=req.context)
 
         # Extract testing context early (needed for dry_run check)
         testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
@@ -271,6 +522,24 @@ def _update_media_buy_impl(
 
         adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
         today = req.today or date.today()
+
+        # Cancellation branch — exclusive with every other update path per
+        # AdCP spec §292 (cancel + other fields => apply cancel, ignore others
+        # except cancellation_reason, warn in response context).
+        if buyer_attempted_cancel:
+            return _execute_cancel(
+                req=req,
+                media_buy=media_buy_locked,
+                identity=identity,
+                tenant=tenant,
+                principal_id=principal_id,
+                uow=uow,
+                adapter=adapter,
+                today=today,
+                ctx_manager=ctx_manager,
+                step=step,
+                testing_ctx=testing_ctx,
+            )
 
         # Dry-run mode: Return simulated response without any database writes
         # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
@@ -469,6 +738,13 @@ def _update_media_buy_impl(
                 media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
                 affected_pkgs = getattr(result, "affected_packages", [])
 
+                # Persist campaign-level pause state to DB so reads (delivery,
+                # list, admin readiness) reflect it without re-querying the
+                # ad server. Pre-existing decoupling: is_paused was never
+                # written prior to this work — we persist before reading the
+                # post-action status below so it reflects the new state.
+                uow.media_buys.update_fields(req.media_buy_id, is_paused=bool(req.paused))
+
                 # Derive post-action status from the DB rather than hardcoding,
                 # so valid_actions reflects what the buyer can actually do next.
                 # Fall back to the current state-machine target only if the DB
@@ -532,6 +808,13 @@ def _update_media_buy_impl(
                             error_message=error_message,
                         )
                         return response_data
+
+                    # Persist per-package pause state to DB. Closes the same
+                    # decoupling as the campaign-level fix above.
+                    if pkg_update.package_id:
+                        uow.media_buys.update_package_fields(
+                            req.media_buy_id, pkg_update.package_id, is_paused=bool(pkg_update.paused)
+                        )
 
                 # Handle budget updates
                 if pkg_update.budget is not None:
@@ -1362,12 +1645,21 @@ def _build_update_request(
     context: Any = None,
     reporting_webhook: Any = None,
     ext: Any = None,
+    canceled: bool | None = None,
+    cancellation_reason: str | None = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
     Handles deprecated field mapping and budget object construction.
     Used by both MCP wrapper and A2A raw function.
+
+    `canceled` is forwarded to the request only when explicitly True so that
+    `model_fields_set` records buyer intent. Library default is True after
+    construction, so passing False or None would leave intent ambiguous;
+    we reject False at the boundary.
     """
+    if canceled is False:
+        raise AdCPValidationError("canceled must be true or omitted (cancellation is irreversible)")
     # Handle deprecated field names
     effective_start = start_time or flight_start_date
     effective_end = end_time or flight_end_date
@@ -1415,6 +1707,10 @@ def _build_update_request(
         request_params["reporting_webhook"] = reporting_webhook
     if ext is not None:
         request_params["ext"] = ext
+    if canceled is True:
+        request_params["canceled"] = True
+    if cancellation_reason is not None:
+        request_params["cancellation_reason"] = cancellation_reason
 
     try:
         req = UpdateMediaBuyRequest(**request_params)
@@ -1425,7 +1721,7 @@ def _build_update_request(
     if not req.has_updatable_fields():
         raise AdCPValidationError(
             "Update request must include at least one updatable field "
-            "(paused, start_time, end_time, packages, budget, "
+            "(paused, canceled, cancellation_reason, start_time, end_time, packages, budget, "
             "push_notification_config, reporting_webhook, context, ext)"
         )
 
@@ -1450,6 +1746,23 @@ async def update_media_buy(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    canceled: Annotated[
+        bool | None,
+        Field(
+            description=(
+                "Set to true to irreversibly cancel the entire media buy. Cancellation is "
+                "terminal: re-cancel returns NOT_CANCELLABLE; other updates on a canceled "
+                "buy return INVALID_STATE."
+            )
+        ),
+    ] = None,
+    cancellation_reason: Annotated[
+        str | None,
+        Field(
+            description="Human-readable reason for cancellation. Only valid with canceled=true.",
+            max_length=500,
+        ),
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1475,6 +1788,8 @@ async def update_media_buy(
         context: Application-level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
         ext: Extension object for custom fields (optional, per AdCP spec)
+        canceled: Set to true to irreversibly cancel the entire media buy (AdCP spec).
+        cancellation_reason: Optional human-readable reason; only valid with canceled=true.
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1498,6 +1813,8 @@ async def update_media_buy(
         context=context,
         reporting_webhook=reporting_webhook,
         ext=ext,
+        canceled=canceled,
+        cancellation_reason=cancellation_reason,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1524,8 +1841,11 @@ def update_media_buy_raw(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    canceled: bool | None = None,
+    cancellation_reason: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    context_id: str | None = None,
 ):
     """Update an existing media buy (raw function for A2A server use).
 
@@ -1549,8 +1869,11 @@ def update_media_buy_raw(
         context: Application level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery
         ext: Extension object for custom fields (optional, per AdCP spec)
+        canceled: Set to true to irreversibly cancel the entire media buy (AdCP spec).
+        cancellation_reason: Optional reason; only valid with canceled=true.
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
+        context_id: Pre-resolved A2A context id (if available)
 
     Returns:
         UpdateMediaBuyResponse
@@ -1571,10 +1894,11 @@ def update_media_buy_raw(
         context=context,
         reporting_webhook=reporting_webhook,
         ext=ext,
+        canceled=canceled,
+        cancellation_reason=cancellation_reason,
     )
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
-    return _update_media_buy_impl(req=req, identity=identity)
+    return _update_media_buy_impl(req=req, identity=identity, context_id=context_id)

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class ReadinessDetails(TypedDict):
     """Detailed readiness information for a media buy."""
 
-    state: str  # "draft", "needs_creatives", "needs_approval", "ready", "live", "paused", "completed", "failed"
+    state: str  # "draft", "needs_creatives", "needs_approval", "ready", "live", "paused", "completed", "canceled", "failed"
     is_ready_to_activate: bool
     packages_total: int
     packages_with_creatives: int
@@ -245,16 +245,20 @@ class MediaBuyReadinessService:
         """Compute the operational state based on media buy data.
 
         State hierarchy (in priority order):
-        1. failed - Media buy creation failed
-        2. paused - Explicitly paused
-        3. needs_approval - Media buy itself awaiting manual approval (NOT creative approval)
-        4. completed - Flight ended
-        5. live - Currently serving (in flight, all creatives approved, no blockers)
-        6. scheduled - Ready and waiting for start date
-        7. needs_creatives - Creatives need action (missing, pending approval, or rejected)
-        8. draft - Initial state, not configured
+        1. canceled - Buyer-initiated terminal cancellation (irreversible)
+        2. failed - Media buy creation failed
+        3. paused - Explicitly paused
+        4. needs_approval - Media buy itself awaiting manual approval (NOT creative approval)
+        5. completed - Flight ended
+        6. live - Currently serving (in flight, all creatives approved, no blockers)
+        7. scheduled - Ready and waiting for start date
+        8. needs_creatives - Creatives need action (missing, pending approval, or rejected)
+        9. draft - Initial state, not configured
         """
-        # Check explicit status first
+        # Check explicit status first; canceled is terminal so it leads.
+        if media_buy.status == "canceled":
+            return "canceled"
+
         if media_buy.status == "failed":
             return "failed"
 

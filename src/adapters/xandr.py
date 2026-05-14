@@ -622,6 +622,7 @@ class XandrAdapter(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        cancellation_reason: str | None = None,
     ) -> UpdateMediaBuyResponse:
         """Update insertion order in Xandr."""
         # NOTE: This is a stub implementation - needs full refactor to match current API
