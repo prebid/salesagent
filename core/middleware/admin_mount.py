@@ -14,6 +14,11 @@ Routing decision (in order):
   and path is ``/`` → 302 redirect to ``/signup`` (replaces the nginx
   ``server_name ${SALES_AGENT_DOMAIN}; location = /`` block that
   proxied apex root to /signup)
+* ``/robots.txt`` → public ``text/plain`` ``Disallow: /`` served directly.
+  Without this short-circuit, the A2A surface answers /robots.txt with
+  a 401 (bearer auth wraps every non-admin path), which generates log
+  spam from well-behaved crawlers and confuses tools that key off the
+  status code.
 * ``/mcp/*`` → MCP (claimed by ``serve(transport="both")``'s inner
   dispatcher before this middleware decides anything)
 * ``/admin/*``, ``/static/*``, ``/auth/*``, ``/login``, ``/logout``,
@@ -114,6 +119,14 @@ class AdminWSGIMount:
 
             path = scope.get("path", "")
 
+            # Public robots.txt: serve a stable ``Disallow: /`` directly so
+            # crawlers don't see a 401 from the bearer-auth-protected A2A
+            # surface. This is a host-level resource (no tenant scope, no
+            # auth), so neither Flask nor A2A is the right owner.
+            if path == "/robots.txt" and scope.get("method", "GET") in ("GET", "HEAD"):
+                await self._send_robots_txt(send, head_only=scope.get("method") == "HEAD")
+                return
+
             # Apex redirect: bare ``sales-agent.example.com/`` (no
             # subdomain) goes to /signup. Replaces the nginx
             # ``location = /`` block in the multi-tenant config that
@@ -197,6 +210,37 @@ class AdminWSGIMount:
             return False
         host_no_port = host.split(":", 1)[0]
         return host_no_port.lower() == sales_domain.lower()
+
+    _ROBOTS_TXT_BODY = b"User-agent: *\nDisallow: /\n"
+
+    @classmethod
+    async def _send_robots_txt(cls, send: Any, *, head_only: bool) -> None:
+        """Emit a public ``robots.txt`` response.
+
+        The API host has no human-crawlable content, so the canonical
+        response is ``Disallow: /``. ``cache-control: public, max-age=86400``
+        keeps crawlers from re-fetching every minute. HEAD requests get
+        the same headers with an empty body per RFC 9110.
+        """
+        body = cls._ROBOTS_TXT_BODY
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"cache-control", b"public, max-age=86400"),
+                ],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"" if head_only else body,
+                "more_body": False,
+            }
+        )
 
     @staticmethod
     async def _send_redirect(send: Any, location: str) -> None:

@@ -20,6 +20,7 @@ def _http_scope(
     apx_host: str | None = None,
     path: str = "/",
     query_string: bytes = b"",
+    method: str = "GET",
 ) -> dict:
     """Build an ASGI HTTP scope with the given host headers and path."""
     headers: list[tuple[bytes, bytes]] = []
@@ -29,6 +30,7 @@ def _http_scope(
         headers.append((b"apx-incoming-host", apx_host.encode("latin-1")))
     return {
         "type": "http",
+        "method": method,
         "path": path,
         "raw_path": path.encode("latin-1"),
         "headers": headers,
@@ -333,3 +335,86 @@ class TestAdminWSGIMountApexRedirect:
 
         cache_control = dict(send.call_args_list[0].args[0]["headers"]).get(b"cache-control")
         assert cache_control == b"no-store"
+
+
+@pytest.mark.asyncio
+class TestAdminWSGIMountRobotsTxt:
+    """``/robots.txt`` is served as a public ``Disallow: /`` response.
+
+    Without the short-circuit, the request falls through to the inner
+    A2A surface, which is wrapped in bearer-token auth and 401s every
+    crawler — flooding production logs with 401 access lines.
+    """
+
+    async def test_robots_txt_served_directly(self):
+        wsgi_app = AsyncMock()
+        inner_app = AsyncMock()
+        mount = AdminWSGIMount(inner_app, wsgi_app=wsgi_app)
+        scope = _http_scope(host="api.example.com", path="/robots.txt")
+        send = AsyncMock()
+
+        await mount(scope, AsyncMock(), send)
+
+        assert send.call_count == 2
+        start = send.call_args_list[0].args[0]
+        body = send.call_args_list[1].args[0]
+        assert start["type"] == "http.response.start"
+        assert start["status"] == 200
+        headers = dict(start["headers"])
+        assert headers.get(b"content-type") == b"text/plain; charset=utf-8"
+        assert b"max-age=86400" in headers.get(b"cache-control", b"")
+        assert body["type"] == "http.response.body"
+        assert body["body"] == b"User-agent: *\nDisallow: /\n"
+        # Neither downstream surface should see the request.
+        wsgi_app.assert_not_called()
+        inner_app.assert_not_called()
+
+    async def test_robots_txt_head_returns_headers_only(self):
+        """HEAD ``/robots.txt`` returns 200 with empty body per RFC 9110."""
+        wsgi_app = AsyncMock()
+        inner_app = AsyncMock()
+        mount = AdminWSGIMount(inner_app, wsgi_app=wsgi_app)
+        scope = _http_scope(host="api.example.com", path="/robots.txt", method="HEAD")
+        send = AsyncMock()
+
+        await mount(scope, AsyncMock(), send)
+
+        assert send.call_args_list[0].args[0]["status"] == 200
+        # Content-Length still reflects the would-be body so caches behave.
+        cl = dict(send.call_args_list[0].args[0]["headers"]).get(b"content-length")
+        assert cl == str(len(b"User-agent: *\nDisallow: /\n")).encode("ascii")
+        assert send.call_args_list[1].args[0]["body"] == b""
+
+    async def test_robots_txt_post_falls_through(self):
+        """POST ``/robots.txt`` is not a crawler probe — let the inner app
+        respond however it would (today: 401/405). The short-circuit only
+        covers safe methods that crawlers actually use."""
+        wsgi_app = AsyncMock()
+        inner_app = AsyncMock()
+        mount = AdminWSGIMount(inner_app, wsgi_app=wsgi_app)
+        scope = _http_scope(host="api.example.com", path="/robots.txt", method="POST")
+        send = AsyncMock()
+
+        receive = AsyncMock()
+        await mount(scope, receive, send)
+
+        send.assert_not_called()
+        inner_app.assert_called_once_with(scope, receive, send)
+
+    async def test_robots_txt_short_circuits_before_a2a(self):
+        """The bug we're fixing: requests on the API host (not the admin
+        host) must NOT reach the inner A2A app, where bearer auth would
+        401 the crawler. Patches ``is_admin_domain`` to False to simulate
+        the production API host where the spam originated."""
+        wsgi_app = AsyncMock()
+        inner_app = AsyncMock()
+        mount = AdminWSGIMount(inner_app, wsgi_app=wsgi_app)
+        scope = _http_scope(host="api.example.com", path="/robots.txt")
+        send = AsyncMock()
+
+        with patch("core.middleware.admin_mount.is_admin_domain", return_value=False):
+            await mount(scope, AsyncMock(), send)
+
+        inner_app.assert_not_called()
+        wsgi_app.assert_not_called()
+        assert send.call_args_list[0].args[0]["status"] == 200
