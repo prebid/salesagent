@@ -232,14 +232,26 @@ class TestAdCPReferenceImplementation:
                 click_through_url="https://nike.com/air-jordan-2025",
             )
 
-            # Sync creatives
-            sync_request = build_sync_creatives_request(creatives=[creative_1, creative_2])
+            # Sync creatives. Use lenient validation: the lifecycle is what we're
+            # testing here, not strict creative-asset schema conformance. Strict mode
+            # rejects creatives whose asset structure doesn't match the format's
+            # asset declaration, which fails silently (response carries 2 entries
+            # with action="failed" and PHASE 7's list_creatives would return empty).
+            sync_request = build_sync_creatives_request(
+                creatives=[creative_1, creative_2],
+                validation_mode="lenient",
+            )
 
             sync_result = await client.call_tool("sync_creatives", sync_request)
             sync_data = parse_tool_result(sync_result)
 
             assert "creatives" in sync_data, "Response must contain creatives (AdCP spec field name)"
             assert len(sync_data["creatives"]) == 2, "Should sync 2 creatives"
+            failed = [c for c in sync_data["creatives"] if c.get("action") == "failed"]
+            assert not failed, (
+                f"sync_creatives reported failures (test would silently miss them at PHASE 7): "
+                f"{[(c.get('creative_id'), c.get('errors')) for c in failed]}"
+            )
             print(f"   ✓ Synced {len(sync_data['creatives'])} creatives")
             print(f"   ✓ Creative IDs: {creative_id_1}, {creative_id_2}")
 
