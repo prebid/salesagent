@@ -17,7 +17,7 @@ from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPError, build_two_layer_error_envelope
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -404,6 +404,35 @@ class ContextManager(DatabaseManager):
                 "Failed to audit workflow_step %s after exception — original exception will still re-raise",
                 step_id,
             )
+
+    def fail_step(
+        self,
+        step_id: str,
+        *,
+        exc: AdCPError,
+        error_message: str | None = None,
+    ) -> None:
+        """Persist a failed-workflow envelope and trigger push notifications.
+
+        Single ingress for failed-workflow persistence: the wire response from
+        the boundary translator and the persisted ``workflow_step.response_data``
+        are byte-identical by construction because both call
+        ``build_two_layer_error_envelope(exc)``.
+
+        Args:
+            step_id: Workflow step ID to update.
+            exc: The AdCPError subclass raised by the ``_impl`` function.
+            error_message: Optional override for ``workflow_step.error_message``.
+                Defaults to ``exc.message`` so the human-readable text is
+                preserved without forcing callers to repeat it.
+        """
+        envelope = build_two_layer_error_envelope(exc)
+        self.update_workflow_step(
+            step_id,
+            status="failed",
+            response_data=envelope,
+            error_message=error_message or exc.message,
+        )
 
     def mark_human_needed(
         self,
