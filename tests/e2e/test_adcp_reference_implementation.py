@@ -214,9 +214,11 @@ class TestAdCPReferenceImplementation:
             creative_id_1 = f"creative_{uuid.uuid4().hex[:8]}"
             creative_id_2 = f"creative_{uuid.uuid4().hex[:8]}"
 
+            # AdCP spec: format_id is a FormatReferenceStructuredObject
+            # (agent_url + id), not a bare string.
             creative_1 = build_creative(
                 creative_id=creative_id_1,
-                format_id="display_300x250",
+                format_id={"agent_url": "https://creative.adcontextprotocol.org/", "id": "display_300x250"},
                 name="Nike Air Jordan - Display 300x250",
                 asset_url="https://example.com/nike-jordan-300x250.jpg",
                 click_through_url="https://nike.com/air-jordan-2025",
@@ -224,7 +226,7 @@ class TestAdCPReferenceImplementation:
 
             creative_2 = build_creative(
                 creative_id=creative_id_2,
-                format_id="display_728x90",
+                format_id={"agent_url": "https://creative.adcontextprotocol.org/", "id": "display_728x90"},
                 name="Nike Air Jordan - Display 728x90",
                 asset_url="https://example.com/nike-jordan-728x90.jpg",
                 click_through_url="https://nike.com/air-jordan-2025",
