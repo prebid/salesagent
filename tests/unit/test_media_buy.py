@@ -404,12 +404,10 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            from src.core.exceptions import AdCPProductUnavailableError
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        assert any("not found" in e.message.lower() for e in result.response.errors)
+            with pytest.raises(AdCPProductUnavailableError, match="(?i)not found"):
+                await _create_media_buy_impl(req, identity=identity)
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_exceeded(self):
@@ -479,12 +477,10 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req=req, identity=identity)
+            from src.core.exceptions import AdCPBudgetExceededError
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        assert any("daily" in e.message.lower() for e in result.response.errors)
+            with pytest.raises(AdCPBudgetExceededError, match="(?i)daily"):
+                await _create_media_buy_impl(req=req, identity=identity)
 
     def test_pricing_option_xor_both_rejected(self):
         """UC-002-V03 / BR-RULE-006: both fixed_price and floor_price rejected.
@@ -1061,11 +1057,10 @@ class TestCreateMediaBuyImplAuth:
             await _create_media_buy_impl(req, identity=None)
 
     @pytest.mark.asyncio
-    async def test_missing_principal_returns_error_response(self):
-        """UC-002-A02: principal not found returns error (not exception).
+    async def test_missing_principal_raises_auth_error(self):
+        """UC-002-A02: principal not found raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined principal resolution)
-        Ported from test_create_media_buy_behavioral.py pattern.
         Covers: UC-002-EXT-I-02
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -1077,10 +1072,8 @@ class TestCreateMediaBuyImplAuth:
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            result = await _create_media_buy_impl(req, identity=identity)
-            response, status = result
-            assert isinstance(response, CreateMediaBuyError)
-            assert status == "failed"
+            with pytest.raises(AdCPAuthenticationError, match="(?i)principal"):
+                await _create_media_buy_impl(req, identity=identity)
 
     @pytest.mark.asyncio
     async def test_missing_tenant_raises_auth_error(self):
@@ -1276,12 +1269,14 @@ class TestCreateMediaBuyIdempotency:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            from src.core.exceptions import AdCPProductUnavailableError
 
-        # Without idempotency_key, the function proceeds past the check.
-        # It will fail at product validation (no products in mock DB) — that's fine.
-        # The point is that find_by_idempotency_key was never called.
-        assert isinstance(result, CreateMediaBuyResult)
+            # Without idempotency_key, function proceeds; with no products in mock DB it
+            # then raises product-not-found. The point is that find_by_idempotency_key
+            # was never called.
+            with pytest.raises(AdCPProductUnavailableError):
+                await _create_media_buy_impl(req, identity=identity)
+
         mock_uow.media_buys.find_by_idempotency_key.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1338,12 +1333,15 @@ class TestCreateMediaBuyIdempotency:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            from src.core.exceptions import AdCPProductUnavailableError
+
+            # New key: idempotency check ran but found nothing. Function proceeded to
+            # validation, which raises because the mock DB has no products.
+            with pytest.raises(AdCPProductUnavailableError):
+                await _create_media_buy_impl(req, identity=identity)
 
         # Idempotency check ran but found nothing — proceeded to normal flow
         mock_idem_repo.find_by_idempotency_key.assert_called_once_with("new-key-never-seen", "test_principal")
-        # Result is an error because product validation fails (expected)
-        assert isinstance(result, CreateMediaBuyResult)
 
 
 class TestCreateMediaBuyAdapterInteraction:

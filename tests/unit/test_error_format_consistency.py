@@ -80,8 +80,9 @@ class TestMCPErrorShapes:
         assert "Identity is required" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_not_found_principal_returns_error_response(self):
-        """MCP _create_media_buy_impl returns error response for non-existent principal."""
+    async def test_not_found_principal_raises_auth_error(self):
+        """MCP _create_media_buy_impl raises AdCPAuthenticationError for non-existent principal."""
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
@@ -106,15 +107,8 @@ class TestMCPErrorShapes:
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            result = await _create_media_buy_impl(req=req, identity=identity)
-
-        # Should return a CreateMediaBuyResult with error response
-        assert hasattr(result, "response")
-        response = result.response
-        assert hasattr(response, "errors")
-        assert response.errors is not None
-        assert len(response.errors) > 0
-        assert response.errors[0].code == "AUTH_REQUIRED"
+            with pytest.raises(AdCPAuthenticationError, match="nonexistent"):
+                await _create_media_buy_impl(req=req, identity=identity)
 
 
 class TestA2AErrorShapes:
@@ -415,11 +409,13 @@ class TestCrossTransportErrorConsistency:
 
     @pytest.mark.asyncio
     async def test_nonexistent_principal_error_consistent(self):
-        """Both transports handle non-existent principal the same way.
+        """Both transports handle non-existent principal via the same typed AdCPAuthenticationError.
 
-        The _create_media_buy_impl function returns a CreateMediaBuyError when
-        principal is not found. This result flows through both transports.
+        The _create_media_buy_impl function raises AdCPAuthenticationError when
+        principal is not found; the boundary translator on each transport serializes
+        the same two-layer envelope.
         """
+        from src.core.exceptions import AdCPAuthenticationError, build_two_layer_error_envelope
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
@@ -444,25 +440,15 @@ class TestCrossTransportErrorConsistency:
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            # Shared impl returns the same result regardless of transport
-            result = await _create_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPAuthenticationError, match="ghost_principal") as exc_info:
+                await _create_media_buy_impl(req=req, identity=identity)
 
-        # The result contains an error response with authentication_error code
-        response = result.response
-        assert hasattr(response, "errors")
-        assert response.errors is not None
-        assert len(response.errors) > 0
-        error = response.errors[0]
-
-        assert error.code == "AUTH_REQUIRED"
-        assert "not found" in error.message.lower()
-
-        # When this flows through A2A's _serialize_for_a2a, it becomes:
-        serialized = AdCPRequestHandler._serialize_for_a2a(response)
-        assert serialized["success"] is False, "Serialized response must have success=False"
-        assert "errors" in serialized
-        assert len(serialized["errors"]) > 0
-        assert serialized["errors"][0]["code"] == "AUTH_REQUIRED"
+        # The boundary translator (called by every transport wrapper) produces
+        # the same two-layer envelope for this typed exception.
+        envelope = build_two_layer_error_envelope(exc_info.value)
+        assert envelope["adcp_error"]["code"] == "AUTH_REQUIRED"
+        assert envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+        assert "not found" in envelope["adcp_error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_unknown_skill_only_affects_a2a(self):

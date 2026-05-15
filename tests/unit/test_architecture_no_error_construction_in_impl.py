@@ -31,7 +31,6 @@ PATTERN_A_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/google_ad_manager.py": 22,
     "src/adapters/kevel.py": 5,
     "src/adapters/triton_digital.py": 5,
-    "src/core/tools/media_buy_create.py": 4,
     "src/core/tools/media_buy_update.py": 21,
 }
 
