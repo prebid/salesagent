@@ -23,6 +23,7 @@ def assert_per_file_caps(
     scan_dirs: list[Path],
     site_label: str,
     typed_raise_hint: str,
+    rel: Callable[[Path], str] | None = None,
 ) -> None:
     """Fail if any scanned file exceeds its cap or appears unaccounted-for.
 
@@ -35,7 +36,12 @@ def assert_per_file_caps(
         site_label: human-readable name for the violation type, used in the
             error message (e.g., ``"Pattern A"`` or ``"raise ValueError"``).
         typed_raise_hint: short remediation hint shown when violations fire.
+        rel: optional callable converting an absolute path to a repo-root-
+            relative key (matching the cap_dict keys). Defaults to ``str(path)``
+            for backward compatibility with CWD-anchored callers.
     """
+    if rel is None:
+        rel = str
     violations: list[str] = []
     unknown_files_with_sites: list[str] = []
 
@@ -43,17 +49,17 @@ def assert_per_file_caps(
         if not scan_dir.exists():
             continue
         for py in sorted(scan_dir.rglob("*.py")):
-            rel = str(py)
+            key = rel(py)
             sites = count_sites(py)
             count = len(sites)
             if count == 0:
                 continue
-            cap = cap_dict.get(rel)
+            cap = cap_dict.get(key)
             if cap is None:
-                unknown_files_with_sites.append(f"  {rel}: {count} {site_label} site(s) — new file, {typed_raise_hint}")
+                unknown_files_with_sites.append(f"  {key}: {count} {site_label} site(s) — new file, {typed_raise_hint}")
             elif count > cap:
                 site_lines = ", ".join(str(s) for s in sites)
-                violations.append(f"  {rel}: {count} sites at lines [{site_lines}] exceeds cap of {cap}")
+                violations.append(f"  {key}: {count} sites at lines [{site_lines}] exceeds cap of {cap}")
 
     msg_parts = []
     if violations:
@@ -68,9 +74,14 @@ def assert_per_file_caps(
     assert not msg_parts, "\n\n".join(msg_parts)
 
 
-def assert_capped_files_still_exist(cap_dict: dict[str, int], cap_dict_name: str) -> None:
+def assert_capped_files_still_exist(
+    cap_dict: dict[str, int],
+    cap_dict_name: str,
+    repo_root: Path | None = None,
+) -> None:
     """Fail if cap_dict has entries pointing to files that no longer exist."""
-    stale = [f for f in cap_dict if not Path(f).exists()]
+    base = repo_root or Path.cwd()
+    stale = [f for f in cap_dict if not (base / f).exists()]
     assert not stale, f"{cap_dict_name} entries point to non-existent files (remove them):\n" + "\n".join(
         f"  {f}" for f in stale
     )
@@ -79,6 +90,7 @@ def assert_capped_files_still_exist(cap_dict: dict[str, int], cap_dict_name: str
 def assert_caps_only_shrink(
     cap_dict: dict[str, int],
     count_sites: Callable[[Path], list[int]],
+    repo_root: Path | None = None,
 ) -> None:
     """Fail if any cap exceeds the actual count — caps must track reality.
 
@@ -86,9 +98,10 @@ def assert_caps_only_shrink(
     while the cap is artificially high). When a cleanup commit lowers actual
     counts, the cap must drop in the same commit.
     """
+    base = repo_root or Path.cwd()
     lagging: list[str] = []
     for rel, cap in cap_dict.items():
-        path = Path(rel)
+        path = base / rel
         if not path.exists():
             continue
         actual = len(count_sites(path))

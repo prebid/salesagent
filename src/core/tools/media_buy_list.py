@@ -13,7 +13,6 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, cast
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field, RootModel, ValidationError
@@ -253,7 +252,12 @@ async def get_media_buys(
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="get_media_buys request"))
+        # Raise AdCPValidationError so the MCP boundary translator runs the
+        # envelope builder; the prior ToolError raise bypassed it and produced
+        # a tuple-stringified wire response with no adcp_error/errors layers.
+        from src.core.exceptions import AdCPValidationError
+
+        raise AdCPValidationError(format_validation_error(e, context="get_media_buys request")) from e
 
 
 def get_media_buys_raw(

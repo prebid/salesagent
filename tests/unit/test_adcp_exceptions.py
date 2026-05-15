@@ -316,7 +316,13 @@ class TestFastAPIExceptionHandlers:
         _assert_two_layer_envelope(response.json(), "AUTH_REQUIRED")
 
     def test_not_found_error_returns_404(self):
-        """AdCPNotFoundError raised in a route must return 404."""
+        """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
+
+        The base ``AdCPNotFoundError`` carries the internal ``NOT_FOUND`` code,
+        which the boundary translates to ``INVALID_REQUEST`` (STANDARD) so the
+        wire stays spec-compliant. Status 404 is preserved. Production code
+        should prefer specific subclasses (AdCPMediaBuyNotFoundError, etc.).
+        """
         from src.app import app
         from src.core.exceptions import AdCPNotFoundError
 
@@ -327,7 +333,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/notfound")
         assert response.status_code == 404
-        _assert_two_layer_envelope(response.json(), "NOT_FOUND")
+        _assert_two_layer_envelope(response.json(), "INVALID_REQUEST")
 
     def test_adapter_error_returns_502(self):
         """AdCPAdapterError raised in a route must return 502."""
@@ -497,9 +503,35 @@ class TestErrorCodeWireTranslation:
 
         assert translate_error_code("VALIDATION_ERROR") == "VALIDATION_ERROR"
         assert translate_error_code("MEDIA_BUY_NOT_FOUND") == "MEDIA_BUY_NOT_FOUND"
-        # Internal-only codes pass through at the helper layer; transport-specific
-        # behavior (e.g., redaction) happens at the boundary handler if needed.
-        assert translate_error_code("NOT_FOUND") == "NOT_FOUND"
+        # Genuinely-unmapped codes pass through; INTERNAL_CODES that used to pass
+        # through (NOT_FOUND, CONFIGURATION_ERROR, INTERNAL_ERROR) are now
+        # explicitly mapped to STANDARD_ERROR_CODES targets — see
+        # test_internal_codes_translated_to_wire_safe_codes below.
+        assert translate_error_code("SOME_UNKNOWN_CODE_THAT_IS_NOT_MAPPED") == "SOME_UNKNOWN_CODE_THAT_IS_NOT_MAPPED"
+
+    def test_internal_codes_translated_to_wire_safe_codes(self):
+        """Base-class codes that should never reach the wire are translated to STANDARD targets.
+
+        Catches accidental leaks: AdCPError, AdCPNotFoundError, AdCPConfigurationError
+        instances that escape to the boundary now produce STANDARD_ERROR_CODES output
+        instead of the previously-leaking internal codes.
+        """
+        from adcp.server.helpers import STANDARD_ERROR_CODES
+
+        from src.core.exceptions import INTERNAL_CODES, translate_error_code
+
+        # Every INTERNAL_CODES entry that could plausibly reach a buyer either:
+        #   (a) has an explicit translation to a STANDARD code, OR
+        #   (b) is documented as adapter-internal (never raised at the boundary).
+        wire_safe = {
+            "NOT_FOUND": "INVALID_REQUEST",
+            "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
+            "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
+        }
+        for internal, expected_wire in wire_safe.items():
+            assert internal in INTERNAL_CODES, f"{internal} should be in INTERNAL_CODES"
+            assert translate_error_code(internal) == expected_wire
+            assert expected_wire in STANDARD_ERROR_CODES
 
     def test_wire_error_code_property_translates(self):
         """``wire_error_code`` exposes the translated code on an instance."""

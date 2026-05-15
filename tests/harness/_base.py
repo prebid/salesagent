@@ -743,7 +743,27 @@ class BaseTestEnv:
         """
         message = data.get("message", data.get("error", str(data)))
 
-        # Try structured error_code first (same as MCP/A2A unwrappers)
+        # Spec-compliant two-layer envelope first.
+        if isinstance(data, dict):
+            adcp_err = data.get("adcp_error")
+            if isinstance(adcp_err, dict) and adcp_err.get("code"):
+                return _adcp_error_from_code(
+                    str(adcp_err["code"]),
+                    str(adcp_err.get("message", message)),
+                    adcp_err.get("recovery"),
+                    adcp_err.get("details"),
+                )
+            errors = data.get("errors")
+            if isinstance(errors, list) and errors and isinstance(errors[0], dict) and errors[0].get("code"):
+                err = errors[0]
+                return _adcp_error_from_code(
+                    str(err["code"]),
+                    str(err.get("message", message)),
+                    err.get("recovery"),
+                    err.get("details"),
+                )
+
+        # Legacy flat shape: { "error_code": ..., "message": ..., "recovery": ... }
         error_code = data.get("error_code")
         if error_code:
             recovery = data.get("recovery")
