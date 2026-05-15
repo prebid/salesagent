@@ -42,8 +42,14 @@ def _install_admin_mounts() -> None:
         filtered_routes.append(route)
 
     app.router.routes = filtered_routes
-    app.mount("/admin", admin_wsgi)
-    app.mount("/", admin_wsgi)
+    # WSGIMiddleware is an ASGI-compatible adapter that Starlette accepts at runtime,
+    # but mypy sees a protocol mismatch with Starlette.mount's ASGIApp expectation.
+    # ``unused-ignore`` keeps both environments happy: CI's mypy (full project venv
+    # with starlette stubs) flags the arg-type error so we suppress it; pre-commit's
+    # isolated mypy hook env lacks starlette and reports the type:ignore as unused,
+    # which the ``unused-ignore`` category suppresses too.
+    app.mount("/admin", admin_wsgi)  # type: ignore[arg-type, unused-ignore]
+    app.mount("/", admin_wsgi)  # type: ignore[arg-type, unused-ignore]
 
 
 @asynccontextmanager
