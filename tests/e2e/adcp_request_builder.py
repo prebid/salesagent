@@ -57,7 +57,7 @@ def build_adcp_media_buy_request(
     brand: dict[str, Any] | None = None,  # AdCP 3.6.0: BrandReference with domain
     context: dict[str, Any] | None = None,
     creative_ids: list[str] | None = None,
-    pricing_option_id: str = "default",
+    pricing_option_id: str = "cpm_usd_fixed",
 ) -> dict[str, Any]:
     """
     Build a valid AdCP create_media_buy request.

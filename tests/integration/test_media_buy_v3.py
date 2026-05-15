@@ -23,7 +23,12 @@ from sqlalchemy import func, select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.exceptions import AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPCapabilityNotSupportedError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
@@ -221,15 +226,8 @@ class TestCreateMediaBuyCurrencyValidation:
             ],
         )
 
-        result = await _create_media_buy_impl(req=req, identity=identity)
-
-        assert result.status == "failed"
-        assert result.response is not None
-        assert hasattr(result.response, "errors")
-        errors = result.response.errors
-        assert len(errors) > 0
-        error_messages = " ".join(e.message.lower() for e in errors)
-        assert "currency" in error_messages or "eur" in error_messages.lower()
+        with pytest.raises(AdCPCapabilityNotSupportedError, match="Currency EUR"):
+            await _create_media_buy_impl(req=req, identity=identity)
 
 
 class TestCreateMediaBuyManualApproval:
@@ -385,9 +383,11 @@ class TestCreateMediaBuyAdapterAtomicity:
             # The important assertion is that a record EXISTS (atomicity: success -> persisted).
             # AdCP MediaBuyStatus distinguishes pending_creatives (missing/unapproved creatives)
             # from pending_start (manual approval / scheduled future start).
-            assert mb.status in ("active", "pending_creatives", "pending_start"), (
-                f"Expected active/pending_creatives/pending_start, got {mb.status}"
-            )
+            assert mb.status in (
+                "active",
+                "pending_creatives",
+                "pending_start",
+            ), f"Expected active/pending_creatives/pending_start, got {mb.status}"
 
             packages = session.scalars(
                 select(DBMediaPackage).where(DBMediaPackage.media_buy_id == mb.media_buy_id)
@@ -519,11 +519,8 @@ class TestUpdateMediaBuyCreativeAssignments:
                 }
             ],
         )
-        update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
-
-        assert hasattr(update_result, "errors") and update_result.errors
-        error_messages = " ".join(str(e).lower() for e in update_result.errors)
-        assert "placement" in error_messages or "not found" in error_messages or "invalid" in error_messages
+        with pytest.raises(AdCPValidationError, match="placement"):
+            _update_media_buy_impl(req=update_req, identity=mb_identity)
 
 
 # ---------------------------------------------------------------------------
@@ -574,9 +571,9 @@ class TestGetMediaBuysResponseFields:
         )
         response = _get_media_buys_impl(get_req, identity=mb_identity, include_snapshot=True)
 
-        assert len(response.media_buys) == 1, (
-            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
-        )
+        assert (
+            len(response.media_buys) == 1
+        ), f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
         assert len(mb_response.packages) >= 1
@@ -664,9 +661,9 @@ class TestGetMediaBuysResponseFields:
         )
         response = _get_media_buys_impl(get_req, identity=mb_identity)
 
-        assert len(response.media_buys) == 1, (
-            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
-        )
+        assert (
+            len(response.media_buys) == 1
+        ), f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
 
@@ -679,9 +676,9 @@ class TestGetMediaBuysResponseFields:
         assert target_pkg is not None, f"Package {package_id} not found in response"
 
         # Creative approvals should be populated
-        assert target_pkg.creative_approvals is not None, (
-            "creative_approvals should be populated after creative assignment"
-        )
+        assert (
+            target_pkg.creative_approvals is not None
+        ), "creative_approvals should be populated after creative assignment"
         assert len(target_pkg.creative_approvals) >= 1
         approval_ids = {a.creative_id for a in target_pkg.creative_approvals}
         assert "c_approval_test" in approval_ids
@@ -713,12 +710,8 @@ class TestCreateMediaBuyPrincipalResolution:
         )
         req = _make_create_request()
 
-        result = await _create_media_buy_impl(req=req, identity=identity)
-
-        assert result.status == "failed"
-        assert hasattr(result.response, "errors")
-        error_messages = " ".join(e.message.lower() for e in result.response.errors)
-        assert "not found" in error_messages or "principal" in error_messages
+        with pytest.raises(AdCPAuthenticationError, match="nonexistent_principal_xyz"):
+            await _create_media_buy_impl(req=req, identity=identity)
 
 
 class TestCreateMediaBuyFullRoundtrip:

@@ -57,6 +57,7 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -333,7 +334,7 @@ class TestMinimumSpendValidation:
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
 
-        # Should fail validation and return errors in response
+        # Should fail validation and raise AdCPBudgetTooLowError
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
             packages=[
@@ -346,14 +347,13 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        with pytest.raises(AdCPBudgetTooLowError, match="(?i)minimum spend|does not meet") as exc_info:
+            await _create_media_buy_impl(req=req, identity=identity)
 
-        # Verify validation failed
-        assert response.errors is not None and len(response.errors) > 0
-        error_msg = response.errors[0].message.lower()
-        assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "1000" in response.errors[0].message
-        assert "usd" in error_msg
+        # Verify error details
+        error_msg = str(exc_info.value)
+        assert "1000" in error_msg
+        assert "USD" in error_msg
 
     async def test_product_override_enforced(self, setup_test_data):
         """Test that product-specific minimum spend override is enforced."""
@@ -369,7 +369,7 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # Try to create media buy below product override ($5000)
-        # Should fail validation and return errors in response
+        # Should fail validation via legacy _validate_pricing_model_selection (AdCPValidationError, not AdCPBudgetTooLowError)
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
             packages=[
@@ -382,14 +382,13 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        with pytest.raises(AdCPValidationError, match="(?i)minimum spend|below minimum") as exc_info:
+            await _create_media_buy_impl(req=req, identity=identity)
 
-        # Verify validation failed
-        assert response.errors is not None and len(response.errors) > 0
-        error_msg = response.errors[0].message.lower()
-        assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "5000" in response.errors[0].message
-        assert "usd" in error_msg
+        # Verify error details
+        error_msg = str(exc_info.value)
+        assert "5000" in error_msg
+        assert "USD" in error_msg
 
     async def test_lower_override_allows_smaller_spend(self, setup_test_data):
         """Test that lower product override allows smaller spend than currency limit."""
@@ -502,7 +501,7 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # $800 should fail (below $1000 USD minimum)
-        # Should fail validation and return errors in response
+        # Should fail validation and raise AdCPBudgetTooLowError
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
             packages=[
@@ -515,14 +514,13 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        with pytest.raises(AdCPBudgetTooLowError, match="(?i)minimum spend|does not meet") as exc_info:
+            await _create_media_buy_impl(req=req, identity=identity)
 
-        # Verify validation failed with USD minimum
-        assert response.errors is not None and len(response.errors) > 0
-        error_msg = response.errors[0].message.lower()
-        assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "1000" in response.errors[0].message  # USD minimum is $1000
-        assert "usd" in error_msg
+        # Verify error details
+        error_msg = str(exc_info.value)
+        assert "1000" in error_msg  # USD minimum is $1000
+        assert "USD" in error_msg
 
     async def test_no_minimum_when_not_set(self, setup_test_data):
         """Test that media buys with no minimum set in currency limit are allowed."""

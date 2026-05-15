@@ -274,10 +274,15 @@ class TestCreativeAssignment:
             )
             products_data = parse_tool_result(products_result)
 
-            assert len(products_data["products"]) > 0, "Must have at least one product"
+            # Need at least 2 distinct products — duplicate product_ids in packages
+            # are now rejected with AdCPConflictError (PR #1307).
+            num_products = len(products_data["products"])
+            assert num_products >= 2, f"Test requires at least 2 distinct products, got {num_products}"
             product = products_data["products"][0]
             product_id = product["product_id"]
-            print(f"   ✓ Found product: {product_id}")
+            product2 = products_data["products"][1]
+            product2_id = product2["product_id"]
+            print(f"   ✓ Found products: {product_id}, {product2_id}")
 
             # Get formats
             formats_result = await client.call_tool("list_creative_formats", {})
@@ -290,7 +295,7 @@ class TestCreativeAssignment:
                 fmt_id_str = fmt_id.get("id", "") if isinstance(fmt_id, dict) else ""
 
                 if "display" in fmt_id_str.lower():
-                    format_id = fmt_id_str  # Store the STRING id
+                    format_id = fmt_id  # Store the FULL FormatId dict (with agent_url) per AdCP spec
                     break
 
             if not format_id:
@@ -315,17 +320,18 @@ class TestCreativeAssignment:
                 brand={"domain": "testbrand.com"},
             )
 
-            # Override packages to have 2 distinct packages
+            # Override packages to have 2 distinct packages — must use distinct product_ids
+            # (PR #1307: duplicate product_ids per package now raise AdCPConflictError).
             media_buy_request["packages"] = [
                 {
                     "product_id": product_id,
-                    "pricing_option_id": "cpm_option_1",
+                    "pricing_option_id": "cpm_usd_fixed",
                     "budget": 5000.0,
                     "targeting_overlay": {"geo_countries": ["US"]},
                 },
                 {
-                    "product_id": product_id,
-                    "pricing_option_id": "cpm_option_1",
+                    "product_id": product2_id,
+                    "pricing_option_id": "cpm_usd_fixed",
                     "budget": 5000.0,
                     "targeting_overlay": {"geo_countries": ["CA"]},
                 },

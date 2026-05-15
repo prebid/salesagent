@@ -18,8 +18,9 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest
+from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_package_request
@@ -134,10 +135,10 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
         end_time=end,
     )
 
-    response, status = await _create_media_buy_impl(req=request, identity=_make_identity())
+    with pytest.raises(AdCPValidationError, match="conflict") as exc_info:
+        await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    assert isinstance(response, CreateMediaBuyError), f"Expected error response, got {type(response).__name__}"
-    error_text = response.errors[0].message
+    error_text = str(exc_info.value)
     assert "geo_countries/geo_countries_exclude conflict" in error_text
     assert "US" in error_text
 
@@ -163,9 +164,9 @@ async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
         end_time=end,
     )
 
-    response, status = await _create_media_buy_impl(req=request, identity=_make_identity())
+    with pytest.raises(AdCPValidationError, match="conflict") as exc_info:
+        await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    assert isinstance(response, CreateMediaBuyError), f"Expected error response, got {type(response).__name__}"
-    error_text = response.errors[0].message
+    error_text = str(exc_info.value)
     assert "geo_metros/geo_metros_exclude conflict" in error_text
     assert "501" in error_text
