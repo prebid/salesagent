@@ -278,6 +278,9 @@ class TestAdCPReferenceImplementation:
             webhook_server["received"].clear()
 
             # Update budget (AdCP spec: budget is a number, not an object)
+            # push_notification_config.authentication requires `schemes` and
+            # `credentials` (minLength 32) per AdCP spec — mirrors the reporting_webhook
+            # shape used by build_adcp_media_buy_request.
             update_result = await client.call_tool(
                 "update_media_buy",
                 {
@@ -286,7 +289,10 @@ class TestAdCPReferenceImplementation:
                     "context": {"e2e": "update_media_buy"},
                     "push_notification_config": {
                         "url": webhook_server["url"],
-                        "authentication": {"type": "none"},
+                        "authentication": {
+                            "credentials": "test-webhook-bearer-token-at-least-32-chars-long",
+                            "schemes": ["Bearer"],
+                        },
                     },
                 },
             )

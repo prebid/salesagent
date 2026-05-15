@@ -188,12 +188,24 @@ def build_sync_creatives_request(
         request["creative_ids"] = creative_ids
 
     if webhook_url:
-        request["push_notification_config"] = {
-            "url": webhook_url,
-            "authentication": {"type": "none"},
-        }
+        request["push_notification_config"] = _push_notification_config(webhook_url)
 
     return request
+
+
+def _push_notification_config(webhook_url: str) -> dict[str, Any]:
+    """Build a spec-compliant push_notification_config for tests.
+
+    AdCP requires authentication.schemes (list) and authentication.credentials
+    (minLength 32). Returning ``{"type": "none"}`` was rejected by the schema.
+    """
+    return {
+        "url": webhook_url,
+        "authentication": {
+            "credentials": "test-webhook-bearer-token-at-least-32-chars-long",
+            "schemes": ["Bearer"],
+        },
+    }
 
 
 def build_creative(
@@ -276,10 +288,7 @@ def build_update_media_buy_request(
     if packages is not None:
         request["packages"] = packages
     if webhook_url:
-        request["push_notification_config"] = {
-            "url": webhook_url,
-            "authentication": {"type": "none"},
-        }
+        request["push_notification_config"] = _push_notification_config(webhook_url)
 
     return request
 
