@@ -31,6 +31,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import MediaBuyStatus
 
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -1246,7 +1247,7 @@ class TestDeliveryAuthErrors:
     """UC-004-EXT-A/B: authentication and principal errors."""
 
     def test_missing_principal_id_returns_error(self):
-        """UC-004-EXT-A1: no principal_id returns principal_id_missing error.
+        """UC-004-EXT-A1: no principal_id raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
         Covers: UC-004-EXT-A-01
@@ -1260,15 +1261,12 @@ class TestDeliveryAuthErrors:
         )
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-        response = _get_media_buy_delivery_impl(req, identity)
 
-        assert response.errors is not None
-        assert len(response.errors) == 1
-        assert response.errors[0].code == "AUTH_REQUIRED"
-        assert response.media_buy_deliveries == []
+        with pytest.raises(AdCPAuthenticationError, match="[Pp]rincipal"):
+            _get_media_buy_delivery_impl(req, identity)
 
     def test_principal_not_found_returns_error(self):
-        """UC-004-EXT-B1: principal ID not in tenant returns principal_not_found.
+        """UC-004-EXT-B1: principal ID not in tenant raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
         Covers: UC-004-EXT-B-01
@@ -1277,12 +1275,8 @@ class TestDeliveryAuthErrors:
         identity = _make_identity(principal_id="ghost_principal")
 
         with patch(f"{_PATCH_PREFIX}.get_principal_object", return_value=None):
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        assert response.errors is not None
-        assert response.errors[0].code == "AUTH_REQUIRED"
-        assert "ghost_principal" in response.errors[0].message
-        assert response.media_buy_deliveries == []
+            with pytest.raises(AdCPAuthenticationError, match="ghost_principal"):
+                _get_media_buy_delivery_impl(req, identity)
 
     def test_auth_failure_no_state_change(self):
         """UC-004-EXT-A2: system state unchanged on auth failure (read-only op).
@@ -1306,11 +1300,8 @@ class TestDeliveryAuthErrors:
             patch(f"{_PATCH_PREFIX}.get_adapter") as mock_adapter,
             patch(f"{_PATCH_PREFIX}._get_target_media_buys") as mock_target,
         ):
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        # Auth failed
-        assert response.errors is not None
-        assert response.errors[0].code == "AUTH_REQUIRED"
+            with pytest.raises(AdCPAuthenticationError):
+                _get_media_buy_delivery_impl(req, identity)
 
         # No adapter or DB calls occurred
         mock_adapter.assert_not_called()
@@ -1512,7 +1503,7 @@ class TestDeliveryInvalidDateRange:
     """UC-004-EXT-E: invalid date range validation."""
 
     def test_start_date_equals_end_date_returns_error(self):
-        """UC-004-EXT-E1: start_date == end_date returns invalid_date_range.
+        """UC-004-EXT-E1: start_date == end_date raises AdCPValidationError.
 
         Spec: UNSPECIFIED (implementation-defined date range validation).
         Spec defines start_date/end_date as string patterns but no ordering constraint.
@@ -1523,14 +1514,11 @@ class TestDeliveryInvalidDateRange:
             end_date="2025-03-15",
         )
 
-        response = _run_impl_with_patches(req)
-
-        assert response.errors is not None
-        assert response.errors[0].code == "VALIDATION_ERROR"
-        assert response.media_buy_deliveries == []
+        with pytest.raises(AdCPValidationError, match="[Ss]tart date"):
+            _run_impl_with_patches(req)
 
     def test_start_date_after_end_date_returns_error(self):
-        """UC-004-EXT-E2: start_date > end_date returns invalid_date_range.
+        """UC-004-EXT-E2: start_date > end_date raises AdCPValidationError.
 
         Spec: UNSPECIFIED (implementation-defined date range validation).
         Covers: UC-004-EXT-E-02
@@ -1540,11 +1528,8 @@ class TestDeliveryInvalidDateRange:
             end_date="2025-03-10",
         )
 
-        response = _run_impl_with_patches(req)
-
-        assert response.errors is not None
-        assert response.errors[0].code == "VALIDATION_ERROR"
-        assert response.media_buy_deliveries == []
+        with pytest.raises(AdCPValidationError, match="[Ss]tart date"):
+            _run_impl_with_patches(req)
 
     def test_date_range_error_no_state_change(self):
         """UC-004-EXT-E3: state unchanged on date range error (read-only op).
@@ -1565,17 +1550,14 @@ class TestDeliveryInvalidDateRange:
 
         with (
             patches["principal_obj"],
-            patches["adapter"] as mock_get_adapter,
+            patches["adapter"],
             patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
             patches["uow"],
         ):
-            response = _get_media_buy_delivery_impl(req, identity)
-
-        # Date range error returned
-        assert response.errors is not None
-        assert response.errors[0].code == "VALIDATION_ERROR"
+            with pytest.raises(AdCPValidationError):
+                _get_media_buy_delivery_impl(req, identity)
 
         # No adapter calls or target media buy lookups occurred
         mock_adapter.get_media_buy_delivery.assert_not_called()
@@ -1591,11 +1573,11 @@ class TestDeliveryAdapterError:
     """UC-004-EXT-F: adapter failure handling."""
 
     def test_adapter_exception_returns_adapter_error(self):
-        """UC-004-EXT-F1: adapter raises Exception -> adapter_error code.
+        """UC-004-EXT-F1: adapter raises Exception -> AdCPAdapterError.
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
-        CONFIRMED: errors array (items: core/error.json) is an optional field for task-specific
-        errors and warnings.
+        Adapter exceptions now propagate as AdCPAdapterError so the boundary translator
+        produces a two-layer envelope.
         Covers: UC-004-EXT-F-01
         """
         buy = _make_mock_media_buy(media_buy_id="mb_err")
@@ -1604,25 +1586,16 @@ class TestDeliveryAdapterError:
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_err"])
 
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_err", buy)],
-        )
-
-        assert response.errors is not None
-        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
-        assert "mb_err" in response.errors[0].message
-        assert response.media_buy_deliveries == []
-        assert response.aggregated_totals.impressions == 0.0
-        assert response.aggregated_totals.spend == 0.0
+        with pytest.raises(AdCPAdapterError, match="mb_err"):
+            _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_err", buy)],
+            )
 
     def test_adapter_error_preserves_reporting_period(self):
-        """UC-004-EXT-F2: adapter error still includes correct reporting_period.
+        """UC-004-EXT-F2: adapter exception raises AdCPAdapterError.
 
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
-        CONFIRMED: reporting_period is a required field in the response, so it must be present
-        even when errors occur.
         Covers: UC-004-EXT-F-02
         """
         buy = _make_mock_media_buy(media_buy_id="mb_err2", currency="EUR")
@@ -1635,21 +1608,18 @@ class TestDeliveryAdapterError:
             end_date="2025-03-31",
         )
 
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_err2", buy)],
-        )
-
-        assert response.reporting_period.start.month == 3
-        assert response.reporting_period.end.month == 3
-        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
+        with pytest.raises(AdCPAdapterError, match="mb_err2"):
+            _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_err2", buy)],
+            )
 
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
 
         Spec: UNSPECIFIED (implementation-defined audit/logging behavior).
-        When adapter raises an exception, the error must be logged.
+        When adapter raises an exception, the error must be logged before AdCPAdapterError propagates.
         Covers: UC-004-EXT-F-03
         """
         buy = _make_mock_media_buy(media_buy_id="mb_log")
@@ -1659,15 +1629,12 @@ class TestDeliveryAdapterError:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_log"])
 
         with patch(f"{_PATCH_PREFIX}.logger") as mock_logger:
-            response = _run_impl_with_patches(
-                req,
-                adapter=mock_adapter,
-                target_buys=[("mb_log", buy)],
-            )
-
-        # Error response returned
-        assert response.errors is not None
-        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
+            with pytest.raises(AdCPAdapterError):
+                _run_impl_with_patches(
+                    req,
+                    adapter=mock_adapter,
+                    target_buys=[("mb_log", buy)],
+                )
 
         # Error was logged
         mock_logger.error.assert_called()
@@ -1675,11 +1642,8 @@ class TestDeliveryAdapterError:
         assert "mb_log" in log_message
 
     def test_adapter_error_no_state_change(self):
-        """UC-004-EXT-F4: state unchanged on adapter error (verify no DB writes).
+        """UC-004-EXT-F4: adapter error raises AdCPAdapterError; no DB writes occur.
 
-        Spec: UNSPECIFIED (implementation-defined error handling behavior).
-        Delivery is a read-only operation. Adapter errors must not cause any DB writes.
-        The response returns error info but doesn't modify any state.
         Covers: UC-004-EXT-F-04
         """
         buy = _make_mock_media_buy(media_buy_id="mb_nowrite")
@@ -1692,21 +1656,12 @@ class TestDeliveryAdapterError:
             end_date="2025-06-30",
         )
 
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_nowrite", buy)],
-        )
-
-        # Error returned, no deliveries
-        assert response.errors is not None
-        assert response.errors[0].code == "SERVICE_UNAVAILABLE"
-        assert response.media_buy_deliveries == []
-
-        # Aggregated totals are zeroed (no partial data leaked)
-        assert response.aggregated_totals.impressions == 0.0
-        assert response.aggregated_totals.spend == 0.0
-        assert response.aggregated_totals.media_buy_count == 0
+        with pytest.raises(AdCPAdapterError, match="mb_nowrite"):
+            _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_nowrite", buy)],
+            )
 
 
 # ===========================================================================
@@ -1740,9 +1695,7 @@ class TestDeliveryWebhookHappyPath:
         """
         service = WebhookDeliveryService()
 
-        with (
-            patch.object(service, "_send_webhook_enhanced", return_value=True) as mock_send,
-        ):
+        with (patch.object(service, "_send_webhook_enhanced", return_value=True) as mock_send,):
             service.send_delivery_webhook(
                 media_buy_id="mb_wh06",
                 tenant_id="t1",

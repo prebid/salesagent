@@ -913,9 +913,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_gen"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-        ):
+        with (patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -3618,7 +3616,7 @@ class TestDeliveryImplDateRange:
             assert 29 <= delta.days <= 31  # ~30 days
 
     def test_start_after_end_returns_error(self):
-        """UC-004-DR03: start >= end returns invalid_date_range error.
+        """UC-004-DR03: start >= end raises AdCPValidationError.
 
         Spec: UNSPECIFIED (implementation-defined date range validation)
         """
@@ -3636,11 +3634,8 @@ class TestDeliveryImplDateRange:
                 start_date="2026-03-20",
                 end_date="2026-03-10",
             )
-            resp = _get_media_buy_delivery_impl(req, identity)
-
-            assert isinstance(resp, GetMediaBuyDeliveryResponse)
-            assert resp.errors is not None
-            assert any(e.code == "VALIDATION_ERROR" for e in resp.errors)
+            with pytest.raises(AdCPValidationError, match="[Ss]tart date"):
+                _get_media_buy_delivery_impl(req, identity)
 
 
 class TestDeliveryImplErrors:
@@ -3666,30 +3661,28 @@ class TestDeliveryImplErrors:
         assert exc_info.value.recovery == "correctable"
 
     def test_principal_not_found_returns_error_response(self):
-        """UC-004-E02: principal not in DB returns error in response.
+        """UC-004-E02: principal not in DB raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined principal resolution)
-        Ported from test_delivery_behavioral.py::test_principal_not_found_returns_error
         """
+        from src.core.exceptions import AdCPAuthenticationError
+
         identity = _make_identity()
 
         with patch("src.core.tools.media_buy_delivery.get_principal_object", return_value=None):
             req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-            resp = _get_media_buy_delivery_impl(req, identity)
-
-            assert isinstance(resp, GetMediaBuyDeliveryResponse)
-            assert resp.errors is not None
-            assert any(e.code == "AUTH_REQUIRED" for e in resp.errors)
+            with pytest.raises(AdCPAuthenticationError):
+                _get_media_buy_delivery_impl(req, identity)
 
     def test_adapter_error_returns_error_code(self):
-        """UC-004-E03: adapter failure returns adapter_error.
+        """UC-004-E03: adapter failure raises AdCPAdapterError.
 
-        Spec: CONFIRMED -- get-media-buy-delivery-response.json has errors array
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/get-media-buy-delivery-response.json
         Priority: P1
         Type: unit
         Source: UC-004 ext-f
         """
+        from src.core.exceptions import AdCPAdapterError
+
         buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
         buy.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]}
 
@@ -3717,11 +3710,8 @@ class TestDeliveryImplErrors:
                 start_date="2025-01-01",
                 end_date="2025-06-30",
             )
-            resp = _get_media_buy_delivery_impl(req, identity)
-
-            assert isinstance(resp, GetMediaBuyDeliveryResponse)
-            assert resp.errors is not None
-            assert any(e.code == "SERVICE_UNAVAILABLE" for e in resp.errors)
+            with pytest.raises(AdCPAdapterError):
+                _get_media_buy_delivery_impl(req, identity)
 
     def test_ownership_mismatch_returns_not_found(self):
         """UC-004-E04: non-owner sees not_found, not ownership_mismatch.

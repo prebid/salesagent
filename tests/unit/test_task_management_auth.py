@@ -122,10 +122,12 @@ async def test_get_task_authenticated_proceeds_past_auth_check(
     mocker: pytest.FixtureRequest,
 ) -> None:
     """Authenticated identity must pass the auth check and proceed to DB access."""
+    from src.core.exceptions import AdCPNotFoundError
+
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
     mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id.return_value = None
 
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(AdCPNotFoundError, match="not found"):
         await get_task(task_id="step-999", identity=_identity_with_principal())
 
 
@@ -134,8 +136,10 @@ async def test_complete_task_authenticated_proceeds_past_auth_check(
     mocker: pytest.FixtureRequest,
 ) -> None:
     """Authenticated identity must pass the auth check and proceed to DB access."""
+    from src.core.exceptions import AdCPNotFoundError
+
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
     mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id.return_value = None
 
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(AdCPNotFoundError, match="not found"):
         await complete_task(task_id="step-999", identity=_identity_with_principal())

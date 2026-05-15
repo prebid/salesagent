@@ -15,7 +15,7 @@ from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import WorkflowUoW
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPConflictError, AdCPNotFoundError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,7 @@ async def get_task(
         task = uow.workflows.get_by_step_id(task_id)
 
         if not task:
-            raise ValueError(f"Task {task_id} not found")
+            raise AdCPNotFoundError(f"Task {task_id} not found")
 
         mappings = uow.workflows.get_mappings_for_step(task_id)
 
@@ -219,7 +219,10 @@ async def complete_task(
     tenant = identity.tenant
 
     if status not in ["completed", "failed"]:
-        raise ValueError(f"Invalid status '{status}'. Must be 'completed' or 'failed'")
+        raise AdCPValidationError(
+            f"Invalid status '{status}'. Must be 'completed' or 'failed'",
+            field="status",
+        )
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -227,10 +230,10 @@ async def complete_task(
         task = uow.workflows.get_by_step_id(task_id)
 
         if not task:
-            raise ValueError(f"Task {task_id} not found")
+            raise AdCPNotFoundError(f"Task {task_id} not found")
 
         if task.status not in ["pending", "in_progress", "requires_approval"]:
-            raise ValueError(f"Task {task_id} is already {task.status} and cannot be completed")
+            raise AdCPConflictError(f"Task {task_id} is already {task.status} and cannot be completed")
 
         completed_time = datetime.now(UTC)
 

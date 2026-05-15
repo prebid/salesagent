@@ -31,13 +31,8 @@ PATTERN_A_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/google_ad_manager.py": 22,
     "src/adapters/kevel.py": 5,
     "src/adapters/triton_digital.py": 5,
-    "src/core/tools/accounts.py": 2,
-    "src/core/tools/creative_formats.py": 1,
-    "src/core/tools/creatives/_processing.py": 1,
     "src/core/tools/media_buy_create.py": 4,
-    "src/core/tools/media_buy_delivery.py": 5,
     "src/core/tools/media_buy_update.py": 21,
-    "src/core/tools/signals.py": 3,
 }
 
 # Anchor scan paths to the repo root so the guard works regardless of CWD
@@ -51,8 +46,18 @@ def _rel(path: Path) -> str:
     return str(path.relative_to(_REPO_ROOT))
 
 
+_NOQA_MARKER = "# noqa: structural-guard"
+
+
 def _count_pattern_a_sites(filepath: Path) -> list[int]:
-    """Return line numbers of ``Error(code=...)`` literals in the file."""
+    """Return line numbers of ``Error(code=...)`` literals in the file.
+
+    Sites carrying a ``# noqa: structural-guard`` comment anywhere within the
+    call's source range are excluded. This marker is reserved for legitimate
+    per-item advisory errors inside *success* response envelopes (e.g.,
+    ``SyncAccountsResponse(errors=list[Error])`` where each entry is a per-account
+    result). Operation-level failures must use typed ``AdCPError`` raises.
+    """
     # Reuse the shared alias collector from the existing code-compliance guard
     # rather than duplicate the AST walk; both guards target the same Error
     # imports.
@@ -60,11 +65,13 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
 
     if not filepath.exists():
         return []
+    source_text = filepath.read_text()
     try:
-        tree = ast.parse(filepath.read_text(), filename=str(filepath))
+        tree = ast.parse(source_text, filename=str(filepath))
     except SyntaxError:
         return []
 
+    source_lines = source_text.splitlines()
     aliases = _collect_error_aliases(tree)
     lines: list[int] = []
     for node in ast.walk(tree):
@@ -78,10 +85,13 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
             matched = True
         if not matched:
             continue
-        for kw in node.keywords:
-            if kw.arg == "code":
-                lines.append(node.lineno)
-                break
+        if not any(kw.arg == "code" for kw in node.keywords):
+            continue
+        start = node.lineno - 1
+        end = (node.end_lineno or node.lineno) - 1
+        if any(_NOQA_MARKER in source_lines[i] for i in range(start, min(end + 1, len(source_lines)))):
+            continue
+        lines.append(node.lineno)
     return lines
 
 
