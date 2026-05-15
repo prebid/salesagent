@@ -572,8 +572,14 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
         bufsize=1,  # Line buffered
     )
 
-    # Wait for server to be ready
-    max_wait = 20  # seconds (increased for server initialization)
+    # Wait for server to be ready.
+    # Server startup is dominated by Python imports (fastmcp + adcp SDK + project)
+    # plus FastAPI lifespan + DB pool warm-up. Under CI load this routinely takes
+    # 20-40s; the prior 20s deadline produced flaky 'failed to start' errors even
+    # though Uvicorn's own log showed it had started just past the threshold. Same
+    # rationale as bf5fe3a66 (test-stack readiness deadline 120s -> 360s for
+    # cold-boot).
+    max_wait = 60  # seconds
     start_time = time.time()
     server_ready = False
 
