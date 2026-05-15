@@ -35,7 +35,7 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/triton_digital.py": 2,
     "src/adapters/xandr.py": 5,
     "src/core/tools/media_buy_create.py": 7,
-    "src/core/tools/media_buy_update.py": 5,
+    "src/core/tools/media_buy_update.py": 4,
     "src/core/tools/performance.py": 1,
 }
 

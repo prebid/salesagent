@@ -24,33 +24,18 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto).
-# Line numbers reflect FIXME comment restored in media_buy_update.py (PR04 review item 1).
+# Sub-batch 3 (PR 2) drained 15 entries via ContextManager.fail_step adoption;
+# the 6 remaining update entries serialize success-shape payloads (approval step,
+# adapter result wrappers) that fail_step does not cover.
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 22 violations (workflow step response_data)
-    # Line numbers updated after state-machine precondition guard added.
-    ("media_buy_update.py", 267),
-    ("media_buy_update.py", 327),
-    ("media_buy_update.py", 328),
-    ("media_buy_update.py", 382),
-    ("media_buy_update.py", 439),
-    ("media_buy_update.py", 462),
-    ("media_buy_update.py", 504),
-    ("media_buy_update.py", 531),
-    ("media_buy_update.py", 548),
-    ("media_buy_update.py", 602),
-    ("media_buy_update.py", 632),
-    ("media_buy_update.py", 652),
-    ("media_buy_update.py", 678),
-    ("media_buy_update.py", 857),
-    ("media_buy_update.py", 888),
-    ("media_buy_update.py", 916),
-    ("media_buy_update.py", 1087),
-    ("media_buy_update.py", 1105),
-    ("media_buy_update.py", 1155),
-    ("media_buy_update.py", 1248),
-    ("media_buy_update.py", 1280),
-    ("media_buy_update.py", 1343),
+    # _update_media_buy_impl: 6 violations (success-shape persistence, not failure)
+    ("media_buy_update.py", 330),
+    ("media_buy_update.py", 331),
+    ("media_buy_update.py", 451),
+    ("media_buy_update.py", 493),
+    ("media_buy_update.py", 520),
+    ("media_buy_update.py", 579),
+    ("media_buy_update.py", 1251),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 615),
     # _list_creatives_impl: 1 violation (filter dict conversion)

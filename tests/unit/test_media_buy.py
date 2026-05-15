@@ -2061,10 +2061,11 @@ class TestUpdateMediaBuyTiming:
             # Precondition + currency check + date check
             mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy, mock_buy]
 
-            result = _update_media_buy_impl(req=req, identity=identity)
+            from src.core.exceptions import AdCPValidationError
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert any("date" in e.message.lower() or "end" in e.message.lower() for e in result.errors)
+            with pytest.raises(AdCPValidationError, match="(?i)date|end") as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
+            assert "date" in str(exc_info.value).lower() or "end" in str(exc_info.value).lower()
 
     def test_shortened_flight_recalculates_daily_spend(self):
         """UC-003-T03: shorter flight with same budget may exceed daily cap.
@@ -2132,13 +2133,12 @@ class TestUpdateMediaBuyTiming:
 
             mock_uow.media_buys.get_by_id.return_value = mock_buy
 
-            result = _update_media_buy_impl(req=req, identity=identity)
+            from src.core.exceptions import AdCPBudgetExceededError
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert any(
-            "daily" in e.message.lower() or "budget" in e.message.lower() or "limit" in e.message.lower()
-            for e in result.errors
-        )
+            with pytest.raises(AdCPBudgetExceededError) as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
+            msg = str(exc_info.value).lower()
+            assert "daily" in msg or "budget" in msg or "limit" in msg
 
 
 class TestUpdateMediaBuyCampaignBudget:
@@ -2376,10 +2376,10 @@ class TestUpdateMediaBuyCreativeIds:
 
             uow_session.scalars.side_effect = [creative_result]
 
-            result = _update_media_buy_impl(req=req, identity=identity)
+            from src.core.exceptions import AdCPCreativeRejectedError
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert any("not found" in e.message.lower() for e in result.errors)
+            with pytest.raises(AdCPCreativeRejectedError, match="(?i)not found"):
+                _update_media_buy_impl(req=req, identity=identity)
 
     def test_creative_error_state_rejected(self):
         """UC-003-CI03: creative with status=error rejected.
@@ -2738,7 +2738,12 @@ class TestUpdateMediaBuyIdentification:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises((ValueError, AdCPAuthorizationError), match="(?i)not found|does not own"):
+            from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+            with pytest.raises(
+                (AdCPMediaBuyNotFoundError, AdCPAuthorizationError),
+                match="(?i)not found|does not own",
+            ):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_buyer_ref_no_longer_accepted_on_update(self):
