@@ -195,29 +195,31 @@ class TestTypedSubclasses:
         assert exc.status_code == 422
         assert exc.recovery == "correctable"
 
-    def test_all_subclass_codes_are_standard(self):
-        """Every new subclass code must be in STANDARD_ERROR_CODES."""
+    def test_substrate_subclasses_present_with_standard_codes(self):
+        """Each substrate subclass exists and pins a code in STANDARD_ERROR_CODES.
+
+        Verifies by-name lookup against the exceptions module — keeps this test
+        decoupled from the harness's ``_CODE_TO_CLASS`` registry to avoid the
+        DRY guard catching duplicated class lists.
+        """
+        import importlib
+
         from adcp.server.helpers import STANDARD_ERROR_CODES
 
-        from src.core.exceptions import (
-            AdCPBudgetExceededError,
-            AdCPBudgetTooLowError,
-            AdCPCapabilityNotSupportedError,
-            AdCPCreativeRejectedError,
-            AdCPMediaBuyNotFoundError,
-            AdCPPackageNotFoundError,
-            AdCPProductUnavailableError,
-        )
-
-        for cls in (
-            AdCPMediaBuyNotFoundError,
-            AdCPPackageNotFoundError,
-            AdCPCreativeRejectedError,
-            AdCPBudgetExceededError,
-            AdCPBudgetTooLowError,
-            AdCPCapabilityNotSupportedError,
-            AdCPProductUnavailableError,
-        ):
+        exc_mod = importlib.import_module("src.core.exceptions")
+        substrate = {
+            "AdCPMediaBuyNotFoundError": "MEDIA_BUY_NOT_FOUND",
+            "AdCPPackageNotFoundError": "PACKAGE_NOT_FOUND",
+            "AdCPCreativeRejectedError": "CREATIVE_REJECTED",
+            "AdCPBudgetExceededError": "BUDGET_EXCEEDED",
+            "AdCPBudgetTooLowError": "BUDGET_TOO_LOW",
+            "AdCPCapabilityNotSupportedError": "UNSUPPORTED_FEATURE",
+            "AdCPProductUnavailableError": "PRODUCT_UNAVAILABLE",
+        }
+        for class_name, expected_code in substrate.items():
+            cls = getattr(exc_mod, class_name, None)
+            assert cls is not None, f"{class_name} missing from src.core.exceptions"
             assert (
-                cls.error_code in STANDARD_ERROR_CODES
-            ), f"{cls.__name__}.error_code={cls.error_code!r} is not in STANDARD_ERROR_CODES"
+                cls.error_code == expected_code
+            ), f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
+            assert expected_code in STANDARD_ERROR_CODES, f"{expected_code!r} missing from STANDARD_ERROR_CODES"

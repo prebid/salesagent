@@ -51,23 +51,13 @@ def _rel(path: Path) -> str:
     return str(path.relative_to(_REPO_ROOT))
 
 
-def _collect_error_aliases(tree: ast.AST) -> set[str]:
-    """Local names that alias the adcp ``Error`` type — match Error imports."""
-    aliases: set[str] = {"Error"}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        module = node.module or ""
-        if "error" not in module.split("."):
-            continue
-        for a in node.names:
-            if a.name == "Error":
-                aliases.add(a.asname or a.name)
-    return aliases
-
-
 def _count_pattern_a_sites(filepath: Path) -> list[int]:
     """Return line numbers of ``Error(code=...)`` literals in the file."""
+    # Reuse the shared alias collector from the existing code-compliance guard
+    # rather than duplicate the AST walk; both guards target the same Error
+    # imports.
+    from tests.unit.test_architecture_error_code_compliance import _collect_error_aliases
+
     if not filepath.exists():
         return []
     try:
