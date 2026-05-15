@@ -504,7 +504,9 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
-            _assert_rest_envelope(response.json(), "NOT_FOUND", recovery="terminal")
+            # AdCPNotFoundError's NOT_FOUND is INTERNAL_CODES; envelope translates
+            # to INVALID_REQUEST so the wire code stays in STANDARD_ERROR_CODES.
+            _assert_rest_envelope(response.json(), "INVALID_REQUEST", recovery="terminal")
 
     def test_adcp_adapter_from_impl_returns_502(self):
         """AdCPAdapterError raised in _impl → REST returns 502 with transient recovery."""
@@ -650,7 +652,11 @@ class TestCustomRecoveryOverrideMCPBoundary:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        _assert_mcp_envelope(exc_info.value, "NOT_FOUND", recovery="transient", message_substr="temporarily missing")
+        # AdCPNotFoundError's NOT_FOUND code maps to INVALID_REQUEST at the wire
+        # boundary so output is spec-compliant; custom recovery still propagates.
+        _assert_mcp_envelope(
+            exc_info.value, "INVALID_REQUEST", recovery="transient", message_substr="temporarily missing"
+        )
 
     def test_custom_recovery_in_extract_error_info(self):
         """extract_error_info returns overridden recovery, not class default."""
@@ -685,7 +691,8 @@ class TestCustomRecoveryOverrideA2ABoundary:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             # a2a-sdk 1.0: data is the spec envelope plus legacy keys; custom recovery propagates.
-            _assert_a2a_envelope(exc_info.value.data, "NOT_FOUND", "transient")
+            # NOT_FOUND is internal; wire-translated to INVALID_REQUEST.
+            _assert_a2a_envelope(exc_info.value.data, "INVALID_REQUEST", "transient")
 
 
 class TestCustomRecoveryOverrideRESTBoundary:
@@ -733,12 +740,15 @@ class TestRecoveryRoundtrip:
         )
         from src.core.tool_error_logging import extract_error_info, with_error_logging
 
+        # AdCPError (INTERNAL_ERROR) and AdCPNotFoundError (NOT_FOUND) hold internal
+        # codes; the boundary translates to STANDARD_ERROR_CODES (SERVICE_UNAVAILABLE
+        # and INVALID_REQUEST respectively). Other subclasses already use STANDARD codes.
         cases = [
-            (AdCPError, "internal", "INTERNAL_ERROR", "terminal"),
+            (AdCPError, "internal", "SERVICE_UNAVAILABLE", "terminal"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
             (AdCPAuthenticationError, "unauth", "AUTH_REQUIRED", "terminal"),
             (AdCPAuthorizationError, "forbidden", "AUTH_REQUIRED", "terminal"),
-            (AdCPNotFoundError, "missing", "NOT_FOUND", "terminal"),
+            (AdCPNotFoundError, "missing", "INVALID_REQUEST", "terminal"),
             (AdCPConflictError, "dup", "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", "INVALID_STATE", "terminal"),
             (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "correctable"),
@@ -827,7 +837,10 @@ class TestRecoveryRoundtrip:
                 assert isinstance(
                     exc_info.value, expected_a2a_type
                 ), f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(exc_info.value).__name__}"
-                _assert_a2a_envelope(exc_info.value.data, exc_class.error_code, expected_recovery)
+                # The envelope serializes the wire-translated code (translates
+                # NOT_FOUND/INTERNAL_ERROR/etc. to STANDARD_ERROR_CODES targets).
+                exc_instance = exc_class(msg)
+                _assert_a2a_envelope(exc_info.value.data, exc_instance.wire_error_code, expected_recovery)
 
     def test_rest_roundtrip_all_subclasses(self):
         """All 11 AdCPError subclasses: raise -> REST handler -> JSON body -> verify recovery."""
@@ -848,12 +861,15 @@ class TestRecoveryRoundtrip:
             AdCPValidationError,
         )
 
+        # Same internal-code -> standard-code translation as the MCP/A2A roundtrip
+        # tests above. HTTP status_code is preserved (it comes from the exception
+        # class directly, not from the wire code translation).
         cases = [
-            (AdCPError, "internal", 500, "INTERNAL_ERROR", "terminal"),
+            (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "terminal"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
             (AdCPAuthenticationError, "unauth", 401, "AUTH_REQUIRED", "terminal"),
             (AdCPAuthorizationError, "forbidden", 403, "AUTH_REQUIRED", "terminal"),
-            (AdCPNotFoundError, "missing", 404, "NOT_FOUND", "terminal"),
+            (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "terminal"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", 410, "INVALID_STATE", "terminal"),
             (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "correctable"),

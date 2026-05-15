@@ -27,6 +27,14 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # transport boundary; codes in INTERNAL_CODES never leave the server.
 
 ERROR_CODE_MAPPING: dict[str, str] = {
+    # Internal-only codes that occasionally leak to the wire when a raise site
+    # uses a base class (AdCPError / AdCPNotFoundError / AdCPConfigurationError)
+    # instead of a specific subclass. Mapped to the closest STANDARD_ERROR_CODES
+    # entry so the wire stays spec-compliant. PR 2 cleanup migrates the raise
+    # sites to specific subclasses; the mappings stay as a safety net.
+    "NOT_FOUND": "INVALID_REQUEST",
+    "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
+    "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
     "AUTH_TOKEN_INVALID": "AUTH_REQUIRED",
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
@@ -203,14 +211,25 @@ class AdCPValidationError(AdCPError):
 
 
 class AdCPAuthenticationError(AdCPError):
-    """Missing or invalid authentication credentials (401)."""
+    """Missing or invalid authentication credentials (401).
+
+    Recovery defaults to ``terminal`` to match
+    ``STANDARD_ERROR_CODES["AUTH_REQUIRED"]["recovery"]`` in adcp 4.3 (the SDK
+    we run). AdCP spec 3.0.4 (CHANGELOG ``78b1dc4``) reclassified AUTH_REQUIRED
+    to ``correctable`` (re-auth recovers); pending the SDK upgrade we keep
+    ``terminal`` so wire output matches the installed SDK's expectation.
+    """
 
     status_code = 401
     error_code = "AUTH_REQUIRED"
 
 
 class AdCPAuthorizationError(AdCPError):
-    """Authenticated but not authorized for this resource (403)."""
+    """Authenticated but not authorized for this resource (403).
+
+    Same ``terminal`` default as ``AdCPAuthenticationError`` for the same
+    SDK-vs-spec mismatch reason — see that class's docstring.
+    """
 
     status_code = 403
     error_code = "AUTH_REQUIRED"
@@ -420,16 +439,20 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
         suggestion=exc.suggestion,
         details=exc.details,
     )
+    # Copy errors[0] for the envelope-level mirror so callers that mutate one
+    # layer don't accidentally mutate the other (aliasing footgun before PR 3
+    # async/submitted work starts touching both).
     envelope: dict[str, Any] = {
-        "adcp_error": payload["errors"][0],
+        "adcp_error": dict(payload["errors"][0]),
         "errors": payload["errors"],
     }
     if exc.context is not None:
         # Accept both ContextObject (Pydantic) and plain dict — the field is
         # echoed verbatim so buyer agents can correlate without us mandating a
-        # specific type at every raise site.
+        # specific type at every raise site. ``mode="json"`` ensures
+        # datetimes/UUIDs/etc. become JSON-serializable primitives.
         if isinstance(exc.context, dict):
             envelope["context"] = dict(exc.context)
         else:
-            envelope["context"] = exc.context.model_dump(exclude_none=True)
+            envelope["context"] = exc.context.model_dump(mode="json", exclude_none=True)
     return envelope
