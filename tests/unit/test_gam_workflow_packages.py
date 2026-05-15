@@ -124,9 +124,9 @@ class TestGAMManualApprovalPath:
                 # Assert - Package IDs must match input packages
                 returned_ids = {pkg.package_id for pkg in response.packages}
                 expected_ids = {pkg.package_id for pkg in sample_packages}
-                assert returned_ids == expected_ids, (
-                    f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-                )
+                assert (
+                    returned_ids == expected_ids
+                ), f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
 
                 # Assert - Other required fields
                 # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
@@ -157,19 +157,21 @@ class TestGAMManualApprovalPath:
             ):
                 mock_workflow.return_value = None  # Simulate failure
 
-                # Act
+                # Act / Assert - workflow failure raises AdCPAdapterError carrying internal_code
+                import pytest
+
+                from src.core.exceptions import AdCPAdapterError
+
                 start_time = datetime.now()
                 end_time = start_time + timedelta(days=30)
-                response = adapter.create_media_buy(
-                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-                )
-
-            # Assert - With oneOf pattern, workflow failure returns error response without packages
-            from src.core.schemas import CreateMediaBuyError
-
-            assert isinstance(response, CreateMediaBuyError), "Workflow failure should return error response"
-            assert len(response.errors) > 0, "Error response must have errors"
-            assert response.errors[0].code == "WORKFLOW_CREATION_FAILED", "Error code should indicate workflow failure"
+                with pytest.raises(AdCPAdapterError) as exc_info:
+                    adapter.create_media_buy(
+                        request=sample_request,
+                        packages=sample_packages,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                assert exc_info.value.details.get("internal_code") == "WORKFLOW_CREATION_FAILED"
 
 
 class TestGAMActivationWorkflowPath:

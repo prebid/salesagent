@@ -23,15 +23,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-# Per-file caps captured at substrate landing. PR 2 drains these to zero.
-# Cannot be raised; only lowered. The guard fails if any file exceeds its cap
-# or if a new file shows up with Pattern A sites.
-PATTERN_A_PER_FILE_CAP: dict[str, int] = {
-    "src/adapters/broadstreet/adapter.py": 13,
-    "src/adapters/google_ad_manager.py": 22,
-    "src/adapters/kevel.py": 5,
-    "src/adapters/triton_digital.py": 5,
-}
+# Pattern A cap dict — drained to zero by PR 2. The guard remains active to
+# block new Pattern A constructions; advisory per-item sites in success
+# envelopes use the structural-guard skip marker (see _count_pattern_a_sites).
+PATTERN_A_PER_FILE_CAP: dict[str, int] = {}
 
 # Anchor scan paths to the repo root so the guard works regardless of CWD
 # (CI runs from the repo root; agents/IDEs may launch pytest from a subdir).

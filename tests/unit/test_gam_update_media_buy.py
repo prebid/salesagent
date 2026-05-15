@@ -7,7 +7,9 @@ and that unsupported actions return explicit errors (no silent failures).
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, Mock, patch
 
-from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuySuccess
+import pytest
+
+from src.core.schemas import UpdateMediaBuySuccess
 
 
 def test_update_package_budget_persists_to_database():
@@ -108,21 +110,17 @@ def test_update_package_budget_returns_error_when_package_not_found():
         mock_scalars.first.return_value = None
         mock_session.scalars.return_value = mock_scalars
 
-        # Call the actual method
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="update_package_budget",
-            package_id=package_id,
-            budget=new_budget,
-            today=datetime.now(UTC),
-        )
+        from src.core.exceptions import AdCPPackageNotFoundError
 
-        # Verify error response
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) == 1
-        assert result.errors[0].code == "PACKAGE_NOT_FOUND"
-        assert package_id in result.errors[0].message
+        with pytest.raises(AdCPPackageNotFoundError, match=package_id):
+            GoogleAdManager.update_media_buy(
+                mock_adapter,
+                media_buy_id=media_buy_id,
+                action="update_package_budget",
+                package_id=package_id,
+                budget=new_budget,
+                today=datetime.now(UTC),
+            )
 
         # Verify commit was NOT called (no changes to persist)
         mock_session.commit.assert_not_called()
@@ -140,21 +138,17 @@ def test_unsupported_action_returns_explicit_error():
     mock_adapter._is_admin_principal = Mock(return_value=False)
     mock_adapter._requires_manual_approval = Mock(return_value=False)
 
-    # Test an action that doesn't exist
-    result = GoogleAdManager.update_media_buy(
-        mock_adapter,
-        media_buy_id=media_buy_id,
-        action="delete_media_buy",  # Not supported
-        package_id=None,
-        budget=None,
-        today=datetime.now(),
-    )
+    from src.core.exceptions import AdCPCapabilityNotSupportedError
 
-    # Verify error response (not success!)
-    assert isinstance(result, UpdateMediaBuyError)
-    assert len(result.errors) == 1
-    assert result.errors[0].code == "UNSUPPORTED_FEATURE"
-    assert "delete_media_buy" in result.errors[0].message
+    with pytest.raises(AdCPCapabilityNotSupportedError, match="delete_media_buy"):
+        GoogleAdManager.update_media_buy(
+            mock_adapter,
+            media_buy_id=media_buy_id,
+            action="delete_media_buy",  # Not supported
+            package_id=None,
+            budget=None,
+            today=datetime.now(),
+        )
 
 
 def test_pause_resume_package_actions_work():
@@ -349,22 +343,20 @@ def test_update_package_budget_rejects_budget_below_delivery():
         mock_scalars.first.return_value = mock_package
         mock_session.scalars.return_value = mock_scalars
 
-        # Call the actual method
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="update_package_budget",
-            package_id=package_id,
-            budget=new_budget,
-            today=datetime.now(UTC),
-        )
+        from src.core.exceptions import AdCPBudgetExceededError
 
-        # Verify error response
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) == 1
-        assert result.errors[0].code == "BUDGET_EXCEEDED"
-        assert str(new_budget) in result.errors[0].message
-        assert str(current_spend) in result.errors[0].message
+        with pytest.raises(AdCPBudgetExceededError) as exc_info:
+            GoogleAdManager.update_media_buy(
+                mock_adapter,
+                media_buy_id=media_buy_id,
+                action="update_package_budget",
+                package_id=package_id,
+                budget=new_budget,
+                today=datetime.now(UTC),
+            )
+        msg = str(exc_info.value)
+        assert str(new_budget) in msg
+        assert str(current_spend) in msg
 
         # Verify commit was NOT called (budget rejected)
         mock_session.commit.assert_not_called()
