@@ -142,12 +142,21 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
     """Translate AdCPError to an A2A SDK error type preserving semantics.
 
-    The recovery classification, error_code, and details are forwarded in the
-    ``data`` field so that buyer agents (and test harness unwrapping) can
-    reconstruct the original AdCPError. Non-standard codes are translated
-    to STANDARD_ERROR_CODES at this transport boundary.
+    The A2A error ``data`` field carries the full spec-compliant two-layer
+    envelope (``adcp_error`` + ``errors[]`` + optional ``context``) so the
+    storyboard runner can read either layer. ``error_code`` and ``recovery``
+    are also surfaced at top-level for backward compatibility with the test
+    harness unwrapper. Non-standard codes are translated to
+    STANDARD_ERROR_CODES via ``exc.wire_error_code`` inside the envelope.
     """
-    data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.wire_error_code}
+    from src.core.exceptions import build_two_layer_error_envelope
+
+    envelope = build_two_layer_error_envelope(exc)
+    data: dict[str, Any] = {
+        **envelope,
+        "error_code": exc.wire_error_code,
+        "recovery": exc.recovery,
+    }
     if exc.details:
         data["details"] = exc.details
     if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
@@ -1397,6 +1406,19 @@ class AdCPRequestHandler(RequestHandler):
         except AdCPError as e:
             # Translate AdCPError to protocol-specific A2A error
             logger.error(f"AdCPError in skill handler {skill_name}: {e.error_code} - {e.message}")
+            # Audit gap fix: log failed A2A operation before re-raising so audit
+            # logger and Slack notifications fire on previously-silent failures.
+            # ``getattr`` keeps this defensive against test fixtures that pass
+            # a string or partially-built identity instead of ResolvedIdentity.
+            tenant_id = getattr(identity, "tenant_id", None)
+            if tenant_id:
+                self._log_a2a_operation(
+                    operation=skill_name,
+                    tenant_id=tenant_id,
+                    principal_id=getattr(identity, "principal_id", None) or "anonymous",
+                    success=False,
+                    error=e.message,
+                )
             raise _adcp_to_a2a_error(e)
         except ValueError as e:
             # Same translation as MCP: ValueError → VALIDATION_ERROR

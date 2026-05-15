@@ -41,8 +41,8 @@ def _install_admin_mounts() -> None:
         filtered_routes.append(route)
 
     app.router.routes = filtered_routes
-    app.mount("/admin", admin_wsgi)  # type: ignore[arg-type]
-    app.mount("/", admin_wsgi)  # type: ignore[arg-type]
+    app.mount("/admin", admin_wsgi)
+    app.mount("/", admin_wsgi)
 
 
 @asynccontextmanager
@@ -95,17 +95,26 @@ from src.core.exceptions import AdCPError  # noqa: E402
 
 @app.exception_handler(AdCPError)
 async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
-    """Convert AdCP exceptions to structured JSON error responses.
+    """Convert AdCP exceptions to the spec-compliant two-layer envelope.
 
-    Translates non-standard error codes to STANDARD_ERROR_CODES via
-    ERROR_CODE_MAPPING at this REST transport boundary so wire output
-    is always spec-compliant.
+    Body shape::
+
+        {
+            "adcp_error": {"code": "...", "message": "...", ...},
+            "errors": [{"code": "...", "message": "...", ...}],
+            "context": {...},     # echoed when present
+        }
+
+    HTTP status comes from ``exc.status_code``; the matching MCP/A2A
+    transport markers (``isError: true`` / ``failed``) are set by their
+    own boundary translators. Wire codes are translated through
+    ``ERROR_CODE_MAPPING`` inside the envelope builder.
     """
-    body = exc.to_dict()
-    body["error_code"] = exc.wire_error_code
+    from src.core.exceptions import build_two_layer_error_envelope
+
     return JSONResponse(
         status_code=exc.status_code,
-        content=body,
+        content=build_two_layer_error_envelope(exc),
     )
 
 

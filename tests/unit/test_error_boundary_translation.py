@@ -23,6 +23,52 @@ from src.core.exceptions import (
 )
 
 # ---------------------------------------------------------------------------
+# Wire-shape helpers — each boundary now produces the AdCP spec two-layer
+# envelope. Tests assert the envelope shape via these helpers instead of
+# repeating the structural checks in every test body.
+# ---------------------------------------------------------------------------
+
+
+def _assert_mcp_envelope(exc, code, recovery=None, message_substr=None):
+    """Verify a ToolError raised by the MCP boundary carries the envelope."""
+    from src.core.tool_error_logging import AdCPToolError
+
+    assert isinstance(exc, AdCPToolError), f"expected AdCPToolError, got {type(exc).__name__}"
+    err = exc.envelope["errors"][0]
+    assert err["code"] == code, f"errors[0].code={err['code']!r}, expected {code!r}"
+    assert (
+        exc.envelope["adcp_error"]["code"] == code
+    ), f"adcp_error.code={exc.envelope['adcp_error']['code']!r}, expected {code!r}"
+    if recovery is not None:
+        assert err.get("recovery") == recovery, f"errors[0].recovery={err.get('recovery')!r}, expected {recovery!r}"
+    if message_substr is not None:
+        assert message_substr in err.get("message", "")
+
+
+def _assert_a2a_envelope(exc_data, code, recovery):
+    """Verify A2AError.data carries the envelope plus backward-compat keys."""
+    assert isinstance(exc_data, dict)
+    assert exc_data["adcp_error"]["code"] == code
+    assert exc_data["errors"][0]["code"] == code
+    assert exc_data["adcp_error"]["recovery"] == recovery
+    assert exc_data["errors"][0]["recovery"] == recovery
+    # Backward-compat top-level keys consumed by the test harness unwrapper.
+    assert exc_data["error_code"] == code
+    assert exc_data["recovery"] == recovery
+
+
+def _assert_rest_envelope(body, code, recovery=None, message_substr=None):
+    """Verify a REST JSON body has the two-layer envelope shape."""
+    assert body["adcp_error"]["code"] == code, f"adcp_error.code={body['adcp_error']['code']!r}, expected {code!r}"
+    assert body["errors"][0]["code"] == code, f"errors[0].code={body['errors'][0]['code']!r}, expected {code!r}"
+    if recovery is not None:
+        assert body["adcp_error"]["recovery"] == recovery
+        assert body["errors"][0]["recovery"] == recovery
+    if message_substr is not None:
+        assert message_substr in body["errors"][0]["message"]
+
+
+# ---------------------------------------------------------------------------
 # MCP Boundary: extract_error_info
 # ---------------------------------------------------------------------------
 
@@ -198,7 +244,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         )
 
     def test_adcp_validation_tool_error_carries_recovery(self):
-        """AdCPValidationError → ToolError carries 'correctable' recovery in args[2]."""
+        """AdCPValidationError → ToolError envelope carries 'correctable' recovery."""
         from fastmcp.exceptions import ToolError
 
         from src.core.tool_error_logging import with_error_logging
@@ -211,11 +257,10 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert len(exc_info.value.args) >= 3
-        assert exc_info.value.args[2] == "correctable"
+        _assert_mcp_envelope(exc_info.value, "VALIDATION_ERROR", recovery="correctable")
 
     def test_adcp_adapter_tool_error_carries_transient_recovery(self):
-        """AdCPAdapterError → ToolError carries 'transient' recovery in args[2]."""
+        """AdCPAdapterError → ToolError envelope carries 'transient' recovery."""
         from fastmcp.exceptions import ToolError
 
         from src.core.tool_error_logging import with_error_logging
@@ -228,12 +273,10 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert exc_info.value.args[0] == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.args[1] == "GAM down"
-        assert exc_info.value.args[2] == "transient"
+        _assert_mcp_envelope(exc_info.value, "SERVICE_UNAVAILABLE", recovery="transient", message_substr="GAM down")
 
     def test_adcp_auth_becomes_tool_error(self):
-        """AdCPAuthenticationError from tool → ToolError with AUTH_REQUIRED code."""
+        """AdCPAuthenticationError from tool → ToolError envelope with AUTH_REQUIRED + terminal."""
         from fastmcp.exceptions import ToolError
 
         from src.core.tool_error_logging import with_error_logging
@@ -246,14 +289,11 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert "AUTH_REQUIRED" in str(exc_info.value) or (
-            exc_info.value.args and exc_info.value.args[0] == "AUTH_REQUIRED"
-        )
-        assert exc_info.value.args[2] == "terminal"
+        _assert_mcp_envelope(exc_info.value, "AUTH_REQUIRED", recovery="terminal")
 
     @pytest.mark.asyncio
     async def test_async_adcp_validation_becomes_tool_error(self):
-        """Async: AdCPValidationError → ToolError with preserved code and recovery."""
+        """Async: AdCPValidationError → ToolError envelope with preserved code and recovery."""
         from fastmcp.exceptions import ToolError
 
         from src.core.tool_error_logging import with_error_logging
@@ -266,10 +306,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             await wrapped()
 
-        assert "VALIDATION_ERROR" in str(exc_info.value) or (
-            exc_info.value.args and exc_info.value.args[0] == "VALIDATION_ERROR"
-        )
-        assert exc_info.value.args[2] == "correctable"
+        _assert_mcp_envelope(exc_info.value, "VALIDATION_ERROR", recovery="correctable")
 
     def test_tool_error_still_passes_through(self):
         """Existing ToolError behavior must be preserved — re-raised unchanged."""
@@ -352,7 +389,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
 
             # a2a-sdk 1.0: error attributes are directly on the exception
             assert "invalid param" in exc_info.value.message
-            assert exc_info.value.data == {"recovery": "correctable", "error_code": "VALIDATION_ERROR"}
+            _assert_a2a_envelope(exc_info.value.data, "VALIDATION_ERROR", "correctable")
 
     @pytest.mark.asyncio
     async def test_adcp_auth_becomes_invalid_request(self):
@@ -372,7 +409,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
 
             # a2a-sdk 1.0: error attributes are directly on the exception
             assert "bad token" in exc_info.value.message
-            assert exc_info.value.data == {"recovery": "terminal", "error_code": "AUTH_REQUIRED"}
+            _assert_a2a_envelope(exc_info.value.data, "AUTH_REQUIRED", "terminal")
 
     @pytest.mark.asyncio
     async def test_adcp_adapter_becomes_internal_error(self):
@@ -392,7 +429,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
 
             # a2a-sdk 1.0: error attributes are directly on the exception
             assert "GAM down" in exc_info.value.message
-            assert exc_info.value.data == {"recovery": "transient", "error_code": "SERVICE_UNAVAILABLE"}
+            _assert_a2a_envelope(exc_info.value.data, "SERVICE_UNAVAILABLE", "transient")
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
@@ -435,10 +472,9 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 400
-            body = response.json()
-            assert body["error_code"] == "VALIDATION_ERROR"
-            assert "invalid request" in body["message"]
-            assert body["recovery"] == "correctable"
+            _assert_rest_envelope(
+                response.json(), "VALIDATION_ERROR", recovery="correctable", message_substr="invalid request"
+            )
 
     def test_adcp_auth_from_impl_returns_401(self):
         """AdCPAuthenticationError raised in _impl → REST returns 401 with terminal recovery."""
@@ -453,9 +489,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 401
-            body = response.json()
-            assert body["error_code"] == "AUTH_REQUIRED"
-            assert body["recovery"] == "terminal"
+            _assert_rest_envelope(response.json(), "AUTH_REQUIRED", recovery="terminal")
 
     def test_adcp_not_found_from_impl_returns_404(self):
         """AdCPNotFoundError raised in _impl → REST returns 404 with terminal recovery."""
@@ -470,9 +504,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
-            body = response.json()
-            assert body["error_code"] == "NOT_FOUND"
-            assert body["recovery"] == "terminal"
+            _assert_rest_envelope(response.json(), "NOT_FOUND", recovery="terminal")
 
     def test_adcp_adapter_from_impl_returns_502(self):
         """AdCPAdapterError raised in _impl → REST returns 502 with transient recovery."""
@@ -487,9 +519,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
-            body = response.json()
-            assert body["error_code"] == "SERVICE_UNAVAILABLE"
-            assert body["recovery"] == "transient"
+            _assert_rest_envelope(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
     def test_adcp_conflict_from_impl_returns_409(self):
         """AdCPConflictError raised in _impl → REST returns 409 with correctable recovery."""
@@ -505,9 +535,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 409
-            body = response.json()
-            assert body["error_code"] == "CONFLICT"
-            assert body["recovery"] == "correctable"
+            _assert_rest_envelope(response.json(), "CONFLICT", recovery="correctable")
 
     def test_adcp_service_unavailable_from_impl_returns_503(self):
         """AdCPServiceUnavailableError raised in _impl → REST returns 503 with transient recovery."""
@@ -523,9 +551,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 503
-            body = response.json()
-            assert body["error_code"] == "SERVICE_UNAVAILABLE"
-            assert body["recovery"] == "transient"
+            _assert_rest_envelope(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
 
 # ---------------------------------------------------------------------------
@@ -569,9 +595,9 @@ class TestToDictRecoveryField:
         for exc, expected_recovery in cases:
             d = exc.to_dict()
             assert "recovery" in d, f"{type(exc).__name__}.to_dict() missing 'recovery' key"
-            assert d["recovery"] == expected_recovery, (
-                f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
-            )
+            assert (
+                d["recovery"] == expected_recovery
+            ), f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
 
     def test_to_dict_custom_recovery_override(self):
         """Custom recovery= kwarg overrides class default in to_dict() output."""
@@ -624,9 +650,7 @@ class TestCustomRecoveryOverrideMCPBoundary:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert exc_info.value.args[0] == "NOT_FOUND"
-        assert exc_info.value.args[1] == "temporarily missing"
-        assert exc_info.value.args[2] == "transient"  # Custom override, not default "terminal"
+        _assert_mcp_envelope(exc_info.value, "NOT_FOUND", recovery="transient", message_substr="temporarily missing")
 
     def test_custom_recovery_in_extract_error_info(self):
         """extract_error_info returns overridden recovery, not class default."""
@@ -660,8 +684,8 @@ class TestCustomRecoveryOverrideA2ABoundary:
             with pytest.raises(InternalError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            # a2a-sdk 1.0: error attributes are directly on the exception
-            assert exc_info.value.data == {"recovery": "transient", "error_code": "NOT_FOUND"}  # Custom, not "terminal"
+            # a2a-sdk 1.0: data is the spec envelope plus legacy keys; custom recovery propagates.
+            _assert_a2a_envelope(exc_info.value.data, "NOT_FOUND", "transient")
 
 
 class TestCustomRecoveryOverrideRESTBoundary:
@@ -681,9 +705,7 @@ class TestCustomRecoveryOverrideRESTBoundary:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
-            body = response.json()
-            assert body["error_code"] == "SERVICE_UNAVAILABLE"
-            assert body["recovery"] == "terminal"  # Custom, not default "transient"
+            _assert_rest_envelope(response.json(), "SERVICE_UNAVAILABLE", recovery="terminal")
 
 
 # ---------------------------------------------------------------------------
@@ -742,9 +764,8 @@ class TestRecoveryRoundtrip:
 
             tool_error = exc_info.value
 
-            # Step 1: ToolError carries the right args
-            assert tool_error.args[0] == expected_code, f"{exc_class.__name__}: code mismatch"
-            assert tool_error.args[2] == expected_recovery, f"{exc_class.__name__}: recovery mismatch in ToolError"
+            # Step 1: ToolError carries the spec-compliant envelope
+            _assert_mcp_envelope(tool_error, expected_code, recovery=expected_recovery)
 
             # Step 2: extract_error_info can read it back
             code, message_out, recovery = extract_error_info(tool_error)
@@ -803,15 +824,10 @@ class TestRecoveryRoundtrip:
                     await handler._handle_explicit_skill("get_products", {}, "token")
 
                 # a2a-sdk 1.0: check exception type and attributes directly
-                assert isinstance(exc_info.value, expected_a2a_type), (
-                    f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(exc_info.value).__name__}"
-                )
-                assert exc_info.value.data["recovery"] == expected_recovery, (
-                    f"{exc_class.__name__}: recovery={exc_info.value.data.get('recovery')!r}, expected {expected_recovery!r}"
-                )
-                assert exc_info.value.data["error_code"] == exc_class.error_code, (
-                    f"{exc_class.__name__}: error_code={exc_info.value.data.get('error_code')!r}, expected {exc_class.error_code!r}"
-                )
+                assert isinstance(
+                    exc_info.value, expected_a2a_type
+                ), f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(exc_info.value).__name__}"
+                _assert_a2a_envelope(exc_info.value.data, exc_class.error_code, expected_recovery)
 
     def test_rest_roundtrip_all_subclasses(self):
         """All 11 AdCPError subclasses: raise -> REST handler -> JSON body -> verify recovery."""
@@ -853,13 +869,7 @@ class TestRecoveryRoundtrip:
             ):
                 client = TestClient(app, raise_server_exceptions=False)
                 response = client.get("/api/v1/capabilities")
-                assert response.status_code == expected_status, (
-                    f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
-                )
-                body = response.json()
-                assert body["error_code"] == expected_code, (
-                    f"{exc_class.__name__}: error_code={body['error_code']!r}, expected {expected_code!r}"
-                )
-                assert body["recovery"] == expected_recovery, (
-                    f"{exc_class.__name__}: recovery={body['recovery']!r}, expected {expected_recovery!r}"
-                )
+                assert (
+                    response.status_code == expected_status
+                ), f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
+                _assert_rest_envelope(response.json(), expected_code, recovery=expected_recovery)

@@ -255,8 +255,36 @@ class TestRecoveryClassification:
 # ---------------------------------------------------------------------------
 
 
+def _assert_two_layer_envelope(body: dict, expected_code: str, expected_message_substr: str | None = None):
+    """Verify the AdCP spec two-layer envelope wire shape.
+
+    Both ``adcp_error.code`` and ``errors[0].code`` must equal ``expected_code``
+    — storyboard runners read whichever layer they're configured for.
+    """
+    assert "adcp_error" in body, f"missing envelope-level adcp_error: {body}"
+    assert "errors" in body, f"missing payload-level errors[]: {body}"
+    assert body["errors"], "errors[] must contain at least one entry"
+    assert (
+        body["adcp_error"]["code"] == expected_code
+    ), f"adcp_error.code={body['adcp_error']['code']!r}, expected {expected_code!r}"
+    assert (
+        body["errors"][0]["code"] == expected_code
+    ), f"errors[0].code={body['errors'][0]['code']!r}, expected {expected_code!r}"
+    if expected_message_substr is not None:
+        assert expected_message_substr in body["errors"][0]["message"]
+
+
 class TestFastAPIExceptionHandlers:
-    """Verify FastAPI exception handlers return correct HTTP responses."""
+    """Verify FastAPI exception handlers return correct HTTP responses.
+
+    The body is the AdCP spec-compliant two-layer envelope::
+
+        {
+            "adcp_error": {"code": "...", "message": "...", "recovery": "..."},
+            "errors": [{"code": "...", "message": "...", "recovery": "..."}],
+            "context": {...},   # optional, present when raised with context
+        }
+    """
 
     def test_validation_error_returns_400(self):
         """AdCPValidationError raised in a route must return 400."""
@@ -271,9 +299,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/validation")
         assert response.status_code == 400
-        body = response.json()
-        assert body["error_code"] == "VALIDATION_ERROR"
-        assert "test validation error" in body["message"]
+        _assert_two_layer_envelope(response.json(), "VALIDATION_ERROR", "test validation error")
 
     def test_authentication_error_returns_401(self):
         """AdCPAuthenticationError raised in a route must return 401."""
@@ -287,8 +313,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
-        body = response.json()
-        assert body["error_code"] == "AUTH_REQUIRED"
+        _assert_two_layer_envelope(response.json(), "AUTH_REQUIRED")
 
     def test_not_found_error_returns_404(self):
         """AdCPNotFoundError raised in a route must return 404."""
@@ -302,8 +327,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/notfound")
         assert response.status_code == 404
-        body = response.json()
-        assert body["error_code"] == "NOT_FOUND"
+        _assert_two_layer_envelope(response.json(), "NOT_FOUND")
 
     def test_adapter_error_returns_502(self):
         """AdCPAdapterError raised in a route must return 502."""
@@ -317,8 +341,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/adapter")
         assert response.status_code == 502
-        body = response.json()
-        assert body["error_code"] == "SERVICE_UNAVAILABLE"
+        _assert_two_layer_envelope(response.json(), "SERVICE_UNAVAILABLE")
 
     def test_conflict_error_returns_409(self):
         """AdCPConflictError raised in a route must return 409."""
@@ -332,8 +355,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        body = response.json()
-        assert body["error_code"] == "CONFLICT"
+        _assert_two_layer_envelope(response.json(), "CONFLICT")
 
     def test_gone_error_returns_410(self):
         """AdCPGoneError raised in a route must return 410."""
@@ -347,8 +369,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/gone")
         assert response.status_code == 410
-        body = response.json()
-        assert body["error_code"] == "INVALID_STATE"
+        _assert_two_layer_envelope(response.json(), "INVALID_STATE")
 
     def test_budget_exhausted_error_returns_422(self):
         """AdCPBudgetExhaustedError raised in a route must return 422."""
@@ -362,8 +383,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/budget")
         assert response.status_code == 422
-        body = response.json()
-        assert body["error_code"] == "BUDGET_EXHAUSTED"
+        _assert_two_layer_envelope(response.json(), "BUDGET_EXHAUSTED")
 
     def test_service_unavailable_error_returns_503(self):
         """AdCPServiceUnavailableError raised in a route must return 503."""
@@ -377,11 +397,10 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/unavailable")
         assert response.status_code == 503
-        body = response.json()
-        assert body["error_code"] == "SERVICE_UNAVAILABLE"
+        _assert_two_layer_envelope(response.json(), "SERVICE_UNAVAILABLE")
 
-    def test_error_response_has_standard_envelope(self):
-        """Error responses must have {error_code, message, details} envelope."""
+    def test_error_response_has_two_layer_envelope(self):
+        """Error responses use the spec-compliant two-layer envelope shape."""
         from src.app import app
         from src.core.exceptions import AdCPValidationError
 
@@ -392,12 +411,31 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/envelope")
         body = response.json()
-        assert "error_code" in body
-        assert "message" in body
-        assert "details" in body
-        assert body["details"] == {"field": "x"}
-        assert "recovery" in body
-        assert body["recovery"] == "correctable"
+        _assert_two_layer_envelope(body, "VALIDATION_ERROR")
+        # Both layers carry recovery
+        assert body["adcp_error"]["recovery"] == "correctable"
+        assert body["errors"][0]["recovery"] == "correctable"
+        # Details propagate into both layers
+        assert body["adcp_error"]["details"] == {"field": "x"}
+        assert body["errors"][0]["details"] == {"field": "x"}
+
+    def test_error_response_echoes_context(self):
+        """When raised with context, the envelope echoes it (spec 3.0.6)."""
+        from adcp.types import ContextObject
+
+        from src.app import app
+        from src.core.exceptions import AdCPValidationError
+
+        @app.get("/test-exc/with-context")
+        def raise_with_context():
+            raise AdCPValidationError("bad", context=ContextObject(correlation_id="trace-xyz"))
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/test-exc/with-context")
+        body = response.json()
+        assert body["context"] == {"correlation_id": "trace-xyz"}
+        # The two-layer envelope contains recovery inside each layer.
+        assert body["errors"][0]["recovery"] == "correctable"
 
 
 # ---------------------------------------------------------------------------
@@ -412,17 +450,17 @@ class TestNoDeadA2AMap:
         """_A2A_ERROR_CODE_MAP was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), (
-            "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
-        )
+        assert not hasattr(
+            exc_module, "_A2A_ERROR_CODE_MAP"
+        ), "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
 
     def test_no_to_a2a_error_code_in_exceptions(self):
         """to_a2a_error_code() was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(exc_module, "to_a2a_error_code"), (
-            "to_a2a_error_code() is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
-        )
+        assert not hasattr(
+            exc_module, "to_a2a_error_code"
+        ), "to_a2a_error_code() is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
 
 
 # ---------------------------------------------------------------------------

@@ -586,11 +586,20 @@ class TestMCPRecoveryInErrorResponses:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
+        from src.core.tool_error_logging import AdCPToolError
+
         tool_error = exc_info.value
-        assert tool_error.args[0] == expected_code
-        assert tool_error.args[1] == msg
-        assert len(tool_error.args) >= 3, f"ToolError for {exc_class} must have 3 args (code, msg, recovery)"
-        assert tool_error.args[2] == expected_recovery
+        assert isinstance(
+            tool_error, AdCPToolError
+        ), f"MCP boundary must raise AdCPToolError for {exc_class}, got {type(tool_error).__name__}"
+        err = tool_error.envelope["errors"][0]
+        assert err["code"] == expected_code, f"{exc_class}: code={err['code']!r}, expected {expected_code!r}"
+        assert err["message"] == msg, f"{exc_class}: message={err['message']!r}, expected {msg!r}"
+        assert (
+            err["recovery"] == expected_recovery
+        ), f"{exc_class}: recovery={err['recovery']!r}, expected {expected_recovery!r}"
+        # adcp_error envelope-level mirror also present
+        assert tool_error.envelope["adcp_error"]["code"] == expected_code
 
 
 # ---------------------------------------------------------------------------
@@ -740,6 +749,14 @@ class TestErrorCodeVocabularyConsistency:
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
         "CONFIGURATION_ERROR",  # Internal only: server config broken
+        # SDK standard codes added by the error-emission-architecture substrate.
+        "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
+        "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
+        "CREATIVE_REJECTED",  # SDK standard: AdCPCreativeRejectedError
+        "BUDGET_EXCEEDED",  # SDK standard: AdCPBudgetExceededError
+        "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
+        "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
+        "PRODUCT_UNAVAILABLE",  # SDK standard: AdCPProductUnavailableError
     }
 
     def test_all_exception_error_codes_are_canonical(self):
