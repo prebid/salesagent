@@ -1,8 +1,74 @@
 # Error Emission Architecture — Implementation Plan
 
-**Status**: Ready to begin implementation. All architectural decisions settled.
+**Status**: PR 1 substrate landed and review-incorporated (PR #1306). Awaiting CI re-run + merge.
 **Tracking**: GitHub architecture issue (body drafted, not yet posted) + companion async/submitted issue (body drafted, not yet posted).
 **Scope**: 3 sequential PRs over 5-8 weeks. Completes closed-#1078's deferred response-shaping scope.
+
+---
+
+## POST-REVIEW ADDENDA (PR #1306 review round 1)
+
+The review surfaced 2 blockers + 7 important items that landed in the PR. Decisions worth pinning so PR 2/3 authors don't re-derive them:
+
+### D9 — Additive guard, not inversion (overrules PLAN section 5 step 10)
+
+**Decision**: Keep `test_architecture_error_code_compliance.py` unchanged AND add `test_architecture_no_error_construction_in_impl.py` as a separate guard.
+
+**Rationale**: The two guards enforce complementary invariants:
+- `test_architecture_error_code_compliance` — every `Error(code=...)` literal uses a STANDARD or INTERNAL code. Still useful for PR 3's success-envelope `errors[]` composition (advisory non-fatal errors are a legitimate use of `Error(code=...)`).
+- `test_architecture_no_error_construction_in_impl` — Pattern A: `_impl` must not construct `Error(code=...)` at all. Stricter superset for `_impl` scope only.
+
+PLAN section 5 said "invert" the older guard; in practice the additive form is cleaner. PR 2 reviewers should not second-guess.
+
+### D10 — INTERNAL_CODES translation as defense-in-depth (B1)
+
+**Decision**: Add `NOT_FOUND → INVALID_REQUEST`, `INTERNAL_ERROR → SERVICE_UNAVAILABLE`, `CONFIGURATION_ERROR → SERVICE_UNAVAILABLE` to `ERROR_CODE_MAPPING`. Overlap with `INTERNAL_CODES` is intentional and re-tested.
+
+**Rationale**: 9 production raise sites today use these base-class codes. The substrate's stated job is wire-safe codes; without translation the new envelope serializes the non-standard codes verbatim. PR 2 cleanup will migrate the 6 `AdCPNotFoundError` sites to specific subclasses (`MEDIA_BUY_NOT_FOUND`, `PACKAGE_NOT_FOUND`, etc.); the 3 `AdCPConfigurationError` sites in `models.py` (encrypted-secret decryption failure) probably stay — those are genuine admin-required configuration faults that `SERVICE_UNAVAILABLE` represents accurately to the buyer.
+
+**Test**: `test_internal_codes_translated_to_wire_safe_codes` in `test_adcp_exceptions.py` hard-asserts each INTERNAL→STANDARD translation. `test_internal_codes_overlap_with_mapping_have_wire_safe_targets` in `test_error_code_mapping.py` enforces that any future INTERNAL/MAPPING overlap must translate to a STANDARD target.
+
+### D11 — A2A fallthrough envelope coverage (B5)
+
+**Decision**: A2A `ValueError` / `PermissionError` / `Exception` paths now wrap in synthetic `AdCPValidationError` / `AdCPAuthorizationError` / `AdCPError` and call `_adcp_to_a2a_error()` so the envelope is uniform across all error paths.
+
+**Rationale**: Mirrors MCP's `_translate_to_tool_error` behavior. Storyboard runner can read `errors[0].code` and `adcp_error.code` from every A2A error path. Closes a hole the substrate would have otherwise left open.
+
+### D12 — Recovery deferral on AdCPAuthenticationError + AdCPAuthorizationError (B2/F5)
+
+**Decision**: Keep `recovery="terminal"` on both. Spec 3.0.4 reclassified `AUTH_REQUIRED` to `correctable`; we follow the installed SDK (4.3) which still says `terminal`.
+
+**Rationale**: Buyer-facing wire output must match what the SDK declares. Re-classification happens when the project upgrades to a SDK version that ships the new vocabulary. Documented in both class docstrings.
+
+### D13 — `media_buy_list.py:256` cleaned up in PR 1 (F1)
+
+`raise ToolError(...)` at this site was a bypass of the new envelope path. Migrated to `raise AdCPValidationError(...)` in this PR so the boundary translator runs.
+
+### D14 — FIXME comments at allowlisted sites deferred (F2)
+
+**Decision**: Defer until the user posts the architecture issue and provides the issue number.
+
+**Rationale**: Per user convention (`feedback_no_notes_for_github_issues`), the user posts issues manually. FIXME format `FIXME(error-emission-architecture-#N)` needs the real N. PR 2 cleanup migrates these sites anyway; FIXMEs at allowlisted-but-not-yet-migrated sites are nice-to-have, not load-bearing.
+
+### D15 — Storyboard smoke test deferred to post-PR-2 (review Q1)
+
+**Decision**: Section 11's storyboard smoke test cannot fully pass until PR 2 lands the return-path Pattern A migration. The raise-path is fixed in PR 1; the return-path (early `return UpdateMediaBuyError(...)` inside `_impl`) is not.
+
+**Rationale**: PR 1's structural ratchet documents the 82 return-path sites as capped, not eliminated. Mark the storyboard smoke test as "deferred verification" in the PR description and re-run after PR 2 lands.
+
+### D16 — `_handle_tool_error` kept defensively (review Q3)
+
+**Decision**: Keep the REST `_handle_tool_error` helper despite it being effectively dead today.
+
+**Rationale**: Routes catch `ToolError` defensively against future refactors that might re-introduce MCP/REST cross-pollination. The helper now correctly produces the envelope (B3 latent bug fixed). Removal is PR 2 follow-up if confirmed unused after the cleanup sweep.
+
+### Open in PR 2:
+
+- 7 broken context-missing Pattern A sites in `media_buy_update.py` (D6 — context echo on those raises).
+- Pattern A migration sweep across 82 sites; allowlist drains to zero.
+- ValueError migration sweep across 126 sites.
+- FIXME comments at remaining allowlisted sites referencing posted architecture issue.
+- Storyboard smoke test re-run + green check.
 
 ---
 

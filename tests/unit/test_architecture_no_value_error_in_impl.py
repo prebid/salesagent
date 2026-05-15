@@ -43,7 +43,12 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/core/tools/task_management.py": 4,
 }
 
-SCAN_DIRS = [Path("src/core/tools"), Path("src/adapters")]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+SCAN_DIRS = [_REPO_ROOT / "src/core/tools", _REPO_ROOT / "src/adapters"]
+
+
+def _rel(path: Path) -> str:
+    return str(path.relative_to(_REPO_ROOT))
 
 
 def _count_value_error_raises(filepath: Path) -> list[int]:
@@ -77,16 +82,17 @@ class TestNoValueErrorInImpl:
             scan_dirs=SCAN_DIRS,
             site_label="raise ValueError",
             typed_raise_hint="convert to typed AdCPError raise (e.g., AdCPValidationError)",
+            rel=_rel,
         )
 
     def test_capped_files_still_exist(self):
         """Stale-cap detection."""
         from tests.unit._per_file_cap_guard import assert_capped_files_still_exist
 
-        assert_capped_files_still_exist(VALUE_ERROR_PER_FILE_CAP, "VALUE_ERROR_PER_FILE_CAP")
+        assert_capped_files_still_exist(VALUE_ERROR_PER_FILE_CAP, "VALUE_ERROR_PER_FILE_CAP", repo_root=_REPO_ROOT)
 
     def test_caps_only_shrink(self):
         """If a file has fewer sites than its cap, lower the cap to match."""
         from tests.unit._per_file_cap_guard import assert_caps_only_shrink
 
-        assert_caps_only_shrink(VALUE_ERROR_PER_FILE_CAP, _count_value_error_raises)
+        assert_caps_only_shrink(VALUE_ERROR_PER_FILE_CAP, _count_value_error_raises, repo_root=_REPO_ROOT)

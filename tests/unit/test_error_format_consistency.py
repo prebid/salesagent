@@ -555,11 +555,13 @@ class TestMCPRecoveryInErrorResponses:
     @pytest.mark.parametrize(
         "exc_class,msg,expected_code,expected_recovery",
         [
-            ("AdCPError", "internal error", "INTERNAL_ERROR", "terminal"),
+            # INTERNAL_ERROR and NOT_FOUND are INTERNAL_CODES; the boundary
+            # translator maps them to STANDARD_ERROR_CODES at wire emission.
+            ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
             ("AdCPAuthenticationError", "bad token", "AUTH_REQUIRED", "terminal"),
             ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
-            ("AdCPNotFoundError", "gone", "NOT_FOUND", "terminal"),
+            ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
             ("AdCPGoneError", "expired", "INVALID_STATE", "terminal"),
             ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),

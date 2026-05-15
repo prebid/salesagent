@@ -1421,16 +1421,20 @@ class AdCPRequestHandler(RequestHandler):
                 )
             raise _adcp_to_a2a_error(e)
         except ValueError as e:
-            # Same translation as MCP: ValueError → VALIDATION_ERROR
+            # ValueError → synthetic AdCPValidationError so the envelope path runs.
+            # Without this, A2A data carried only `message` and the storyboard
+            # runner synthesized MCP_ERROR (no errors[]/adcp_error layers).
             logger.error(f"ValueError in skill handler {skill_name}: {e}")
-            raise InvalidParamsError(message=str(e))
+            raise _adcp_to_a2a_error(AdCPValidationError(str(e))) from e
         except PermissionError as e:
-            # Same translation as MCP: PermissionError → AUTHORIZATION_ERROR
+            # Same envelope-shape treatment for PermissionError → AUTH_REQUIRED.
             logger.error(f"PermissionError in skill handler {skill_name}: {e}")
-            raise InvalidRequestError(message=str(e))
+            raise _adcp_to_a2a_error(AdCPAuthorizationError(str(e))) from e
         except Exception as e:
+            # Catch-all: build a synthetic AdCPError so the envelope is uniform.
+            # Recovery defaults to terminal (matches AdCPError class default).
             logger.error(f"Error in skill handler {skill_name}: {e}")
-            raise InternalError(message=f"Skill {skill_name} failed: {str(e)}")
+            raise _adcp_to_a2a_error(AdCPError(f"Skill {skill_name} failed: {e}")) from e
 
     async def _handle_get_products_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_products skill invocation.

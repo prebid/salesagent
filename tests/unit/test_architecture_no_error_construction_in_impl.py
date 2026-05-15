@@ -40,7 +40,15 @@ PATTERN_A_PER_FILE_CAP: dict[str, int] = {
     "src/core/tools/signals.py": 3,
 }
 
-SCAN_DIRS = [Path("src/core/tools"), Path("src/adapters")]
+# Anchor scan paths to the repo root so the guard works regardless of CWD
+# (CI runs from the repo root; agents/IDEs may launch pytest from a subdir).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+SCAN_DIRS = [_REPO_ROOT / "src/core/tools", _REPO_ROOT / "src/adapters"]
+
+
+def _rel(path: Path) -> str:
+    """Return path relative to repo root for stable allowlist keys."""
+    return str(path.relative_to(_REPO_ROOT))
 
 
 def _collect_error_aliases(tree: ast.AST) -> set[str]:
@@ -100,13 +108,14 @@ class TestNoErrorConstructionInImpl:
             scan_dirs=SCAN_DIRS,
             site_label="Pattern A",
             typed_raise_hint="convert to typed AdCPError raise (e.g., AdCPMediaBuyNotFoundError)",
+            rel=_rel,
         )
 
     def test_capped_files_still_exist(self):
         """Stale-cap detection: if a file in the cap dict no longer exists, the cap is stale."""
         from tests.unit._per_file_cap_guard import assert_capped_files_still_exist
 
-        assert_capped_files_still_exist(PATTERN_A_PER_FILE_CAP, "PATTERN_A_PER_FILE_CAP")
+        assert_capped_files_still_exist(PATTERN_A_PER_FILE_CAP, "PATTERN_A_PER_FILE_CAP", repo_root=_REPO_ROOT)
 
     def test_caps_only_shrink(self):
         """Sites in capped files must equal the cap exactly (or be below it).
@@ -116,4 +125,4 @@ class TestNoErrorConstructionInImpl:
         """
         from tests.unit._per_file_cap_guard import assert_caps_only_shrink
 
-        assert_caps_only_shrink(PATTERN_A_PER_FILE_CAP, _count_pattern_a_sites)
+        assert_caps_only_shrink(PATTERN_A_PER_FILE_CAP, _count_pattern_a_sites, repo_root=_REPO_ROOT)
