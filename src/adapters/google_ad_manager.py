@@ -1117,7 +1117,7 @@ class GoogleAdManager(AdServerAdapter):
         is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
 
         if not is_fresh:
-            raise ValueError(f"GAM data is not fresh enough for media buy {media_buy_id}")
+            raise AdCPAdapterError(f"GAM data is not fresh enough for media buy {media_buy_id}")
 
         # Aggregate totals across all packages
         total_impressions = reporting_data.metrics.get("total_impressions", 0)
