@@ -48,16 +48,26 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 
 def _handle_tool_error(e: ToolError) -> JSONResponse:
-    """Convert MCP ToolError to HTTP error response using adcp_error()."""
-    from adcp.server.helpers import adcp_error
+    """Convert MCP ToolError to the spec-compliant two-layer envelope body.
 
-    from src.core.tool_error_logging import extract_error_info
+    Routes that catch ``ToolError`` defensively land here. If the exception
+    is the typed ``AdCPToolError`` raised by the MCP boundary translator, its
+    envelope is forwarded unchanged. Plain ``ToolError`` (raised by other
+    paths) is rebuilt into an envelope via a synthetic ``AdCPError`` so the
+    wire output is uniform across all REST routes.
+    """
+    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+    from src.core.tool_error_logging import AdCPToolError, extract_error_info
+
+    if isinstance(e, AdCPToolError):
+        return JSONResponse(status_code=500, content=e.envelope)
 
     error_code, error_message, recovery = extract_error_info(e)
-    return JSONResponse(
-        status_code=500,
-        content=adcp_error(error_code, error_message, recovery=recovery),
-    )
+    synthetic = AdCPError(error_message)
+    synthetic.error_code = error_code
+    if recovery in ("transient", "correctable", "terminal"):
+        synthetic.recovery = recovery  # type: ignore[assignment]
+    return JSONResponse(status_code=500, content=build_two_layer_error_envelope(synthetic))
 
 
 # ---------------------------------------------------------------------------
