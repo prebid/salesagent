@@ -150,6 +150,11 @@
 
                     <div class="sa-menu__group-label">Workspace</div>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/publishers/">Publishers</a>
+                    {% if not embedded_view %}
+                    {# Signing keys: dead code on embedded — storefront signs under
+                       its own domain. Sprint 7 Phase 4c hard-hide. #}
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/signing-keys/">Signing keys</a>
+                    {% endif %}
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/settings">Tenant Settings</a>
                 </div>
             </div>

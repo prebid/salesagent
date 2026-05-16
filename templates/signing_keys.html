@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Signing keys - {{ tenant.name }}{% endblock %}
+{% block content %}
+<style>
+    .sk-section { margin-bottom: var(--sa-space-7); }
+    .sk-section h2 {
+        font-size: var(--sa-text-lg);
+        color: var(--sa-text-strong);
+        margin: 0 0 var(--sa-space-2);
+        font-weight: 600;
+    }
+    .sk-section .sk-section-help {
+        color: var(--sa-text-muted);
+        font-size: var(--sa-text-sm);
+        margin-bottom: var(--sa-space-4);
+    }
+    .sk-card {
+        background: var(--sa-bg-surface);
+        border: 1px solid var(--sa-border);
+        border-radius: var(--sa-radius-lg);
+        padding: var(--sa-space-5);
+        box-shadow: var(--sa-shadow-xs);
+    }
+    .sk-status-card {
+        background: var(--sa-bg-muted);
+        border: 1px solid var(--sa-border);
+        border-radius: var(--sa-radius-lg);
+        padding: var(--sa-space-4) var(--sa-space-5);
+        margin-bottom: var(--sa-space-4);
+    }
+    .btn { padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; border: none; font-size: 0.875rem; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-outline-warning { background: white; color: #92400e; border: 1px solid #f59e0b; padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th { text-align: left; padding: 0.5rem 0.75rem; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; font-size: 0.875rem; }
+    .table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f3f4f6; font-size: 0.875rem; }
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge.bg-success { background: #d1fae5; color: #065f46; }
+    .badge.bg-secondary { background: #e5e7eb; color: #374151; }
+    .text-muted { color: #6b7280; }
+    .small { font-size: 0.85em; }
+</style>
+
+<div class="sk-section">
+    <h2>🔑 Signing keys</h2>
+    <p class="sk-section-help">
+        Salesagent's outbound signing keys (RFC 9421). Buyers verify our webhook signatures against
+        a public JWKS you publish on <strong>your own domain</strong>. Two steps:
+    </p>
+    <ol class="small text-muted" style="margin: 0.25rem 0 1rem 1.25rem;">
+        <li>Publish the JWK below as a JWKS document (<code>{"keys": [&hellip;]}</code>) at a URL you control —
+            typically <code>https://&lt;your-house-domain&gt;/.well-known/jwks.json</code>.
+            <strong>Preserve the <code>adcp_use</code> field</strong> on each key — the AdCP webhook verifier
+            rejects keys without <code>adcp_use="webhook-signing"</code>, and mixing webhook-signing keys with
+            request-signing keys in the same JWKS only works if every key keeps its own <code>adcp_use</code>.</li>
+        <li>Reference that URL from your <code>brand.json</code>'s <code>agents[].jwks_uri</code> entry at
+            <code>{{ tenant.brand_json_url or 'https://&lt;your-house-domain&gt;/.well-known/brand.json' }}</code>.
+            <strong>Set <code>jwks_uri</code> explicitly</strong> when the salesagent runs on a different domain
+            than your brand.json (e.g. a SaaS subdomain) — the well-known fallback only resolves when origins match.</li>
+    </ol>
+
+    <div class="sk-card" style="margin-bottom: 1rem;">
+        <form method="POST"
+              action="{{ url_for('tenants.generate_webhook_signing_key', tenant_id=tenant.tenant_id) }}"
+              onsubmit="return confirm('Generate a new Ed25519 keypair? Any existing active webhook-signing key will be rotated out — you must publish the new public JWK to your JWKS endpoint before buyers can verify.');">
+            <button type="submit" class="btn btn-primary">
+                🔐 Generate Ed25519 keypair
+            </button>
+            <small class="text-muted" style="margin-left: 0.75rem;">
+                Creates a new active webhook-signing credential and rotates out any existing one.
+            </small>
+        </form>
+    </div>
+
+    {% if not signing_credentials %}
+    <div class="sk-status-card">
+        <strong>No outbound signing credentials configured.</strong>
+        <p style="margin: 0.25rem 0 0 0;">Webhooks fall back to HMAC. Click <em>Generate Ed25519 keypair</em> above to enable RFC 9421 signing.</p>
+    </div>
+    {% else %}
+    <div class="sk-card">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Purpose</th>
+                    <th>Backend</th>
+                    <th>Key ID</th>
+                    <th>Public JWK</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for cred in signing_credentials %}
+                <tr>
+                    <td><code>{{ cred.purpose }}</code></td>
+                    <td>
+                        <code>{{ cred.backend }}</code><br>
+                        <small class="text-muted">{{ cred.backend_ref }}</small>
+                    </td>
+                    <td><code style="font-size: 0.85em;">{{ cred.key_id }}</code></td>
+                    <td>
+                        <details>
+                            <summary class="text-muted small" style="cursor: pointer;">show JWK</summary>
+                            <pre style="margin: 0; font-size: 0.75em;">{{ cred.public_jwk | tojson(indent=2) }}</pre>
+                        </details>
+                    </td>
+                    <td>
+                        {% if cred.is_active %}
+                        <span class="badge bg-success">active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">inactive</span>
+                        {% endif %}
+                    </td>
+                    <td><small>{{ cred.created_at.strftime('%Y-%m-%d') if cred.created_at else '—' }}</small></td>
+                    <td>
+                        {% if cred.is_active and cred.purpose == 'webhook-signing' %}
+                        <form method="POST"
+                              action="{{ url_for('tenants.rotate_out_webhook_signing_key', tenant_id=tenant.tenant_id, key_id=cred.key_id) }}"
+                              style="display: inline;"
+                              onsubmit="return confirm('Rotate out kid={{ cred.key_id }}? The salesagent will stop signing webhooks with this key immediately. Generate a replacement first if you need uninterrupted signing.');">
+                            <button type="submit" class="btn btn-outline-warning">Rotate out</button>
+                        </form>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
