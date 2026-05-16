@@ -2,8 +2,8 @@
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [Sprint 4 (UI hardening)](./embedded-mode-sprint-4-ui-hardening.md), [Sprint 5 (Buyer Routing UX)](./embedded-mode-sprint-5-buyer-routing-ux.md)
-**Status:** Draft. Phase 1a + 1b cleanup landed; Phases 2–4 not yet started.
-**Last updated:** 2026-05-14
+**Status:** Phase 1a + 1b + 4a + 4b landed; Phases 2, 3, 4c, 4d not yet started. Phase 4 reframed 2026-05-16 around instance-level capability flags (see Phase 4 below).
+**Last updated:** 2026-05-16
 
 ## Why this sprint exists
 
@@ -37,10 +37,10 @@ Configure ▼
   Workspace
     └─ Publishers                            (promoted by Phase 2)
     └─ Users & Access                        (standalone today)
-    └─ Signing Keys                          (promoted by Phase 2)
-    └─ Policies & Workflows                  (promoted by Phase 2)
-    └─ Integrations                          (promoted by Phase 2)
-    └─ Tenant Settings    ← hidden on embedded
+    └─ Signing Keys                          (promoted by Phase 2; hard-hidden on embedded — Phase 4c)
+    └─ Policies & Workflows                  (promoted by Phase 2; subsections capability-gated — Phase 4b)
+    └─ Integrations                          (promoted by Phase 2; subsections capability-gated — Phase 4b)
+    └─ Tenant Settings    ← hidden on embedded after capability flags collapse it (Phase 4d)
 ```
 
 Sections that **leave Settings entirely** (folded into existing primary-nav pages, not promoted):
@@ -57,7 +57,9 @@ Sections that **disappear** entirely (already hidden in embedded; redundant on s
 
 ## Why hide Tenant Settings entirely on embedded
 
-After Phases 2–4, the three sections that remain in Tenant Settings (Account, Ad Server, Danger Zone) are all already individually `{% if not embedded_view %}` gated — they're tenant-identity config that the upstream platform owns via the Tenant Management API. Once those three are the only contents, hiding the page entrypoint in the Configure menu is the natural completion: no entry → no broken-feeling page where 100% of the content is "your platform manages this." It also removes the Phase 1a Buyer-Agents-style bug where stale internal links (e.g., setup checklist actions, in-app banners) point to a section that no longer renders.
+After Phase 2 entity promotions, the three sections that remain in Tenant Settings (Account, Ad Server, Danger Zone) are all already individually `{% if not embedded_view %}` gated — they're tenant-identity config that the upstream platform owns via the Tenant Management API. Once those three are the only contents, hiding the page entrypoint in the Configure menu is the natural completion: no entry → no broken-feeling page where 100% of the content is "your platform manages this." It also removes the Phase 1a Buyer-Agents-style bug where stale internal links (e.g., setup checklist actions, in-app banners) point to a section that no longer renders.
+
+The same logic applies to the new standalone Configure peer pages created by Phase 2 (Policies & Workflows, Integrations) whose subsections are individually gated by capability flags in Phase 4b — when every subsection inside them is owned by the storefront, the page renders empty and the nav entry should drop too. Phase 4d handles both.
 
 ## Phasing
 
@@ -120,12 +122,110 @@ Recommend shipping each entity promotion as its own PR to keep review focused.
 
 After Phase 3, Tenant Settings contains only: Account, Ad Server, Danger Zone.
 
-### Phase 4 — Hide Tenant Settings on embedded; remove dead code
+### Phase 4 — Headless capability flags + selective section hide on embedded
 
-- Gate the Configure → Workspace → Tenant Settings nav entry in `templates/base.html` on `{% if not embedded_view %}`.
-- Gate the `/tenant/<id>/settings` route on `not embedded_view` (return 404 or redirect to Configure → Setup Checklist).
-- Delete the now-unreachable embedded branches inside `tenant_settings.html` (lines 429-438, 1120, 1939, 2206, 2234, 2842).
-- Delete the dead `<div id="advertisers">` section if Buyer Agents is fully decommissioned in Phase 2; or fold its Principal-admin contents into the new Users & Access page if standalone tenants still need access-token management.
+**Why this changes from the prior spec.** "Hide Tenant Settings on embedded" was too coarse. Embedded mode is heading toward a *headless salesagent*: the storefront (Scope3 Interchange and any peer host) progressively absorbs every workflow that isn't ad-server-specific. The salesagent's job collapses to "execute against the ad server"; the storefront owns the business workflows on top of it.
+
+The split is the inverse of what the original `embedded-mode.md` "publisher-managed vs platform-managed" table suggests. The right axis is **ad-server-specific vs ad-server-generic**:
+
+| Stays in salesagent (publisher-managed in the salesagent tenant) | Migrates up to storefront over time |
+|---|---|
+| Ad-server credentials, network code | Creative approval workflow |
+| Products (mapped to ad-server inventory) | Slack / task notifications |
+| Principals / advertisers (mapped to ad-server companies) | Advertising policy, prohibited tactics/advertisers |
+| Naming templates (produce ad-server order + line-item names) | Product ranking |
+| Measurement providers (attached to ad-server line items) | Brand manifest |
+| Inventory profiles + targeting criteria | Signals / creative agent allowlists |
+| Publisher partnerships (publisher-of-record assertions) | AI services (storefront's own AI handles workflows it owns) |
+| Currency limits (set at provisioning — ad-server contract) | |
+| | **Dead on embedded regardless of storefront:** signing keys, OIDC config |
+
+Different storefronts will absorb different workflows on different timelines. Scope3 may ship centralized creative approval before centralized Slack notifications; another storefront may do the opposite. The mechanism must let each capability flip independently. It is **instance-level, not per-tenant** — one embedded salesagent instance corresponds to one storefront operator, and the storefront decides once which workflows it owns across all of its tenants.
+
+**Capability flags — instance-level config.**
+
+New env var `EMBEDDED_CAPABILITIES`, JSON-encoded:
+
+```bash
+EMBEDDED_CAPABILITIES='{
+  "creative_approval": "storefront",
+  "slack": "storefront",
+  "advertising_policy": "storefront",
+  "product_ranking": "storefront",
+  "brand_manifest": "storefront",
+  "signals_agents": "storefront",
+  "creative_agents": "storefront",
+  "ai_services": "storefront"
+}'
+```
+
+- Every capability defaults to `"publisher"` if unset.
+- On open instances (`MANAGED_INSTANCE=false`), the variable is ignored entirely — `capability_owner()` always returns `"publisher"`, gating is a no-op.
+- Existing embedded tenants get unchanged behavior at upgrade time; the storefront opts each workflow in by flipping the env var, no per-tenant migration needed.
+
+Resolution helper (proposed location: `src/admin/utils/embedded.py`):
+
+```python
+def capability_owner(name: str) -> Literal["publisher", "storefront"]:
+    """Returns 'storefront' if the embedded storefront owns this workflow,
+    'publisher' otherwise. Always 'publisher' on open instances."""
+    if not settings.managed_instance:
+        return "publisher"
+    return settings.embedded_capabilities.get(name, "publisher")
+```
+
+Exposed to Jinja as `{{ capability_owner('creative_approval') }}` plus a convenience: `{{ publisher_owns('creative_approval') }}` (sugar for `== 'publisher'`).
+
+**Phase 4a — Capability infrastructure.** ✅ LANDED (2026-05-16)
+
+- Parse `EMBEDDED_CAPABILITIES` into `settings.embedded_capabilities: dict[str, str]` at startup. Fail loud on malformed JSON.
+- Add `capability_owner()` and `publisher_owns()` helpers; register both as Jinja globals.
+- Unit tests: defaults, open-instance no-op, malformed JSON failure, individual capability resolution.
+- No UI or template changes in this phase. Mergeable on its own.
+
+**Phase 4b — Per-section flag gating.** ✅ LANDED (2026-05-16)
+
+Wrap each migrating subsection in `{% if publisher_owns('<capability>') %}`. POST handlers reject writes with `403 Forbidden` and a banner ("This is managed by your platform") when the capability is `storefront`.
+
+| Capability | Surface today |
+|---|---|
+| `creative_approval` | `tenant_settings.html#business-rules` → Creative Review subsection (lines 1452-1611) plus the Approval Workflow checkbox (lines 1441-1450) |
+| `slack` | `tenant_settings.html#integrations` → Slack subsection (lines 2263-2312) |
+| `advertising_policy` | `tenant_settings.html#business-rules` → Advertising Policy subsection (lines 1672-1720) |
+| `product_ranking` | `tenant_settings.html#business-rules` → Product Ranking subsection (lines 1722-1776) |
+| `signals_agents` | `tenant_settings.html#integrations` → Signals Discovery Agents subsection (lines 2652-2673) |
+| `creative_agents` | `tenant_settings.html#integrations` → Creative Agents subsection (lines 2629-2650) |
+| `ai_services` | `tenant_settings.html#integrations` → AI Services subsection (lines 2314-2627) |
+| `brand_manifest` | (not yet rendered — gate the section when added) |
+
+If Phase 2 has already promoted Policies & Workflows / Integrations to standalone Configure peer pages by the time Phase 4b lands, apply the same gates inside the new templates. Each test gets a pair: `capability=publisher → section visible and writable`; `capability=storefront → section hidden, POST returns 403`.
+
+**Phase 4c — Unconditional removals on embedded.**
+
+Three surfaces never make sense on embedded regardless of which storefront is the wrapper — no `"publisher"` answer is correct. No capability flag; hard gate on `not embedded_view`:
+
+- **Signing keys** (`tenant_settings.html#signing-keys`, lines 2757+, plus its standalone Phase-2 page). The salesagent does not issue webhooks under its own domain in embedded mode; the storefront signs. Self-signing inside the storefront's perimeter is dead code.
+- **OIDC blueprint** registration. Already unused on embedded per `embedded-mode.md`. Gate route registration on `not settings.managed_instance` (or at least the nav entry).
+- **Buyer Agents tab.** Already shipped in Phase 1a — listed here for completeness.
+
+**Phase 4d — Tenant Settings page collapse.**
+
+After 4b + 4c land and the reference storefront has flipped its capability flags, the Scope3 embedded instance will see:
+- Account, Ad Server, Danger Zone: already `not embedded_view` gated.
+- All Business Rules subsections: capability=storefront → hidden.
+- All Integrations subsections: capability=storefront → hidden.
+- Signing Keys: hard-gated → hidden.
+
+Result: the Tenant Settings page renders empty on embedded for the Scope3 deployment. Land the original spec's bullet now — gate the Configure → Workspace → Tenant Settings nav entry and the `/tenant/<id>/settings` route on `not embedded_view`. The same logic applies to any Phase-2-promoted standalone Configure peer page (Policies & Workflows, Integrations) where every subsection inside it has flipped to storefront: if all subsections are gated off, the page itself goes too.
+
+Don't land 4d until 4b has shipped and the storefront operator has confirmed its capability set produces a complete empty-page state. Otherwise an embedded operator could lose access to a workflow the storefront hasn't actually absorbed yet.
+
+**Migration safety.**
+
+- New env var defaults to all-publisher → existing tenants behave identically at upgrade.
+- Capability flips are env-var-level, reversible without code or DB changes.
+- Phase 2 (entity promotion) and Phase 4 (capability gating) are independent. Phase 2 serves publishers who still own the workflow; Phase 4 hides UI for workflows the storefront has taken over. They compose: a Phase-2-promoted page can have Phase-4-gated subsections.
+- The original spec's Constraint 4 ("Embedded operators must never lose access mid-phase") becomes "Embedded operators must never lose access to a workflow that hasn't actually been taken over upstream." Capability flag flips at the storefront's pace, not the salesagent release pace.
 
 ## Constraints during the rollout
 

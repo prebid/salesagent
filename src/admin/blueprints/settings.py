@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_capabilities import capability_owned_response, publisher_owns
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 
@@ -483,6 +484,12 @@ def update_adapter(tenant_id):
 @require_tenant_access(role=("admin",))
 def update_slack(tenant_id):
     """Update Slack integration settings."""
+    # Headless gate: the storefront may centralize Slack notifications
+    # on embedded instances. When that capability is owned by the
+    # storefront, the template hides the section and direct POSTs are
+    # rejected as defense-in-depth.
+    if not publisher_owns("slack"):
+        return capability_owned_response("slack")
     try:
         from src.core.webhook_validator import WebhookURLValidator
 
@@ -531,6 +538,8 @@ def update_slack(tenant_id):
 @require_tenant_access(role=("admin",))
 def update_ai(tenant_id):
     """Update AI services settings (multi-provider configuration)."""
+    if not publisher_owns("ai_services"):
+        return capability_owned_response("ai_services")
     try:
         provider = request.form.get("ai_provider", "gemini").strip()
         model = request.form.get("ai_model", "").strip()
@@ -598,10 +607,16 @@ def update_ai(tenant_id):
 def test_ai_connection(tenant_id):
     """Test AI connection with current configuration.
 
+    Gated on the ``ai_services`` capability — if the storefront owns
+    AI, there's nothing on the publisher side to probe.
+
     This endpoint is a read-only probe — it validates credentials against the
     upstream provider and never writes to tenant state — so it opts into the
     embedded-write gate. The verb-based gate would otherwise misclassify it.
     """
+    if not publisher_owns("ai_services"):
+        return capability_owned_response("ai_services")
+
     import asyncio
     import concurrent.futures
 
@@ -696,7 +711,10 @@ def test_logfire_connection(tenant_id):
     """Test Logfire connection with provided token.
 
     Read-only probe — see `test_ai_connection` above for rationale.
+    Gated on the ``ai_services`` capability.
     """
+    if not publisher_owns("ai_services"):
+        return capability_owned_response("ai_services")
     try:
         data = request.get_json() or {}
         logfire_token = data.get("logfire_token", "").strip()
@@ -749,7 +767,11 @@ def get_ai_models(tenant_id):
     """Get available AI models from Pydantic AI.
 
     Returns models grouped by provider, extracted from pydantic_ai.models.KnownModelName.
+    Gated on the ``ai_services`` capability — no model picker if AI is storefront-owned.
     """
+    if not publisher_owns("ai_services"):
+        return capability_owned_response("ai_services")
+
     from pydantic_ai.models import KnownModelName
 
     # Extract all model strings from KnownModelName Literal type
@@ -1178,6 +1200,43 @@ def parse_form_data_to_policy_updates(form_data) -> dict[str, Any]:
     return updates
 
 
+# Maps each business-rules form field to its capability. Fields not in
+# this map (currencies, measurement_providers, naming_templates) stay
+# publisher-owned permanently — they're ad-server-specific config.
+_BUSINESS_RULES_FIELD_CAPABILITIES: dict[str, str] = {
+    "approval_mode": "creative_approval",
+    "creative_review_criteria": "creative_approval",
+    "creative_auto_approve_threshold": "creative_approval",
+    "creative_auto_reject_threshold": "creative_approval",
+    "sensitive_categories": "creative_approval",
+    "learn_from_overrides": "creative_approval",
+    "human_review_required": "creative_approval",
+    "policy_check_enabled": "advertising_policy",
+    "default_prohibited_categories": "advertising_policy",
+    "default_prohibited_tactics": "advertising_policy",
+    "prohibited_categories": "advertising_policy",
+    "prohibited_tactics": "advertising_policy",
+    "prohibited_advertisers": "advertising_policy",
+    "product_ranking_prompt": "product_ranking",
+    "brand_manifest_policy": "brand_manifest",
+    "enable_axe_signals": "signals_agents",
+}
+
+
+def _rejected_storefront_capability(form_data) -> str | None:
+    """Return the capability name if any field in ``form_data`` belongs
+    to a workflow the storefront owns; otherwise ``None``.
+
+    The template gates hide these sections, so a populated field implies
+    a direct POST, a stale browser form, or a template bug. Either way,
+    reject.
+    """
+    for field, capability in _BUSINESS_RULES_FIELD_CAPABILITIES.items():
+        if field in form_data and not publisher_owns(capability):
+            return capability
+    return None
+
+
 @settings_bp.route("/business-rules", methods=["POST"])
 @log_admin_action("update_business_rules")
 @require_tenant_access(role=("admin",), allow_embedded_writes=True)
@@ -1191,13 +1250,19 @@ def update_business_rules(tenant_id):
     them via the proxied admin UI. The model-layer guard's
     ``PUBLISHER_WRITABLE_FIELDS[Tenant]`` allow-list enforces the per-column
     boundary as defense-in-depth.
+
+    Headless gate (Sprint 7 Phase 4b): several form fields belong to workflows
+    the storefront may centralize on embedded instances. Reject if any of those
+    fields are present in the submitted form.
     """
     from src.services.policy_service import PolicyService, ValidationError
 
-    try:
-        # Get form data
-        data = request.get_json() if request.is_json else request.form
+    data = request.get_json() if request.is_json else request.form
+    rejected = _rejected_storefront_capability(data)
+    if rejected is not None:
+        return capability_owned_response(rejected)
 
+    try:
         # Parse form data into PolicyService format
         updates = parse_form_data_to_policy_updates(data)
 
@@ -1220,8 +1285,11 @@ def update_business_rules(tenant_id):
                             tenant.adapter_config.gam_manual_approval_required = manual_approval_value
                         elif adapter_type == "mock":
                             tenant.adapter_config.mock_manual_approval_required = manual_approval_value
-                elif not request.is_json:
-                    # Checkbox not present in form data means unchecked
+                elif not request.is_json and publisher_owns("creative_approval"):
+                    # Checkbox not present in form data means unchecked.
+                    # Skip when the storefront owns creative_approval — the
+                    # checkbox isn't rendered, so its absence doesn't mean
+                    # "publisher unchecked it."
                     tenant.human_review_required = False
                     if tenant.adapter_config:
                         adapter_type = tenant.adapter_config.adapter_type

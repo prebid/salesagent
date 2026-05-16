@@ -492,7 +492,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_buyer_routing_page.py", "_add_routing_rule"),
     ("tests/integration/test_buyer_routing_page.py", "_add_account"),
     ("tests/integration/test_embed_breadcrumbs.py", "_insert_render_tenant"),
-    ("tests/integration/test_embedded_ui_hardening.py", "_insert_tenant"),
     ("tests/integration/test_managed_mode_auth_bypass.py", "managed_tenant"),
     (
         "tests/integration/test_managed_mode_auth_bypass.py",

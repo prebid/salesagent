@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_capabilities import require_capability_blueprint
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeAgent, Tenant
 
@@ -14,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 creative_agents_bp = Blueprint("creative_agents", __name__)
+
+# Headless gate (Sprint 7 Phase 4b): when the storefront centralizes
+# creative agents on this embedded instance, every route under this
+# blueprint returns 403. The Tenant Settings page hides the link too;
+# the before_request hook is defense-in-depth against direct URLs.
+creative_agents_bp.before_request(require_capability_blueprint("creative_agents"))
 
 
 @creative_agents_bp.route("/")

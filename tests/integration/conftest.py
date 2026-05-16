@@ -1245,3 +1245,43 @@ def add_required_setup_data(session, tenant_id: str):
         ]
         for item in inventory_items:
             session.add(item)
+
+
+# ---------------------------------------------------------------------------
+# Embedded-mode admin UI fixtures (Sprint 4 + Sprint 7 Phase 4b)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def embedded_app(integration_db, monkeypatch):
+    """Full admin Flask app for per-tenant UI tests.
+
+    Delvars ``MANAGED_INSTANCE`` and ``EMBEDDED_CAPABILITIES`` by default
+    so the test super-admin session bypass works on open tenants. Tests
+    that want managed-instance behavior re-set the env vars in-body via
+    monkeypatch.
+    """
+    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+    monkeypatch.delenv("MANAGED_INSTANCE", raising=False)
+    monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
+
+    from src.admin.app import create_app
+
+    return create_app({"TESTING": True, "WTF_CSRF_ENABLED": False})
+
+
+@pytest.fixture
+def embedded_client(embedded_app):
+    """Flask test client with a super-admin test session.
+
+    The session bypasses OAuth — see ``require_tenant_access``. Open
+    tenants pass through cleanly; managed-instance + ``is_embedded=True``
+    tenants still hit the X-Identity middleware, so route tests against
+    those need to send the headers explicitly.
+    """
+    c = embedded_app.test_client()
+    with c.session_transaction() as sess:
+        sess["test_user"] = {"email": "admin@example.com", "name": "Admin"}
+        sess["test_user_role"] = "super_admin"
+        sess["test_tenant_id"] = "*"
+    return c

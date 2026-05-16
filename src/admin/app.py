@@ -610,6 +610,15 @@ def create_app(config=None):
         # policy expressions that describe the tenant itself.
         context["embedded_view"] = is_embedded_view(tenant_for_breadcrumb)
 
+        # Headless-direction capability helpers. Templates use these to
+        # gate subsections that have been taken over by the storefront on
+        # this embedded instance — e.g. ``{% if publisher_owns('slack') %}``.
+        # No-op on open instances (always returns publisher-owned).
+        from src.admin.utils.embedded_capabilities import capability_owner, publisher_owns
+
+        context["capability_owner"] = capability_owner
+        context["publisher_owns"] = publisher_owns
+
         return context
 
     # Iframe embedding policy. ``MANAGED_MODE_FRAME_ANCESTORS`` is a CSP
