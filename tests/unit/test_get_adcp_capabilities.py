@@ -642,7 +642,11 @@ class TestResponseShapeCapabilities:
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
-        """Features defaults: inline_creative_management=True, property_list_filtering=True."""
+        """Features defaults: inline_creative_management=True, property_list_filtering=False.
+
+        property_list_filtering is False until an adapter actually compiles
+        `targeting_overlay.property_list` into native ad-server targeting.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(principal_id=None)
@@ -653,7 +657,7 @@ class TestResponseShapeCapabilities:
 
         features = response.media_buy.features
         assert features.inline_creative_management is True
-        assert features.property_list_filtering is True
+        assert features.property_list_filtering is False
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""

@@ -161,8 +161,13 @@ def _get_adcp_capabilities_impl(
     features = MediaBuyFeatures(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
-        # property_list_filtering: Implemented — filters products by buyer property lists
-        property_list_filtering=True,
+        # property_list_filtering: Declared False until at least one adapter actually
+        # compiles `targeting_overlay.property_list` into native ad-server targeting.
+        # Today every adapter silently drops the field (verified via
+        # `grep -rn 'property_list' src/adapters/` returning zero hits). The previous
+        # declaration of True was false advertising on the seller's MCP wire contract.
+        # Restore (per-adapter-aware) when Kevel's siteId resolver lands (B3 follow-up).
+        property_list_filtering=False,
         # catalog_management: We have product catalog management
         catalog_management=True,
     )
