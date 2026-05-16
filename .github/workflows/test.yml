@@ -439,11 +439,15 @@ jobs:
         # Captures the runner's exit code explicitly via set +e / set -e and
         # surfaces real failure on any non-zero exit. `--summary-output`
         # writes a schema-stable summary artifact for debugging.
+        # --allow-http: runner's pre-flight refuses non-HTTPS URLs by default
+        # ("Production agents MUST terminate TLS"). CI runs against the local
+        # docker stack at http://localhost:8000/mcp/, so this is required.
         set +e
         npx -y @adcp/sdk@6.11.0 storyboard run \
           http://localhost:8000/mcp/ \
           "$SCENARIO_ID" \
           --protocol mcp \
+          --allow-http \
           --auth "$ADCP_AUTH_TOKEN" \
           --json --summary-output storyboard-summary.json \
           > storyboard-result.json
