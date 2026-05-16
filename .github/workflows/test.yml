@@ -360,17 +360,35 @@ jobs:
         docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   storyboard-compliance:
-    name: AdCP Storyboard Compliance (refine_products)
+    name: AdCP Storyboard Compliance (${{ matrix.scenario.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 12
     # Runs the @adcp/sdk storyboard runner against a docker-compose tenant on every
-    # PR. Locks in the buying_mode/refine wireup against spec 3.0.6 so a regression
-    # in the get_products surface is caught at PR review time, not when a downstream
-    # buyer agent calls the production tenant.
+    # PR. Each scenario in the matrix runs as a separate parallel job so failures
+    # are isolated and artifacts are uploaded per-scenario. Adding a new scenario:
+    # append an entry to strategy.matrix.scenario.
+    #
+    # Scenarios are activated by salesagent's get_adcp_capabilities specialism
+    # declaration (currently `sales-non-guaranteed`). All three scenarios below
+    # are bundled in that specialism's requires_scenarios.
     #
     # See:
-    # - .claude/notes/buying-mode-refine-wireup/PLAN.md §4.4
+    # - .claude/notes/buying-mode-refine-wireup/PLAN.md §4.4 (refine_products)
+    # - .claude/notes/inventory-targeting/PLAN.md A3+A4 (inventory_list_*)
     # - Issue #1247 item 5
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - id: media_buy_seller/refine_products
+            name: refine_products
+            artifact: refine-products
+          - id: media_buy_seller/inventory_list_targeting
+            name: inventory_list_targeting
+            artifact: inventory-list-targeting
+          - id: media_buy_seller/inventory_list_no_match
+            name: inventory_list_no_match
+            artifact: inventory-list-no-match
 
     steps:
     - uses: actions/checkout@v4
@@ -410,24 +428,21 @@ jobs:
         node --version
         npx -y @adcp/sdk@6.11.0 storyboard list | head -5
 
-    - name: Run refine_products storyboard via @adcp/sdk
+    - name: Run ${{ matrix.scenario.name }} storyboard via @adcp/sdk
       env:
         ADCP_AUTH_TOKEN: test123
+        SCENARIO_ID: ${{ matrix.scenario.id }}
+        SCENARIO_NAME: ${{ matrix.scenario.name }}
       run: |
         # CLI grammar (verified against @adcp/sdk@6.11.0 bin/adcp.js):
         #   adcp storyboard run <agent_url> <storyboard_id> [--protocol mcp]
-        # Earlier invocation used `mcp` as positional <agent> and the non-existent
-        # `--scenario` flag; the runner errored out with `'mcp' is not a valid
-        # agent alias`, `|| true` swallowed the exit, the bash test on an empty
-        # FAILURES string silently mis-evaluated, and the job printed "passed"
-        # while validating nothing. The new invocation captures the runner's
-        # exit code explicitly and surfaces real failure on any non-zero exit.
-        # `--summary-output` writes a schema-stable summary that we upload as
-        # an artifact for debugging.
+        # Captures the runner's exit code explicitly via set +e / set -e and
+        # surfaces real failure on any non-zero exit. `--summary-output`
+        # writes a schema-stable summary artifact for debugging.
         set +e
         npx -y @adcp/sdk@6.11.0 storyboard run \
           http://localhost:8000/mcp/ \
-          media_buy_seller/refine_products \
+          "$SCENARIO_ID" \
           --protocol mcp \
           --auth "$ADCP_AUTH_TOKEN" \
           --json --summary-output storyboard-summary.json \
@@ -437,16 +452,16 @@ jobs:
         cat storyboard-result.json | jq '.' || echo "(storyboard-result.json was empty or non-JSON)"
         cat storyboard-summary.json | jq '.' || echo "(storyboard-summary.json missing or non-JSON)"
         if [ "$RC" -ne 0 ]; then
-          echo "::error::Storyboard refine_products failed (runner exit $RC)"
+          echo "::error::Storyboard $SCENARIO_NAME failed (runner exit $RC)"
           exit "$RC"
         fi
-        echo "✅ Storyboard refine_products: runner exit 0"
+        echo "✅ Storyboard $SCENARIO_NAME: runner exit 0"
 
     - name: Upload storyboard result
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: storyboard-refine-products-${{ github.run_id }}
+        name: storyboard-${{ matrix.scenario.artifact }}-${{ github.run_id }}
         path: |
           storyboard-result.json
           storyboard-summary.json
