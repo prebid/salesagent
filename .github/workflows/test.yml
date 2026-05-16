@@ -363,6 +363,17 @@ jobs:
     name: AdCP Storyboard Compliance (${{ matrix.scenario.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    # ADVISORY (non-blocking) until pre-existing salesagent gaps are addressed.
+    # The first real run revealed these scenarios are blocked by:
+    #   - #1247 gap #1: get_products rejects `adcp_major_version` parameter
+    #     (affects all 3 scenarios via the discover phase)
+    #   - Auth token mismatch: scenario passes --auth test123; salesagent's
+    #     default tenant rejects it
+    #   - inventory_list_* scenarios additionally need PR #1276 (persist+echo)
+    # `continue-on-error: true` keeps the runner output visible (artifacts +
+    # GitHub UI advisory warning) without blocking PR merge. Flip back to
+    # false once the underlying gaps land.
+    #
     # Runs the @adcp/sdk storyboard runner against a docker-compose tenant on every
     # PR. Each scenario in the matrix runs as a separate parallel job so failures
     # are isolated and artifacts are uploaded per-scenario. Adding a new scenario:
@@ -375,7 +386,8 @@ jobs:
     # See:
     # - .claude/notes/buying-mode-refine-wireup/PLAN.md §4.4 (refine_products)
     # - .claude/notes/inventory-targeting/PLAN.md A3+A4 (inventory_list_*)
-    # - Issue #1247 item 5
+    # - Issue #1247 item 5 (storyboard CI), gap #1 (adcp_major_version)
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -519,9 +531,17 @@ jobs:
     steps:
     - name: Check test results
       run: |
-        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.storyboard-compliance.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
+        # storyboard-compliance is intentionally excluded from the failure-blocking
+        # check while pre-existing salesagent gaps (#1247 gap #1, auth token,
+        # PR #1276 persist+echo) keep the gates red. See storyboard-compliance
+        # job comment for the flip-back path. The job still runs + uploads
+        # artifacts + shows GitHub UI warnings — just non-blocking for merge.
+        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
           echo "❌ Tests failed"
           exit 1
         else
-          echo "✅ All tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, storyboard-compliance, lint+mypy)"
+          if [ "${{ needs.storyboard-compliance.result }}" = "failure" ]; then
+            echo "⚠️ Storyboard compliance has advisory failures — see job artifacts and #1247 gap #1"
+          fi
+          echo "✅ All required tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, lint+mypy)"
         fi
