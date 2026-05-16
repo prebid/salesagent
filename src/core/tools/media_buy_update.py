@@ -729,9 +729,14 @@ def _update_media_buy_impl(
                             + "\n".join(f"  • {err}" for err in validation_errors)
                         )
                         logger.error(f"[UPDATE] {error_msg}")
-                        raise AdCPValidationError(
-                            error_msg, details={"error_code": "INVALID_CREATIVES", "creative_errors": validation_errors}
+                        exc = AdCPValidationError(
+                            error_msg,
+                            details={"error_code": "INVALID_CREATIVES", "creative_errors": validation_errors},
+                            context=req.context,
                         )
+                        if step:
+                            ctx_manager.fail_step(step.step_id, exc=exc)
+                        raise exc
 
                     # Get existing assignments for this package
                     assignment_stmt = select(DBAssignment).where(
