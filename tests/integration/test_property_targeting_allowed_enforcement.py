@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from src.core.database.database_session import get_db_session
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CollectionListReference,
@@ -89,7 +90,15 @@ def property_targeting_tenant(integration_db):
 
 @pytest.mark.requires_db
 async def test_create_rejects_property_list_when_product_disallows(property_targeting_tenant):
-    """Product with property_targeting_allowed=False rejects property_list targeting on create."""
+    """Product with property_targeting_allowed=False rejects property_list targeting on create.
+
+    The validation block raises AdCPValidationError so the transport boundary translates
+    to the spec-compliant two-layer envelope. The previous raw ValueError shape was caught
+    by an inner (ValueError, PermissionError) catchall and re-emitted via Pattern A
+    (Error(code=...) construction in _impl) — anti-pattern that the error-emission
+    architecture work eliminates. After PR #1306 / PR #1307 land, this raise propagates
+    cleanly through the narrowed except AdCPError boundary.
+    """
     start, end = _future_dates()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
@@ -110,12 +119,16 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
         end_time=end,
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
+    with pytest.raises(AdCPValidationError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    assert isinstance(response, CreateMediaBuyError)
-    error_text = response.errors[0].message
-    assert "prod_no_property_targeting" in error_text
-    assert "property_targeting_allowed" in error_text
+    exc = excinfo.value
+    assert "prod_no_property_targeting" in exc.message
+    assert "property_targeting_allowed" in exc.message
+    assert exc.error_code == "VALIDATION_ERROR"
+    assert exc.field == "packages[].targeting_overlay.property_list"
+    assert exc.details is not None
+    assert "violations" in exc.details
 
 
 @pytest.mark.requires_db

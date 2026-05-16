@@ -1643,7 +1643,11 @@ async def _create_media_buy_impl(
                     )
                 ]
                 if property_targeting_violations:
-                    raise ValueError(f"Targeting validation failed: {'; '.join(property_targeting_violations)}")
+                    raise AdCPValidationError(
+                        f"Targeting validation failed: {'; '.join(property_targeting_violations)}",
+                        field="packages[].targeting_overlay.property_list",
+                        details={"violations": property_targeting_violations},
+                    )
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
@@ -2722,9 +2726,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
