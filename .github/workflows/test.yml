@@ -378,7 +378,9 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '20'
+        # Node 22+: @adcp/sdk's auth.js requires the ESM-only `jose` package
+        # which Node 20's CommonJS require() rejects with ERR_REQUIRE_ESM.
+        node-version: '22'
 
     - name: Start salesagent stack with docker compose
       run: |
@@ -399,46 +401,55 @@ jobs:
           exit 1
         }
 
+    - name: Smoke-test @adcp/sdk storyboard CLI
+      # Fail-fast on CLI-shape breakage (wrong flag, missing arg, ESM error).
+      # Without this, a CLI regression would only surface as a confusing
+      # error inside the live storyboard run — and historically was swallowed
+      # by `|| true`. See PLAN-v2 A3.
+      run: |
+        node --version
+        npx -y @adcp/sdk@6.11.0 storyboard list | head -5
+
     - name: Run refine_products storyboard via @adcp/sdk
       env:
         ADCP_AUTH_TOKEN: test123
       run: |
-        # The salesagent local stack accepts password 'test123' for the default tenant.
-        # The @adcp/sdk@6.11.0 storyboard runner ships compliance/cache/3.0.6/protocols/
-        # media-buy/scenarios/refine_products.yaml — we exercise that scenario against
-        # the running tenant.
+        # CLI grammar (verified against @adcp/sdk@6.11.0 bin/adcp.js):
+        #   adcp storyboard run <agent_url> <storyboard_id> [--protocol mcp]
+        # Earlier invocation used `mcp` as positional <agent> and the non-existent
+        # `--scenario` flag; the runner errored out with `'mcp' is not a valid
+        # agent alias`, `|| true` swallowed the exit, the bash test on an empty
+        # FAILURES string silently mis-evaluated, and the job printed "passed"
+        # while validating nothing. The new invocation captures the runner's
+        # exit code explicitly and surfaces real failure on any non-zero exit.
+        # `--summary-output` writes a schema-stable summary that we upload as
+        # an artifact for debugging.
+        set +e
         npx -y @adcp/sdk@6.11.0 storyboard run \
-          mcp \
           http://localhost:8000/mcp/ \
+          media_buy_seller/refine_products \
+          --protocol mcp \
           --auth "$ADCP_AUTH_TOKEN" \
-          --scenario media_buy_seller/refine_products \
-          --json > storyboard-result.json || true
-
-        # Inspect the result. The runner writes a JSON envelope; we fail the job if
-        # phases that we explicitly support reported a hard failure. Extra failures
-        # in not-yet-implemented phases (e.g., proposal_finalize) are tolerated until
-        # #1073 lands.
-        cat storyboard-result.json | jq '.'
-        FAILURES=$(jq -r '
-          [
-            .phases[]?
-            | select(.id == "brief" or .id == "refine")
-            | .steps[]?
-            | select(.status == "failed")
-          ] | length
-        ' storyboard-result.json)
-        if [ "$FAILURES" -gt 0 ]; then
-          echo "::error::Storyboard refine_products reported $FAILURES failures in brief/refine phases"
-          exit 1
+          --json --summary-output storyboard-summary.json \
+          > storyboard-result.json
+        RC=$?
+        set -e
+        cat storyboard-result.json | jq '.' || echo "(storyboard-result.json was empty or non-JSON)"
+        cat storyboard-summary.json | jq '.' || echo "(storyboard-summary.json missing or non-JSON)"
+        if [ "$RC" -ne 0 ]; then
+          echo "::error::Storyboard refine_products failed (runner exit $RC)"
+          exit "$RC"
         fi
-        echo "✅ Storyboard refine_products: brief and refine phases passed"
+        echo "✅ Storyboard refine_products: runner exit 0"
 
     - name: Upload storyboard result
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: storyboard-refine-products-${{ github.run_id }}
-        path: storyboard-result.json
+        path: |
+          storyboard-result.json
+          storyboard-summary.json
         retention-days: 7
 
     - name: Cleanup
