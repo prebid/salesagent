@@ -37,6 +37,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
+from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -131,17 +132,20 @@ class MediaBuyUoW(BaseUoW):
     media_buys: MediaBuyRepository | None
     products: ProductRepository | None
     currency_limits: CurrencyLimitRepository | None
+    idempotency_attempts: IdempotencyAttemptRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
         self.products = ProductRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
+        self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
         self.products = None
         self.currency_limits = None
+        self.idempotency_attempts = None
 
 
 class ProductUoW(BaseUoW):

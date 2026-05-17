@@ -974,6 +974,69 @@ class MediaBuy(Base):
     )
 
 
+class IdempotencyAttempt(Base):
+    """Cached rejection envelope keyed by (tenant, principal, tool, idempotency_key).
+
+    AdCP spec mandates that retrying a tool call with the same idempotency_key
+    must return the original result without re-processing. Successful media
+    buys are already idempotent via MediaBuy.idempotency_key (the partial
+    unique index on `media_buys`). This table fills the gap for *rejected*
+    requests — without it, a buyer who retries after a validation failure
+    would re-run the validation and could legitimately get a different answer
+    (e.g. if a product was added in the interim).
+
+    The cached envelope (`response_envelope`) is the full Pydantic-dumped
+    error response (CreateMediaBuyError, UpdateMediaBuyError, etc.) so the
+    boundary can return it verbatim on replay.
+
+    `expires_at` enforces an explicit TTL — buyers retrying long after a
+    rejection should get a fresh evaluation, not a stale answer. The default
+    TTL is announced via `get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds`
+    (86400 = 24h).
+    """
+
+    __tablename__ = "idempotency_attempts"
+
+    attempt_id: Mapped[str] = mapped_column(String(50), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
+    )
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    tool_name: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        comment="Tool that produced the rejection, e.g. 'create_media_buy'",
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    response_envelope: Mapped[dict] = mapped_column(
+        JSONType,
+        nullable=False,
+        comment="Cached rejection envelope (Pydantic .model_dump()); returned verbatim on replay",
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="CASCADE",
+        ),
+        Index(
+            "idx_idempotency_attempts_lookup",
+            "tenant_id",
+            "principal_id",
+            "tool_name",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index("idx_idempotency_attempts_expires_at", "expires_at"),
+    )
+
+
 class MediaPackage(Base):
     """Media package model for structured querying of media buy packages.
 
