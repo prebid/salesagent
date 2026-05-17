@@ -305,9 +305,9 @@ class TestA2AErrorPropagation:
 
         # CRITICAL ASSERTIONS: Success response
         assert artifact_data["success"] is True, "success must be True for successful operation"
-        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
-            "errors field must be None or empty array for success"
-        )
+        assert (
+            artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0
+        ), "errors field must be None or empty array for success"
         assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
@@ -439,55 +439,71 @@ class TestA2AErrorResponseStructure:
         assert "required_parameters" in result, "Validation error should list required params"
 
     async def test_adcp_error_carries_recovery_through_a2a_boundary(self, integration_db, handler):
-        """A2A boundary translates AdCPError to A2AError with recovery in data field.
+        """AdCPError propagates from _handle_explicit_skill with recovery preserved.
 
-        This tests _adcp_to_a2a_error propagation through _handle_explicit_skill.
+        Post-B4 contract: _handle_explicit_skill no longer translates AdCPError
+        to a JSON-RPC A2AError. The typed exception propagates so the outer
+        dispatcher loop can wrap the two-layer envelope into a failed Task's
+        artifact DataPart. The envelope built from the exception carries
+        ``recovery`` from the AdCPError class default (or override).
         """
         from unittest.mock import patch
 
-        from a2a.utils.errors import A2AError
-
-        from src.core.exceptions import AdCPAdapterError, AdCPValidationError
+        from src.core.exceptions import (
+            AdCPAdapterError,
+            AdCPValidationError,
+            build_two_layer_error_envelope,
+        )
 
         # Test transient recovery (AdCPAdapterError)
         async def mock_adapter_fail(params, token):
             raise AdCPAdapterError("GAM timeout")
 
         with patch.object(handler, "_handle_get_products_skill", mock_adapter_fail):
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPAdapterError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.data is not None, "A2AError data must not be None"
-            assert error.data["recovery"] == "transient", "AdCPAdapterError must have transient recovery"
+            assert error.recovery == "transient", "AdCPAdapterError must have transient recovery"
+            # Envelope built from the propagated exception preserves recovery.
+            envelope = build_two_layer_error_envelope(error)
+            assert envelope["adcp_error"]["recovery"] == "transient"
+            assert envelope["errors"][0]["recovery"] == "transient"
 
         # Test correctable recovery (AdCPValidationError)
         async def mock_validation_fail(params, token):
             raise AdCPValidationError("invalid brief")
 
         with patch.object(handler, "_handle_get_products_skill", mock_validation_fail):
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.data["recovery"] == "correctable", "AdCPValidationError must have correctable recovery"
+            assert error.recovery == "correctable", "AdCPValidationError must have correctable recovery"
+            envelope = build_two_layer_error_envelope(error)
+            assert envelope["adcp_error"]["recovery"] == "correctable"
 
     async def test_custom_recovery_override_preserved_through_a2a(self, integration_db, handler):
-        """Custom recovery= override on AdCPError is preserved through A2A serialization."""
+        """Custom recovery= override on AdCPError is preserved when propagating.
+
+        Post-B4 contract: a raise-site override on ``recovery`` survives the
+        propagation through ``_handle_explicit_skill`` and round-trips through
+        the two-layer envelope builder unchanged.
+        """
         from unittest.mock import patch
 
-        from a2a.utils.errors import A2AError
-
-        from src.core.exceptions import AdCPNotFoundError
+        from src.core.exceptions import AdCPNotFoundError, build_two_layer_error_envelope
 
         async def mock_transient_not_found(params, token):
             raise AdCPNotFoundError("temporarily gone", recovery="transient")
 
         with patch.object(handler, "_handle_get_products_skill", mock_transient_not_found):
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPNotFoundError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.data["recovery"] == "transient", (
-                "Custom recovery='transient' override must be preserved, not default 'terminal'"
-            )
+            assert (
+                error.recovery == "transient"
+            ), "Custom recovery='transient' override must be preserved, not default 'terminal'"
+            envelope = build_two_layer_error_envelope(error)
+            assert envelope["adcp_error"]["recovery"] == "transient"
