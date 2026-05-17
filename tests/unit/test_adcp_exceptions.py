@@ -173,11 +173,32 @@ class TestRecoveryClassification:
         assert exc.recovery == "terminal"
 
     def test_not_found_error_defaults_to_terminal(self):
-        """AdCPNotFoundError defaults to recovery='terminal'."""
+        """AdCPNotFoundError (the *base*) defaults to recovery='terminal'.
+
+        Specific typed subclasses (``AdCPMediaBuyNotFoundError``,
+        ``AdCPPackageNotFoundError``) override to ``correctable`` because the
+        buyer holds the lever — they can re-issue with the right id. The base
+        keeps ``terminal`` for genuinely-gone resources without a known
+        recovery path.
+        """
         from src.core.exceptions import AdCPNotFoundError
 
         exc = AdCPNotFoundError("resource missing")
         assert exc.recovery == "terminal"
+
+    def test_media_buy_not_found_error_defaults_to_correctable(self):
+        """AdCPMediaBuyNotFoundError overrides base to recovery='correctable'."""
+        from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+        exc = AdCPMediaBuyNotFoundError("media buy mb_xyz not found")
+        assert exc.recovery == "correctable"
+
+    def test_package_not_found_error_defaults_to_correctable(self):
+        """AdCPPackageNotFoundError overrides base to recovery='correctable'."""
+        from src.core.exceptions import AdCPPackageNotFoundError
+
+        exc = AdCPPackageNotFoundError("package pkg_xyz not found")
+        assert exc.recovery == "correctable"
 
     def test_rate_limit_error_defaults_to_transient(self):
         """AdCPRateLimitError defaults to recovery='transient'."""
@@ -200,12 +221,26 @@ class TestRecoveryClassification:
         exc = AdCPConflictError("duplicate idempotency key")
         assert exc.recovery == "correctable"
 
-    def test_gone_error_defaults_to_terminal(self):
-        """AdCPGoneError defaults to recovery='terminal'."""
+    def test_gone_error_defaults_to_correctable(self):
+        """AdCPGoneError defaults to recovery='correctable'.
+
+        Resource is gone, but the buyer can recover by referencing a fresh
+        resource (new proposal, new media buy) and re-issuing the request.
+        """
         from src.core.exceptions import AdCPGoneError
 
         exc = AdCPGoneError("proposal expired")
-        assert exc.recovery == "terminal"
+        assert exc.recovery == "correctable"
+
+    def test_account_payment_required_error_defaults_to_correctable(self):
+        """AdCPAccountPaymentRequiredError defaults to recovery='correctable'.
+
+        Buyer can resolve by settling the outstanding balance and retrying.
+        """
+        from src.core.exceptions import AdCPAccountPaymentRequiredError
+
+        exc = AdCPAccountPaymentRequiredError("invoice overdue")
+        assert exc.recovery == "correctable"
 
     def test_budget_exhausted_error_defaults_to_correctable(self):
         """AdCPBudgetExhaustedError defaults to recovery='correctable'.

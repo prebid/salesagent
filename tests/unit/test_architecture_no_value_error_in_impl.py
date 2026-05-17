@@ -17,6 +17,23 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+# Per-file caps for ``raise ValueError(...)`` sites. Two categories of entries:
+#
+#   1. **Migration targets** — boundary-facing raises that should become typed
+#      ``AdCPError`` subclasses. Tracked by issue #1304; each site carries a
+#      ``# FIXME(#1304): migrate to typed AdCPError raise`` comment so reviewers
+#      can grep to the cleanup work. PR 2 sub-batches drain these.
+#
+#   2. **Internal contracts** — ``ValueError`` raised inside helper functions
+#      to enforce programmer-error invariants (Pydantic validators, factory
+#      "unknown type" guards, schema-config validators). These crash with a
+#      stack trace if violated and the boundary catchall wraps any that escape.
+#      Per the boundary-vs-internal rule (memory `feedback_valueerror_boundary_vs_internal`),
+#      internal contracts stay as ValueError; PR 2 only migrates the boundary set.
+#
+# A future split (e.g. ``BOUNDARY_PER_FILE_CAP`` + ``INTERNAL_PER_FILE_CAP``)
+# would make the distinction visible at the guard level. For now, both
+# categories share the cap dict and shrink together as PR 2 lands.
 VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/__init__.py": 2,
     "src/adapters/base.py": 1,

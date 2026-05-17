@@ -605,8 +605,36 @@ class AdCPRequestHandler(RequestHandler):
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
-                        # A2AError should bubble up immediately (JSON-RPC error)
+                        # A2AError should bubble up immediately (JSON-RPC error).
+                        # Reserved for transport-protocol failures (MethodNotFound,
+                        # malformed request, etc.) — never AdCP-level errors, which
+                        # are now caught below and surfaced as failed Tasks with a
+                        # two-layer envelope in the artifact DataPart.
                         raise
+                    except AdCPError as e:
+                        # AdCP-level errors are async-task failures, not JSON-RPC
+                        # errors. Wrap the two-layer envelope into the result so
+                        # the artifact DataPart carries it; the explicit-skill
+                        # loop below marks the Task as failed when no skills
+                        # succeed. Mirrors the SDK's _send_adcp_error reference
+                        # for storyboard scenarios that exercise invalid-state
+                        # transitions on an otherwise-routable skill.
+                        from src.core.exceptions import build_two_layer_error_envelope
+
+                        logger.warning(
+                            "AdCPError in explicit skill %s: %s — emitting failed Task with envelope",
+                            skill_name,
+                            e.error_code,
+                        )
+                        envelope = build_two_layer_error_envelope(e)
+                        results.append(
+                            {
+                                "skill": skill_name,
+                                "error": e.message,
+                                "error_envelope": envelope,
+                                "success": False,
+                            }
+                        )
                     except Exception as e:
                         logger.error(f"Error in explicit skill {skill_name}: {e}")
                         results.append({"skill": skill_name, "error": str(e), "success": False})
@@ -629,7 +657,15 @@ class AdCPRequestHandler(RequestHandler):
 
                 # Create artifacts for all skill results with human-readable text
                 for i, res in enumerate(results):
-                    artifact_data = res["result"] if res["success"] else {"error": res["error"]}
+                    if res["success"]:
+                        artifact_data = res["result"]
+                    elif "error_envelope" in res:
+                        # AdCPError path: surface the full two-layer envelope as
+                        # the DataPart so the storyboard runner / harness can
+                        # read either ``adcp_error.code`` or ``errors[0].code``.
+                        artifact_data = res["error_envelope"]
+                    else:
+                        artifact_data = {"error": res["error"]}
 
                     # Generate human-readable text from response __str__()
                     # Per A2A spec, use TextPart + DataPart pattern (not description field)
@@ -1404,12 +1440,11 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (already properly formatted)
             raise
         except AdCPError as e:
-            # Translate AdCPError to protocol-specific A2A error
+            # Audit-log the failure before propagating so the audit logger /
+            # Slack notifications fire even on the failed-Task envelope path.
+            # Defensive about identity shape — test fixtures sometimes pass a
+            # string or partially-built identity instead of ResolvedIdentity.
             logger.error(f"AdCPError in skill handler {skill_name}: {e.error_code} - {e.message}")
-            # Audit gap fix: log failed A2A operation before re-raising so audit
-            # logger and Slack notifications fire on previously-silent failures.
-            # ``getattr`` keeps this defensive against test fixtures that pass
-            # a string or partially-built identity instead of ResolvedIdentity.
             tenant_id = getattr(identity, "tenant_id", None)
             if tenant_id:
                 self._log_a2a_operation(
@@ -1419,7 +1454,12 @@ class AdCPRequestHandler(RequestHandler):
                     success=False,
                     error=e.message,
                 )
-            raise _adcp_to_a2a_error(e)
+            # Propagate the typed exception up to the explicit-skill dispatcher
+            # so it can wrap a two-layer envelope into the Task's DataPart and
+            # mark the Task as failed. Translating to a JSON-RPC error here
+            # (the previous behavior) elevated AdCP-level errors to transport
+            # failures, breaking the storyboard invalid_transitions contract.
+            raise
         except ValueError as e:
             # ValueError → synthetic AdCPValidationError so the envelope path runs.
             # Without this, A2A data carried only `message` and the storyboard
