@@ -1,6 +1,6 @@
 """Integration tests: property_targeting_allowed enforcement at create/update.
 
-AdCP 3.0.1 spec (core/targeting.json:191) — sellers SHOULD reject property_list
+AdCP 3.0.6 spec (core/targeting.json:191) — sellers SHOULD reject property_list
 targeting against products with property_targeting_allowed=false. Two paths:
 - create_media_buy: validation block inside the UoW where product_map is built
 - update_media_buy: validation guards the targeting_overlay write

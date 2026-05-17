@@ -193,7 +193,7 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
 def validate_property_targeting_allowed(product: Any, targeting_overlay: Targeting | None) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
-    AdCP 3.0.1 (core/targeting.json:191): "Sellers SHOULD return a validation
+    AdCP 3.0.6 (core/targeting.json:191): "Sellers SHOULD return a validation
     error if the product has property_targeting_allowed: false."
 
     Used at both create_media_buy and update_media_buy validation sites; pulled
