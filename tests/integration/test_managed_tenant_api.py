@@ -303,34 +303,26 @@ class TestProvision:
         assert body["public_agent_url"] == "https://interchange.io"
 
     # ------------------------------------------------------------------
-    # Sprint 1.8 §8: first-sync-on-provision
+    # First-sync kicks off as a side effect; never surfaces in response.
     # ------------------------------------------------------------------
 
-    def test_provision_response_includes_initial_sync_run_ids(self, client, auth_headers, cleanup_tenants):
-        """Provision response surfaces the same ``sync_run_ids`` shape as
-        ``/refresh`` so Storefront can poll ``/status.syncs`` for first-
-        time progress without waiting for the next 6h cron tick.
-
-        Workers are stubbed by the autouse ``_stub_refresh_workers``
-        fixture so SyncJob rows stay pending; this test exercises the
-        wiring (rows + response), not the worker-side behavior.
-        """
+    def test_provision_response_does_not_surface_sync_handles(self, client, auth_headers, cleanup_tenants):
+        """Provision is binary — tenant created or not. It must not return
+        sync handles that invite polling. Inventory sync state lives in
+        the salesagent UI from this point on; the storefront is done."""
         payload = _provision_payload(external_org_id="org_initial_sync")
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
         assert response.status_code == 201, response.get_data(as_text=True)
         body = response.get_json()
         cleanup_tenants.append(body["tenant_id"])
 
-        assert "initial_sync" in body and body["initial_sync"] is not None
-        sync_run_ids = body["initial_sync"]["sync_run_ids"]
-        assert set(sync_run_ids.keys()) == {"inventory", "custom_targeting", "advertisers"}
-        # Each sync_type gets a unique id (no collisions).
-        assert len(set(sync_run_ids.values())) == 3
+        assert "initial_sync" not in body
+        assert "sync_run_ids" not in body
 
-    def test_provision_creates_pending_sync_jobs(self, client, auth_headers, cleanup_tenants):
-        """Provision-time first-sync creates SyncJob rows tagged with the
-        provision triggered_by_id, matching the ids returned in the
-        response so callers can correlate."""
+    def test_provision_kicks_off_sync_jobs_as_side_effect(self, client, auth_headers, cleanup_tenants):
+        """First inventory sync runs as a side effect of provisioning.
+        SyncJob rows still get created (visible in the salesagent UI
+        dashboard) but are not surfaced to the provision caller."""
         payload = _provision_payload(external_org_id="org_initial_sync_jobs")
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
         assert response.status_code == 201, response.get_data(as_text=True)
@@ -338,20 +330,62 @@ class TestProvision:
         tid = body["tenant_id"]
         cleanup_tenants.append(tid)
 
-        sync_run_ids = body["initial_sync"]["sync_run_ids"]
-
         with get_db_session() as session:
             jobs = session.scalars(select(SyncJob).filter_by(tenant_id=tid)).all()
 
         assert len(jobs) == 3
         assert {j.sync_type for j in jobs} == {"inventory", "custom_targeting", "advertisers"}
         for job in jobs:
-            assert job.status == "pending"
             assert job.triggered_by == "api"
             assert job.triggered_by_id == "tenant_management_api:provision"
 
-        # Response ids round-trip to DB rows.
-        assert {j.sync_id for j in jobs} == set(sync_run_ids.values())
+    def test_inventory_spawn_failure_marks_sync_rows_failed(self, client, auth_headers, cleanup_tenants, monkeypatch):
+        """If the inventory worker spawn raises, the inventory + bundled
+        targeting SyncJob rows must transition to ``failed`` with the
+        error surfaced. Without this fix, rows sit ``pending`` forever
+        and the publisher's dashboard shows "never run" with no hint."""
+        import src.admin.tenant_management_api as api_module
+
+        def _raise_on_spawn(**_kw):
+            raise RuntimeError("simulated spawn failure")
+
+        # Undo the autouse spawn-stub so the real _spawn_refresh_workers
+        # runs and exercises the inventory-spawn path.
+        monkeypatch.setattr(api_module, "_spawn_refresh_workers", _LIVE_SPAWN_REFRESH_WORKERS)
+        monkeypatch.setattr(
+            "src.services.background_sync_service.start_inventory_sync_background",
+            _raise_on_spawn,
+        )
+        # Advertisers spawn would otherwise try to import a real GAM client;
+        # neuter it so this test isolates the inventory failure. The
+        # advertisers row is intentionally not asserted on — its spawn
+        # path is separate and warrants its own test if regressed.
+        monkeypatch.setattr(
+            "src.services.gam_advertisers_sync.sync_advertisers",
+            lambda **_kw: None,
+        )
+
+        payload = _provision_payload(external_org_id="org_spawn_fail")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert response.status_code == 201, response.get_data(as_text=True)
+        tid = response.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        with get_db_session() as session:
+            jobs = {j.sync_type: j for j in session.scalars(select(SyncJob).filter_by(tenant_id=tid)).all()}
+
+        assert jobs["inventory"].status == "failed"
+        assert jobs["custom_targeting"].status == "failed"
+        # Error message captures the exception class, message, spawn label,
+        # and a brief traceback — enough for the publisher to self-diagnose
+        # common issues without escalating to an engineer.
+        inventory_err = jobs["inventory"].error_message or ""
+        assert "simulated spawn failure" in inventory_err
+        assert "RuntimeError" in inventory_err
+        assert "inventory" in inventory_err  # spawn_label
+        assert "Traceback" in inventory_err
+        assert "simulated spawn failure" in (jobs["custom_targeting"].error_message or "")
+        assert jobs["inventory"].completed_at is not None
 
 
 # ---------------------------------------------------------------------------

@@ -341,19 +341,6 @@ class AdapterStatusResponse(BaseModel):
     connection_test_error: str | None = None
 
 
-class InitialSyncBlock(BaseModel):
-    """Sync run ids spawned at provision time.
-
-    Storefront polls ``/status.syncs`` for progress per sync_type. Same
-    shape as ``RefreshResponse.sync_run_ids`` so callers can reuse the
-    refresh-poller path on first provision.
-    """
-
-    model_config = _config()
-
-    sync_run_ids: dict[str, str] = Field(default_factory=dict)
-
-
 class ProvisionTenantResponse(BaseModel):
     """Response body for ``POST /tenants/provision``."""
 
@@ -377,12 +364,6 @@ class ProvisionTenantResponse(BaseModel):
     adapter: AdapterStatusResponse
 
     initial_principal: ProvisionedPrincipalResponse | None = None
-
-    # Sprint 1.8 §8: first-sync-on-provision. Workers are spawned
-    # immediately after the tenant rows commit so the publisher has data
-    # the moment provisioning returns. Null only if the host product
-    # spawned the workers out-of-band (e.g. dry-run / preview flows).
-    initial_sync: InitialSyncBlock | None = None
 
 
 # ---------------------------------------------------------------------------

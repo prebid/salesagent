@@ -37,7 +37,6 @@ from src.admin.api_schemas.tenant_management import (
     CreateWebhookSubscriptionRequest,
     FreeWheelAdapterConfig,
     GAMAdapterConfig,
-    InitialSyncBlock,
     ListAccountsManagedResponse,
     ListAdaptersResponse,
     ListAuditLogResponse,
@@ -1133,24 +1132,20 @@ def provision_tenant():
         session.refresh(new_tenant)
         created_at = new_tenant.created_at
 
-    # Sprint 1.8 §8: first-sync-on-provision. Same row-create + worker-spawn
-    # path as ``/refresh``, so the publisher has data the moment provisioning
-    # returns instead of waiting for the next 6h cron tick. Workers transition
-    # rows pending → running → completed/failed in the background; the
-    # response surfaces the run ids so callers can poll /status.syncs.
-    initial_sync_block: InitialSyncBlock | None = None
+    # First inventory sync runs as a side effect of provisioning, not a
+    # gate on it. Provision is binary: credentials validated upstream
+    # (Step 2b), tenant rows committed, response returns. Inventory sync
+    # state lives in the salesagent UI from this point on — the publisher
+    # logs in and sees current sync progress on the dashboard. No handles
+    # are surfaced to the caller; we are not inviting polling.
     try:
-        sync_run_ids, _ = _create_and_spawn_refresh(
+        _create_and_spawn_refresh(
             tenant_id=tenant_id,
             triggered_by_id="tenant_management_api:provision",
         )
-        initial_sync_block = InitialSyncBlock(sync_run_ids=sync_run_ids)
     except Exception:
-        # First-sync is best-effort: if it fails, the tenant is still
-        # provisioned and the next /refresh or cron tick will pick up.
-        # Log so the failure is visible in observability.
         logger.exception(
-            "[provision] first-sync-on-provision failed for tenant=%s — "
+            "[provision] first-sync kickoff failed for tenant=%s — "
             "tenant is still provisioned; next /refresh or cron tick will sync",
             tenant_id,
         )
@@ -1179,7 +1174,6 @@ def provision_tenant():
             if initial_principal_id and initial_principal_name
             else None
         ),
-        initial_sync=initial_sync_block,
     )
     return jsonify(response.model_dump(mode="json")), 201
 
@@ -2041,6 +2035,61 @@ _REFRESH_SYNC_TYPES: tuple[str, ...] = ("inventory", "custom_targeting", "advert
 _REFRESH_IDEMPOTENCY_SECONDS = 60
 
 
+def _mark_sync_failed_on_spawn(
+    tenant_id: str,
+    sync_ids: list[str],
+    exc: BaseException,
+    *,
+    spawn_label: str,
+) -> None:
+    """Transition pending SyncJob rows to ``failed`` when worker spawn raised.
+
+    Without this, a spawn-time exception leaves rows in ``pending`` forever
+    — the publisher's dashboard shows "never run" with no error surfaced.
+    Marking the row ``failed`` makes the failure visible in the salesagent
+    UI and lets the next /refresh tick re-attempt cleanly.
+
+    Captures structured error context (class, message, brief traceback) on
+    the row so a publisher can self-diagnose common issues (e.g., a missing
+    GAM scope shows up as a recognizable exception name) without escalating
+    to an engineer for routine failures.
+    """
+    if not sync_ids:
+        return
+    import traceback
+
+    from src.core.database.repositories import SyncJobRepository
+
+    # Three frames is usually enough to identify the spawn site without
+    # ballooning the Text column. Real traceback lives in the logger.exception
+    # call at the catch site for full engineer debugging.
+    tb_lines = traceback.format_tb(exc.__traceback__, limit=3) if exc.__traceback__ else []
+    tb_summary = "".join(tb_lines).strip()
+    error_message = f"Worker spawn failed ({spawn_label}): {type(exc).__name__}: {exc}"
+    if tb_summary:
+        error_message = f"{error_message}\n\nTraceback (most recent calls):\n{tb_summary}"
+
+    try:
+        with get_db_session() as session:
+            repo = SyncJobRepository(session, tenant_id)
+            transitioned = repo.mark_pending_as_failed(sync_ids, error_message)
+            session.commit()
+            if transitioned == 0:
+                # The rows we tried to mark failed weren't in 'pending' —
+                # most likely a worker that started before the spawn-time
+                # exception fired already promoted them to 'running'.
+                # That worker now owns the lifecycle; surface a warning so
+                # this race is visible if it ever happens in practice.
+                logger.warning(
+                    "Spawn failure but no SyncJob rows transitioned to failed for tenant=%s "
+                    "sync_ids=%s — rows already moved past 'pending'; worker owns the lifecycle",
+                    tenant_id,
+                    sync_ids,
+                )
+    except Exception:
+        logger.exception("Failed to mark SyncJob rows failed after spawn error: %s", sync_ids)
+
+
 def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None:
     """Spawn background workers for any pending SyncJob rows /refresh
     just created.
@@ -2052,9 +2101,9 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
     - ``advertisers`` runs in its own thread via ``sync_advertisers``.
 
     Rows already in 'running' state (idempotency reuse) are skipped —
-    a worker is already on it. Failures during spawn are logged but
-    don't bubble up: the row stays pending and the next /refresh call
-    (after the 60s window) will re-attempt.
+    a worker is already on it. Spawn failures transition the row to
+    ``failed`` so the publisher sees the error in the salesagent UI
+    instead of an eternally pending row.
     """
     import threading
 
@@ -2084,12 +2133,18 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
                 pending_sync_id=inventory_id,
                 targeting_sync_id=targeting_id if targeting_id in pending_ids else None,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "[refresh] failed to spawn inventory worker for tenant=%s sync_id=%s",
                 tenant_id,
                 inventory_id,
             )
+            # Both inventory and the bundled targeting row need to be
+            # transitioned — the targeting worker is the inventory worker.
+            failed_ids = [inventory_id]
+            if targeting_id and targeting_id in pending_ids:
+                failed_ids.append(targeting_id)
+            _mark_sync_failed_on_spawn(tenant_id, failed_ids, exc, spawn_label="inventory")
     elif targeting_id and targeting_id in pending_ids:
         # Edge case: inventory row was reused (running) but targeting is
         # fresh-pending. Mark targeting as bundled with the live inventory
@@ -2135,12 +2190,13 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
                 name=f"sync-advertisers-{advertisers_id}",
             )
             thread.start()
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "[refresh] failed to spawn advertisers worker for tenant=%s sync_id=%s",
                 tenant_id,
                 advertisers_id,
             )
+            _mark_sync_failed_on_spawn(tenant_id, [advertisers_id], exc, spawn_label="advertisers")
 
 
 def _create_and_spawn_refresh(

@@ -41,10 +41,13 @@ def test_adapter_connection(adapter_type: str, config: dict[str, Any]) -> tuple[
     """Probe the adapter's authentication path.
 
     Args:
-        adapter_type: One of ``"google_ad_manager"`` or ``"mock"``.
+        adapter_type: One of ``"google_ad_manager"``, ``"freewheel"``, or
+            ``"mock"``.
         config: Adapter-specific configuration. For GAM this includes
             ``network_code`` and one of ``service_account_json`` /
-            ``refresh_token``.
+            ``refresh_token``. For FreeWheel this includes
+            ``environment`` and one of (``username``, ``password``) /
+            ``api_token``.
 
     Returns:
         A ``(success, error)`` tuple. ``error`` is None on success and a
@@ -55,6 +58,9 @@ def test_adapter_connection(adapter_type: str, config: dict[str, Any]) -> tuple[
 
     if adapter_type == "google_ad_manager":
         return _test_gam(config)
+
+    if adapter_type == "freewheel":
+        return _test_freewheel(config)
 
     return False, f"Unsupported adapter_type: {adapter_type!r}"
 
@@ -83,6 +89,64 @@ def _test_gam(config: dict[str, Any]) -> tuple[bool, str | None]:
     if result.status == HealthStatus.HEALTHY:
         return True, None
     return False, result.message or "GAM connection probe returned non-healthy status"
+
+
+def _test_freewheel(config: dict[str, Any]) -> tuple[bool, str | None]:
+    """Authentication probe for FreeWheel Publisher API.
+
+    Hits ``/auth/token/info`` — a 200 proves the bearer (or password
+    grant) is recognised by FreeWheel's gateway. Same probe FreeWheel's
+    own ``check_permissions()`` matrix uses for the required
+    ``auth_token_info`` scope, so success here means everything else in
+    that matrix has a real chance.
+    """
+    username = config.get("username")
+    password = config.get("password")
+    api_token = config.get("api_token")
+    if not ((username and password) or api_token):
+        return False, "FreeWheel config requires either (username + password) or api_token"
+
+    try:
+        from src.adapters.freewheel._transport import (
+            FreeWheelAuthError,
+            FreeWheelError,
+            FreeWheelForbiddenError,
+        )
+        from src.adapters.freewheel.client import FreeWheelClient
+        from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
+    except Exception as exc:  # pragma: no cover - environmental
+        logger.exception("FreeWheel imports failed")
+        return False, f"FreeWheel client unavailable: {exc}"
+
+    environment = config.get("environment", "production")
+    base_url = FREEWHEEL_HOSTS.get(environment, FREEWHEEL_HOSTS["production"])
+
+    try:
+        client = FreeWheelClient(
+            api_token=api_token,
+            username=username,
+            password=password,
+            base_url=base_url,
+        )
+        client.token_info()
+    except FreeWheelAuthError as exc:
+        return False, f"FreeWheel auth rejected: {exc}"
+    except FreeWheelForbiddenError as exc:
+        # Bearer is valid but lacks the entitlements to introspect itself.
+        # Treat as a credential problem — the configured key isn't usable.
+        return False, f"FreeWheel bearer lacks entitlements: {exc}"
+    except FreeWheelError as exc:
+        # Other FreeWheel-side error (4xx validation, 5xx server). Surface
+        # the status code so the host product can distinguish transient
+        # infra failures from bad credentials.
+        return False, f"FreeWheel API error (status={exc.status_code}): {exc}"
+    except Exception as exc:
+        # Network / transport failure (DNS, TLS, timeout, JSON decode).
+        # Not a credentials problem; the host product may want to retry.
+        logger.warning("FreeWheel token_info() transport failure: %s", exc)
+        return False, f"FreeWheel transport failure: {type(exc).__name__}: {exc}"
+
+    return True, None
 
 
 def preview_adapter(adapter_type: str, config: dict[str, Any]) -> AdapterPreview:

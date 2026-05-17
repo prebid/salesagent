@@ -3281,17 +3281,6 @@
             ],
             "default": null
           },
-          "initial_sync": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProvisionTenantResponse.f44f287.InitialSyncBlock"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
           "is_embedded": {
             "const": true,
             "default": true,
@@ -3366,21 +3355,6 @@
           "connection_test_passed"
         ],
         "title": "AdapterStatusResponse",
-        "type": "object"
-      },
-      "ProvisionTenantResponse.f44f287.InitialSyncBlock": {
-        "additionalProperties": false,
-        "description": "Sync run ids spawned at provision time.\n\nStorefront polls ``/status.syncs`` for progress per sync_type. Same\nshape as ``RefreshResponse.sync_run_ids`` so callers can reuse the\nrefresh-poller path on first provision.",
-        "properties": {
-          "sync_run_ids": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Sync Run Ids",
-            "type": "object"
-          }
-        },
-        "title": "InitialSyncBlock",
         "type": "object"
       },
       "ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse": {

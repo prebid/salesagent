@@ -13,7 +13,7 @@ Stage 4 of #382 adds :class:`SyncJobAdminRepository` for the cross-tenant
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
@@ -82,6 +82,33 @@ class SyncJobRepository:
         """
         stmt = select(SyncJob).filter_by(sync_id=sync_id, tenant_id=self._tenant_id)
         return self._session.scalars(stmt).first()
+
+    def mark_pending_as_failed(self, sync_ids: list[str], error_message: str) -> int:
+        """Transition any of the given pending SyncJob rows to ``failed``.
+
+        Used by the provision / refresh paths when a worker spawn raises:
+        without this, the row sits ``pending`` forever and the publisher
+        sees "never run" with no error surfaced. Only ``pending`` rows are
+        touched — a worker that already started running owns the row's
+        lifecycle from that point on.
+
+        Returns the count of rows transitioned.
+        """
+        if not sync_ids:
+            return 0
+        rows = self._session.scalars(
+            select(SyncJob).where(
+                SyncJob.tenant_id == self._tenant_id,
+                SyncJob.sync_id.in_(sync_ids),
+                SyncJob.status == "pending",
+            )
+        ).all()
+        now = datetime.now(UTC)
+        for row in rows:
+            row.status = "failed"
+            row.completed_at = now
+            row.error_message = error_message
+        return len(rows)
 
     def latest_completed_at(self, *, adapter_type: str, sync_type: str) -> datetime | None:
         """Return ``completed_at`` of the most-recent ``status=completed``
