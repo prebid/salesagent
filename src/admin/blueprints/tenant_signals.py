@@ -1,43 +1,48 @@
 """Admin blueprint for managing tenant signals.
 
-Tenant signals are operator-declared adapter targeting capabilities — the
-publisher's first-party map of "what targeting can a buyer apply on this
-inventory." They surface to the storefront through the AdCP ``get_signals``
-tool with their public schema (``value_type`` / ``categories`` / ``range``);
-the adapter-specific ``adapter_config`` resolution map stays operator-side.
+Operator authoring surface for ``TenantSignal`` — the publisher's
+first-party map of "what targeting can a buyer apply on this inventory."
+Storefronts discover signals through the AdCP ``get_signals`` tool;
+buyers reference the resulting ``signal_id`` in
+``audience_include`` / ``audience_exclude`` on ``create_media_buy``.
 
-This UI is the operator's authoring surface. The same data is reachable via
-REST at ``/api/v1/tenants/<id>/signals`` for programmatic operators.
+UX (post-#465):
 
-Authoring model:
+- **Landing** (``/signals/``) is the operator's primary surface. Three
+  states depending on synced inventory:
+  1. **No inventory** — empty state with a "Sync inventory first" CTA.
+  2. **Has unmapped inventory** — bulk-map table on top (segments tab +
+     KV-pairs tab) showing every synced GAM entity, with a "Mapped as X"
+     badge inline for rows that already have a signal. Operator ticks
+     boxes → ``POST /signals/bulk-create`` mints one TenantSignal per
+     row in a single transaction.
+  3. **Everything mapped** — just the existing signals library below
+     the bulk panel.
+- **Composite builder** (``/signals/composite``) is the rare-path
+  surface: multi-key AND, OR-groups, exclude. Embeds the same
+  ``TargetingWidget`` product authoring uses.
+- **Detail / edit** (``/signals/<signal_id>/edit``) — rename, edit
+  description, delete. Where ``signal_id`` is visible (monospace,
+  copyable) for ops debugging.
 
-    Operator picks a *source* (GAM audience segment / GAM custom key+value /
-    Freewheel viewership profile / Freewheel audience item / Freewheel
-    custom key+value), then picks one or more *entities* from the chosen
-    source (looked up live from the ad server's discovery API). The form
-    derives ``signal_id`` from the operator's name, ``value_type`` from the
-    source, and the resolution ``adapter_config`` from the picked entities.
-    A FREEFORM GAM key is the only case that asks for operator-supplied
-    values — by definition GAM has nothing to enumerate.
-
-The legacy "Advanced (composed / JSON)" textarea is preserved on the edit
-form so operators can hand-author composed expressions or shapes the
-picker doesn't yet support (multi-adapter compositions). New rows always
-flow through the structured pickers.
+The legacy ``/signals/add`` route is gone — see #458/#462/#464 in git
+history if you need the source-picker UI back.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.signal_id import unique_signal_id
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantSignal
+from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
 
 logger = logging.getLogger(__name__)
@@ -45,37 +50,13 @@ logger = logging.getLogger(__name__)
 tenant_signals_bp = Blueprint("tenant_signals", __name__)
 
 _VALID_VALUE_TYPES = ("binary", "categorical", "numeric")
-
-# Source kinds the structured picker emits. Each maps to a specific
-# adapter_config shape; the picker UI hides the JSON entirely.
-_SOURCE_KINDS = {
-    "gam_audience_segment",  # one or more GAM audience segments (AND)
-    "gam_custom_key_value",  # one or more (key, value) pairs (AND)
-    # "Complex GAM targeting" — full TargetingWidget output (groups OR'd,
-    # criteria within group AND'd, multi-value criteria OR'd, exclude
-    # supported). Buy-time materialization rejects mixing this with any
-    # other signal in the same audience_include / audience_exclude list
-    # because the per-signal accumulator can't merge groups-format with
-    # flat key=value entries. See `_apply_signal` in GAM targeting.py.
-    "gam_complex_targeting",
-    "fw_viewership_profile",
-    "fw_audience_item",
-    "fw_custom_kv",
-}
+_SIGNAL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def _parse_csv(raw: str | None) -> list[str]:
-    """Parse a comma-separated form field into a clean list of strings."""
     if not raw:
         return []
     return [piece.strip() for piece in raw.split(",") if piece.strip()]
-
-
-def _parse_json(raw: str | None, *, default):
-    """Parse a JSON form field. Empty input → ``default``."""
-    if not raw or not str(raw).strip():
-        return default
-    return json.loads(raw)
 
 
 def _parse_float(raw: str | None) -> float | None:
@@ -84,16 +65,60 @@ def _parse_float(raw: str | None) -> float | None:
     return float(raw)
 
 
+# ---------------------------------------------------------------------------
+# Landing page — bulk-map + existing library
+# ---------------------------------------------------------------------------
+
+
 @tenant_signals_bp.route("/")
 @require_tenant_access()
 def list_signals(tenant_id: str):
-    """List operator-declared signals for a tenant."""
+    """Signals library landing.
+
+    Three rendered states (see module docstring). All three are the same
+    template — the conditional branches inside it decide what to show.
+    """
     with get_db_session() as session:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
             flash("Tenant not found.", "error")
             return redirect(url_for("core.index"))
-        rows = TenantSignalRepository(session, tenant_id).list_all()
+
+        signal_repo = TenantSignalRepository(session, tenant_id)
+        segment_index, kv_index = signal_repo.mapped_index()
+
+        # Load synced GAM inventory rows (the bulk-map source). Empty when
+        # the tenant hasn't synced — that's State A (the "sync first" CTA).
+        gam_repo = GAMSyncRepository(session, tenant_id)
+        segments_rows = gam_repo.list_inventory("audience_segment")
+        keys_rows = gam_repo.list_inventory("custom_targeting_key")
+
+        segments = [
+            {
+                "id": row.inventory_id,
+                "name": row.name,
+                "size": (row.inventory_metadata or {}).get("size"),
+                "type": (row.inventory_metadata or {}).get("type"),
+                "mapped_signal_id": (
+                    segment_index[row.inventory_id].signal_id if row.inventory_id in segment_index else None
+                ),
+                "mapped_signal_name": (
+                    segment_index[row.inventory_id].name if row.inventory_id in segment_index else None
+                ),
+            }
+            for row in segments_rows
+        ]
+        keys = [
+            {
+                "id": row.inventory_id,
+                "name": row.name,
+                "display_name": (row.inventory_metadata or {}).get("display_name") or row.name,
+                "type": (row.inventory_metadata or {}).get("type", "UNKNOWN"),
+            }
+            for row in keys_rows
+        ]
+
+        rows = signal_repo.list_all()
         signals = [
             {
                 "signal_id": row.signal_id,
@@ -101,69 +126,141 @@ def list_signals(tenant_id: str):
                 "description": row.description,
                 "value_type": row.value_type,
                 "categories": row.categories or [],
-                "range_min": row.range_min,
-                "range_max": row.range_max,
-                "targeting_dimension": row.targeting_dimension,
-                "data_provider": row.data_provider,
                 "adapter_kind": (row.adapter_config or {}).get("kind"),
+                "is_composed": (row.adapter_config or {}).get("type") == "composed",
+                "is_complex": (row.adapter_config or {}).get("kind") == "gam_targeting_groups",
                 "updated_at": row.updated_at,
             }
             for row in rows
         ]
+
+    has_inventory = bool(segments or keys)
     return render_template(
         "tenant_signals_list.html",
         tenant_id=tenant_id,
         tenant_name=tenant.name,
         signals=signals,
+        segments=segments,
+        keys=keys,
+        kv_index_size=len(kv_index),
+        has_inventory=has_inventory,
     )
 
 
-@tenant_signals_bp.route("/add", methods=["GET", "POST"])
+# ---------------------------------------------------------------------------
+# Bulk-map: turn ticked GAM entities into TenantSignal rows in one txn
+# ---------------------------------------------------------------------------
+
+
+@tenant_signals_bp.route("/bulk-create", methods=["POST"])
 @require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
-@log_admin_action("create_tenant_signal")
-def add_signal(tenant_id: str):
-    if request.method == "GET":
-        return render_template(
-            "tenant_signals_form.html",
-            tenant_id=tenant_id,
-            mode="add",
-            signal=None,
-            form_data=None,
-            errors=None,
-            value_types=_VALID_VALUE_TYPES,
-        )
+@log_admin_action("bulk_create_tenant_signals")
+def bulk_create(tenant_id: str):
+    """Mint one TenantSignal per ticked row from the bulk-map UI.
 
-    form_data, errors, parsed = _validate_form(request.form, mode="add")
-    if not errors:
-        with get_db_session() as session:
-            if session.get(Tenant, tenant_id) is None:
-                flash("Tenant not found.", "error")
-                return redirect(url_for("core.index"))
-            repo = TenantSignalRepository(session, tenant_id)
-            # Auto-generate signal_id from name; disambiguate against the
-            # tenant's existing row ids.
-            parsed["signal_id"] = unique_signal_id(parsed["name"], exists=lambda sid: repo.get_by_id(sid) is not None)
-            signal = TenantSignal(tenant_id=tenant_id, **parsed)
-            repo.add(signal)
-            session.commit()
-        flash(f"Signal {parsed['signal_id']!r} created.", "success")
-        return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
+    Request: JSON ``{"items": [{"kind": "audience_segment"|
+    "custom_key_value", ...source-specific ids...}, ...]}``.
+    For segments: ``{"kind": "audience_segment", "segment_id":
+    "...", "segment_name": "..."}``. For KVs: ``{"kind":
+    "custom_key_value", "key_id": "...", "value_id": "...",
+    "key_name": "...", "value_name": "..."}``.
 
-    return render_template(
-        "tenant_signals_form.html",
-        tenant_id=tenant_id,
-        mode="add",
-        signal=None,
-        form_data=form_data,
-        errors=errors,
-        value_types=_VALID_VALUE_TYPES,
-    )
+    Names auto-derive from the supplied display names; ``signal_id``
+    slugified + collision-disambiguated. Rows that would duplicate an
+    existing mapping silently skip — the UI already prevented re-checking
+    them, this is the defensive backstop.
+
+    Returns JSON ``{"created": N, "skipped": [signal_id, ...]}``.
+    """
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items") or []
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "items must be a non-empty list"}), 400
+
+    created: list[str] = []
+    skipped: list[str] = []
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return jsonify({"error": "tenant not found"}), 404
+        repo = TenantSignalRepository(session, tenant_id)
+        segment_index, kv_index = repo.mapped_index()
+
+        for item in items:
+            kind = item.get("kind")
+            if kind == "audience_segment":
+                segment_id = str(item.get("segment_id") or "")
+                segment_name = str(item.get("segment_name") or f"Segment {segment_id}")
+                if not segment_id:
+                    continue
+                if segment_id in segment_index:
+                    skipped.append(segment_index[segment_id].signal_id)
+                    continue
+                signal_id = unique_signal_id(segment_name, exists=lambda sid: repo.get_by_id(sid) is not None)
+                signal = TenantSignal(
+                    tenant_id=tenant_id,
+                    signal_id=signal_id,
+                    name=segment_name,
+                    value_type="binary",
+                    adapter_config={
+                        "type": "passthrough",
+                        "kind": "audience_segment",
+                        "segment_id": segment_id,
+                    },
+                    data_provider="publisher",
+                    targeting_dimension="audience",
+                )
+                repo.add(signal)
+                created.append(signal_id)
+            elif kind == "custom_key_value":
+                key_id = str(item.get("key_id") or "")
+                value_id = str(item.get("value_id") or "")
+                key_name = str(item.get("key_name") or f"Key {key_id}")
+                value_name = str(item.get("value_name") or f"Value {value_id}")
+                if not key_id or not value_id:
+                    continue
+                if (key_id, value_id) in kv_index:
+                    skipped.append(kv_index[(key_id, value_id)].signal_id)
+                    continue
+                derived_name = f"{key_name}={value_name}"
+                signal_id = unique_signal_id(derived_name, exists=lambda sid: repo.get_by_id(sid) is not None)
+                signal = TenantSignal(
+                    tenant_id=tenant_id,
+                    signal_id=signal_id,
+                    name=derived_name,
+                    value_type="binary",
+                    adapter_config={
+                        "type": "passthrough",
+                        "kind": "custom_key_value",
+                        "key_id": key_id,
+                        "value_id": value_id,
+                    },
+                    data_provider="publisher",
+                )
+                repo.add(signal)
+                created.append(signal_id)
+            else:
+                return jsonify({"error": f"unsupported kind: {kind!r}"}), 400
+
+        session.commit()
+
+    return jsonify({"created": len(created), "skipped": skipped, "signal_ids": created})
+
+
+# ---------------------------------------------------------------------------
+# Detail / edit / delete
+# ---------------------------------------------------------------------------
 
 
 @tenant_signals_bp.route("/<signal_id>/edit", methods=["GET", "POST"])
 @require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 @log_admin_action("update_tenant_signal")
 def edit_signal(tenant_id: str, signal_id: str):
+    """Edit name / description / advanced config of an existing signal.
+
+    Detail surface that doubles as edit. Operators reach this via the
+    library list. ``signal_id`` is shown here (monospace, copyable) — the
+    one place it's legitimately needed for debugging integrations.
+    """
     with get_db_session() as session:
         if session.get(Tenant, tenant_id) is None:
             flash("Tenant not found.", "error")
@@ -175,24 +272,19 @@ def edit_signal(tenant_id: str, signal_id: str):
 
         if request.method == "GET":
             return render_template(
-                "tenant_signals_form.html",
+                "tenant_signals_edit.html",
                 tenant_id=tenant_id,
-                mode="edit",
                 signal=signal,
                 form_data=None,
                 errors=None,
                 value_types=_VALID_VALUE_TYPES,
             )
 
-        # mode="edit" — signal_id is immutable (it's a public handle buyers
-        # may already reference). Operator-edits flow through the same
-        # source-first picker; name changes do NOT re-slug.
-        form_data, errors, parsed = _validate_form(request.form, mode="edit")
+        form_data, errors, parsed = _validate_edit_form(request.form)
         if errors:
             return render_template(
-                "tenant_signals_form.html",
+                "tenant_signals_edit.html",
                 tenant_id=tenant_id,
-                mode="edit",
                 signal=signal,
                 form_data=form_data,
                 errors=errors,
@@ -222,39 +314,24 @@ def delete_signal(tenant_id: str, signal_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Form validation
+# Edit-form validation (light — only name / description / advanced JSON)
 # ---------------------------------------------------------------------------
 
 
-def _validate_form(form, *, mode: str) -> tuple[dict, dict, dict]:
-    """Validate form input and return (form_data_for_re-render, errors, parsed_kwargs).
-
-    Two authoring paths supported:
-
-    - **Structured (default)**: ``source_kind`` + per-source entity fields.
-      The picker UI emits these. value_type, categories, and adapter_config
-      are derived; signal_id is generated server-side from ``name``.
-    - **Advanced JSON (escape hatch)**: ``authoring_mode == "advanced"``
-      passes raw ``adapter_config`` JSON + manual ``value_type`` /
-      ``categories`` / range. Available on edit only so existing
-      hand-authored rows can still round-trip.
+def _validate_edit_form(form) -> tuple[dict, dict, dict]:
+    """Edit form is light: name (required), description, optional
+    advanced-JSON for hand-authored rows. ``signal_id`` is immutable
+    (buyer-referenced handle).
     """
-    authoring_mode = (form.get("authoring_mode") or "structured").strip()
     form_data = {
-        "authoring_mode": authoring_mode,
         "name": (form.get("name") or "").strip(),
         "description": (form.get("description") or "").strip(),
-        "targeting_dimension": (form.get("targeting_dimension") or "").strip(),
-        "data_provider": (form.get("data_provider") or "").strip(),
-        # Structured-mode fields
-        "source_kind": (form.get("source_kind") or "").strip(),
-        "entities": form.get("entities") or "",
-        "freeform_values": (form.get("freeform_values") or "").strip(),
-        # Advanced-mode fields
         "value_type": (form.get("value_type") or "").strip(),
         "categories": (form.get("categories") or "").strip(),
         "range_min": (form.get("range_min") or "").strip(),
         "range_max": (form.get("range_max") or "").strip(),
+        "targeting_dimension": (form.get("targeting_dimension") or "").strip(),
+        "data_provider": (form.get("data_provider") or "").strip(),
         "adapter_config": form.get("adapter_config") or "",
     }
     errors: dict[str, str] = {}
@@ -268,197 +345,29 @@ def _validate_form(form, *, mode: str) -> tuple[dict, dict, dict]:
     parsed["targeting_dimension"] = form_data["targeting_dimension"] or None
     parsed["data_provider"] = form_data["data_provider"] or None
 
-    if authoring_mode == "advanced":
-        _parse_advanced_fields(form_data, errors, parsed)
-    else:
-        _parse_structured_fields(form_data, errors, parsed)
+    if form_data["value_type"]:
+        if form_data["value_type"] not in _VALID_VALUE_TYPES:
+            errors["value_type"] = f"value_type must be one of {', '.join(_VALID_VALUE_TYPES)}."
+        else:
+            parsed["value_type"] = form_data["value_type"]
+
+    if form_data["categories"]:
+        parsed["categories"] = _parse_csv(form_data["categories"])
+
+    if form_data["range_min"] or form_data["range_max"]:
+        try:
+            parsed["range_min"] = _parse_float(form_data["range_min"])
+            parsed["range_max"] = _parse_float(form_data["range_max"])
+        except ValueError:
+            errors["range"] = "range_min and range_max must be numeric or empty."
+
+    if form_data["adapter_config"]:
+        try:
+            adapter_config = json.loads(form_data["adapter_config"])
+            if not isinstance(adapter_config, dict):
+                raise ValueError("adapter_config must be a JSON object.")
+            parsed["adapter_config"] = adapter_config
+        except (ValueError, json.JSONDecodeError) as exc:
+            errors["adapter_config"] = f"Invalid JSON: {exc}"
 
     return form_data, errors, parsed
-
-
-def _parse_structured_fields(form_data: dict, errors: dict, parsed: dict) -> None:
-    """Translate source-first picker fields into TenantSignal kwargs.
-
-    The picker emits ``source_kind`` (one of the values in
-    ``_SOURCE_KINDS``) and ``entities`` — a JSON array of source-specific
-    objects (e.g. ``[{"segment_id": "..."}, ...]`` or
-    ``[{"key_id": "...", "value_id": "...", "key_type": "PREDEFINED"}]``).
-    A single entity emits a pass-through ``adapter_config``; multiple
-    entities emit a composed AND.
-
-    FREEFORM custom keys may be paired with operator-supplied
-    ``freeform_values`` (CSV) — those become the public ``categories``
-    list since GAM has nothing to enumerate. PREDEFINED keys leave
-    ``categories`` empty; values resolve live at targeting time.
-    """
-    source_kind = form_data["source_kind"]
-    if not source_kind:
-        errors["source_kind"] = "Pick a source for this signal."
-        return
-    if source_kind not in _SOURCE_KINDS:
-        errors["source_kind"] = f"Unknown source kind {source_kind!r}."
-        return
-
-    # Complex GAM targeting takes the TargetingWidget's groups payload
-    # verbatim into adapter_config. It has different shape from the
-    # entity-list sources, so handle it before the entities parse.
-    if source_kind == "gam_complex_targeting":
-        _parse_gam_complex_targeting(form_data, errors, parsed)
-        return
-
-    try:
-        entities = _parse_json(form_data["entities"], default=[])
-    except (ValueError, json.JSONDecodeError) as exc:
-        errors["entities"] = f"entities must be a JSON array: {exc}"
-        return
-    if not isinstance(entities, list) or not entities:
-        errors["entities"] = "Pick at least one entity for the signal."
-        return
-
-    try:
-        criteria = [_entity_to_criterion(source_kind, ent) for ent in entities]
-    except ValueError as exc:
-        errors["entities"] = str(exc)
-        return
-
-    # Single entity → pass-through; multiple → composed AND. Both shapes are
-    # already understood by every per-adapter materializer (#439).
-    if len(criteria) == 1:
-        parsed["adapter_config"] = {"type": "passthrough", **criteria[0]}
-    else:
-        parsed["adapter_config"] = {"type": "composed", "criteria": criteria}
-
-    parsed["value_type"] = "binary"
-    parsed["categories"] = _parse_csv(form_data["freeform_values"])
-    parsed["range_min"] = None
-    parsed["range_max"] = None
-
-
-def _entity_to_criterion(source_kind: str, entity: dict) -> dict:
-    """Normalize one picker-emitted entity to a materializer criterion.
-
-    Raises ``ValueError`` with an operator-friendly message if the entity
-    is missing required ids — the picker should never emit these but we
-    validate defensively (the field is JSON the operator could craft).
-    """
-    if not isinstance(entity, dict):
-        raise ValueError("Each entity must be an object.")
-    mode = entity.get("mode", "include")
-    if mode not in ("include", "exclude"):
-        raise ValueError(f"mode must be 'include' or 'exclude' (got {mode!r}).")
-
-    if source_kind == "gam_audience_segment":
-        segment_id = entity.get("segment_id")
-        if not segment_id:
-            raise ValueError("GAM audience segment requires segment_id.")
-        return {"kind": "audience_segment", "segment_id": str(segment_id), "mode": mode}
-
-    if source_kind == "gam_custom_key_value":
-        key_id, value_id = entity.get("key_id"), entity.get("value_id")
-        if not key_id or not value_id:
-            raise ValueError("GAM custom key+value requires key_id and value_id.")
-        return {
-            "kind": "custom_key_value",
-            "key_id": str(key_id),
-            "value_id": str(value_id),
-            "mode": mode,
-        }
-
-    if source_kind == "fw_viewership_profile":
-        profile_id = entity.get("profile_id")
-        if profile_id is None:
-            raise ValueError("Freewheel viewership profile requires profile_id.")
-        return {"kind": "freewheel_viewership_profile", "profile_id": int(profile_id), "mode": mode}
-
-    if source_kind == "fw_audience_item":
-        item_id = entity.get("item_id")
-        if item_id is None:
-            raise ValueError("Freewheel audience item requires item_id.")
-        return {"kind": "freewheel_audience_item", "item_id": int(item_id), "mode": mode}
-
-    if source_kind == "fw_custom_kv":
-        key, value_id = entity.get("key"), entity.get("value_id")
-        if not key or not value_id:
-            raise ValueError("Freewheel custom KV requires key and value_id.")
-        return {"kind": "freewheel_custom_kv", "key": str(key), "value_id": str(value_id), "mode": mode}
-
-    raise ValueError(f"Unsupported source_kind {source_kind!r}.")
-
-
-def _parse_gam_complex_targeting(form_data: dict, errors: dict, parsed: dict) -> None:
-    """Translate a TargetingWidget groups payload into adapter_config.
-
-    The widget writes ``{"key_value_pairs": {"groups": [{"criteria":
-    [{"keyId": ..., "values": [...], "exclude": ...}]}]}}`` to a hidden
-    field that the form copies into ``entities`` on submit. We pass the
-    groups dict straight into adapter_config — the GAM targeting layer
-    already understands the groups format via
-    ``_build_groups_custom_targeting_structure``.
-
-    Buy-time materialization rejects mixing this signal with any other
-    signal in the same audience_include / audience_exclude list because
-    the per-signal accumulator can't merge groups-format with flat
-    key=value entries from sibling signals.
-    """
-    try:
-        payload = _parse_json(form_data["entities"], default={})
-    except (ValueError, json.JSONDecodeError) as exc:
-        errors["entities"] = f"Targeting builder payload must be JSON: {exc}"
-        return
-    if not isinstance(payload, dict):
-        errors["entities"] = "Targeting builder payload must be a JSON object."
-        return
-
-    kvp = payload.get("key_value_pairs") or {}
-    groups = kvp.get("groups") or []
-    if not groups:
-        errors["entities"] = "Add at least one criterion in the targeting builder."
-        return
-
-    # Light validation — each criterion needs a key and at least one value.
-    for group_idx, group in enumerate(groups):
-        criteria = group.get("criteria") or []
-        if not criteria:
-            errors["entities"] = f"Group {group_idx + 1} has no criteria."
-            return
-        for crit_idx, criterion in enumerate(criteria):
-            if not criterion.get("keyId"):
-                errors["entities"] = f"Group {group_idx + 1} criterion {crit_idx + 1} is missing a key."
-                return
-            if not criterion.get("values"):
-                errors["entities"] = f"Group {group_idx + 1} criterion {crit_idx + 1} has no values."
-                return
-
-    parsed["adapter_config"] = {
-        "type": "passthrough",
-        "kind": "gam_targeting_groups",
-        "groups": groups,
-    }
-    parsed["value_type"] = "binary"
-    parsed["categories"] = []
-    parsed["range_min"] = None
-    parsed["range_max"] = None
-
-
-def _parse_advanced_fields(form_data: dict, errors: dict, parsed: dict) -> None:
-    """Hand-authored JSON path — preserved for round-tripping legacy rows."""
-    if form_data["value_type"] not in _VALID_VALUE_TYPES:
-        errors["value_type"] = f"value_type must be one of {', '.join(_VALID_VALUE_TYPES)}."
-    else:
-        parsed["value_type"] = form_data["value_type"]
-
-    parsed["categories"] = _parse_csv(form_data["categories"])
-
-    try:
-        parsed["range_min"] = _parse_float(form_data["range_min"])
-        parsed["range_max"] = _parse_float(form_data["range_max"])
-    except ValueError:
-        errors["range"] = "range_min and range_max must be numeric or empty."
-
-    try:
-        adapter_config = _parse_json(form_data["adapter_config"], default={})
-        if not isinstance(adapter_config, dict):
-            raise ValueError("adapter_config must be a JSON object.")
-        parsed["adapter_config"] = adapter_config
-    except (ValueError, json.JSONDecodeError) as exc:
-        errors["adapter_config"] = f"Invalid JSON: {exc}"

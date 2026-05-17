@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Edit signal — {{ signal.name }}{% endblock %}
+
+{% block content %}
+{% set effective = form_data if form_data else {
+    "name": signal.name,
+    "description": signal.description or "",
+    "targeting_dimension": signal.targeting_dimension or "",
+    "data_provider": signal.data_provider or "",
+    "value_type": signal.value_type,
+    "categories": (signal.categories or []) | join(", "),
+    "range_min": signal.range_min if signal.range_min is not none else "",
+    "range_max": signal.range_max if signal.range_max is not none else "",
+    "adapter_config": (signal.adapter_config or {}) | tojson(indent=2),
+} %}
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Edit signal</h2>
+            <p class="sa-page-header__subtitle">
+                <code class="font-monospace">{{ signal.signal_id }}</code>
+                <button type="button" class="btn btn-sm btn-link p-0 ms-2" id="copy-signal-id"
+                        title="Copy signal_id">copy</button>
+                — buyer-referenced handle. Immutable.
+            </p>
+        </div>
+    </header>
+
+    <form method="POST">
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0">Identity</h5></div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Name <span class="text-danger">*</span></label>
+                    <input name="name" type="text" required
+                           class="form-control{% if errors and errors.name %} is-invalid{% endif %}"
+                           value="{{ effective.name }}">
+                    {% if errors and errors.name %}<div class="invalid-feedback">{{ errors.name }}</div>{% endif %}
+                    <div class="form-text">Surfaces to buyers via <code>get_signals</code>.</div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea name="description" class="form-control" rows="2">{{ effective.description }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <details class="card mb-3">
+            <summary class="card-header py-2 px-3" style="cursor:pointer">
+                <span class="small text-muted">Advanced: adapter_config / schema</span>
+            </summary>
+            <div class="card-body">
+                <p class="text-muted small">
+                    The bulk-map UI sets these for you. Edit here only if you need to hand-author the
+                    resolved targeting or override the AdCP schema fields.
+                </p>
+                <div class="row mb-3">
+                    <div class="col">
+                        <label class="form-label">Value type</label>
+                        <select name="value_type" class="form-select{% if errors and errors.value_type %} is-invalid{% endif %}">
+                            {% for vt in value_types %}
+                            <option value="{{ vt }}" {% if effective.value_type == vt %}selected{% endif %}>{{ vt }}</option>
+                            {% endfor %}
+                        </select>
+                        {% if errors and errors.value_type %}<div class="invalid-feedback">{{ errors.value_type }}</div>{% endif %}
+                    </div>
+                    <div class="col">
+                        <label class="form-label">Categories (CSV)</label>
+                        <input name="categories" type="text" class="form-control"
+                               value="{{ effective.categories }}">
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col">
+                        <label class="form-label">Range min</label>
+                        <input name="range_min" type="text" class="form-control" value="{{ effective.range_min }}">
+                    </div>
+                    <div class="col">
+                        <label class="form-label">Range max</label>
+                        <input name="range_max" type="text" class="form-control" value="{{ effective.range_max }}">
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col">
+                        <label class="form-label">Targeting dimension <span class="text-muted small">(internal)</span></label>
+                        <input name="targeting_dimension" type="text" class="form-control"
+                               value="{{ effective.targeting_dimension }}">
+                    </div>
+                    <div class="col">
+                        <label class="form-label">Data provider</label>
+                        <input name="data_provider" type="text" class="form-control"
+                               value="{{ effective.data_provider }}">
+                    </div>
+                </div>
+                <div class="mb-1">
+                    <label class="form-label">adapter_config (JSON)</label>
+                    <textarea name="adapter_config" rows="8"
+                              class="form-control font-monospace{% if errors and errors.adapter_config %} is-invalid{% endif %}">{{ effective.adapter_config }}</textarea>
+                    {% if errors and errors.adapter_config %}<div class="invalid-feedback">{{ errors.adapter_config }}</div>{% endif %}
+                </div>
+            </div>
+        </details>
+
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary">Save changes</button>
+            <a href="{{ url_for('tenant_signals.list_signals', tenant_id=tenant_id) }}" class="btn btn-link">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<script>
+document.getElementById('copy-signal-id')?.addEventListener('click', () => {
+    navigator.clipboard.writeText({{ signal.signal_id | tojson }});
+});
+</script>
+{% endblock %}

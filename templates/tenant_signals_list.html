@@ -3,81 +3,373 @@
 {% block title %}Signals - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="container-fluid">
-    <div class="row">
-        <div class="col-md-12">
-            <header class="sa-page-header">
-                <div>
-                    <h2 class="sa-page-header__title">Tenant Signals</h2>
-                    <p class="sa-page-header__subtitle">
-                        Operator-declared targeting capabilities. Surface to storefronts via the AdCP
-                        <code>get_signals</code> tool.
-                    </p>
-                </div>
-                <div class="sa-page-header__actions">
-                    <a href="{{ url_for('tenant_signals.add_signal', tenant_id=tenant_id) }}"
-                       class="btn btn-primary">
-                        <i class="fas fa-plus"></i> Create Signal
-                    </a>
-                </div>
-            </header>
+<style>
+    /* admin.css has a legacy ``.tab-content { display: none }`` rule from a
+       pre-Bootstrap tab system. Scope-override it so Bootstrap 5 tabs work
+       inside this page. */
+    #bulk-map-card .tab-content { display: block; }
+</style>
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Signals</h2>
+            <p class="sa-page-header__subtitle">
+                Operator-declared targeting capabilities. Tick the ad-server entities you want to expose,
+                then click <strong>Create signals</strong>. Storefronts discover them via AdCP
+                <code>get_signals</code>; buyers reference each in <code>audience_include</code> /
+                <code>audience_exclude</code> on <code>create_media_buy</code>.
+            </p>
+        </div>
+    </header>
 
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="mb-0">{{ signals|length }} signal{{ 's' if signals|length != 1 else '' }}</h5>
+    {# ========= State A — no synced inventory ========= #}
+    {% if not has_inventory %}
+    <div class="card mb-3">
+        <div class="card-body text-center py-5">
+            <h5 class="card-title">No inventory synced yet</h5>
+            <p class="text-muted mb-4">
+                Sync your ad server's custom targeting keys and audience segments before mapping signals.
+                Run inventory sync once, then come back here to tick what you want to expose.
+            </p>
+            <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}" class="btn btn-primary">
+                Go to inventory sync →
+            </a>
+        </div>
+    </div>
+    {% else %}
+
+    {# ========= State B / C — bulk-map table + library ========= #}
+    <div class="card mb-3" id="bulk-map-card">
+        <div class="card-header d-flex align-items-center justify-content-between">
+            <h5 class="mb-0">Map targeting to signals</h5>
+            <ul class="nav nav-pills nav-sm" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#segments-tab" type="button" role="tab">
+                        Audience segments ({{ segments | length }})
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#keys-tab" type="button" role="tab">
+                        Custom keys ({{ keys | length }})
+                    </button>
+                </li>
+            </ul>
+        </div>
+        <div class="card-body p-0">
+            <div class="tab-content">
+                {# ----- Segments tab ----- #}
+                <div class="tab-pane show active" id="segments-tab" role="tabpanel">
+                    {% if segments %}
+                    <table class="table table-sm table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width:36px"></th>
+                                <th>Segment</th>
+                                <th>Type</th>
+                                <th>Reach (people)</th>
+                                <th>GAM ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for s in segments %}
+                            <tr {% if s.mapped_signal_id %}class="table-active text-muted"{% endif %}>
+                                <td>
+                                    {% if s.mapped_signal_id %}
+                                    <input type="checkbox" class="form-check-input" disabled checked>
+                                    {% else %}
+                                    <input type="checkbox" class="form-check-input bulk-map-row"
+                                           data-kind="audience_segment"
+                                           data-segment-id="{{ s.id }}"
+                                           data-segment-name="{{ s.name }}">
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {{ s.name }}
+                                    {% if s.mapped_signal_id %}
+                                    <a class="badge bg-success text-decoration-none ms-2"
+                                       href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped_signal_id) }}">
+                                        Mapped — {{ s.mapped_signal_name }}
+                                    </a>
+                                    {% endif %}
+                                </td>
+                                <td><span class="badge bg-light text-dark">{{ s.type or "—" }}</span></td>
+                                <td class="text-end">{{ "{:,}".format(s.size) if s.size else "—" }}</td>
+                                <td class="text-muted small font-monospace">{{ s.id }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="p-4 text-center text-muted">No audience segments synced. Run inventory sync to load them.</div>
+                    {% endif %}
                 </div>
-                <div class="card-body">
-                    {% if signals %}
-                    <div class="table-responsive">
-                        <table class="table table-hover">
-                            <thead>
-                                <tr>
-                                    <th>signal_id</th>
-                                    <th>Name</th>
-                                    <th>Value type</th>
-                                    <th>Adapter kind</th>
-                                    <th>Dimension</th>
-                                    <th>Provider</th>
-                                    <th>Updated</th>
-                                    <th class="text-end">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for s in signals %}
-                                <tr>
-                                    <td><code>{{ s.signal_id }}</code></td>
-                                    <td>{{ s.name }}</td>
-                                    <td><span class="badge bg-secondary">{{ s.value_type }}</span></td>
-                                    <td>
-                                        {% if s.adapter_kind %}<code>{{ s.adapter_kind }}</code>{% else %}<span class="text-muted">—</span>{% endif %}
-                                    </td>
-                                    <td>{{ s.targeting_dimension or '—' }}</td>
-                                    <td>{{ s.data_provider or '—' }}</td>
-                                    <td><small class="text-muted">{{ s.updated_at.strftime('%Y-%m-%d %H:%M') }}</small></td>
-                                    <td class="text-end">
-                                        <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}"
-                                           class="btn btn-sm btn-outline-secondary">Edit</a>
-                                        <form method="POST"
-                                              action="{{ url_for('tenant_signals.delete_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}"
-                                              class="d-inline"
-                                              onsubmit="return confirm('Delete signal {{ s.signal_id }}?');">
-                                            <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                                        </form>
-                                    </td>
-                                </tr>
+
+                {# ----- Custom keys tab ----- #}
+                <div class="tab-pane" id="keys-tab" role="tabpanel">
+                    {% if keys %}
+                    <p class="text-muted small px-3 pt-3 mb-2">
+                        Pick a key to see its values, then tick which (key, value) pairs to expose as signals.
+                        FREEFORM keys can't be bulk-mapped — their values aren't enumerable from GAM.
+                    </p>
+                    <div class="row g-0">
+                        <div class="col-md-4 border-end">
+                            <div class="list-group list-group-flush" id="keys-list">
+                                {% for k in keys %}
+                                <button type="button"
+                                        class="list-group-item list-group-item-action key-row"
+                                        data-key-id="{{ k.id }}"
+                                        data-key-name="{{ k.display_name }}"
+                                        data-key-type="{{ k.type }}">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <span>{{ k.display_name }}</span>
+                                        <span class="badge bg-light text-dark">{{ k.type }}</span>
+                                    </div>
+                                    <small class="text-muted font-monospace">{{ k.id }}</small>
+                                </button>
                                 {% endfor %}
-                            </tbody>
-                        </table>
+                            </div>
+                        </div>
+                        <div class="col-md-8">
+                            <div id="key-values-panel" class="p-3 text-muted">
+                                Pick a key on the left to load its values.
+                            </div>
+                        </div>
                     </div>
                     {% else %}
-                    <p class="text-muted text-center py-4">
-                        No signals declared yet. Click <strong>Create Signal</strong> to declare your first
-                        adapter targeting capability.
-                    </p>
+                    <div class="p-4 text-center text-muted">No custom targeting keys synced.</div>
                     {% endif %}
                 </div>
             </div>
         </div>
+        <div class="card-footer d-flex justify-content-between align-items-center">
+            <div class="text-muted small" id="bulk-footer-hint">Pick rows to map — they'll become signals on save.</div>
+            <button type="button" class="btn btn-primary" id="bulk-create-btn" disabled>
+                Create <span id="bulk-selection-count" class="d-none"></span> signals
+            </button>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ========= Existing signals library ========= #}
+    <div class="card">
+        <div class="card-header d-flex align-items-center justify-content-between">
+            <h5 class="mb-0">Existing signals ({{ signals | length }})</h5>
+            <div class="form-check form-switch">
+                <input type="checkbox" class="form-check-input" id="show-ids-toggle">
+                <label class="form-check-label small text-muted" for="show-ids-toggle">Show IDs</label>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            {% if signals %}
+            <table class="table table-sm table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th class="signal-id-col d-none">signal_id</th>
+                        <th>Kind</th>
+                        <th>Type</th>
+                        <th>Updated</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in signals %}
+                    <tr>
+                        <td>{{ s.name }}</td>
+                        <td class="signal-id-col d-none font-monospace small">{{ s.signal_id }}</td>
+                        <td>
+                            <span class="badge bg-light text-dark">
+                            {% if s.is_complex %}complex{% elif s.is_composed %}composed{% else %}{{ s.adapter_kind or "—" }}{% endif %}
+                            </span>
+                        </td>
+                        <td>{{ s.value_type }}</td>
+                        <td class="small text-muted">{{ s.updated_at.strftime("%Y-%m-%d") if s.updated_at else "—" }}</td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-outline-secondary"
+                               href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}">Edit</a>
+                            <form method="POST"
+                                  action="{{ url_for('tenant_signals.delete_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Delete signal {{ s.name }}?')">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="p-4 text-center text-muted">
+                No signals declared yet. Tick rows above and click <strong>Create signals</strong>.
+            </div>
+            {% endif %}
+        </div>
     </div>
 </div>
+
+{% if has_inventory %}
+<script>
+(function() {
+    'use strict';
+
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = {{ tenant_id | tojson }};
+    const apiBase = scriptRoot + '/admin/api/tenant/' + tenantId;
+    const bulkCreateUrl = scriptRoot + '/tenant/' + tenantId + '/signals/bulk-create';
+
+    const idsToggle = document.getElementById('show-ids-toggle');
+    if (idsToggle) {
+        idsToggle.addEventListener('change', () => {
+            document.querySelectorAll('.signal-id-col').forEach(c => {
+                c.classList.toggle('d-none', !idsToggle.checked);
+            });
+        });
+    }
+
+    const selected = [];
+    const countSpan = document.getElementById('bulk-selection-count');
+    const createBtn = document.getElementById('bulk-create-btn');
+    const footerHint = document.getElementById('bulk-footer-hint');
+
+    function refreshCount() {
+        createBtn.disabled = selected.length === 0;
+        if (selected.length === 0) {
+            countSpan.classList.add('d-none');
+            footerHint.textContent = "Pick rows to map — they'll become signals on save.";
+        } else {
+            countSpan.textContent = selected.length;
+            countSpan.classList.remove('d-none');
+            footerHint.textContent = `${selected.length} ticked. Click to create one signal per row.`;
+        }
+    }
+
+    document.querySelectorAll('.bulk-map-row').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const payload = {
+                kind: cb.dataset.kind,
+                segment_id: cb.dataset.segmentId,
+                segment_name: cb.dataset.segmentName,
+            };
+            const key = JSON.stringify({k: payload.kind, id: payload.segment_id});
+            if (cb.checked) selected.push({key, payload});
+            else {
+                const idx = selected.findIndex(s => s.key === key);
+                if (idx >= 0) selected.splice(idx, 1);
+            }
+            refreshCount();
+        });
+    });
+
+    const valuesPanel = document.getElementById('key-values-panel');
+    if (valuesPanel) {
+        document.querySelectorAll('.key-row').forEach(row => {
+            row.addEventListener('click', async () => {
+                document.querySelectorAll('.key-row').forEach(r => r.classList.remove('active'));
+                row.classList.add('active');
+                const keyId = row.dataset.keyId;
+                const keyName = row.dataset.keyName;
+                const keyType = row.dataset.keyType;
+                valuesPanel.innerHTML = '<div class="text-muted">Loading values…</div>';
+
+                if (keyType === 'FREEFORM') {
+                    valuesPanel.innerHTML = `
+                        <div class="alert alert-info mb-0">
+                            <strong>FREEFORM key</strong> — GAM accepts any value for this key, so there's
+                            nothing to enumerate. Bulk-mapping isn't possible here. (A custom-targeting
+                            builder for these cases is coming in a follow-up.)
+                        </div>`;
+                    return;
+                }
+
+                try {
+                    const r = await fetch(apiBase + '/targeting/values/' + keyId, { credentials: 'same-origin' });
+                    const data = await r.json();
+                    if (data.error) {
+                        // Adapter-layer errors leak implementation detail — rewrite the
+                        // two we know we'll hit from this surface into operator-grade copy.
+                        const raw = String(data.error);
+                        if (raw.includes('No adapter configured') || raw.includes('GAM') && raw.includes('not configured')) {
+                            valuesPanel.innerHTML = `
+                                <div class="alert alert-warning mb-0">
+                                    GAM isn't connected for this tenant. Connect it under
+                                    <a href="${scriptRoot}/tenant/${tenantId}/settings/integrations/">Configure → Integrations</a>
+                                    to load this key's values.
+                                </div>`;
+                            return;
+                        }
+                        throw new Error(raw);
+                    }
+                    const values = data.values || [];
+                    if (!values.length) {
+                        valuesPanel.innerHTML = '<div class="text-muted">No values defined in GAM for this key.</div>';
+                        return;
+                    }
+                    const rows = values.map(v => {
+                        const key = JSON.stringify({k: 'custom_key_value', id: keyId + ':' + String(v.id)});
+                        const isSelected = selected.some(s => s.key === key);
+                        return `<tr>
+                            <td style="width:36px">
+                                <input type="checkbox" class="form-check-input kv-check"
+                                    ${isSelected ? 'checked' : ''}
+                                    data-key-id="${keyId}"
+                                    data-key-name="${keyName}"
+                                    data-value-id="${v.id}"
+                                    data-value-name="${v.name}">
+                            </td>
+                            <td>${v.name}</td>
+                            <td class="text-muted small font-monospace">${v.id}</td>
+                        </tr>`;
+                    }).join('');
+                    valuesPanel.innerHTML = `
+                        <p class="small text-muted px-1">Values for <strong>${keyName}</strong>:</p>
+                        <table class="table table-sm"><tbody>${rows}</tbody></table>`;
+
+                    document.querySelectorAll('.kv-check').forEach(cb => {
+                        cb.addEventListener('change', () => {
+                            const payload = {
+                                kind: 'custom_key_value',
+                                key_id: cb.dataset.keyId,
+                                key_name: cb.dataset.keyName,
+                                value_id: cb.dataset.valueId,
+                                value_name: cb.dataset.valueName,
+                            };
+                            const key = JSON.stringify({k: payload.kind, id: payload.key_id + ':' + payload.value_id});
+                            if (cb.checked) selected.push({key, payload});
+                            else {
+                                const idx = selected.findIndex(s => s.key === key);
+                                if (idx >= 0) selected.splice(idx, 1);
+                            }
+                            refreshCount();
+                        });
+                    });
+                } catch (e) {
+                    valuesPanel.innerHTML = `<div class="text-danger">Failed to load values: ${e.message}</div>`;
+                }
+            });
+        });
+    }
+
+    createBtn.addEventListener('click', async () => {
+        createBtn.disabled = true;
+        createBtn.textContent = 'Creating…';
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        try {
+            const r = await fetch(bulkCreateUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+                body: JSON.stringify({ items: selected.map(s => s.payload) }),
+            });
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.error || 'create failed');
+            window.location.reload();
+        } catch (e) {
+            alert('Failed to create signals: ' + e.message);
+            createBtn.disabled = false;
+            createBtn.textContent = 'Create signals';
+        }
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

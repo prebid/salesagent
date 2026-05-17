@@ -66,3 +66,37 @@ class TenantSignalRepository:
                 f"tenant mismatch: signal.tenant_id={signal.tenant_id!r} != repo tenant_id={self._tenant_id!r}"
             )
         self._session.delete(signal)
+
+    def mapped_index(self) -> tuple[dict[str, TenantSignal], dict[tuple[str, str], TenantSignal]]:
+        """Return ``(segment_index, kv_index)`` indices over existing signals
+        for the bulk-map UI's "already mapped as …" badges.
+
+        - ``segment_index``: ``segment_id`` → signal (one entry per
+          pass-through audience_segment signal)
+        - ``kv_index``: ``(key_id, value_id)`` → signal (one per
+          pass-through custom_key_value signal)
+
+        Composed and complex signals don't appear in either index — they're
+        N-to-N with inventory and can't be represented as "this row is
+        mapped". Operators rename / re-author them through the detail page.
+
+        Python-side filtering is fine: tenants typically have at most a few
+        hundred signals, and a single ``SELECT *`` is faster than two
+        JSONB-path queries.
+        """
+        segment_index: dict[str, TenantSignal] = {}
+        kv_index: dict[tuple[str, str], TenantSignal] = {}
+        for signal in self.list_all():
+            cfg = signal.adapter_config or {}
+            if cfg.get("type") == "composed":
+                continue  # complex signals don't get inline badges
+            kind = cfg.get("kind")
+            if kind == "audience_segment":
+                seg = cfg.get("segment_id")
+                if seg:
+                    segment_index[str(seg)] = signal
+            elif kind == "custom_key_value":
+                key_id, value_id = cfg.get("key_id"), cfg.get("value_id")
+                if key_id and value_id:
+                    kv_index[(str(key_id), str(value_id))] = signal
+        return segment_index, kv_index

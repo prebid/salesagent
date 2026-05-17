@@ -13,7 +13,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import GamAdvertiser, GAMLineItem, GAMOrder
+from src.core.database.models import GamAdvertiser, GAMInventory, GAMLineItem, GAMOrder
 
 
 class GAMSyncRepository:
@@ -81,5 +81,25 @@ class GAMSyncRepository:
                     GAMLineItem.tenant_id == self._tenant_id,
                     GAMLineItem.order_id.in_(order_ids),
                 )
+            ).all()
+        )
+
+    # ------------------------------------------------------------------
+    # GAMInventory readers — fuel the signals bulk-map UI
+    # ------------------------------------------------------------------
+
+    def list_inventory(self, inventory_type: str) -> list[GAMInventory]:
+        """Return synced GAM inventory rows of one type
+        (``audience_segment``, ``custom_targeting_key``, …) ordered by
+        name. Empty when the tenant hasn't synced.
+        """
+        return list(
+            self._session.scalars(
+                select(GAMInventory)
+                .where(
+                    GAMInventory.tenant_id == self._tenant_id,
+                    GAMInventory.inventory_type == inventory_type,
+                )
+                .order_by(GAMInventory.name)
             ).all()
         )
