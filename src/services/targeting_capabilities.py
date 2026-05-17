@@ -199,8 +199,12 @@ def validate_property_targeting_allowed(product: Any, targeting_overlay: Targeti
     Used at both create_media_buy and update_media_buy validation sites; pulled
     here so the rule lives in one place.
 
-    Returns a violation message string, or None when targeting is allowed.
+    Returns a violation message string, or None when targeting is allowed or
+    when the product is missing (caller is responsible for surfacing the
+    not-found error via a separate path; this helper must not crash on None).
     """
+    if product is None:
+        return None
     if (
         targeting_overlay is not None
         and getattr(targeting_overlay, "property_list", None) is not None

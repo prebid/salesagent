@@ -587,8 +587,10 @@ class TestTargetingOverlayRoundTrip:
         mock_principal_obj,
         mock_uow_cls,
     ):
-        """Targeting carries internal fields (had_city_targeting, tenant_id) — these
-        must not leak into the response. Pydantic excludes them via Targeting.model_dump."""
+        """Targeting carries internal fields (had_city_targeting, tenant_id, etc.) — none
+        of them may leak into the response. Targeting.model_dump excludes the full set:
+        key_value_pairs, tenant_id, created_at, updated_at, metadata, had_city_targeting.
+        """
         mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
 
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
@@ -602,8 +604,12 @@ class TestTargetingOverlayRoundTrip:
                     },
                     # Legacy city targeting triggers had_city_targeting=True via normalizer
                     "geo_city_any_of": ["NYC"],
+                    # Each of these must be excluded by Targeting.model_dump
                     "tenant_id": "leaky_tenant_id",
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "updated_at": "2025-01-02T00:00:00Z",
                     "metadata": {"private": "do_not_leak"},
+                    "key_value_pairs": {"aee_segment": "secret"},
                 },
             }
         )
@@ -616,8 +622,17 @@ class TestTargetingOverlayRoundTrip:
 
         dumped = response.model_dump(exclude_none=True)
         targeting = dumped["media_buys"][0]["packages"][0]["targeting_overlay"]
-        # had_city_targeting has exclude=True
-        assert "had_city_targeting" not in targeting
+        # Full excluded set per Targeting.model_dump + Field(exclude=True)
+        excluded_internal_fields = {
+            "key_value_pairs",
+            "tenant_id",
+            "created_at",
+            "updated_at",
+            "metadata",
+            "had_city_targeting",
+        }
+        leaked = excluded_internal_fields & set(targeting.keys())
+        assert not leaked, f"Internal Targeting fields leaked into response: {sorted(leaked)}"
         # property_list still surfaces
         assert targeting["property_list"]["list_id"] == "v1"
 

@@ -275,12 +275,19 @@ def _update_media_buy_impl(
         # AdCP 3.0.1 spec (core/targeting.json:191): reject property_list targeting
         # on products with property_targeting_allowed=False. Runs before the dry_run
         # early return so dry_run requests are also rejected (parity with create).
+        # FIXME(inventory-targeting-A1-update): convert the return-envelope below to
+        # `raise AdCPValidationError(...)` when PR #1307 sub-batch 3 drains the
+        # remaining Pattern A sites in this file. Kept as return-envelope here to
+        # mirror the existing local convention (AUTH_REQUIRED at lines 258-274).
         if req.packages:
-            from src.core.database.models import Product as ProductModel
+            from src.core.database.repositories.product import ProductRepository
             from src.services.targeting_capabilities import (
                 validate_property_targeting_allowed,
             )
 
+            # MediaBuyUoW doesn't expose a ProductRepository; instantiate one on the
+            # shared session so tenant-scoping lives in the repo (not duplicated here).
+            product_repo = ProductRepository(session, tenant["tenant_id"])
             for pkg_update in req.packages:
                 if (
                     pkg_update.targeting_overlay is None
@@ -294,12 +301,7 @@ def _update_media_buy_impl(
                 package_product_id = (media_package.package_config or {}).get("product_id")
                 if not package_product_id:
                     continue
-                product = session.scalars(
-                    select(ProductModel).where(
-                        ProductModel.tenant_id == tenant["tenant_id"],
-                        ProductModel.product_id == package_product_id,
-                    )
-                ).first()
+                product = product_repo.get_by_id(package_product_id)
                 violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
                 if violation:
                     if step is not None:
