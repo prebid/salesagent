@@ -13,8 +13,10 @@ from typing import Any
 
 from sqlalchemy import select
 
+from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.database.repositories import MediaBuyUoW
 from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
@@ -265,7 +267,7 @@ def _mark_approval_complete(
     principal_id: str,
     media_buy_id: str,
 ):
-    """Mark approval as completed and send webhook notification."""
+    """Mark approval as completed, advance MediaBuy.status, audit, and webhook."""
     try:
         with get_db_session() as db:
             import json
@@ -277,6 +279,34 @@ def _mark_approval_complete(
                 approval_job.completed_at = datetime.now(UTC)
                 approval_job.summary = json.dumps(summary) if summary else None
                 db.commit()
+
+        # Advance MediaBuy.status — without this, the buy stays at pending_approval
+        # forever even though GAM approved the order.
+        try:
+            with MediaBuyUoW(tenant_id) as uow:
+                assert uow.media_buys is not None
+                uow.media_buys.update_status(media_buy_id, "active")
+        except Exception as e:
+            logger.error(f"Failed to update MediaBuy {media_buy_id} status to active: {e}")
+
+        # Audit log (also fires Slack notification when configured).
+        try:
+            audit = AuditLogger(adapter_name="GoogleAdManager", tenant_id=tenant_id)
+            audit.log_operation(
+                operation="approve_order",
+                principal_name=principal_id,
+                principal_id=principal_id,
+                adapter_id=str(summary.get("order_id", "")),
+                success=True,
+                details={
+                    "order_id": summary.get("order_id"),
+                    "media_buy_id": media_buy_id,
+                    "attempts": summary.get("attempts"),
+                    "duration_seconds": summary.get("duration_seconds"),
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to write approval audit log: {e}")
 
         # Send webhook notification
         if webhook_url:
@@ -303,7 +333,9 @@ def _mark_approval_failed(
     principal_id: str,
     media_buy_id: str,
 ):
-    """Mark approval as failed and send webhook notification."""
+    """Mark approval as failed, terminalize MediaBuy.status, audit, and webhook."""
+    order_id: str | None = None
+    attempts: int | None = None
     try:
         with get_db_session() as db:
             stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
@@ -313,6 +345,37 @@ def _mark_approval_failed(
                 approval_job.completed_at = datetime.now(UTC)
                 approval_job.error_message = error_message
                 db.commit()
+                if approval_job.progress:
+                    order_id = approval_job.progress.get("order_id")
+                    attempts = approval_job.progress.get("attempts")
+
+        # Terminalize MediaBuy.status — without this, the buy stays at pending_approval
+        # forever after the background poll gives up.
+        try:
+            with MediaBuyUoW(tenant_id) as uow:
+                assert uow.media_buys is not None
+                uow.media_buys.update_status(media_buy_id, "failed")
+        except Exception as e:
+            logger.error(f"Failed to update MediaBuy {media_buy_id} status to failed: {e}")
+
+        # Audit log (also fires Slack notification when configured).
+        try:
+            audit = AuditLogger(adapter_name="GoogleAdManager", tenant_id=tenant_id)
+            audit.log_operation(
+                operation="approve_order",
+                principal_name=principal_id,
+                principal_id=principal_id,
+                adapter_id=str(order_id or ""),
+                success=False,
+                error=error_message,
+                details={
+                    "order_id": order_id,
+                    "media_buy_id": media_buy_id,
+                    "attempts": attempts,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to write approval-failure audit log: {e}")
 
         # Send webhook notification
         if webhook_url:
@@ -323,8 +386,8 @@ def _mark_approval_failed(
                 media_buy_id=media_buy_id,
                 status="failed",
                 message=error_message,
-                order_id=approval_job.progress.get("order_id") if approval_job and approval_job.progress else None,
-                attempts=approval_job.progress.get("attempts") if approval_job and approval_job.progress else None,
+                order_id=order_id,
+                attempts=attempts,
             )
 
     except Exception as e:

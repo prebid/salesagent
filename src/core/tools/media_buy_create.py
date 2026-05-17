@@ -981,26 +981,44 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             else:
                 logger.info(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
 
-        # After creatives are uploaded (or skipped), retry order approval
-        # This is necessary because:
-        # 1. GAM may still be processing inventory forecasts (NO_FORECAST_YET error)
-        # 2. Creatives may have been uploaded after the initial approval attempt
+        # After creatives are uploaded (or skipped), retry order approval.
+        # GAM forecasting (NO_FORECAST_YET) can take seconds to minutes after line-item
+        # creation. We try once synchronously to capture the common fast-path; if it
+        # fails, we hand off to the background polling service so the admin request
+        # returns immediately instead of blocking on the legacy 40x15s retry default.
         logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
+        background_owns_status = False
         try:
             adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
             if hasattr(adapter, "orders_manager") and adapter.orders_manager:
-                approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
+                approval_success = adapter.orders_manager.approve_order(response.media_buy_id, max_retries=1)
                 if approval_success:
                     logger.info(f"[APPROVAL] Successfully approved GAM order {response.media_buy_id}")
                 else:
-                    # GAM approval failed - return failure so status can be updated
-                    error_msg = (
-                        f"Failed to approve order {response.media_buy_id}, "
-                        f"it will remain in DRAFT status. This may be due to missing creatives or "
-                        f"GAM still processing inventory forecasts."
-                    )
-                    logger.warning(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    # Hand off to background polling. start_order_approval_background
+                    # owns the terminal MediaBuy.status transition (active/failed) and
+                    # the audit/Slack notification (see order_approval_service.py).
+                    from src.services.order_approval_service import start_order_approval_background
+
+                    try:
+                        approval_id = start_order_approval_background(
+                            order_id=response.media_buy_id,
+                            media_buy_id=media_buy_id,
+                            tenant_id=tenant_id,
+                            principal_id=principal.principal_id,
+                            webhook_url=None,
+                        )
+                        background_owns_status = True
+                        logger.info(
+                            f"[APPROVAL] GAM forecast not ready for {response.media_buy_id}; "
+                            f"handed off to background polling (job: {approval_id})"
+                        )
+                    except ValueError as already_running:
+                        background_owns_status = True
+                        logger.info(
+                            f"[APPROVAL] Background approval already running for "
+                            f"{response.media_buy_id}: {already_running}"
+                        )
             else:
                 logger.info("[APPROVAL] Adapter does not support order approval, skipping")
         except Exception as approval_error:
@@ -1009,12 +1027,17 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
             return False, error_msg
 
-        # Update media buy status to 'active' after successful adapter execution
-        # (UC-002:437 — "updates the media buy status to active")
-        with MediaBuyUoW(tenant_id) as uow3:
-            assert uow3.media_buys is not None
-            uow3.media_buys.update_status(media_buy_id, "active")
-            logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
+        if background_owns_status:
+            # Don't write 'active' here; the polling service will transition the
+            # MediaBuy to active or failed based on what GAM actually does.
+            logger.info(f"[APPROVAL] Status update deferred to background polling for {media_buy_id}")
+        else:
+            # Update media buy status to 'active' after successful adapter execution
+            # (UC-002:437 — "updates the media buy status to active")
+            with MediaBuyUoW(tenant_id) as uow3:
+                assert uow3.media_buys is not None
+                uow3.media_buys.update_status(media_buy_id, "active")
+                logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
 
         return True, None
 
