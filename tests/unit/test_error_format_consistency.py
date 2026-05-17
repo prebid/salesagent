@@ -563,7 +563,7 @@ class TestMCPRecoveryInErrorResponses:
             ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
             ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
-            ("AdCPGoneError", "expired", "INVALID_STATE", "terminal"),
+            ("AdCPGoneError", "expired", "INVALID_STATE", "correctable"),
             ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),
             ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
             ("AdCPAdapterError", "GAM down", "SERVICE_UNAVAILABLE", "transient"),
@@ -610,10 +610,13 @@ class TestMCPRecoveryInErrorResponses:
 
 
 class TestA2ARecoveryInErrorResponses:
-    """Verify that A2A A2AError carries recovery in data for every AdCPError subclass.
+    """Verify recovery semantics propagate from every AdCPError subclass.
 
-    The A2A boundary (_handle_explicit_skill) translates AdCPError -> A2AError
-    with data={"recovery": ...}. Buyer agents parse this to decide retry strategy.
+    After the B4 review fix, ``_handle_explicit_skill`` no longer translates
+    AdCPError to A2AError — the typed exception propagates so the explicit-
+    skill dispatcher can wrap it into a failed Task with a two-layer envelope
+    DataPart. The buyer agent parses ``recovery`` from the propagated exception
+    (or from the envelope's ``adcp_error.recovery`` once it reaches the wire).
     """
 
     def setup_method(self):
@@ -630,7 +633,7 @@ class TestA2ARecoveryInErrorResponses:
             ("AdCPAuthorizationError", "forbidden", "terminal"),
             ("AdCPNotFoundError", "missing", "terminal"),
             ("AdCPConflictError", "dup", "correctable"),
-            ("AdCPGoneError", "expired", "terminal"),
+            ("AdCPGoneError", "expired", "correctable"),
             ("AdCPBudgetExhaustedError", "broke", "correctable"),
             ("AdCPRateLimitError", "slow", "transient"),
             ("AdCPAdapterError", "down", "transient"),
@@ -638,11 +641,10 @@ class TestA2ARecoveryInErrorResponses:
         ],
         ids=lambda x: x if isinstance(x, str) and x.startswith("AdCP") else "",
     )
-    async def test_a2a_server_error_carries_recovery(self, exc_class, msg, expected_recovery):
-        """A2AError from A2A boundary has data.recovery={expected_recovery} for {exc_class}."""
-        from a2a.utils.errors import A2AError
-
+    async def test_a2a_propagated_error_carries_recovery(self, exc_class, msg, expected_recovery):
+        """Typed AdCPError propagates from _handle_explicit_skill with recovery={expected_recovery}."""
         import src.core.exceptions as exc_mod
+        from src.core.exceptions import AdCPError, build_two_layer_error_envelope
 
         klass = getattr(exc_mod, exc_class)
 
@@ -650,13 +652,15 @@ class TestA2ARecoveryInErrorResponses:
             raise klass(msg)
 
         with patch.object(self.handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPError) as exc_info:
                 await self.handler._handle_explicit_skill("get_products", {}, "token")
 
-            # a2a-sdk 1.0: error attributes are directly on the exception
-            assert exc_info.value.data is not None, f"A2AError.data must not be None for {exc_class}"
-            assert "recovery" in exc_info.value.data, f"A2AError.data must contain 'recovery' for {exc_class}"
-            assert exc_info.value.data["recovery"] == expected_recovery
+            # Recovery is on the propagated exception itself (the dispatcher will
+            # build the envelope when wrapping into the failed Task's DataPart).
+            assert exc_info.value.recovery == expected_recovery
+            # And the envelope builder surfaces it on the wire shape.
+            envelope = build_two_layer_error_envelope(exc_info.value)
+            assert envelope["adcp_error"]["recovery"] == expected_recovery
 
 
 # ---------------------------------------------------------------------------

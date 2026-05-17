@@ -171,6 +171,10 @@ class AdCPError(Exception):
         handlers (FastAPI exception handler, MCP wrapper, A2A wrapper) are
         responsible for translating to wire-compliant codes via
         ``translate_error_code()`` or ``wire_error_code``.
+
+        Includes ``context`` when present so callers building advisory
+        payloads (audit logging, retry-loop diagnostics) have the same
+        request-correlation envelope key the two-layer wire shape exposes.
         """
         result: dict[str, Any] = {
             "error_code": self.error_code,
@@ -182,6 +186,10 @@ class AdCPError(Exception):
             result["field"] = self.field
         if self.suggestion is not None:
             result["suggestion"] = self.suggestion
+        if self.context is not None:
+            result["context"] = (
+                self.context.model_dump(mode="json") if hasattr(self.context, "model_dump") else self.context
+            )
         return result
 
     def to_adcp_error(self) -> dict[str, Any]:
@@ -191,14 +199,23 @@ class AdCPError(Exception):
         envelope. Translation to ``STANDARD_ERROR_CODES`` happens at transport
         boundaries via ``translate_error_code()`` — this method preserves the
         raw ``error_code`` so internal callers retain the source classification.
+
+        ``context`` flows into ``details["context"]`` so the SDK helper
+        doesn't drop request-correlation data on the floor.
         """
+        merged_details = dict(self.details) if self.details else {}
+        if self.context is not None:
+            merged_details.setdefault(
+                "context",
+                self.context.model_dump(mode="json") if hasattr(self.context, "model_dump") else self.context,
+            )
         return adcp_error(
             self.error_code,
             self.message,
             recovery=self.recovery,
             field=self.field,
             suggestion=self.suggestion,
-            details=self.details,
+            details=merged_details or None,
         )
 
 
@@ -264,10 +281,15 @@ class AdCPAccountSuspendedError(AdCPError):
 
 
 class AdCPAccountPaymentRequiredError(AdCPError):
-    """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED)."""
+    """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED).
+
+    Recovery=correctable: the buyer can resolve by settling the outstanding
+    balance (or the seller can re-activate the account) and retry.
+    """
 
     status_code = 402
     error_code = "ACCOUNT_PAYMENT_REQUIRED"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPConflictError(AdCPError):
@@ -285,10 +307,16 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
 
 
 class AdCPGoneError(AdCPError):
-    """Resource previously existed but is no longer available (410)."""
+    """Resource previously existed but is no longer available (410).
+
+    Recovery=correctable: the resource itself is gone, but the buyer can
+    recover by referencing a different resource (a fresh proposal, a new
+    media buy) and re-issuing the request.
+    """
 
     status_code = 410
     error_code = "INVALID_STATE"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPBudgetExhaustedError(AdCPError):
@@ -346,15 +374,28 @@ class AdCPServiceUnavailableError(AdCPError):
 
 
 class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
-    """Media buy lookup failed (404, MEDIA_BUY_NOT_FOUND)."""
+    """Media buy lookup failed (404, MEDIA_BUY_NOT_FOUND).
+
+    Recovery=correctable: the buyer can correct by supplying the right
+    media_buy_id (typo, wrong tenant, stale reference). Overrides the
+    ``AdCPNotFoundError`` ``terminal`` default — for this specific not-found
+    case the buyer's own request is the lever for recovery.
+    """
 
     error_code = "MEDIA_BUY_NOT_FOUND"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPPackageNotFoundError(AdCPNotFoundError):
-    """Package lookup failed within a media buy (404, PACKAGE_NOT_FOUND)."""
+    """Package lookup failed within a media buy (404, PACKAGE_NOT_FOUND).
+
+    Recovery=correctable: the buyer can correct by supplying the right
+    package_id. Overrides the ``AdCPNotFoundError`` ``terminal`` default for
+    the same reason as ``AdCPMediaBuyNotFoundError``.
+    """
 
     error_code = "PACKAGE_NOT_FOUND"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPCreativeRejectedError(AdCPError):
@@ -382,7 +423,17 @@ class AdCPBudgetTooLowError(AdCPError):
 
 
 class AdCPCapabilityNotSupportedError(AdCPError):
-    """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE)."""
+    """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
+
+    Recovery=correctable here is an **intentional divergence** from the AdCP
+    spec, which classifies ``UNSUPPORTED_FEATURE`` as ``terminal``. The
+    salesagent emits this when the buyer can correct by dropping the
+    unsupported feature from the request (e.g. removing ``property_list``
+    targeting against an adapter that doesn't compile it) — i.e. the buyer
+    holds the lever for recovery. We keep ``correctable`` so retry-on-fix
+    semantics work end-to-end; revisit if the SDK runtime starts enforcing
+    the spec's ``terminal`` classification.
+    """
 
     status_code = 422
     error_code = "UNSUPPORTED_FEATURE"

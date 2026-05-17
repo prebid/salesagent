@@ -26,6 +26,15 @@ from pathlib import Path
 # Per-file caps captured at substrate landing. PR 2 drains these to zero.
 # Cannot be raised; only lowered. The guard fails if any file exceeds its cap
 # or if a new file shows up with Pattern A sites.
+#
+# Every entry below is a MIGRATION TARGET tracked by issue #1304 — each
+# capped file carries ``# FIXME(#1304): migrate to typed AdCPError raise``
+# comments at the Error(code=...) sites so reviewers can grep their way to
+# the cleanup work. There are no legitimate-floor exceptions in this dict;
+# legitimate per-item advisory Error(code=...) sites in success envelopes
+# use the ``# noqa: structural-guard`` marker (4 known sites in PR 2 plan).
+# When PR 2 sub-batches land, drop the relevant entry below to zero rather
+# than gradually lowering it — keep the cap honest.
 PATTERN_A_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/broadstreet/adapter.py": 13,
     "src/adapters/google_ad_manager.py": 22,
