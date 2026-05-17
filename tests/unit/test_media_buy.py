@@ -913,9 +913,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_gen"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-        ):
+        with (patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -1301,10 +1299,15 @@ class TestCreateMediaBuyIdempotency:
         mock_idem_repo = MagicMock()
         mock_idem_repo.find_by_idempotency_key.return_value = None
 
+        # Mock idempotency_attempts repo also returns None (no cached rejection)
+        mock_idem_attempts_repo = MagicMock()
+        mock_idem_attempts_repo.find_by_key.return_value = None
+
         mock_idem_uow = MagicMock()
         mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
         mock_idem_uow.__exit__ = MagicMock(return_value=None)
         mock_idem_uow.media_buys = mock_idem_repo
+        mock_idem_uow.idempotency_attempts = mock_idem_attempts_repo
 
         # Validation UoW (for product lookup — will fail with no products)
         session = MagicMock()
