@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.admin.services.adapter_connection_tester import probe_adapter_connection
+from src.admin.services.adapter_connection_tester import preview_adapter, probe_adapter_connection
 
 
 class TestFreeWheelProbe:
@@ -187,3 +187,104 @@ class TestRoutingTable:
                 f"{adapter_type!r} (declared in AdapterConfig union) fell through to the "
                 f"unsupported-type branch in probe_adapter_connection — add a probe for it."
             )
+
+    def test_all_adapter_types_have_preview(self):
+        """Same guard for ``preview_adapter`` — the Storefront's inline
+        preview UI must work for every adapter the schema accepts. A new
+        adapter without a preview path returns ``ok=False`` with an
+        Unsupported error, breaking the pre-commit UX."""
+        from typing import get_args
+
+        from src.admin.api_schemas.tenant_management import AdapterConfig
+
+        union = get_args(AdapterConfig)[0]
+        adapter_types = [get_args(m.model_fields["type"].annotation)[0] for m in get_args(union)]
+
+        for adapter_type in adapter_types:
+            preview = preview_adapter(adapter_type, {})
+            err = preview.error or ""
+            assert "Unsupported adapter_type" not in err, (
+                f"{adapter_type!r} (declared in AdapterConfig union) fell through to the "
+                f"unsupported-type branch in preview_adapter — add a _preview_{adapter_type}()."
+            )
+
+
+class TestFreeWheelPreview:
+    def test_missing_credentials_returns_inline_error(self):
+        preview = preview_adapter("freewheel", {"environment": "production"})
+        assert preview.ok is False
+        assert "username + password" in (preview.error or "") or "api_token" in (preview.error or "")
+
+    def test_auth_rejection_surfaces_inline(self):
+        from src.adapters.freewheel._transport import FreeWheelAuthError
+
+        with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
+            client = mock_cls.return_value
+            client.token_info.side_effect = FreeWheelAuthError("bad", status_code=401)
+            preview = preview_adapter("freewheel", {"api_token": "tok"})
+        assert preview.ok is False
+        assert "auth rejected" in preview.error
+
+    def test_happy_path_surfaces_user_name_as_network_name(self):
+        with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
+            client = mock_cls.return_value
+            client.token_info.return_value = {"user_id": 42, "user_name": "alice@example.com"}
+            client.inventory.list_sites.return_value = MagicMock()
+            preview = preview_adapter("freewheel", {"api_token": "tok"})
+        assert preview.ok is True
+        assert preview.network_name == "alice@example.com"
+        assert preview.inventory_reachable is True
+
+    def test_inventory_unreachable_is_non_fatal(self):
+        """If token is valid but inventory probe fails, preview still
+        returns ok=True — preview is a soft check, not the provision
+        gate. Inventory_reachable flag tells the UI to warn but allow."""
+        with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
+            client = mock_cls.return_value
+            client.token_info.return_value = {"user_name": "u"}
+            client.inventory.list_sites.side_effect = Exception("scope missing")
+            preview = preview_adapter("freewheel", {"api_token": "tok"})
+        assert preview.ok is True
+        assert preview.inventory_reachable is False
+
+
+class TestBroadstreetPreview:
+    def test_happy_path_returns_network_name(self):
+        with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
+            client = mock_cls.return_value
+            client.get_network.return_value = {"id": "nw1", "name": "Acme Publishers"}
+            preview = preview_adapter("broadstreet", {"network_id": "nw1", "api_key": "k"})
+        assert preview.ok is True
+        assert preview.network_name == "Acme Publishers"
+        assert preview.network_code == "nw1"
+
+    def test_wrong_network_returns_inline_404(self):
+        from src.adapters.broadstreet.client import BroadstreetAPIError
+
+        with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
+            client = mock_cls.return_value
+            client.get_network.side_effect = BroadstreetAPIError("not found", status_code=404)
+            preview = preview_adapter("broadstreet", {"network_id": "nw1", "api_key": "k"})
+        assert preview.ok is False
+        assert "not found" in preview.error
+
+
+class TestSpringServePreview:
+    def test_happy_path_returns_email_as_network_name(self):
+        with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
+            client = mock_cls.return_value
+            client.probe.return_value = (200, "[]")
+            preview = preview_adapter("springserve", {"email": "ops@pub.com", "password": "x"})
+        assert preview.ok is True
+        assert preview.network_name == "ops@pub.com"
+        assert preview.inventory_reachable is True
+
+    def test_auth_failure_surfaces_inline(self):
+        from src.adapters.springserve._transport import SpringServeAuthError
+
+        with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
+            client = mock_cls.return_value
+            client.probe.side_effect = SpringServeAuthError("bad", status_code=401)
+            preview = preview_adapter("springserve", {"api_token": "tok"})
+        assert preview.ok is False
+        assert "auth rejected" in preview.error

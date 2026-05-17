@@ -300,6 +300,15 @@ def preview_adapter(adapter_type: str, config: dict[str, Any]) -> AdapterPreview
     if adapter_type == "google_ad_manager":
         return _preview_gam(config)
 
+    if adapter_type == "freewheel":
+        return _preview_freewheel(config)
+
+    if adapter_type == "broadstreet":
+        return _preview_broadstreet(config)
+
+    if adapter_type == "springserve":
+        return _preview_springserve(config)
+
     return AdapterPreview(ok=False, error=f"Unsupported adapter_type: {adapter_type!r}")
 
 
@@ -351,3 +360,177 @@ def _preview_gam(config: dict[str, Any]) -> AdapterPreview:
         time_zone=getattr(network, "timeZone", None),
         inventory_reachable=True,
     )
+
+
+def _preview_freewheel(config: dict[str, Any]) -> AdapterPreview:
+    """FreeWheel preview: token validation + identity metadata.
+
+    Auth via ``token_info`` returns ``{user_id, user_name, ...}`` fields
+    the Storefront UI can render as "you're connected as <user_name>".
+    ``inventory_reachable`` set by attempting one ``list_sites`` page —
+    same probe as :func:`_test_freewheel`, surfaced as a flag instead
+    of a hard 4xx so the preview is inline.
+    """
+    username = config.get("username")
+    password = config.get("password")
+    api_token = config.get("api_token")
+    if not ((username and password) or api_token):
+        return AdapterPreview(
+            ok=False,
+            error="FreeWheel config requires either (username + password) or api_token",
+        )
+
+    try:
+        from src.adapters.freewheel._transport import FreeWheelAuthError, FreeWheelError
+        from src.adapters.freewheel.client import FreeWheelClient
+        from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
+    except Exception as exc:  # pragma: no cover - environmental
+        logger.exception("FreeWheel imports failed")
+        return AdapterPreview(ok=False, error=f"FreeWheel client unavailable: {exc}")
+
+    environment = config.get("environment", "production")
+    base_url = FREEWHEEL_HOSTS.get(environment, FREEWHEEL_HOSTS["production"])
+
+    try:
+        client = FreeWheelClient(api_token=api_token, username=username, password=password, base_url=base_url)
+        token_info = client.token_info()
+    except FreeWheelAuthError as exc:
+        return AdapterPreview(ok=False, error=f"FreeWheel auth rejected: {exc}")
+    except FreeWheelError as exc:
+        return AdapterPreview(ok=False, error=f"FreeWheel API error (status={exc.status_code}): {exc}")
+    except Exception as exc:
+        logger.warning("FreeWheel token_info() failed: %s", exc)
+        return AdapterPreview(ok=False, error=f"FreeWheel transport failure: {type(exc).__name__}: {exc}")
+
+    # token_info shape: {"user_id": ..., "user_name": ..., "scope": ...}.
+    # FreeWheel doesn't expose a single "network" entity; we use user_name
+    # as the human-readable label so the Storefront UI shows "you're
+    # connected as <user_name>".
+    network_name = token_info.get("user_name") if isinstance(token_info, dict) else None
+
+    # Probe inventory reachability — non-fatal. A 200 here proves the
+    # token has the publisher binding we need at provision time.
+    inventory_reachable = False
+    try:
+        client.inventory.list_sites(per_page=1)
+        inventory_reachable = True
+    except Exception as exc:  # noqa: BLE001 — preview path is best-effort
+        logger.debug("FreeWheel inventory preview probe failed: %s", exc)
+
+    return AdapterPreview(
+        ok=True,
+        network_name=network_name,
+        network_code=None,  # FreeWheel publisher accounts don't have a network_code
+        currency_code=None,  # Not exposed by token_info; would need a separate call
+        time_zone=None,
+        inventory_reachable=inventory_reachable,
+    )
+
+
+def _preview_broadstreet(config: dict[str, Any]) -> AdapterPreview:
+    """Broadstreet preview: ``get_network()`` returns network metadata
+    (name, id) in one call. Validates auth + network binding too — same
+    probe as :func:`_test_broadstreet`, surfaced with network metadata.
+    """
+    network_id = config.get("network_id")
+    api_key = config.get("api_key")
+    if not network_id:
+        return AdapterPreview(ok=False, error="Broadstreet network_id is required")
+    if not api_key:
+        return AdapterPreview(ok=False, error="Broadstreet api_key is required")
+
+    try:
+        from src.adapters.broadstreet.client import BroadstreetAPIError, BroadstreetClient
+    except Exception as exc:  # pragma: no cover - environmental
+        logger.exception("Broadstreet imports failed")
+        return AdapterPreview(ok=False, error=f"Broadstreet client unavailable: {exc}")
+
+    try:
+        client = BroadstreetClient(access_token=str(api_key), network_id=str(network_id))
+        network = client.get_network()
+    except BroadstreetAPIError as exc:
+        status = exc.status_code
+        if status in (401, 403):
+            return AdapterPreview(ok=False, error=f"Broadstreet auth rejected (status={status}): {exc}")
+        if status == 404:
+            return AdapterPreview(ok=False, error=f"Broadstreet network {network_id!r} not found")
+        return AdapterPreview(ok=False, error=f"Broadstreet API error (status={status}): {exc}")
+    except Exception as exc:
+        logger.warning("Broadstreet get_network() failed: %s", exc)
+        return AdapterPreview(ok=False, error=f"Broadstreet transport failure: {type(exc).__name__}: {exc}")
+
+    # Broadstreet network responses use camelCase keys per the v0 API; the
+    # client returns the unwrapped network dict.
+    name = None
+    if isinstance(network, dict):
+        name = network.get("name") or network.get("Name")
+
+    return AdapterPreview(
+        ok=True,
+        network_name=name,
+        network_code=str(network_id),
+        currency_code=None,  # Broadstreet doesn't surface currency at the network level
+        time_zone=None,
+        # Broadstreet inventory sync isn't implemented (#448) — declared
+        # False on the capability flag, so we don't probe inventory here
+        # either. Network access proven by get_network() returning 200.
+        inventory_reachable=False,
+    )
+
+
+def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
+    """SpringServe preview: token mint + supply scope probe in one call.
+
+    Same probe as :func:`_test_springserve` but surfaced as a preview
+    flag instead of a hard 4xx. SpringServe's auth API doesn't return
+    metadata equivalent to GAM's network info; the only thing we can
+    confirm is that the bearer is valid and has supply access.
+    """
+    email = config.get("email")
+    password = config.get("password")
+    api_token = config.get("api_token")
+    if not ((email and password) or api_token):
+        return AdapterPreview(
+            ok=False,
+            error="SpringServe config requires either (email + password) or api_token",
+        )
+
+    try:
+        from src.adapters.springserve._transport import (
+            SpringServeAuthError,
+            SpringServeError,
+            SpringServeForbiddenError,
+        )
+        from src.adapters.springserve.client import SpringServeClient
+    except Exception as exc:  # pragma: no cover - environmental
+        logger.exception("SpringServe imports failed")
+        return AdapterPreview(ok=False, error=f"SpringServe client unavailable: {exc}")
+
+    try:
+        client = SpringServeClient(api_token=api_token, email=email, password=password)
+        status, body = client.probe("GET", "/supply/tags?per_page=1")
+    except SpringServeAuthError as exc:
+        return AdapterPreview(ok=False, error=f"SpringServe auth rejected: {exc}")
+    except SpringServeForbiddenError as exc:
+        return AdapterPreview(ok=False, error=f"SpringServe bearer lacks entitlements: {exc}")
+    except SpringServeError as exc:
+        return AdapterPreview(ok=False, error=f"SpringServe API error (status={exc.status_code}): {exc}")
+    except Exception as exc:
+        logger.warning("SpringServe probe failed: %s", exc)
+        return AdapterPreview(ok=False, error=f"SpringServe transport failure: {type(exc).__name__}: {exc}")
+
+    if status == 200:
+        return AdapterPreview(
+            ok=True,
+            network_name=email if email else None,
+            network_code=None,
+            currency_code=None,
+            time_zone=None,
+            inventory_reachable=True,
+        )
+    if status in (401, 403):
+        return AdapterPreview(
+            ok=False,
+            error=f"SpringServe bearer cannot read supply inventory (status={status})",
+        )
+    return AdapterPreview(ok=False, error=f"SpringServe supply probe returned status={status}: {body[:200]}")
