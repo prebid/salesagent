@@ -180,6 +180,42 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
     return exc
 
 
+def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Exception | None:
+    """Reconstruct an AdCPError subclass from a two-layer envelope dict.
+
+    Accepts the envelope shape produced by ``build_two_layer_error_envelope``:
+    ``{"adcp_error": {code, message, recovery, ...}, "errors": [...], ...}``.
+    Also accepts the legacy flat shape ``{"error_code": ..., "recovery": ...}``
+    for tests that predate the envelope.
+
+    Returns the reconstructed ``AdCPError`` subclass, or ``None`` if no
+    ``error_code`` can be extracted (caller picks a fallback).
+    """
+    if not isinstance(envelope, dict):
+        return None
+    error_code: str | None = None
+    message = fallback_message
+    recovery: str | None = None
+    adcp_err = envelope.get("adcp_error")
+    if isinstance(adcp_err, dict):
+        error_code = adcp_err.get("code")
+        message = adcp_err.get("message", message) or message
+        recovery = adcp_err.get("recovery")
+    if not error_code:
+        errors = envelope.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            error_code = errors[0].get("code")
+            message = errors[0].get("message", message) or message
+            recovery = errors[0].get("recovery", recovery)
+    if not error_code:
+        # Legacy flat shape: top-level error_code key.
+        error_code = envelope.get("error_code")
+        recovery = recovery or envelope.get("recovery")
+    if not error_code:
+        return None
+    return _adcp_error_from_code(error_code, message, recovery)
+
+
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     """Translate a2a A2AError back to the corresponding AdCPError.
 
@@ -200,21 +236,9 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     message = getattr(exc, "message", str(exc))
     data = getattr(exc, "data", None) or {}
 
-    # Prefer the spec two-layer envelope embedded in data.
-    error_code = None
-    if isinstance(data, dict):
-        adcp_err = data.get("adcp_error")
-        if isinstance(adcp_err, dict):
-            error_code = adcp_err.get("code")
-        if not error_code:
-            errors = data.get("errors")
-            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
-                error_code = errors[0].get("code")
-        # Backward-compat: top-level error_code key for tests that pre-date the envelope.
-        if not error_code:
-            error_code = data.get("error_code")
-    if error_code:
-        return _adcp_error_from_code(error_code, message, data.get("recovery"))
+    reconstructed = _envelope_to_adcp_error(data, fallback_message=message) if isinstance(data, dict) else None
+    if reconstructed is not None:
+        return reconstructed
 
     from src.core.exceptions import (
         AdCPAuthenticationError,
@@ -510,6 +534,24 @@ class BaseTestEnv:
         # Parse Task.artifacts[0] into response_cls
         if not isinstance(task_result, Task):
             raise TypeError(f"Expected Task, got {type(task_result).__name__}: {task_result}")
+
+        # AdCP-domain errors now surface as a failed Task with the two-layer
+        # envelope in the artifact DataPart (B4 contract). Reconstruct the
+        # AdCPError so callers can catch domain exceptions instead of getting
+        # a pydantic ValidationError from trying to parse the envelope as a
+        # success response.
+        from a2a.types import TaskState
+
+        if task_result.status.state == TaskState.TASK_STATE_FAILED:
+            from src.core.exceptions import AdCPError
+
+            if task_result.artifacts:
+                envelope = extract_data_from_artifact(task_result.artifacts[0])
+                reconstructed = _envelope_to_adcp_error(envelope, fallback_message="A2A skill failed")
+                if reconstructed is not None:
+                    raise reconstructed
+            raise AdCPError(f"A2A task failed: {task_result.status}")
+
         if not task_result.artifacts:
             raise ValueError(f"Task has no artifacts. Status: {task_result.status}")
         artifact_data = extract_data_from_artifact(task_result.artifacts[0])

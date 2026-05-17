@@ -12,7 +12,6 @@ from unittest.mock import MagicMock
 import pytest
 from a2a.server.routes.common import ServerCallContext
 from a2a.types import SendMessageRequest, Task
-from a2a.utils.errors import A2AError, InvalidParamsError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.resolved_identity import ResolvedIdentity
@@ -128,9 +127,15 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
 async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, sample_principal, sample_products):
     """Test that requests with neither brief nor brand are rejected.
 
-    The handler raises AdCPValidationError which is translated to
-    InvalidParamsError at the A2A boundary via _adcp_to_a2a_error().
+    The handler raises AdCPValidationError; the explicit-skill dispatcher
+    catches it and surfaces a failed Task with the two-layer envelope as
+    the artifact DataPart (B4 contract — AdCP-domain errors are async-task
+    failures, not JSON-RPC transport errors).
     """
+    from a2a.types import TaskState
+
+    from tests.utils.a2a_helpers import extract_data_from_artifact
+
     handler = AdCPRequestHandler()
     identity = _make_identity(sample_tenant, sample_principal)
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
@@ -146,9 +151,15 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     )
     params = SendMessageRequest(message=message)
 
-    # Empty params → AdCPValidationError → InvalidParamsError
     context = ServerCallContext()
-    with pytest.raises(A2AError) as exc_info:
-        await handler.on_message_send(params, context)
+    result = await handler.on_message_send(params, context)
 
-    assert isinstance(exc_info.value, InvalidParamsError)
+    # Empty params → AdCPValidationError → failed Task with envelope DataPart
+    assert isinstance(result, Task)
+    assert result.status.state == TaskState.TASK_STATE_FAILED, f"Expected failed task, got {result.status.state}"
+    assert result.artifacts, "Failed task must carry an envelope artifact"
+    envelope = extract_data_from_artifact(result.artifacts[0])
+    # Two-layer envelope: adcp_error mirror + errors[] payload
+    assert envelope.get("adcp_error", {}).get("code") == "VALIDATION_ERROR"
+    assert isinstance(envelope.get("errors"), list)
+    assert envelope["errors"][0].get("code") == "VALIDATION_ERROR"
