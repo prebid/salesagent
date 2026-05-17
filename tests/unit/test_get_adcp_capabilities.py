@@ -646,6 +646,7 @@ class TestResponseShapeCapabilities:
 
         property_list_filtering is False until an adapter actually compiles
         `targeting_overlay.property_list` into native ad-server targeting.
+        Without a configured adapter (anonymous access here), the field is False.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -658,6 +659,50 @@ class TestResponseShapeCapabilities:
         features = response.media_buy.features
         assert features.inline_creative_management is True
         assert features.property_list_filtering is False
+
+    def test_property_list_filtering_true_when_adapter_supports_it(self):
+        """Adapter-aware: property_list_filtering reflects the configured adapter's class attribute.
+
+        Kevel (B3) sets supports_property_list_filtering=True; adapters that
+        can't compile property_list (Mock/Broadstreet/Xandr/Triton in B4)
+        leave it False. The capability declaration follows the adapter.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        # Adapter class with native property_list support
+        kevel_like_adapter = MagicMock()
+        kevel_like_adapter.default_channels = ["display"]
+        kevel_like_adapter.get_targeting_capabilities.return_value = None
+        kevel_like_adapter.__class__ = type(
+            "FakeKevel", (), {"supports_property_list_filtering": True, "adapter_name": "kevel"}
+        )
+
+        identity = _make_capabilities_identity()
+        stack = _patch_capabilities_deps(adapter=kevel_like_adapter)
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy.features.property_list_filtering is True
+
+    def test_property_list_filtering_false_when_adapter_does_not_support(self):
+        """An adapter without native property_list compilation must not advertise the capability."""
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        mock_like_adapter = MagicMock()
+        mock_like_adapter.default_channels = ["display"]
+        mock_like_adapter.get_targeting_capabilities.return_value = None
+        mock_like_adapter.__class__ = type(
+            "FakeMock", (), {"supports_property_list_filtering": False, "adapter_name": "mock"}
+        )
+
+        identity = _make_capabilities_identity()
+        stack = _patch_capabilities_deps(adapter=mock_like_adapter)
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy.features.property_list_filtering is False
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""
