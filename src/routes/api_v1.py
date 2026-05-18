@@ -52,22 +52,23 @@ def _handle_tool_error(e: ToolError) -> JSONResponse:
 
     Routes that catch ``ToolError`` defensively land here. If the exception
     is the typed ``AdCPToolError`` raised by the MCP boundary translator, its
-    envelope is forwarded unchanged. Plain ``ToolError`` (raised by other
-    paths) is rebuilt into an envelope via a synthetic ``AdCPError`` so the
-    wire output is uniform across all REST routes.
+    envelope and status_code are forwarded unchanged so 4xx errors don't get
+    mislabeled as 5xx. Plain ``ToolError`` (raised by other paths) is rebuilt
+    into an envelope via a synthetic ``AdCPError`` and defaults to 500 —
+    the only sensible default when no typed source is available.
     """
     from src.core.exceptions import AdCPError, build_two_layer_error_envelope
     from src.core.tool_error_logging import AdCPToolError, extract_error_info
 
     if isinstance(e, AdCPToolError):
-        return JSONResponse(status_code=500, content=e.envelope)
+        return JSONResponse(status_code=e.status_code, content=e.envelope)
 
     error_code, error_message, recovery = extract_error_info(e)
     synthetic = AdCPError(error_message)
     synthetic.error_code = error_code
     if recovery in ("transient", "correctable", "terminal"):
         synthetic.recovery = recovery  # type: ignore[assignment]
-    return JSONResponse(status_code=500, content=build_two_layer_error_envelope(synthetic))
+    return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))
 
 
 # ---------------------------------------------------------------------------

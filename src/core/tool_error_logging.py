@@ -28,10 +28,16 @@ class AdCPToolError(ToolError):
 
     The envelope is also exposed as ``self.envelope`` so audit logging,
     activity feed, and REST fallback code can read it without re-parsing.
+
+    ``status_code`` mirrors the source ``AdCPError.status_code`` so REST
+    routes catching this exception emit the right HTTP status. Defaults to
+    500 for compatibility with paths that don't supply a typed source (the
+    plain ToolError fallback in ``_handle_tool_error``).
     """
 
-    def __init__(self, envelope: dict[str, Any]):
+    def __init__(self, envelope: dict[str, Any], status_code: int = 500):
         self.envelope = envelope
+        self.status_code = status_code
         super().__init__(json.dumps(envelope))
 
 
@@ -191,13 +197,13 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
         raise
     if isinstance(error, AdCPError):
         envelope = build_two_layer_error_envelope(error)
-        raise AdCPToolError(envelope) from error
+        raise AdCPToolError(envelope, status_code=error.status_code) from error
     if isinstance(error, ValueError):
         synthetic: AdCPError = AdCPValidationError(str(error))
-        raise AdCPToolError(build_two_layer_error_envelope(synthetic)) from error
+        raise AdCPToolError(build_two_layer_error_envelope(synthetic), status_code=synthetic.status_code) from error
     if isinstance(error, PermissionError):
         synthetic = AdCPAuthorizationError(str(error))
-        raise AdCPToolError(build_two_layer_error_envelope(synthetic)) from error
+        raise AdCPToolError(build_two_layer_error_envelope(synthetic), status_code=synthetic.status_code) from error
     raise
 
 
