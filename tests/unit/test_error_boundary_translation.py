@@ -493,6 +493,79 @@ class TestA2ABoundaryAdCPErrorTranslation:
             assert exc_info.value.message == "not found"
 
 
+class TestA2ADispatcherFailedSkillResult:
+    """``_build_failed_skill_result`` emits a spec-compliant envelope for every exception.
+
+    Both the AdCPError branch and the untyped-Exception fallthrough in the
+    explicit-skill dispatcher land here, so the artifact DataPart always
+    carries the two-layer envelope shape — never a flat ``{error: ...}`` dict.
+    Storyboard runners depend on ``adcp_error.code`` and ``errors[0].code``
+    being readable from any failure path.
+    """
+
+    def test_adcp_error_keeps_typed_code(self):
+        """AdCPError instances flow through unchanged — typed code preserved."""
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        result = AdCPRequestHandler._build_failed_skill_result("get_products", AdCPValidationError("bad input"))
+
+        assert result["success"] is False
+        assert result["skill"] == "get_products"
+        assert result["error"] == "bad input"
+        env = result["error_envelope"]
+        assert env["adcp_error"]["code"] == "VALIDATION_ERROR"
+        assert env["errors"][0]["code"] == "VALIDATION_ERROR"
+        assert env["errors"][0]["recovery"] == "correctable"
+
+    def test_untyped_exception_wrapped_in_synthetic_adcp_error(self):
+        """Bare ``Exception`` is wrapped in a synthetic AdCPError with wire-safe code.
+
+        ``AdCPError`` defaults to ``INTERNAL_ERROR`` which lives in
+        ``INTERNAL_CODES`` — ``wire_error_code`` translates it to
+        ``SERVICE_UNAVAILABLE`` so buyer agents only see standard codes.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError("unexpected boom"))
+
+        assert result["success"] is False
+        env = result["error_envelope"]
+        # Wire code is translated via ERROR_CODE_MAPPING
+        assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+        assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
+        # The original RuntimeError message is preserved verbatim
+        assert "unexpected boom" in env["errors"][0]["message"]
+
+    def test_exception_with_empty_message_falls_back_to_type_name(self):
+        """Untyped exceptions with no string content get the exception class name.
+
+        Avoids emitting an empty ``message`` field that violates the spec's
+        non-empty-message expectation on the wire envelope.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError())
+
+        assert result["error"] == "RuntimeError"
+        env = result["error_envelope"]
+        assert env["errors"][0]["message"] == "RuntimeError"
+
+    def test_envelope_shape_matches_typed_branch(self):
+        """Untyped fallthrough produces the SAME envelope shape as the typed branch.
+
+        Storyboard runners must be able to parse the DataPart uniformly
+        regardless of which catch branch produced the failure result.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        typed = AdCPRequestHandler._build_failed_skill_result("s", AdCPValidationError("bad"))
+        untyped = AdCPRequestHandler._build_failed_skill_result("s", RuntimeError("boom"))
+
+        assert set(typed.keys()) == set(untyped.keys())
+        assert set(typed["error_envelope"].keys()) == set(untyped["error_envelope"].keys())
+        assert set(typed["error_envelope"]["errors"][0].keys()) == set(untyped["error_envelope"]["errors"][0].keys())
+
+
 # ---------------------------------------------------------------------------
 # REST Boundary: AdCPError → HTTP status code via exception handler
 # ---------------------------------------------------------------------------
@@ -596,6 +669,156 @@ class TestRESTBoundaryAdCPErrorTranslation:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 503
             _assert_rest_envelope(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
+
+
+class TestRESTSymmetricValueErrorAndPermissionError:
+    """REST mirrors MCP/A2A by wrapping ValueError and PermissionError in envelopes.
+
+    Without these handlers, a raw ``ValueError`` raised by application code
+    would surface as a 500 server error on REST while the same exception
+    produces a 400 VALIDATION_ERROR envelope on MCP and A2A. Cross-transport
+    symmetry: every transport translates the same Python exception to the
+    same wire shape.
+    """
+
+    def test_value_error_returns_400_with_validation_envelope(self):
+        """Raw ValueError → 400 with VALIDATION_ERROR envelope (mirrors MCP wrapper)."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=ValueError("invalid input shape"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 400
+            _assert_rest_envelope(
+                response.json(),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                message_substr="invalid input shape",
+            )
+
+    def test_permission_error_returns_403_with_auth_envelope(self):
+        """Raw PermissionError → 403 with AUTH_REQUIRED envelope (mirrors MCP wrapper)."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=PermissionError("tenant scope mismatch"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 403
+            _assert_rest_envelope(
+                response.json(),
+                "AUTH_REQUIRED",
+                message_substr="tenant scope mismatch",
+            )
+
+    def test_request_validation_error_unaffected(self):
+        """FastAPI's RequestValidationError handler is NOT overridden by our ValueError handler.
+
+        ``RequestValidationError`` is not a ``ValueError`` subclass, so FastAPI's
+        existing 422 + ``{"detail": [...]}`` response shape for request-body
+        validation failures continues to work — only application-raised
+        ``ValueError`` is wrapped into the AdCP envelope.
+        """
+        from fastapi.exceptions import RequestValidationError
+
+        assert not issubclass(RequestValidationError, ValueError), (
+            "RequestValidationError must not inherit ValueError, otherwise our "
+            "ValueError handler would shadow FastAPI's request-body 422 handler."
+        )
+
+
+# ---------------------------------------------------------------------------
+# REST defensive ToolError catch: _handle_tool_error must preserve status_code
+# ---------------------------------------------------------------------------
+
+
+class TestHandleToolErrorPreservesStatusCode:
+    """``_handle_tool_error`` must use the source AdCPError's status_code.
+
+    REST routes catch ``ToolError`` defensively (when downstream code is
+    wrapped by ``with_error_logging`` and translates AdCPError → AdCPToolError).
+    The wire HTTP status must reflect the original AdCPError's classification
+    (400/401/403/404/422/etc.) — not the hardcoded 500 it used to default to,
+    which caused 4xx errors to be mislabeled as 5xx on this defensive path.
+    """
+
+    def test_validation_tool_error_returns_400(self):
+        """AdCPToolError carrying a VALIDATION_ERROR envelope → 400."""
+        from src.core.exceptions import AdCPValidationError, build_two_layer_error_envelope
+        from src.core.tool_error_logging import AdCPToolError
+        from src.routes.api_v1 import _handle_tool_error
+
+        source = AdCPValidationError("invalid request")
+        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+
+        response = _handle_tool_error(tool_error)
+        assert response.status_code == 400
+
+    def test_auth_tool_error_returns_401(self):
+        """AdCPToolError carrying an AUTH_REQUIRED envelope → 401."""
+        from src.core.exceptions import AdCPAuthenticationError, build_two_layer_error_envelope
+        from src.core.tool_error_logging import AdCPToolError
+        from src.routes.api_v1 import _handle_tool_error
+
+        source = AdCPAuthenticationError("token expired")
+        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+
+        response = _handle_tool_error(tool_error)
+        assert response.status_code == 401
+
+    def test_not_found_tool_error_returns_404(self):
+        """AdCPToolError carrying a NOT_FOUND envelope → 404."""
+        from src.core.exceptions import AdCPMediaBuyNotFoundError, build_two_layer_error_envelope
+        from src.core.tool_error_logging import AdCPToolError
+        from src.routes.api_v1 import _handle_tool_error
+
+        source = AdCPMediaBuyNotFoundError("buy_x missing")
+        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+
+        response = _handle_tool_error(tool_error)
+        assert response.status_code == 404
+
+    def test_budget_exceeded_tool_error_returns_422(self):
+        """AdCPToolError carrying a BUDGET_EXCEEDED envelope → 422."""
+        from src.core.exceptions import AdCPBudgetExceededError, build_two_layer_error_envelope
+        from src.core.tool_error_logging import AdCPToolError
+        from src.routes.api_v1 import _handle_tool_error
+
+        source = AdCPBudgetExceededError("over ceiling")
+        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+
+        response = _handle_tool_error(tool_error)
+        assert response.status_code == 422
+
+    def test_adapter_tool_error_returns_502(self):
+        """AdCPToolError carrying a SERVICE_UNAVAILABLE/adapter envelope → 502."""
+        from src.core.exceptions import AdCPAdapterError, build_two_layer_error_envelope
+        from src.core.tool_error_logging import AdCPToolError
+        from src.routes.api_v1 import _handle_tool_error
+
+        source = AdCPAdapterError("GAM unavailable")
+        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+
+        response = _handle_tool_error(tool_error)
+        assert response.status_code == 502
+
+    def test_plain_tool_error_falls_back_to_500(self):
+        """Plain ToolError (no typed source) defaults to 500 — the only sensible value."""
+        from fastmcp.exceptions import ToolError
+
+        from src.routes.api_v1 import _handle_tool_error
+
+        response = _handle_tool_error(ToolError("unstructured failure"))
+        assert response.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -891,9 +1114,9 @@ class TestRecoveryRoundtrip:
 
             # 2. Standalone translator still produces the right A2A type + envelope.
             translated = _adcp_to_a2a_error(exc_class(msg))
-            assert isinstance(translated, expected_a2a_type), (
-                f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, " f"got {type(translated).__name__}"
-            )
+            assert isinstance(
+                translated, expected_a2a_type
+            ), f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(translated).__name__}"
             exc_instance = exc_class(msg)
             _assert_a2a_envelope(translated.data, exc_instance.wire_error_code, expected_recovery)
 

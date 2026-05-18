@@ -113,6 +113,32 @@ def translate_error_code(code: str) -> str:
     return ERROR_CODE_MAPPING.get(code, code)
 
 
+def _serialize_context(
+    context: ContextObject | dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Serialize an AdCP ContextObject (or dict) into a JSON-safe dict.
+
+    Single source of truth for context serialization — used by ``to_dict``,
+    ``to_adcp_error``, and ``build_two_layer_error_envelope`` so all three
+    paths emit byte-identical context payloads.
+
+    Behavior:
+        - ``None`` → ``None`` (caller decides whether to omit the key).
+        - ``dict`` → shallow copy. Prevents aliasing footguns when one
+          serialization layer mutates its copy and accidentally mutates
+          the source context still held on the exception.
+        - ``ContextObject`` → ``model_dump(mode="json", exclude_none=True)``.
+          ``mode="json"`` coerces datetimes/UUIDs/etc. to JSON-serializable
+          primitives; ``exclude_none=True`` matches the spec's emit-only-
+          populated-fields norm.
+    """
+    if context is None:
+        return None
+    if isinstance(context, dict):
+        return dict(context)
+    return context.model_dump(mode="json", exclude_none=True)
+
+
 class AdCPError(Exception):
     """Base exception for all AdCP errors.
 
@@ -186,10 +212,9 @@ class AdCPError(Exception):
             result["field"] = self.field
         if self.suggestion is not None:
             result["suggestion"] = self.suggestion
-        if self.context is not None:
-            result["context"] = (
-                self.context.model_dump(mode="json") if hasattr(self.context, "model_dump") else self.context
-            )
+        serialized_context = _serialize_context(self.context)
+        if serialized_context is not None:
+            result["context"] = serialized_context
         return result
 
     def to_adcp_error(self) -> dict[str, Any]:
@@ -204,11 +229,9 @@ class AdCPError(Exception):
         doesn't drop request-correlation data on the floor.
         """
         merged_details = dict(self.details) if self.details else {}
-        if self.context is not None:
-            merged_details.setdefault(
-                "context",
-                self.context.model_dump(mode="json") if hasattr(self.context, "model_dump") else self.context,
-            )
+        serialized_context = _serialize_context(self.context)
+        if serialized_context is not None:
+            merged_details.setdefault("context", serialized_context)
         return adcp_error(
             self.error_code,
             self.message,
@@ -497,13 +520,7 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
         "adcp_error": dict(payload["errors"][0]),
         "errors": payload["errors"],
     }
-    if exc.context is not None:
-        # Accept both ContextObject (Pydantic) and plain dict — the field is
-        # echoed verbatim so buyer agents can correlate without us mandating a
-        # specific type at every raise site. ``mode="json"`` ensures
-        # datetimes/UUIDs/etc. become JSON-serializable primitives.
-        if isinstance(exc.context, dict):
-            envelope["context"] = dict(exc.context)
-        else:
-            envelope["context"] = exc.context.model_dump(mode="json", exclude_none=True)
+    serialized_context = _serialize_context(exc.context)
+    if serialized_context is not None:
+        envelope["context"] = serialized_context
     return envelope

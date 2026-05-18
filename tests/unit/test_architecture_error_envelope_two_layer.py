@@ -30,8 +30,50 @@ BOUNDARY_FUNCTIONS = [
 ENVELOPE_BUILDER = "build_two_layer_error_envelope"
 
 
+def _collect_module_functions(tree: ast.AST) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Return ``{name: FunctionDef}`` for every module-level function in ``tree``."""
+    out: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out[node.name] = node
+    return out
+
+
+def _body_contains_builder_call(
+    body_node: ast.AST, all_funcs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef], seen: set[str]
+) -> bool:
+    """Return True if ``body_node`` calls ``build_two_layer_error_envelope`` directly or via an in-module helper.
+
+    1-level transitive call analysis: handler → in-module helper → builder.
+    Prevents DRY refactors (extracting the envelope-building call into a shared
+    ``_envelope_response`` helper) from defeating the guard without weakening
+    its actual intent (every boundary's wire response must run through the
+    builder).
+    """
+    for child in ast.walk(body_node):
+        if not isinstance(child, ast.Call):
+            continue
+        f = child.func
+        if isinstance(f, ast.Name) and f.id == ENVELOPE_BUILDER:
+            return True
+        if isinstance(f, ast.Attribute) and f.attr == ENVELOPE_BUILDER:
+            return True
+        # Direct call to an in-module helper → recurse into the helper's body.
+        callee_name = f.id if isinstance(f, ast.Name) else None
+        if callee_name and callee_name in all_funcs and callee_name not in seen:
+            seen.add(callee_name)
+            if _body_contains_builder_call(all_funcs[callee_name], all_funcs, seen):
+                return True
+    return False
+
+
 def _function_calls_builder(filepath: str, func_name: str) -> bool:
-    """Return True if ``func_name`` in ``filepath`` calls ``build_two_layer_error_envelope``."""
+    """Return True if ``func_name`` in ``filepath`` reaches ``build_two_layer_error_envelope``.
+
+    Accepts both direct calls and 1-level transitive calls through helpers
+    defined in the same module, so DRY refactors that extract a shared
+    envelope-response helper still satisfy the guard.
+    """
     path = Path(filepath)
     if not path.exists():
         return False
@@ -40,17 +82,11 @@ def _function_calls_builder(filepath: str, func_name: str) -> bool:
     except SyntaxError:
         return False
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-            for child in ast.walk(node):
-                if isinstance(child, ast.Call):
-                    f = child.func
-                    if isinstance(f, ast.Name) and f.id == ENVELOPE_BUILDER:
-                        return True
-                    if isinstance(f, ast.Attribute) and f.attr == ENVELOPE_BUILDER:
-                        return True
-            return False
-    return False  # function not found
+    all_funcs = _collect_module_functions(tree)
+    target = all_funcs.get(func_name)
+    if target is None:
+        return False
+    return _body_contains_builder_call(target, all_funcs, seen={func_name})
 
 
 class TestBoundaryTranslatorsUseEnvelope:

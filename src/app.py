@@ -93,7 +93,26 @@ app.mount("/mcp", mcp_app)
 # AdCP exception handlers — translate typed exceptions to HTTP responses.
 # ---------------------------------------------------------------------------
 
-from src.core.exceptions import AdCPError  # noqa: E402
+from src.core.exceptions import (  # noqa: E402
+    AdCPAuthorizationError,
+    AdCPError,
+    AdCPValidationError,
+    build_two_layer_error_envelope,
+)
+
+
+def _envelope_response(exc: AdCPError) -> JSONResponse:
+    """Build a JSONResponse carrying the two-layer envelope for ``exc``.
+
+    Single source of truth for the REST envelope-response shape — used by
+    every exception handler so HTTP status, body envelope, and wire codes
+    are constructed identically regardless of which exception type fired
+    the handler.
+    """
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=build_two_layer_error_envelope(exc),
+    )
 
 
 @app.exception_handler(AdCPError)
@@ -113,12 +132,36 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
     own boundary translators. Wire codes are translated through
     ``ERROR_CODE_MAPPING`` inside the envelope builder.
     """
-    from src.core.exceptions import build_two_layer_error_envelope
+    return _envelope_response(exc)
 
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=build_two_layer_error_envelope(exc),
-    )
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+    """Cross-transport symmetry: REST wraps raw ``ValueError`` as VALIDATION_ERROR.
+
+    MCP's ``_translate_to_tool_error`` and A2A's dispatcher both catch raw
+    ``ValueError`` and wrap it in a synthetic ``AdCPValidationError`` envelope.
+    REST mirrors that here so a buyer-facing ``ValueError`` raised by
+    application code surfaces with the same wire shape and HTTP 400 status
+    on every transport, not the 500 default FastAPI gives unhandled errors.
+
+    Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
+    ValueError subclass) — request-body validation keeps its existing handler.
+    """
+    return _envelope_response(AdCPValidationError(str(exc)))
+
+
+@app.exception_handler(PermissionError)
+async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
+    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as AUTH_REQUIRED.
+
+    Mirror of the MCP / A2A boundaries which translate ``PermissionError`` to
+    a synthetic ``AdCPAuthorizationError`` envelope. Without this handler a
+    raw ``PermissionError`` on the REST path would render as a 500 server
+    error instead of the 403 authorization envelope every transport should
+    emit for the same condition.
+    """
+    return _envelope_response(AdCPAuthorizationError(str(exc)))
 
 
 # ---------------------------------------------------------------------------

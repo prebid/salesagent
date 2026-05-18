@@ -184,36 +184,43 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
     """Reconstruct an AdCPError subclass from a two-layer envelope dict.
 
     Accepts the envelope shape produced by ``build_two_layer_error_envelope``:
-    ``{"adcp_error": {code, message, recovery, ...}, "errors": [...], ...}``.
+    ``{"adcp_error": {code, message, recovery, details, ...}, "errors": [...], ...}``.
     Also accepts the legacy flat shape ``{"error_code": ..., "recovery": ...}``
     for tests that predate the envelope.
 
-    Returns the reconstructed ``AdCPError`` subclass, or ``None`` if no
-    ``error_code`` can be extracted (caller picks a fallback).
+    Single source of truth for envelope→exception reconstruction — called by
+    ``_unwrap_a2a_server_error`` (A2AError.data path) and
+    ``BaseTestEnv.parse_rest_error`` (REST response body path). Returns the
+    reconstructed ``AdCPError`` subclass, or ``None`` if no ``error_code`` can
+    be extracted (caller picks a fallback).
     """
     if not isinstance(envelope, dict):
         return None
     error_code: str | None = None
     message = fallback_message
     recovery: str | None = None
+    details: dict | None = None
     adcp_err = envelope.get("adcp_error")
     if isinstance(adcp_err, dict):
         error_code = adcp_err.get("code")
         message = adcp_err.get("message", message) or message
         recovery = adcp_err.get("recovery")
+        details = adcp_err.get("details")
     if not error_code:
         errors = envelope.get("errors")
         if isinstance(errors, list) and errors and isinstance(errors[0], dict):
             error_code = errors[0].get("code")
             message = errors[0].get("message", message) or message
             recovery = errors[0].get("recovery", recovery)
+            details = details or errors[0].get("details")
     if not error_code:
         # Legacy flat shape: top-level error_code key.
         error_code = envelope.get("error_code")
         recovery = recovery or envelope.get("recovery")
+        details = details or envelope.get("details")
     if not error_code:
         return None
-    return _adcp_error_from_code(error_code, message, recovery)
+    return _adcp_error_from_code(error_code, message, recovery, details)
 
 
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
@@ -797,37 +804,17 @@ class BaseTestEnv:
     def parse_rest_error(self, status_code: int, data: dict[str, Any]) -> Exception:
         """Reconstruct an AdCPError from REST error response.
 
-        Prefers the structured error_code in the response body (same precision
-        as MCP and A2A unwrappers). Falls back to HTTP status mapping.
+        Delegates envelope and legacy-flat parsing to the shared
+        ``_envelope_to_adcp_error`` helper (same path used by the A2A
+        unwrapper) so REST and A2A reconstruction stay byte-identical.
+        Falls back to HTTP status mapping only when no ``error_code`` is
+        recoverable from the body.
         """
         message = data.get("message", data.get("error", str(data)))
 
-        # Spec-compliant two-layer envelope first.
-        if isinstance(data, dict):
-            adcp_err = data.get("adcp_error")
-            if isinstance(adcp_err, dict) and adcp_err.get("code"):
-                return _adcp_error_from_code(
-                    str(adcp_err["code"]),
-                    str(adcp_err.get("message", message)),
-                    adcp_err.get("recovery"),
-                    adcp_err.get("details"),
-                )
-            errors = data.get("errors")
-            if isinstance(errors, list) and errors and isinstance(errors[0], dict) and errors[0].get("code"):
-                err = errors[0]
-                return _adcp_error_from_code(
-                    str(err["code"]),
-                    str(err.get("message", message)),
-                    err.get("recovery"),
-                    err.get("details"),
-                )
-
-        # Legacy flat shape: { "error_code": ..., "message": ..., "recovery": ... }
-        error_code = data.get("error_code")
-        if error_code:
-            recovery = data.get("recovery")
-            details = data.get("details")
-            return _adcp_error_from_code(error_code, message, recovery, details)
+        reconstructed = _envelope_to_adcp_error(data, fallback_message=message)
+        if reconstructed is not None:
+            return reconstructed
 
         # Fallback: map HTTP status to exception class
         from src.core.exceptions import (

@@ -89,6 +89,120 @@ class TestContextEcho:
         envelope = build_two_layer_error_envelope(exc)
         assert envelope["context"]["correlation_id"] == "dict-ctx"
 
+    def test_dict_context_is_shallow_copied(self):
+        """Mutating the source dict context must not mutate emitted envelope context.
+
+        The three serialization paths (``to_dict``, ``to_adcp_error``,
+        ``build_two_layer_error_envelope``) all funnel through
+        ``_serialize_context`` and must shallow-copy dict context so an
+        exception held across multiple serializations doesn't leak mutations
+        from one envelope into another (aliasing footgun before PR 3
+        async/submitted work starts touching both layers).
+        """
+        source_ctx = {"correlation_id": "orig"}
+        exc = AdCPNotFoundError("not found", context=source_ctx)
+        envelope = build_two_layer_error_envelope(exc)
+
+        source_ctx["correlation_id"] = "mutated"
+        source_ctx["new_key"] = "added"
+
+        assert envelope["context"]["correlation_id"] == "orig"
+        assert "new_key" not in envelope["context"]
+
+    def test_context_object_uses_exclude_none(self):
+        """``ContextObject`` serialization must drop unset optional fields.
+
+        ``_serialize_context`` invokes ``model_dump(mode="json", exclude_none=True)``
+        so the wire envelope only carries populated fields — matches the
+        spec's emit-only-populated-fields norm.
+        """
+        from adcp.types import ContextObject
+
+        ctx = ContextObject(correlation_id="cid")
+        exc = AdCPNotFoundError("x", context=ctx)
+        envelope = build_two_layer_error_envelope(exc)
+
+        # Every emitted field must be non-None — exclude_none drops unset optionals
+        assert envelope["context"]["correlation_id"] == "cid"
+        assert all(v is not None for v in envelope["context"].values())
+
+    def test_three_paths_emit_consistent_context(self):
+        """``to_dict``, ``to_adcp_error``, and envelope emit identical context payloads.
+
+        Single source of truth (``_serialize_context``) means all three
+        serialization paths must produce byte-identical context dicts for
+        the same input — boundary handlers can swap between them without
+        observable shape differences.
+        """
+        from adcp.types import ContextObject
+
+        for ctx_input in (ContextObject(correlation_id="abc"), {"correlation_id": "xyz"}):
+            exc = AdCPNotFoundError("x", context=ctx_input)
+
+            flat = exc.to_dict()
+            payload = exc.to_adcp_error()
+            envelope = build_two_layer_error_envelope(exc)
+
+            assert flat["context"] == envelope["context"]
+            assert payload["errors"][0]["details"]["context"] == envelope["context"]
+
+
+class TestRestAndA2AReconstructionAgree:
+    """``parse_rest_error`` and ``_envelope_to_adcp_error`` agree byte-for-byte.
+
+    Both reconstruct an AdCPError subclass from an envelope dict — the REST
+    body comes from the FastAPI ``adcp_error_handler``, the A2A body comes
+    from the explicit-skill dispatcher's artifact DataPart. The DRY invariant
+    says they must produce identical exceptions for identical envelope input,
+    so storyboard runners that hit either transport see the same typed result.
+    """
+
+    def test_validation_error_envelope_reconstructs_identically(self):
+        from src.core.exceptions import AdCPValidationError
+        from tests.harness._base import _envelope_to_adcp_error
+
+        source = AdCPValidationError("bad input", details={"field": "budget"})
+        envelope = build_two_layer_error_envelope(source)
+
+        from tests.harness._base import BaseTestEnv
+
+        # parse_rest_error is a method — call via a minimal subclass instance
+        env = BaseTestEnv.__new__(BaseTestEnv)  # bypass __init__
+        rest_exc = env.parse_rest_error(400, envelope)
+        a2a_exc = _envelope_to_adcp_error(envelope)
+
+        assert isinstance(rest_exc, AdCPValidationError)
+        assert isinstance(a2a_exc, AdCPValidationError)
+        assert rest_exc.error_code == a2a_exc.error_code == "VALIDATION_ERROR"
+        assert rest_exc.message == a2a_exc.message == "bad input"
+        assert rest_exc.recovery == a2a_exc.recovery == "correctable"
+        assert rest_exc.details == a2a_exc.details == {"field": "budget"}
+
+    def test_not_found_envelope_reconstructs_identically(self):
+        from src.core.exceptions import AdCPMediaBuyNotFoundError
+        from tests.harness._base import BaseTestEnv, _envelope_to_adcp_error
+
+        source = AdCPMediaBuyNotFoundError("buy_x missing")
+        envelope = build_two_layer_error_envelope(source)
+
+        env = BaseTestEnv.__new__(BaseTestEnv)
+        rest_exc = env.parse_rest_error(404, envelope)
+        a2a_exc = _envelope_to_adcp_error(envelope)
+
+        assert type(rest_exc) is type(a2a_exc) is AdCPMediaBuyNotFoundError
+        assert rest_exc.error_code == a2a_exc.error_code == "MEDIA_BUY_NOT_FOUND"
+        assert rest_exc.recovery == a2a_exc.recovery == "correctable"
+
+    def test_rest_falls_back_to_status_when_envelope_lacks_code(self):
+        """REST keeps its HTTP-status fallback for unstructured bodies."""
+        from src.core.exceptions import AdCPRateLimitError
+        from tests.harness._base import BaseTestEnv
+
+        env = BaseTestEnv.__new__(BaseTestEnv)
+        # Body without any envelope or legacy keys → status code fallback kicks in
+        exc = env.parse_rest_error(429, {"message": "slow down"})
+        assert isinstance(exc, AdCPRateLimitError)
+
 
 class TestOptionalFieldsPropagate:
     """field, suggestion, details propagate into both layers."""

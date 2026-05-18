@@ -195,6 +195,28 @@ class AdCPRequestHandler(RequestHandler):
         self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
 
+    @staticmethod
+    def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
+        """Build the dispatcher result dict for a failed skill invocation.
+
+        Both the typed-AdCPError branch and the untyped fallthrough land here so
+        the artifact DataPart always carries a spec-compliant two-layer envelope
+        — never a flat ``{"error": "..."}`` dict that would force the storyboard
+        runner to synthesize ``MCP_ERROR``. Untyped exceptions are wrapped in a
+        synthetic ``AdCPError`` (``INTERNAL_ERROR`` → ``SERVICE_UNAVAILABLE``
+        via ``wire_error_code``) so the wire output stays in STANDARD_ERROR_CODES.
+        """
+        from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+
+        if not isinstance(exc, AdCPError):
+            exc = AdCPError(str(exc) or type(exc).__name__)
+        return {
+            "skill": skill_name,
+            "error": exc.message,
+            "error_envelope": build_two_layer_error_envelope(exc),
+            "success": False,
+        }
+
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
 
@@ -613,31 +635,21 @@ class AdCPRequestHandler(RequestHandler):
                         raise
                     except AdCPError as e:
                         # AdCP-level errors are async-task failures, not JSON-RPC
-                        # errors. Wrap the two-layer envelope into the result so
-                        # the artifact DataPart carries it; the explicit-skill
-                        # loop below marks the Task as failed when no skills
-                        # succeed. Mirrors the SDK's _send_adcp_error reference
-                        # for storyboard scenarios that exercise invalid-state
+                        # errors. Mirrors the SDK's _send_adcp_error reference for
+                        # storyboard scenarios that exercise invalid-state
                         # transitions on an otherwise-routable skill.
-                        from src.core.exceptions import build_two_layer_error_envelope
-
                         logger.warning(
                             "AdCPError in explicit skill %s: %s — emitting failed Task with envelope",
                             skill_name,
                             e.error_code,
                         )
-                        envelope = build_two_layer_error_envelope(e)
-                        results.append(
-                            {
-                                "skill": skill_name,
-                                "error": e.message,
-                                "error_envelope": envelope,
-                                "success": False,
-                            }
-                        )
+                        results.append(self._build_failed_skill_result(skill_name, e))
                     except Exception as e:
-                        logger.error(f"Error in explicit skill {skill_name}: {e}")
-                        results.append({"skill": skill_name, "error": str(e), "success": False})
+                        # Untyped fallthrough — same envelope shape as the AdCPError
+                        # branch so storyboard runners can `JSON.parse` the DataPart
+                        # uniformly regardless of which branch caught the failure.
+                        logger.error(f"Error in explicit skill {skill_name}: {e}", exc_info=True)
+                        results.append(self._build_failed_skill_result(skill_name, e))
 
                 # Check for submitted status (manual approval required) - return early without artifacts
                 # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
