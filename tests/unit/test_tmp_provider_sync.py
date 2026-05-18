@@ -286,19 +286,17 @@ class TestResolveSellAgentUrl:
 
         assert result == "https://custom.agent.com/mcp"
 
-    @patch("src.services.tmp_provider_sync.TenantConfigRepository")
-    @patch("src.services.tmp_provider_sync.get_db_session")
-    def test_uses_tenant_virtual_host(self, mock_db, mock_repo_cls):
+    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
+    def test_uses_tenant_virtual_host(self, mock_uow_cls):
         """Uses tenant.virtual_host when ADCP_AGENT_URL is not set."""
         tenant = MagicMock()
         tenant.virtual_host = "tenant.salesagent.example.com"
         tenant.subdomain = "tenant"
-        mock_repo = MagicMock()
-        mock_repo.get_tenant.return_value = tenant
-        mock_repo_cls.return_value = mock_repo
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_db.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow = MagicMock()
+        mock_uow.tenant_config = MagicMock()
+        mock_uow.tenant_config.get_tenant.return_value = tenant
+        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
         with patch.dict("os.environ", {}, clear=False):
             # Ensure ADCP_AGENT_URL is not set
@@ -308,19 +306,17 @@ class TestResolveSellAgentUrl:
 
         assert result == "https://tenant.salesagent.example.com/mcp"
 
-    @patch("src.services.tmp_provider_sync.TenantConfigRepository")
-    @patch("src.services.tmp_provider_sync.get_db_session")
-    def test_falls_back_to_default(self, mock_db, mock_repo_cls):
+    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
+    def test_falls_back_to_default(self, mock_uow_cls):
         """Falls back to default URL when tenant has no virtual_host or subdomain."""
         tenant = MagicMock()
         tenant.virtual_host = None
         tenant.subdomain = None
-        mock_repo = MagicMock()
-        mock_repo.get_tenant.return_value = tenant
-        mock_repo_cls.return_value = mock_repo
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_db.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow = MagicMock()
+        mock_uow.tenant_config = MagicMock()
+        mock_uow.tenant_config.get_tenant.return_value = tenant
+        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
         with patch.dict("os.environ", {}, clear=False):
             import os
