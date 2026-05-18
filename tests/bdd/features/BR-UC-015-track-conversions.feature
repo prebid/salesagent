@@ -954,7 +954,7 @@ Feature: BR-UC-015 Track Conversions
   @T-UC-015-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account log_event produces simulated processing with sandbox flag
     Given an event source "src_web" is configured
-    And the request targets a sandbox account
+    Given the request targets a sandbox account
     When the Buyer Agent logs valid events
     Then the response should include sandbox equals true
     And no real attribution or reporting pipelines should have been triggered
@@ -974,7 +974,7 @@ Feature: BR-UC-015 Track Conversions
 
   @T-UC-015-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid event returns real validation error
-    And the request targets a sandbox account
+    Given the request targets a sandbox account
     When the Buyer Agent logs events with missing required event_type
     Then the response should indicate a validation error
     And the error should be a real validation error, not simulated

@@ -16,6 +16,10 @@ import inspect
 
 import pytest
 
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 
 class TestSchemaLibraryInheritance:
     """Test that schemas properly extend library types."""

@@ -23,6 +23,37 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+def _sandbox_identity(ctx: dict, transport: Transport | None = None) -> ResolvedIdentity | None:
+    """Return a dry_run identity when ctx['sandbox'] is True, else None.
+
+    For REST transport, uses the env's DB-backed identity as base (real auth
+    token required) and replaces the testing_context with dry_run=True.
+    For other transports, builds a synthetic identity via PrincipalFactory.
+    """
+    if not ctx.get("sandbox"):
+        return None
+
+    env = ctx["env"]
+
+    if transport in (Transport.REST, Transport.E2E_REST):
+        # REST goes through middleware — need real DB-backed auth token.
+        # Clone the env's default REST identity with dry_run=True.
+        base = env.identity_for(transport)
+        from src.core.testing_hooks import AdCPTestContext
+
+        return base.model_copy(
+            update={"testing_context": AdCPTestContext(dry_run=True)},
+        )
+
+    from tests.factories.principal import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
+        principal_id=env._principal_id,
+        tenant_id=env._tenant_id,
+        dry_run=True,
+    )
+
+
 def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
     """Dispatch through ctx['transport'] (defaults to IMPL for backward compat)."""
     transport = ctx.get("transport")
@@ -30,8 +61,15 @@ def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
         _call_via(ctx, transport, req=req)
     else:
         env = ctx["env"]
+        call_kwargs: dict[str, Any] = {"req": req}
+        identity = _sandbox_identity(ctx, Transport.IMPL)
+        if identity is not None:
+            call_kwargs["identity"] = identity
+        elif "identity" in ctx:
+            # Given step explicitly set identity (e.g. None for no-auth scenarios)
+            call_kwargs["identity"] = ctx["identity"]
         try:
-            ctx["response"] = env.call_impl(req=req)
+            ctx["response"] = env.call_impl(**call_kwargs)
         except Exception as exc:
             ctx["error"] = exc
 
@@ -51,6 +89,13 @@ def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsReq
             kwargs.update(req.model_dump(exclude_none=True))
         else:
             kwargs["req"] = req
+
+    identity = _sandbox_identity(ctx, t)
+    if identity is not None:
+        kwargs["identity"] = identity
+    elif "identity" in ctx:
+        # Given step explicitly set identity (e.g. None for no-auth scenarios)
+        kwargs["identity"] = ctx["identity"]
 
     try:
         result = env.call_via(t, **kwargs)
@@ -120,7 +165,7 @@ def when_call_mcp_type(ctx: dict, type_value: str) -> None:
     parsers.re(
         r"the Buyer Agent (?:requests the format catalog"
         r"|requests all formats with no filters"
-        r"|sends a list_creative_formats request)"
+        r"|sends a list_creative_formats (?:request|task))"
     )
 )
 def when_request_unfiltered(ctx: dict) -> None:
@@ -131,7 +176,7 @@ def when_request_unfiltered(ctx: dict) -> None:
 @when("the Buyer Agent sends a list_creative_formats request with invalid dimension filters")
 def when_send_request_invalid_dimensions(ctx: dict) -> None:
     try:
-        req = ListCreativeFormatsRequest(min_width=-1)
+        req = ListCreativeFormatsRequest(min_width="invalid")  # type: ignore[arg-type]
         _call(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -169,6 +214,7 @@ def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_s
 
 
 @when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
+@when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}"'))
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
     # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
     _call(ctx)
@@ -712,28 +758,59 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 # ── Creative agent format queries (partition / boundary) ─────────────
 # These test a separate API (creative agent format querying), not
-# list_creative_formats. Marked xfail in conftest.py.
+# list_creative_formats. Until the dedicated API exists, we proxy
+# through list_creative_formats with the creative_agent_formats seeded
+# into the registry. Marked xfail in conftest.py.
+
+
+def _sync_creative_agent_formats(ctx: dict) -> None:
+    """Push ctx['creative_agent_formats'] into the harness registry."""
+    formats = ctx.get("creative_agent_formats", [])
+    if formats:
+        ctx["env"].set_registry_formats(formats)
+
+
+_AGENT_TYPE_PARTITION_MAP = {
+    "not_provided": "omitted",
+}
+
+_AGENT_ASSET_PARTITION_MAP = {
+    "not_provided": "omitted",
+}
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with type "{partition}"'))
 def when_query_agent_type(ctx: dict, partition: str) -> None:
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "creative_agent_format_type"
+    _sync_creative_agent_formats(ctx)
+    _partition_type(ctx, _AGENT_TYPE_PARTITION_MAP.get(partition, partition))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with asset_types "{partition}"'))
 def when_query_agent_asset_types(ctx: dict, partition: str) -> None:
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "creative_agent_asset_type"
+    _sync_creative_agent_formats(ctx)
+    _partition_asset_types(ctx, _AGENT_ASSET_PARTITION_MAP.get(partition, partition))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at type boundary "{boundary_point}"'))
 def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "creative_agent_format_type"
+    _sync_creative_agent_formats(ctx)
+    mapping = {
+        "audio (first enum value)": "audio",
+        "dooh (last enum value)": "dooh",
+        "Not provided (no filter)": "omitted",
+        "native (valid in media-buy variant but not in creative agent)": "native",
+    }
+    _partition_type(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at asset_types boundary "{boundary_point}"'))
 def when_boundary_agent_asset_types(ctx: dict, boundary_point: str) -> None:
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "creative_agent_asset_type"
+    _sync_creative_agent_formats(ctx)
+    mapping = {
+        "image (first enum value)": "image",
+        "url (last enum value)": "url",
+        "Not provided (no filter)": "omitted",
+        "vast (valid in media-buy variant but not in creative agent)": "vast",
+        "Empty array": "empty_array",
+    }
+    _partition_asset_types(ctx, mapping.get(boundary_point, boundary_point))

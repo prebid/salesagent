@@ -38,8 +38,8 @@ Feature: BR-UC-002 Create Media Buy
     | buyer_ref      | campaign-2026-q1             |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
-    | start_time     | 2026-04-01T00:00:00Z         |
-    | end_time       | 2026-04-30T23:59:59Z         |
+    | start_time     | {30 days from now}           |
+    | end_time       | {60 days from now}           |
     And the request includes 2 packages with valid product_ids
     And each package has a positive budget meeting minimum spend
     And all packages use the same currency "USD"
@@ -122,8 +122,8 @@ Feature: BR-UC-002 Create Media Buy
     | buyer_ref      | campaign-2026-q1             |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
-    | start_time     | 2026-04-01T00:00:00Z         |
-    | end_time       | 2026-04-30T23:59:59Z         |
+    | start_time     | {30 days from now}           |
+    | end_time       | {60 days from now}           |
     And the account "acc-001" exists and is active
     And proposal "prop-2026-001" exists and has not expired
     And the proposal has 3 product allocations

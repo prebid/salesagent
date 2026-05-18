@@ -30,8 +30,8 @@ from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy as MediaBuyModel
-from src.core.database.models import PricingOption, Tenant
 from src.core.database.models import Product as ProductModel
+from src.core.database.models import Tenant
 from src.core.schemas import (
     Budget,
     DeliveryTotals,
@@ -52,9 +52,8 @@ class TestMCPToolsAudit:
         """Create a test tenant for audit tests."""
         tenant_id = "audit_test_tenant"
         with get_db_session() as session:
-            # Clean up any existing test data
+            # Clean up any existing test data — Product before PricingOption (CASCADE)
             session.execute(delete(MediaBuyModel).where(MediaBuyModel.tenant_id == tenant_id))
-            session.execute(delete(PricingOption).where(PricingOption.tenant_id == tenant_id))
             session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
             # Clean up principals
             from src.core.database.models import Principal as PrincipalModel
@@ -74,10 +73,10 @@ class TestMCPToolsAudit:
 
         yield tenant_id
 
-        # Cleanup
+        # Cleanup — delete Product before PricingOption; CASCADE handles pricing_options
+        # and avoids the prevent_empty_pricing_options trigger.
         with get_db_session() as session:
             session.execute(delete(MediaBuyModel).where(MediaBuyModel.tenant_id == tenant_id))
-            session.execute(delete(PricingOption).where(PricingOption.tenant_id == tenant_id))
             session.execute(delete(ProductModel).where(ProductModel.tenant_id == tenant_id))
             # Clean up principals
             from src.core.database.models import Principal as PrincipalModel
@@ -133,7 +132,7 @@ class TestMCPToolsAudit:
                 description="Product for audit testing",
                 pricing_model="CPM",
                 rate="10.00",
-                is_fixed=False,
+                is_fixed=True,
                 format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
             )
 

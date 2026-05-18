@@ -15,11 +15,13 @@ Usage::
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.core import (
     AdapterConfigFactory,
+    AuthorizedPropertyFactory,
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
     TenantFactory,
+    set_adapter_test_behavior,
 )
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 from tests.factories.creative_asset import CreativeAssetFactory
@@ -37,6 +39,7 @@ ALL_FACTORIES = [
     AccountFactory,
     AgentAccountAccessFactory,
     AdapterConfigFactory,
+    AuthorizedPropertyFactory,
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
@@ -60,6 +63,7 @@ __all__ = [
     "AccountFactory",
     "AdapterConfigFactory",
     "AgentAccountAccessFactory",
+    "AuthorizedPropertyFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
@@ -80,4 +84,5 @@ __all__ = [
     "TenantAuthConfigFactory",
     "TenantFactory",
     "UserFactory",
+    "set_adapter_test_behavior",
 ]

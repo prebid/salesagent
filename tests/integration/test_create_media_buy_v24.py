@@ -178,7 +178,6 @@ class TestCreateMediaBuyV24Format:
                 AuthorizedProperty,
                 MediaBuy,
                 MediaPackage,
-                PricingOption,
                 Product,
                 PropertyTag,
             )
@@ -193,9 +192,8 @@ class TestCreateMediaBuyV24Format:
             )
             # Delete media_buys (depends on principals/products)
             session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_tenant_v24"))
-            # Delete pricing options (depends on products)
-            session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_tenant_v24"))
-            # Delete products
+            # Delete products first — CASCADE handles pricing_options,
+            # avoiding the prevent_empty_pricing_options trigger
             session.execute(delete(Product).where(Product.tenant_id == "test_tenant_v24"))
             # Delete principals
             session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "test_tenant_v24"))

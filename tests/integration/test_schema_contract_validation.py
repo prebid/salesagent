@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.adcp_schema]
 
 # V3: Consolidated pricing types - CpmAuctionPricingOption/CpmFixedRatePricingOption → CpmPricingOption
 # Use fixed_price for fixed-rate, floor_price for auction

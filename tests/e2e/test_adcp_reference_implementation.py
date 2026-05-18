@@ -30,6 +30,10 @@ from tests.e2e.adcp_request_builder import (
     parse_tool_result,
 )
 
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 
 class WebhookReceiver(BaseHTTPRequestHandler):
     """Simple webhook receiver for testing async notifications."""

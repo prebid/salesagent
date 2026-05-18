@@ -25,6 +25,19 @@ _DUPLICATE_THRESHOLD = 3
 # "bare format" — the *absence* of a kwarg is the tested behavior.
 # Each step text carries distinct semantic meaning despite identical code.
 _ALLOWED_DUPLICATES: set[str] = {
+    "given_boundary_buyer_ref",
+    "given_partition_buyer_ref",
+    "given_buyer_owns_pkg_by_buyer_ref",
+    "given_cross_buy_request",
+    "given_buyer_owns_mb_with_buyer_ref",
+    "given_buyer_owns_mb_with_ref_and_id",
+    "given_resubmit_buyer_ref",
+    "given_request_with_buyer_ref",
+    "when_query_by_refs",
+    "then_package_buyer_ref",
+    "then_buyer_refs_for_correlation",
+    "then_response_buyer_ref",
+    "then_response_has_buyer_ref",
     "given_registry_format_no_dimensions",
     "given_registry_format_named",
     "given_registry_format_no_disclosure",

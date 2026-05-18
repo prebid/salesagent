@@ -201,6 +201,16 @@ class AdCPAuthenticationError(AdCPError):
     error_code = "AUTH_REQUIRED"
 
 
+class AdCPAuthRequiredError(AdCPAuthenticationError):
+    """No authentication context present (401, AUTH_REQUIRED).
+
+    Raised when the request contains no auth token at all -- distinct from
+    AUTH_TOKEN_INVALID (token present but bad).
+    """
+
+    error_code = "AUTH_REQUIRED"
+
+
 class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403)."""
 

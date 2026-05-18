@@ -266,7 +266,7 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
-        result = self.response.model_dump(mode=info.mode)
+        result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
         return result
 

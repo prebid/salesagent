@@ -61,7 +61,7 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthRequiredError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -93,7 +93,9 @@ def _get_media_buys_impl(
         GetMediaBuysResponse with matching media buys
     """
     if identity is None:
-        raise AdCPAuthenticationError("Identity is required")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     if req.account is not None or req.account_id is not None:
         raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
@@ -106,7 +108,7 @@ def _get_media_buys_impl(
             errors=[{"code": "PRINCIPAL_ID_MISSING", "message": "Principal ID not found in context"}],
         )
 
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
@@ -142,6 +144,7 @@ def _get_media_buys_impl(
             principal,
             dry_run=testing_ctx.dry_run if testing_ctx else False,
             testing_context=testing_ctx,
+            tenant=tenant,
         )
         if adapter.capabilities.supports_realtime_reporting:
             # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
@@ -304,7 +307,11 @@ def _fetch_target_media_buys(
 ) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters."""
     assert uow.media_buys is not None
-    filter_statuses = _resolve_status_filter(req.status_filter)
+    # Per AdCP spec: the default status filter (active-only) applies only when
+    # media_buy_ids are omitted. When the caller specifies
+    # explicit IDs, return all matching buys regardless of status.
+    has_explicit_ids = bool(req.media_buy_ids)
+    filter_statuses = _resolve_status_filter(req.status_filter, skip_default=has_explicit_ids)
 
     buys = uow.media_buys.get_by_principal(
         principal_id,
@@ -325,16 +332,22 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
         )
         for buy in buys
-        if _compute_status(buy, today) in filter_statuses
+        if filter_statuses is None or _compute_status(buy, today) in filter_statuses
     ]
 
 
 def _resolve_status_filter(
     status_filter: MediaBuyStatus | Any | None,
-) -> set[MediaBuyStatus]:
-    """Resolve status_filter request field to a set of MediaBuyStatus values."""
+    *,
+    skip_default: bool = False,
+) -> set[MediaBuyStatus] | None:
+    """Resolve status_filter request field to a set of MediaBuyStatus values.
+
+    Returns None when no filtering should be applied (explicit IDs with no filter).
+    """
     if status_filter is None:
-        # Default: active only
+        if skip_default:
+            return None  # No filtering — return all statuses
         return {MediaBuyStatus.active}
 
     if isinstance(status_filter, RootModel):

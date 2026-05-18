@@ -41,8 +41,6 @@ class TestCreateMediaBuyRoundtrip:
     @pytest.fixture
     def setup_test_tenant(self, integration_db):
         """Set up test tenant with product."""
-        from src.core.database.models import PricingOption
-
         with get_db_session() as session:
             now = datetime.now(UTC)
 
@@ -102,10 +100,9 @@ class TestCreateMediaBuyRoundtrip:
             "product_id": "prod_roundtrip",
         }
 
-        # Cleanup in reverse order of dependencies
+        # Cleanup: delete products first (CASCADE handles pricing_options),
+        # then other entities. This avoids the prevent_empty_pricing_options trigger.
         with get_db_session() as session:
-            # Delete in order: PricingOption -> Product -> Principal -> CurrencyLimit -> Tenant
-            session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_roundtrip_tenant"))
             session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == "test_roundtrip_tenant"))
             session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "test_roundtrip_tenant"))
             session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_roundtrip_tenant"))
