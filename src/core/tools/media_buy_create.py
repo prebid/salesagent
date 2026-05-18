@@ -1303,11 +1303,19 @@ def _build_idempotency_hit_result(
     idempotency_key: str | None,
     principal_id: str,
     context: ContextObject | None,
+    req: "CreateMediaBuyRequest | None" = None,
+    adapter: "Any | None" = None,
 ) -> CreateMediaBuyResult:
     """Re-query the winner of an idempotency race and return its result.
 
     Used both for the happy-path idempotency lookup and for the TOCTOU
     race-condition recovery (IntegrityError on commit).
+
+    ``req`` + ``adapter`` are optional so the property_list advisory can be
+    rebuilt on every replay (rebuild, don't persist — capability could have
+    flipped True between the original call and the replay). Callers that
+    have them in scope pass them; the function tolerates None for callers
+    that don't yet.
     """
     from src.core.database.repositories import MediaBuyUoW
 
@@ -1329,6 +1337,13 @@ def _build_idempotency_hit_result(
         except ValueError:
             adcp_status = MediaBuyStatus.pending_start
 
+        # Rebuild the property_list advisory live rather than reading a cached
+        # copy: between the original request and this replay, an adapter could
+        # have flipped supports_property_list_filtering=True (e.g. #1314 merged).
+        # The advisory must reflect the current capability state, not whatever
+        # was true at the original Day-1 call.
+        advisories = _property_list_unsupported_advisories(req, adapter) if req is not None else None
+
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
                 media_buy_id=existing.media_buy_id,
@@ -1336,6 +1351,7 @@ def _build_idempotency_hit_result(
                 status=adcp_status,
                 valid_actions=valid_actions_for_status(adcp_status.value),
                 context=context,
+                errors=advisories,
             ),
             status=AdcpTaskStatus.completed.value,
         )
@@ -1433,6 +1449,15 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key,
                     principal_id=principal_id,
                     context=req.context,
+                    req=req,
+                    # FIXME(idempotency-adapter): adapter isn't initialized yet
+                    # at this early happy-path check, so the advisory may
+                    # misfire after #1314 flips Kevel's capability to True
+                    # (Kevel tenants would see a stale UNSUPPORTED_FEATURE
+                    # on replay). Today no adapter compiles property_list,
+                    # so the advisory is always correct. Untangle when the
+                    # idempotency probe moves after adapter init.
+                    adapter=None,
                 )
 
     # Context management and workflow step creation - create workflow step FIRST
@@ -2200,6 +2225,8 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
                     context=req.context,
+                    req=req,
+                    adapter=adapter,
                 )
 
             # Log to activity feed for manual approval case
@@ -3073,6 +3100,8 @@ async def _create_media_buy_impl(
                 idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
                 context=req.context,
+                req=req,
+                adapter=adapter,
             )
 
         # Populate media_packages table for structured querying

@@ -516,6 +516,52 @@ class TestTargetingOverlayRoundTrip:
         # property_list still surfaces
         assert targeting["property_list"]["list_id"] == "v1"
 
+    def test_corrupted_targeting_surfaces_via_errors_channel(self, patched_internals):
+        """A single bad package_config row must not crash the response.
+
+        Corrupted row → targeting_overlay=None for THAT package + one
+        ``TARGETING_REHYDRATION_FAILED`` entry on ``response.errors``. The
+        rest of the buy still renders (round-trip resilience). Catches only
+        ``TypeError`` (real corruption) — pydantic ``ValidationError`` is
+        intentionally NOT caught so dev/CI canary fires on field-declaration
+        drift (CLAUDE.md "No Quiet Failures").
+        """
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
+        # Bad row: package_config["targeting_overlay"] is a list, not a dict
+        # → Targeting(**raw) raises TypeError. Real corruption case.
+        bad_pkg = make_package(package_config={"product_id": "prod_1", "targeting_overlay": ["bogus"]})
+        good_pkg = make_package(
+            package_config={
+                "product_id": "prod_2",
+                "targeting_overlay": {
+                    "property_list": {"agent_url": "https://gov.example", "list_id": "v1"},
+                },
+            }
+        )
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [bad_pkg, good_pkg]}
+
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=make_identity())
+
+        # Both packages survive — the bad one gets targeting_overlay=None.
+        assert len(response.media_buys[0].packages) == 2
+        bad_response_pkg = response.media_buys[0].packages[0]
+        good_response_pkg = response.media_buys[0].packages[1]
+        assert bad_response_pkg.targeting_overlay is None
+        assert good_response_pkg.targeting_overlay is not None
+        assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
+
+        # Failure surfaced via the response errors channel — buyer can reconcile.
+        # Uses standard wire code ``INTERNAL_ERROR`` (seller-side data integrity)
+        # with the rehydration detail in the message.
+        assert response.errors is not None
+        assert len(response.errors) == 1
+        err = response.errors[0]
+        assert err.code == "INTERNAL_ERROR"
+        assert "TARGETING_REHYDRATION_FAILED" in err.message
+        assert err.field is not None and "targeting_overlay" in err.field
+
 
 class TestGetMediaBuysResponseStructure:
     """Tests for response schema compliance."""

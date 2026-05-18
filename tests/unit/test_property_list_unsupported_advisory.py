@@ -264,3 +264,84 @@ class TestUpdateRequestPackagesFlow:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
         advisories = build_property_list_unsupported_advisories(req.packages, False)
         assert advisories == []
+
+
+# ---------------------------------------------------------------------------
+# Idempotency replay: advisory must be rebuilt live, not read from cache
+# ---------------------------------------------------------------------------
+
+
+class TestIdempotencyReplayRebuildsAdvisory:
+    """The cached idempotency response is reconstructed from DB columns and
+    doesn't persist the ``errors`` advisory list. Each replay rebuilds the
+    advisory live using the CURRENT adapter capability — so the advisory
+    disappears automatically when the capability flips True between Day-1
+    and the replay, rather than locking in stale Day-1 state.
+    """
+
+    def test_replay_rebuild_helper_returns_advisory_when_capability_off(self):
+        """The helper used by _build_idempotency_hit_result returns the same
+        advisory it would have returned on the original request."""
+        from tests.helpers.adcp_factories import create_test_package_request
+
+        req = CreateMediaBuyRequest(
+            brand={"domain": "testbrand.com"},
+            packages=[
+                create_test_package_request(
+                    product_id="prod_1",
+                    budget=1000.0,
+                    pricing_option_id="cpm_usd_fixed",
+                    targeting_overlay={
+                        "property_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "v1",
+                        },
+                    },
+                ),
+            ],
+            start_time="2030-01-01T00:00:00Z",
+            end_time="2030-01-31T23:59:59Z",
+        )
+        # adapter=None mirrors the "no compiling adapter" state of today's
+        # _build_idempotency_hit_result early-path call site
+        # (FIXME(idempotency-adapter) in media_buy_create.py).
+        advisories = build_property_list_unsupported_advisories(
+            req.packages,
+            supports_property_list_filtering(None),
+        )
+        assert len(advisories) == 1
+        assert advisories[0].code == "UNSUPPORTED_FEATURE"
+
+    def test_replay_rebuild_disappears_when_capability_flips_true(self):
+        """The point of rebuild-live: when an adapter flips
+        ``supports_property_list_filtering=True`` between Day-1 and the
+        replay, the advisory naturally disappears. This is what makes
+        rebuild correct vs persisting the Day-1 errors list verbatim."""
+        from tests.helpers.adcp_factories import create_test_package_request
+
+        class _CompilingAdapter:
+            supports_property_list_filtering = True
+
+        req = CreateMediaBuyRequest(
+            brand={"domain": "testbrand.com"},
+            packages=[
+                create_test_package_request(
+                    product_id="prod_1",
+                    budget=1000.0,
+                    pricing_option_id="cpm_usd_fixed",
+                    targeting_overlay={
+                        "property_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "v1",
+                        },
+                    },
+                ),
+            ],
+            start_time="2030-01-01T00:00:00Z",
+            end_time="2030-01-31T23:59:59Z",
+        )
+        advisories = build_property_list_unsupported_advisories(
+            req.packages,
+            supports_property_list_filtering(_CompilingAdapter()),
+        )
+        assert advisories == []
