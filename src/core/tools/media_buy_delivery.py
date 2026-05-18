@@ -18,7 +18,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import Field, RootModel, ValidationError
 from rich.console import Console
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,21 @@ def _is_circuit_breaker_open(tenant_id: str) -> bool:
     return webhook_delivery_service.has_open_circuit_breaker(tenant_id)
 
 
+def _resolve_attribution_window(requested: AttributionWindow | None) -> dict[str, Any]:
+    """Return the requested attribution window as a dict, or the platform default.
+
+    Platform default per BR-RULE-092: last_touch model with 30-day post_click window.
+    Returns a dict because the response model uses a bundled AttributionWindow class
+    distinct from the request's — a dict bridges both.
+    """
+    if requested is not None:
+        return requested.model_dump(mode="json")
+    return {
+        "model": "last_touch",
+        "post_click": {"interval": 30, "unit": "days"},
+    }
+
+
 def _get_media_buy_delivery_impl(
     req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity | None
 ) -> GetMediaBuyDeliveryResponse:
@@ -80,7 +95,9 @@ def _get_media_buy_delivery_impl(
 
     # Validate identity is provided
     if identity is None:
-        raise AdCPValidationError("Context is required", recovery="correctable")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()
@@ -548,6 +565,7 @@ def _get_media_buy_delivery_impl(
             notification_type=notification_type,
             sequence_number=sequence_number,
             next_expected_at=next_expected_at,
+            attribution_window=_resolve_attribution_window(req.attribution_window),
         )
 
         # Apply testing hooks if needed
