@@ -12,6 +12,7 @@ Covers:
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -205,37 +206,51 @@ class TestMapCreativeStatus:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def patched_internals():
+    """Patch the 5 media_buy_list internals shared by every _impl test below.
+
+    Yields a SimpleNamespace of mocks so tests configure them as
+    ``patched_internals.buys.return_value = [...]`` instead of stacking five
+    @patch decorators and threading five positional parameters per test.
+
+    Pre-configures the always-same defaults (`principal_id="principal_1"`,
+    empty creative approvals) so individual tests only set what they care about.
+    """
+    with (
+        patch("src.core.tools.media_buy_list.MediaBuyUoW") as m_uow,
+        patch("src.core.tools.media_buy_list.get_principal_object") as m_principal,
+        patch("src.core.tools.media_buy_list._fetch_target_media_buys") as m_buys,
+        patch("src.core.tools.media_buy_list._fetch_packages") as m_packages,
+        patch("src.core.tools.media_buy_list._fetch_creative_approvals") as m_approvals,
+    ):
+        m_principal.return_value = MagicMock(principal_id="principal_1")
+        m_approvals.return_value = {}
+        yield SimpleNamespace(
+            uow=m_uow,
+            principal=m_principal,
+            buys=m_buys,
+            packages=m_packages,
+            approvals=m_approvals,
+        )
+
+
 class TestGetMediaBuysImpl:
     """Tests for _get_media_buys_impl using mocked database."""
 
     def _make_request(self, **kwargs):
         return GetMediaBuysRequest(**kwargs)
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_returns_active_media_buy(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_returns_active_media_buy(self, patched_internals):
         """Basic happy path: one active media buy returned."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         # Use clearly active dates (past start, far future end)
         buy = make_media_buy(
             media_buy_id="buy_active",
             start_date=date(2020, 1, 1),
             end_date=date(2099, 12, 31),
         )
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_active": [make_package(media_buy_id="buy_active")]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_active": [make_package(media_buy_id="buy_active")]}
 
         req = self._make_request()
         response = _get_media_buys_impl(req, identity=make_identity())
@@ -254,26 +269,11 @@ class TestGetMediaBuysImpl:
         assert response.errors is not None
         assert len(response.errors) > 0
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_snapshot_not_requested_when_false(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_snapshot_not_requested_when_false(self, patched_internals):
         """When include_snapshot=False, adapter.get_packages_snapshot not called."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [make_package()]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [make_package()]}
 
         mock_adapter = MagicMock()
         mock_adapter.capabilities.supports_realtime_reporting = True
@@ -285,27 +285,12 @@ class TestGetMediaBuysImpl:
 
         mock_adapter.get_packages_snapshot.assert_not_called()
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_snapshot_requested_calls_adapter(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_snapshot_requested_calls_adapter(self, patched_internals):
         """When include_snapshot=True, adapter.get_packages_snapshot is called."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package(package_config={"platform_line_item_id": "li_123"})
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [pkg]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         snapshot = Snapshot(
             as_of=datetime(2025, 6, 15, tzinfo=UTC),
@@ -330,27 +315,12 @@ class TestGetMediaBuysImpl:
         # Response should contain the snapshot
         assert response.media_buys[0].packages[0].snapshot is not None
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_snapshot_unavailable_when_adapter_lacks_support(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_snapshot_unavailable_when_adapter_lacks_support(self, patched_internals):
         """When include_snapshot=True but adapter lacks get_packages_snapshot, mark as unsupported."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package()
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [pkg]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         mock_adapter = MagicMock()
         mock_adapter.capabilities.supports_realtime_reporting = False
@@ -382,22 +352,8 @@ class TestTargetingOverlayRoundTrip:
     def _make_request(self, **kwargs):
         return GetMediaBuysRequest(**kwargs)
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_property_list_returned_at_storyboard_path(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_property_list_returned_at_storyboard_path(self, patched_internals):
         """media_buys[0].packages[0].targeting_overlay.property_list.list_id matches input."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package(
             package_config={
@@ -410,9 +366,8 @@ class TestTargetingOverlayRoundTrip:
                 },
             }
         )
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [pkg]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
         response = _get_media_buys_impl(req, identity=make_identity())
@@ -423,22 +378,8 @@ class TestTargetingOverlayRoundTrip:
         assert targeting.property_list is not None
         assert targeting.property_list.list_id == "acme_outdoor_allowlist_v1"
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_collection_list_returned_at_storyboard_path(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_collection_list_returned_at_storyboard_path(self, patched_internals):
         """media_buys[0].packages[0].targeting_overlay.collection_list.list_id matches input."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package(
             package_config={
@@ -451,9 +392,8 @@ class TestTargetingOverlayRoundTrip:
                 },
             }
         )
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [pkg]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
         response = _get_media_buys_impl(req, identity=make_identity())
@@ -463,22 +403,8 @@ class TestTargetingOverlayRoundTrip:
         assert targeting.collection_list is not None
         assert targeting.collection_list.list_id == "acme_outdoor_collections_v1"
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_both_list_types_returned_together(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_both_list_types_returned_together(self, patched_internals):
         """Storyboard's create-with-both-lists step expects both fields back at once."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package(
             package_config={
@@ -495,9 +421,8 @@ class TestTargetingOverlayRoundTrip:
                 },
             }
         )
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [pkg]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
         response = _get_media_buys_impl(req, identity=make_identity())
@@ -508,22 +433,8 @@ class TestTargetingOverlayRoundTrip:
         assert pkg_data["targeting_overlay"]["property_list"]["list_id"] == "acme_outdoor_allowlist_v1"
         assert pkg_data["targeting_overlay"]["collection_list"]["list_id"] == "acme_outdoor_collections_v1"
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_legacy_targeting_key_fallback(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_legacy_targeting_key_fallback(self, patched_internals):
         """Pre-rename data stored under 'targeting' key still rehydrates."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package(
             package_config={
@@ -536,9 +447,8 @@ class TestTargetingOverlayRoundTrip:
                 },
             }
         )
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [pkg]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
         response = _get_media_buys_impl(req, identity=make_identity())
@@ -547,52 +457,23 @@ class TestTargetingOverlayRoundTrip:
         assert targeting is not None
         assert targeting.property_list.list_id == "legacy_v1"
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_no_targeting_overlay_returns_none(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_no_targeting_overlay_returns_none(self, patched_internals):
         """Packages without persisted targeting return targeting_overlay=None, not an empty Targeting."""
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package(package_config={"product_id": "prod_1"})  # no targeting at all
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [pkg]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
         response = _get_media_buys_impl(req, identity=make_identity())
 
         assert response.media_buys[0].packages[0].targeting_overlay is None
 
-    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
-    @patch("src.core.tools.media_buy_list.get_principal_object")
-    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
-    @patch("src.core.tools.media_buy_list._fetch_packages")
-    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
-    def test_internal_targeting_fields_not_leaked(
-        self,
-        mock_fetch_approvals,
-        mock_fetch_packages,
-        mock_fetch_buys,
-        mock_principal_obj,
-        mock_uow_cls,
-    ):
+    def test_internal_targeting_fields_not_leaked(self, patched_internals):
         """Targeting carries internal fields (had_city_targeting, tenant_id, etc.) — none
         of them may leak into the response. Targeting.model_dump excludes the full set:
         key_value_pairs, tenant_id, created_at, updated_at, metadata, had_city_targeting.
         """
-        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
-
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         pkg = make_package(
             package_config={
@@ -613,9 +494,8 @@ class TestTargetingOverlayRoundTrip:
                 },
             }
         )
-        mock_fetch_buys.return_value = [buy]
-        mock_fetch_packages.return_value = {"buy_1": [pkg]}
-        mock_fetch_approvals.return_value = {}
+        patched_internals.buys.return_value = [buy]
+        patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
         response = _get_media_buys_impl(req, identity=make_identity())

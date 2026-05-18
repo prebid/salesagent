@@ -9,8 +9,6 @@ Covers: UC-002-MAIN-14b
 Covers: UC-003-MAIN-14
 """
 
-from datetime import UTC, datetime, timedelta
-
 import pytest
 
 from src.core.database.database_session import get_db_session
@@ -22,12 +20,13 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import (
     add_targeting_test_product,
+    future_iso_date_range,
     seed_media_buy_with_package,
     seed_targeting_test_tenant,
 )
@@ -37,19 +36,12 @@ pytestmark = pytest.mark.requires_db
 TENANT_ID = "test_property_targeting_allowed"
 
 
-def _future_dates() -> tuple[str, str]:
-    tomorrow = datetime.now(UTC) + timedelta(days=1)
-    end = tomorrow + timedelta(days=30)
-    return tomorrow.strftime("%Y-%m-%dT00:00:00Z"), end.strftime("%Y-%m-%dT23:59:59Z")
-
-
 def _make_identity() -> ResolvedIdentity:
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id="test_adv",
         tenant_id=TENANT_ID,
-        tenant={"tenant_id": TENANT_ID},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_property_targeting"),
         protocol="mcp",
+        dry_run=True,
     )
 
 
@@ -99,7 +91,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
     architecture work eliminates. After PR #1306 / PR #1307 land, this raise propagates
     cleanly through the narrowed except AdCPError boundary.
     """
-    start, end = _future_dates()
+    start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
         packages=[
@@ -134,7 +126,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
 @pytest.mark.requires_db
 async def test_create_accepts_property_list_when_product_allows(property_targeting_tenant):
     """Product with property_targeting_allowed=True passes the validation."""
-    start, end = _future_dates()
+    start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
         packages=[
@@ -156,16 +148,19 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    # Either succeeds outright, or fails on something else — but not on property_targeting_allowed.
-    if isinstance(response, CreateMediaBuyError):
-        for error in response.errors:
-            assert "property_targeting_allowed" not in error.message
+    # The validation rule must not fire for an allowing product — but unrelated
+    # downstream errors are acceptable in this happy-path assertion so the test
+    # doesn't churn on unrelated failures. The bare `if isinstance` body alone
+    # made this vacuous (zero assertions ran on the success branch).
+    assert not isinstance(response, CreateMediaBuyError) or all(
+        "property_targeting_allowed" not in err.message for err in response.errors
+    )
 
 
 @pytest.mark.requires_db
 async def test_create_accepts_collection_list_without_property_list(property_targeting_tenant):
     """collection_list alone never triggers the property_list check."""
-    start, end = _future_dates()
+    start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
         packages=[
@@ -187,9 +182,12 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    if isinstance(response, CreateMediaBuyError):
-        for error in response.errors:
-            assert "property_targeting_allowed" not in error.message
+    # Same shape as the happy path above — assert the rule didn't fire even if
+    # an unrelated error did. The original body skipped assertions entirely on
+    # the success branch (vacuous pass).
+    assert not isinstance(response, CreateMediaBuyError) or all(
+        "property_targeting_allowed" not in err.message for err in response.errors
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -234,10 +232,16 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
 
     response = _update_media_buy_impl(req=request, identity=_make_identity())
 
-    # Response shape varies by error path; check the error is about property_targeting_allowed
-    response_dict = response.model_dump() if hasattr(response, "model_dump") else response
-    errors_text = str(response_dict)
-    assert "property_targeting_allowed" in errors_text or "VALIDATION_ERROR" in errors_text
+    # Match the unit-test pattern at test_update_media_buy_behavioral.py: both
+    # the spec-compliant code AND the rule-specific message must be present, so
+    # an unrelated VALIDATION_ERROR (budget, format, etc.) can't satisfy this.
+    from src.core.schemas import UpdateMediaBuyError
+
+    assert isinstance(response, UpdateMediaBuyError)
+    assert len(response.errors) > 0
+    error = response.errors[0]
+    assert error.code == "VALIDATION_ERROR"
+    assert "property_targeting_allowed" in error.message
 
 
 @pytest.mark.requires_db

@@ -12,9 +12,12 @@ does not yet define but that adapters actively support.  These are candidates
 for upstream inclusion in AdCP.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.core.schemas import Targeting, TargetingCapability
+
+if TYPE_CHECKING:
+    from src.core.database.models import Product
 
 # Define targeting capabilities for the platform
 TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
@@ -190,7 +193,7 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
     return [f"{key} is not a recognized targeting field" for key in model_extra]
 
 
-def validate_property_targeting_allowed(product: Any, targeting_overlay: Targeting | None) -> str | None:
+def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
     AdCP 3.0.6 (core/targeting.json:191): "Sellers SHOULD return a validation
@@ -207,8 +210,8 @@ def validate_property_targeting_allowed(product: Any, targeting_overlay: Targeti
         return None
     if (
         targeting_overlay is not None
-        and getattr(targeting_overlay, "property_list", None) is not None
-        and not getattr(product, "property_targeting_allowed", False)
+        and targeting_overlay.property_list is not None
+        and not product.property_targeting_allowed
     ):
         return f"Product {product.product_id} does not allow property_list targeting (property_targeting_allowed=false)"
     return None

@@ -11,7 +11,6 @@ managed-only fields; extra="forbid" rejects unknown fields before validators run
 Covers: salesagent-31v (PR review #10).
 """
 
-from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -23,17 +22,11 @@ from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_package_request
-from tests.utils.database_helpers import seed_targeting_test_tenant
+from tests.utils.database_helpers import future_iso_date_range, seed_targeting_test_tenant
 
 pytestmark = pytest.mark.requires_db
 
 TENANT_ID = "test_targeting_validation"
-
-
-def _future_dates() -> tuple[str, str]:
-    tomorrow = datetime.now(UTC) + timedelta(days=1)
-    end = tomorrow + timedelta(days=30)
-    return tomorrow.strftime("%Y-%m-%dT00:00:00Z"), end.strftime("%Y-%m-%dT23:59:59Z")
 
 
 @pytest.fixture
@@ -90,7 +83,7 @@ def _make_identity() -> ResolvedIdentity:
 @pytest.mark.requires_db
 async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
     """Same country in include and exclude → validation error via real wiring."""
-    start, end = _future_dates()
+    start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
         packages=[
@@ -119,7 +112,7 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
 @pytest.mark.requires_db
 async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
     """Same metro DMA in include and exclude → validation error via real wiring."""
-    start, end = _future_dates()
+    start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
         packages=[

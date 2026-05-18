@@ -304,17 +304,22 @@ def _update_media_buy_impl(
                 product = product_repo.get_by_id(package_product_id)
                 violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
                 if violation:
+                    # Mirror create_media_buy's wire format so buyers see the same
+                    # error shape regardless of which endpoint surfaced the rule
+                    # (media_buy_create.py:1647 wraps the same way).
+                    error_message = f"Targeting validation failed: {violation}"
+                    error_response = UpdateMediaBuyError(
+                        errors=[Error(code="VALIDATION_ERROR", message=error_message)],
+                        context=req.context,
+                    )
                     if step is not None:
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data={"errors": [{"code": "VALIDATION_ERROR", "message": violation}]},
-                            error_message=violation,
+                            response_data=error_response.model_dump(mode="json"),
+                            error_message=error_message,
                         )
-                    return UpdateMediaBuyError(
-                        errors=[Error(code="VALIDATION_ERROR", message=violation)],
-                        context=req.context,
-                    )
+                    return error_response
 
         # Dry-run mode: Return simulated response without any database writes
         # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
