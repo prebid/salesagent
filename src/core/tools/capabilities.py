@@ -158,16 +158,19 @@ def _get_adcp_capabilities_impl(
 
     # Build features - be honest about what we actually support
     # These should be adapter-dependent in the future
+    from src.services.targeting_capabilities import supports_property_list_filtering
+
     features = MediaBuyFeatures(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
-        # property_list_filtering: Declared False until at least one adapter actually
-        # compiles `targeting_overlay.property_list` into native ad-server targeting.
-        # Today every adapter silently drops the field (verified via
-        # `grep -rn 'property_list' src/adapters/` returning zero hits). The previous
-        # declaration of True was false advertising on the seller's MCP wire contract.
-        # Restore (per-adapter-aware) when Kevel's siteId resolver lands (B3 follow-up).
-        property_list_filtering=False,
+        # property_list_filtering: True iff the bound adapter actually compiles
+        # `targeting_overlay.property_list` into native ad-server targeting.
+        # Today no adapter sets this — capability remains False; create/update
+        # emit per-package UNSUPPORTED_FEATURE advisories on the success envelope
+        # so buyers can see the silent-drop window. Kevel's siteId resolver flips
+        # this True (PR #1314) and the other 4 adapters hard-reject (PR #1313)
+        # — same source of truth via `supports_property_list_filtering()`.
+        property_list_filtering=supports_property_list_filtering(adapter),
         # catalog_management: We have product catalog management
         catalog_management=True,
     )

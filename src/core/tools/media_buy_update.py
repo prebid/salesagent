@@ -66,6 +66,30 @@ from src.core.tools.financial_validation import (
 from src.core.validation_helpers import format_validation_error
 
 
+def _property_list_unsupported_advisories(
+    req: UpdateMediaBuyRequest,
+    adapter: Any | None,
+) -> list[Error] | None:
+    """Return advisory errors for property_list submitted to a non-compiling adapter.
+
+    Mirrors ``media_buy_create._property_list_unsupported_advisories``. Spec
+    basis: AdCP 3.0.7 non-fatal-in-payload rule — fields the seller persists
+    but cannot honor get reported on the success envelope so the buyer sees
+    the silent-drop window. Returns ``None`` (not ``[]``) so the optional
+    ``errors`` field round-trips cleanly through ``model_dump(exclude_none=True)``.
+    """
+    from src.services.targeting_capabilities import (
+        build_property_list_unsupported_advisories,
+        supports_property_list_filtering,
+    )
+
+    advisories = build_property_list_unsupported_advisories(
+        req.packages,
+        supports_property_list_filtering(adapter),
+    )
+    return advisories or None
+
+
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     """Derive the AdCP buyer-action names implied by an update request.
 
@@ -304,9 +328,17 @@ def _update_media_buy_impl(
                 product = product_repo.get_by_id(package_product_id)
                 violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
                 if violation:
-                    # Mirror create_media_buy's wire format so buyers see the same
-                    # error shape regardless of which endpoint surfaced the rule
-                    # (media_buy_create.py:1647 wraps the same way).
+                    # Returns an UpdateMediaBuyError envelope per local convention:
+                    # every other validation/auth/budget error path in this file
+                    # returns Error(...) rather than raising AdCPValidationError
+                    # (see lines 258-274, 422-434, 480-491, 506-583). The
+                    # f"Targeting validation failed: ..." prefix matches the
+                    # human-readable string create_media_buy emits at
+                    # media_buy_create.py:1647, but the WIRE shape diverges:
+                    # create raises -> transport translates to ToolError (MCP) /
+                    # InvalidParamsError (A2A); update returns this envelope
+                    # directly. FIXME(salesagent-hr8n): wire-shape convergence
+                    # tracked in PR #1307 sub-batch 3.
                     error_message = f"Targeting validation failed: {violation}"
                     error_response = UpdateMediaBuyError(
                         errors=[Error(code="VALIDATION_ERROR", message=error_message)],
@@ -349,6 +381,7 @@ def _update_media_buy_impl(
                 affected_packages=simulated_affected,
                 valid_actions=valid_actions_for_status(_dry_run_status),
                 context=req.context,
+                errors=_property_list_unsupported_advisories(req, adapter),
             )
 
             return dry_run_response
@@ -372,6 +405,7 @@ def _update_media_buy_impl(
                 affected_packages=[],  # Not yet applied — pending approval
                 valid_actions=valid_actions_for_status(_approval_status),
                 context=req.context,
+                errors=_property_list_unsupported_advisories(req, adapter),
             )
             approval_data = approval_response.model_dump(mode="json")
             approval_data["request_data"] = req.model_dump(mode="json")
@@ -532,6 +566,7 @@ def _update_media_buy_impl(
                     media_buy_id=media_buy_id,
                     affected_packages=affected_pkgs,
                     valid_actions=valid_actions_for_status(_post_action_status),
+                    errors=_property_list_unsupported_advisories(req, adapter),
                 )
                 # Log successful update_media_buy (pause/resume)
                 audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -1368,6 +1403,7 @@ def _update_media_buy_impl(
             affected_packages=affected_packages_list,
             valid_actions=valid_actions_for_status(_final_status),
             context=req.context,
+            errors=_property_list_unsupported_advisories(req, adapter),
         )
 
         # Log successful update_media_buy call

@@ -193,6 +193,67 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
     return [f"{key} is not a recognized targeting field" for key in model_extra]
 
 
+def supports_property_list_filtering(adapter: object | None) -> bool:
+    """Return True iff the bound adapter compiles ``targeting_overlay.property_list``.
+
+    Today no adapter sets ``supports_property_list_filtering=True``; the
+    declaration in ``get_adcp_capabilities`` is the canonical "False until an
+    adapter actually compiles it" anchor. When Kevel's siteId resolver lands
+    (PR #1314 / B3), Kevel's adapter class will set this ClassVar to True and
+    the helper will start returning True for tenants on Kevel. Other adapters
+    will hard-reject via PR #1313 / B4, at which point this advisory path is
+    unreachable for them. Centralizing the check here keeps the wire
+    declaration (capabilities) and the per-call advisory (this module) in
+    lockstep with one source of truth.
+    """
+    if adapter is None:
+        return False
+    return bool(getattr(adapter.__class__, "supports_property_list_filtering", False))
+
+
+def build_property_list_unsupported_advisories(
+    packages: list[Any] | None,
+    capability_supported: bool,
+) -> list[Any]:
+    """Build per-package ``UNSUPPORTED_FEATURE`` advisories for property_list use.
+
+    AdCP spec 3.0.7 ``error-handling.mdx`` describes non-fatal errors as
+    "populate only the payload... MUST NOT populate ``adcp_error``" — i.e.
+    advisories ride on the success envelope. Buyers see the silent-drop
+    window (PR #1276 lands property_list round-trip; PR #1314 / #1313
+    activate compilation) without the request being rejected.
+
+    Returns Error objects for each package whose ``targeting_overlay.property_list``
+    is set when the bound adapter does not compile the field. Caller appends
+    to ``CreateMediaBuySuccess.errors`` / ``UpdateMediaBuySuccess.errors``.
+    """
+    if capability_supported or not packages:
+        return []
+    from src.core.schemas import Error
+
+    advisories: list[Any] = []
+    for index, package in enumerate(packages):
+        overlay = getattr(package, "targeting_overlay", None)
+        if overlay is None or getattr(overlay, "property_list", None) is None:
+            continue
+        advisories.append(
+            Error(
+                code="UNSUPPORTED_FEATURE",
+                message=(
+                    "property_list_filtering is declared off for this seller. "
+                    "The list_id is persisted on the package but will not affect "
+                    "targeting until adapter compilation lands."
+                ),
+                field=f"packages[{index}].targeting_overlay.property_list",
+                suggestion=(
+                    "Continue to send property_list; the seller will activate it "
+                    "once the adapter compiles list_ids into native targeting."
+                ),
+            )
+        )
+    return advisories
+
+
 def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
     """Reject property_list targeting against products that disallow it.
 

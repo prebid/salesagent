@@ -1803,7 +1803,7 @@ class TestUC003UpdateTargetingOverlay:
         """Update with only collection_list does not trigger the property_list-specific
         property_targeting_allowed check — that gate is property_list-only.
 
-        Covers: UC-003-MAIN-13
+        Covers: UC-003-MAIN-14
         """
         _setup_db_session(standard_mocks)
 
@@ -1831,6 +1831,82 @@ class TestUC003UpdateTargetingOverlay:
         # Targeting persisted; no property_list rejection
         assert isinstance(result, UpdateMediaBuySuccess)
         assert mock_pkg.package_config["targeting_overlay"] is not None
+
+    def test_property_list_update_replaces_existing_not_merge(self, standard_mocks):
+        """Update with a NEW property_list.list_id replaces the prior one (not merged).
+
+        UC-003-MAIN-13's obligation reads "the response reflects the new
+        list_id values (replacement, not merge)." Starts from a package whose
+        persisted targeting_overlay already carries property_list.list_id="A",
+        applies an update with list_id="B", and asserts:
+          * the persisted targeting_overlay.property_list.list_id is "B"
+          * "A" does not survive (not merged, not kept as a fallback)
+
+        Covers: UC-003-MAIN-13
+        """
+        _setup_db_session(standard_mocks)
+
+        # Pre-existing package state — already has list_id="A" persisted.
+        # The MediaPackage.package_config dict is what update_media_buy mutates
+        # in place via flag_modified; that mutation is what we read back here.
+        existing_overlay = {
+            "property_list": {
+                "agent_url": "https://gov.example",
+                "list_id": "A",
+            },
+        }
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {
+            "product_id": "prod_open",
+            "targeting_overlay": dict(existing_overlay),  # copy so test isn't aliased
+        }
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        # Product allows property targeting so the validation guard doesn't fire
+        # (this test is about the replace semantic, not the allow/deny gate).
+        from unittest.mock import MagicMock as _MM
+
+        mock_product = _MM()
+        mock_product.product_id = "prod_open"
+        mock_product.property_targeting_allowed = True
+        standard_mocks["db_session"].scalars.return_value.first.return_value = mock_product
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_pl_swap",
+            packages=[
+                {
+                    "package_id": "pkg_1",
+                    "targeting_overlay": {
+                        "property_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "B",
+                        },
+                    },
+                }
+            ],
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        # Update succeeded.
+        assert isinstance(result, UpdateMediaBuySuccess)
+
+        # Persisted targeting_overlay reflects the swap, not a merge.
+        # update_media_buy stores Targeting models in package_config; legacy
+        # rows pre-3.0 may still surface as dicts via the rehydrate fallback.
+        # Read both shapes to keep this test robust as the migration completes.
+        persisted = mock_pkg.package_config["targeting_overlay"]
+        if hasattr(persisted, "model_dump"):
+            persisted_pl = persisted.property_list
+            persisted_list_id = persisted_pl.list_id if persisted_pl is not None else None
+        else:
+            persisted_list_id = persisted["property_list"]["list_id"]
+        assert (
+            persisted_list_id == "B"
+        ), f"replacement semantic broken — persisted list_id={persisted_list_id!r}, expected 'B'"
+        # The original "A" must not survive on list_id specifically (don't
+        # substring-match the whole overlay repr — 'AnyUrl' contains 'A' too).
+        assert persisted_list_id != "A", "original list_id was not replaced"
 
 
 # ---------------------------------------------------------------------------
