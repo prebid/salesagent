@@ -182,8 +182,27 @@ def _get_media_buys_impl(
             # Materialize targeting_overlay from package_config so callers can verify
             # what was persisted. Tolerates the legacy "targeting" key for data written
             # before the targeting_overlay rename (see media_buy_create.py:638-642).
+            # A single corrupted package_config row must not crash the whole tenant's
+            # get_media_buys response — log the bad row and surface the package with
+            # targeting_overlay=None so the rest of the buy still renders. The
+            # buyer can still see media_buy_id, budget, status, etc. and reconcile
+            # the bad package out-of-band.
             targeting_raw = pkg_config.get("targeting_overlay") or pkg_config.get("targeting")
-            targeting_overlay = Targeting(**targeting_raw) if targeting_raw else None
+            targeting_overlay: Targeting | None
+            if not targeting_raw:
+                targeting_overlay = None
+            else:
+                try:
+                    targeting_overlay = Targeting(**targeting_raw)
+                except (TypeError, ValueError, ValidationError) as exc:
+                    logger.warning(
+                        "Failed to rehydrate targeting_overlay for media_buy=%s package=%s; "
+                        "returning targeting_overlay=None for this package. Error: %s",
+                        buy.media_buy_id,
+                        pkg_id,
+                        exc,
+                    )
+                    targeting_overlay = None
 
             response_packages.append(
                 GetMediaBuysPackage(

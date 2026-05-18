@@ -230,18 +230,17 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
         ],
     )
 
-    response = _update_media_buy_impl(req=request, identity=_make_identity())
+    # PR #1276 round-5: validation site raises AdCPValidationError (matches
+    # create-time path exactly). Boundary translator turns it into the
+    # spec-compliant two-layer envelope at the transport edge.
+    with pytest.raises(AdCPValidationError) as excinfo:
+        _update_media_buy_impl(req=request, identity=_make_identity())
 
-    # Match the unit-test pattern at test_update_media_buy_behavioral.py: both
-    # the spec-compliant code AND the rule-specific message must be present, so
-    # an unrelated VALIDATION_ERROR (budget, format, etc.) can't satisfy this.
-    from src.core.schemas import UpdateMediaBuyError
-
-    assert isinstance(response, UpdateMediaBuyError)
-    assert len(response.errors) > 0
-    error = response.errors[0]
-    assert error.code == "VALIDATION_ERROR"
-    assert "property_targeting_allowed" in error.message
+    exc = excinfo.value
+    assert exc.error_code == "VALIDATION_ERROR"
+    assert exc.field == "packages[].targeting_overlay.property_list"
+    assert "property_targeting_allowed" in exc.message
+    assert exc.details is not None and "violations" in exc.details
 
 
 @pytest.mark.requires_db

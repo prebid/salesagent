@@ -127,6 +127,11 @@ from src.core.tools.financial_validation import validate_max_daily_package_spend
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
 from src.services.activity_feed import activity_feed
+from src.services.targeting_capabilities import (
+    build_property_list_unsupported_advisories,
+    supports_property_list_filtering,
+    validate_property_targeting_allowed,
+)
 
 # --- Helper Functions ---
 
@@ -166,11 +171,6 @@ def _property_list_unsupported_advisories(
     Returns ``None`` (not ``[]``) so the optional ``errors`` field round-trips
     cleanly through ``model_dump(exclude_none=True)``.
     """
-    from src.services.targeting_capabilities import (
-        build_property_list_unsupported_advisories,
-        supports_property_list_filtering,
-    )
-
     advisories = build_property_list_unsupported_advisories(
         req.packages,
         supports_property_list_filtering(adapter),
@@ -1656,8 +1656,6 @@ async def _create_media_buy_impl(
             # Lives here because product_map is in scope; the rest of targeting
             # validation runs further down outside this UoW block.
             if req.packages:
-                from src.services.targeting_capabilities import validate_property_targeting_allowed
-
                 property_targeting_violations = [
                     v
                     for package in req.packages

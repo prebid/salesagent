@@ -64,6 +64,11 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.validation_helpers import format_validation_error
+from src.services.targeting_capabilities import (
+    build_property_list_unsupported_advisories,
+    supports_property_list_filtering,
+    validate_property_targeting_allowed,
+)
 
 
 def _property_list_unsupported_advisories(
@@ -78,11 +83,6 @@ def _property_list_unsupported_advisories(
     the silent-drop window. Returns ``None`` (not ``[]``) so the optional
     ``errors`` field round-trips cleanly through ``model_dump(exclude_none=True)``.
     """
-    from src.services.targeting_capabilities import (
-        build_property_list_unsupported_advisories,
-        supports_property_list_filtering,
-    )
-
     advisories = build_property_list_unsupported_advisories(
         req.packages,
         supports_property_list_filtering(adapter),
@@ -299,19 +299,14 @@ def _update_media_buy_impl(
         # AdCP 3.0.6 spec (core/targeting.json:191): reject property_list targeting
         # on products with property_targeting_allowed=False. Runs before the dry_run
         # early return so dry_run requests are also rejected (parity with create).
-        # FIXME(inventory-targeting-A1-update): convert the return-envelope below to
-        # `raise AdCPValidationError(...)` when PR #1307 sub-batch 3 drains the
-        # remaining Pattern A sites in this file. Kept as return-envelope here to
-        # mirror the existing local convention (AUTH_REQUIRED at lines 258-274).
+        # Raises AdCPValidationError so the transport boundary translates to the
+        # spec-compliant two-layer envelope — mirrors media_buy_create.py:1647
+        # exactly (same error code, same field, same details shape, same wire
+        # output). The boundary's existing AdCPError handler updates any
+        # in-flight workflow step to status="failed" for the audit trail.
         if req.packages:
-            from src.core.database.repositories.product import ProductRepository
-            from src.services.targeting_capabilities import (
-                validate_property_targeting_allowed,
-            )
-
-            # MediaBuyUoW doesn't expose a ProductRepository; instantiate one on the
-            # shared session so tenant-scoping lives in the repo (not duplicated here).
-            product_repo = ProductRepository(session, tenant["tenant_id"])
+            assert uow.products is not None, "MediaBuyUoW.products required for product targeting validation"
+            property_targeting_violations: list[str] = []
             for pkg_update in req.packages:
                 if (
                     pkg_update.targeting_overlay is None
@@ -325,33 +320,16 @@ def _update_media_buy_impl(
                 package_product_id = (media_package.package_config or {}).get("product_id")
                 if not package_product_id:
                     continue
-                product = product_repo.get_by_id(package_product_id)
+                product = uow.products.get_by_id(package_product_id)
                 violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
                 if violation:
-                    # Returns an UpdateMediaBuyError envelope per local convention:
-                    # every other validation/auth/budget error path in this file
-                    # returns Error(...) rather than raising AdCPValidationError
-                    # (see lines 258-274, 422-434, 480-491, 506-583). The
-                    # f"Targeting validation failed: ..." prefix matches the
-                    # human-readable string create_media_buy emits at
-                    # media_buy_create.py:1647, but the WIRE shape diverges:
-                    # create raises -> transport translates to ToolError (MCP) /
-                    # InvalidParamsError (A2A); update returns this envelope
-                    # directly. FIXME(salesagent-hr8n): wire-shape convergence
-                    # tracked in PR #1307 sub-batch 3.
-                    error_message = f"Targeting validation failed: {violation}"
-                    error_response = UpdateMediaBuyError(
-                        errors=[Error(code="VALIDATION_ERROR", message=error_message)],
-                        context=req.context,
-                    )
-                    if step is not None:
-                        ctx_manager.update_workflow_step(
-                            step.step_id,
-                            status="failed",
-                            response_data=error_response.model_dump(mode="json"),
-                            error_message=error_message,
-                        )
-                    return error_response
+                    property_targeting_violations.append(violation)
+            if property_targeting_violations:
+                raise AdCPValidationError(
+                    f"Targeting validation failed: {'; '.join(property_targeting_violations)}",
+                    field="packages[].targeting_overlay.property_list",
+                    details={"violations": property_targeting_violations},
+                )
 
         # Dry-run mode: Return simulated response without any database writes
         # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated

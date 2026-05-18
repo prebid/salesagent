@@ -1754,25 +1754,30 @@ class TestUC003UpdateTargetingOverlay:
 
     def test_property_list_update_rejected_when_product_disallows(self, standard_mocks):
         """Update with property_list against a product where property_targeting_allowed=False
-        is rejected with VALIDATION_ERROR before persistence — mirrors create-time rule.
+        raises AdCPValidationError before persistence — same wire shape as create-time rule.
+
+        PR #1276 round-5 switched this site from return-envelope to raise per
+        reviewer feedback (avoids growing the model_dump _impl allowlist). The
+        boundary translator turns the raise into the spec-compliant two-layer
+        envelope.
 
         Covers: UC-003-MAIN-14
         """
-        from src.core.schemas import UpdateMediaBuyError
+        from src.core.exceptions import AdCPValidationError
 
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         mock_pkg = MagicMock()
         mock_pkg.package_config = {"product_id": "prod_strict"}
         standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
 
-        # Product load returns a product that disallows property targeting.
+        # uow.products.get_by_id returns a product that disallows property targeting.
         # Set product_id explicitly so the violation message contains the literal
         # ID rather than a MagicMock repr (the shared helper formats it into the message).
         mock_product = MagicMock()
         mock_product.product_id = "prod_strict"
         mock_product.property_targeting_allowed = False
-        mock_session.scalars.return_value.first.return_value = mock_product
+        standard_mocks["uow_instance"].products.get_by_id.return_value = mock_product
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
@@ -1789,15 +1794,19 @@ class TestUC003UpdateTargetingOverlay:
                 }
             ],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
+        with pytest.raises(AdCPValidationError) as excinfo:
+            _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuyError)
-        # Persistence must NOT have happened — package_config still untouched
+        # Persistence must NOT have happened — package_config still untouched.
         assert "targeting_overlay" not in mock_pkg.package_config
-        # Error message identifies the constraint
-        error_msg = result.errors[0].message
-        assert "prod_strict" in error_msg
-        assert "property_targeting_allowed" in error_msg
+        # Error mirrors create's shape exactly: same code, same field, same details.
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.field == "packages[].targeting_overlay.property_list"
+        assert "prod_strict" in exc.message
+        assert "property_targeting_allowed" in exc.message
+        assert exc.details is not None
+        assert "violations" in exc.details
 
     def test_collection_list_update_skips_property_targeting_check(self, standard_mocks):
         """Update with only collection_list does not trigger the property_list-specific
@@ -1864,12 +1873,10 @@ class TestUC003UpdateTargetingOverlay:
 
         # Product allows property targeting so the validation guard doesn't fire
         # (this test is about the replace semantic, not the allow/deny gate).
-        from unittest.mock import MagicMock as _MM
-
-        mock_product = _MM()
+        mock_product = MagicMock()
         mock_product.product_id = "prod_open"
         mock_product.property_targeting_allowed = True
-        standard_mocks["db_session"].scalars.return_value.first.return_value = mock_product
+        standard_mocks["uow_instance"].products.get_by_id.return_value = mock_product
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
