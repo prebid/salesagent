@@ -33,9 +33,7 @@ from typing import Any
 
 import httpx
 
-from src.core.database.database_session import get_db_session
-from src.core.database.repositories.tenant_config import TenantConfigRepository
-from src.core.database.repositories.uow import MediaBuyUoW, TMPProviderUoW
+from src.core.database.repositories.uow import MediaBuyUoW, TMPProviderUoW, TenantConfigUoW
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +60,11 @@ def _resolve_seller_agent_url(tenant_id: str) -> str:
         return override.rstrip("/")
 
     # Load tenant to resolve virtual_host / subdomain.
-    # Uses TenantConfigRepository for architecture compliance (no raw select).
+    # Uses TenantConfigUoW for architecture compliance (no raw get_db_session).
     try:
-        with get_db_session() as session:
-            tenant_repo = TenantConfigRepository(session, tenant_id)
-            tenant = tenant_repo.get_tenant()
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.virtual_host:
                 host = tenant.virtual_host
                 scheme = "https" if "localhost" not in host else "http"

@@ -40,9 +40,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from src.core.database.database_session import get_db_session
-from src.core.database.repositories.tenant_config import TenantConfigRepository
-from src.core.database.repositories.tmp_provider import TMPProviderRepository
+from src.core.database.repositories.uow import TenantConfigUoW, TMPProviderUoW
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +58,14 @@ async def tmp_providers_discovery(tenant_id: str) -> JSONResponse:
       draining → included (router stops sending new requests but in-flight complete)
       inactive → excluded
     """
-    with get_db_session() as session:
-        # Verify tenant exists — return 404 for unknown tenants so the router
-        # can distinguish "no providers" from "wrong tenant_id".
-        tenant_config = TenantConfigRepository(session, tenant_id)
-        if tenant_config.get_tenant() is None:
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        if uow.tenant_config.get_tenant() is None:
             raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
 
-        repo = TMPProviderRepository(session, tenant_id)
-        providers = repo.list_syncable()
+    with TMPProviderUoW(tenant_id) as uow:
+        assert uow.tmp_providers is not None
+        providers = uow.tmp_providers.list_syncable()
 
     # include_conditional=False: the TMP Router expects countries/uid_types
     # to always be present (None means "accepts all" for legacy rows).
