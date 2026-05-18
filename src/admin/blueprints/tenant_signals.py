@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
@@ -105,10 +106,12 @@ def _parse_float(raw: str | None) -> float | None:
 @tenant_signals_bp.route("/")
 @require_tenant_access()
 def list_signals(tenant_id: str):
-    """Signals library landing.
+    """Signals page — source-centric layout (PR 4 redesign).
 
-    Three rendered states (see module docstring). All three are the same
-    template — the conditional branches inside it decide what to show.
+    One card per source kind (Audience segments, Custom targeting keys,
+    Composite signals). Every ad-server entity is a row; mapping state
+    lives inline. The earlier "bulk-map vs library" split collapses
+    into this single view.
     """
     with get_db_session() as session:
         tenant = session.get(Tenant, tenant_id)
@@ -119,95 +122,164 @@ def list_signals(tenant_id: str):
         signal_repo = TenantSignalRepository(session, tenant_id)
         segment_index, kv_index = signal_repo.mapped_index()
 
-        # Load synced GAM inventory rows (the bulk-map source). Empty when
-        # the tenant hasn't synced — that's State A (the "sync first" CTA).
         gam_repo = GAMSyncRepository(session, tenant_id)
         segments_rows = gam_repo.list_inventory("audience_segment")
         keys_rows = gam_repo.list_inventory("custom_targeting_key")
 
-        segments = [
-            {
-                "id": row.inventory_id,
-                "name": row.name,
-                "size": (row.inventory_metadata or {}).get("size"),
-                "type": (row.inventory_metadata or {}).get("type"),
-                "mapped_signal_id": (
-                    segment_index[row.inventory_id].signal_id if row.inventory_id in segment_index else None
-                ),
-                "mapped_signal_name": (
-                    segment_index[row.inventory_id].name if row.inventory_id in segment_index else None
-                ),
-            }
-            for row in segments_rows
-        ]
-        keys = [
-            {
-                "id": row.inventory_id,
-                "name": row.name,
-                "display_name": (row.inventory_metadata or {}).get("display_name") or row.name,
-                "type": (row.inventory_metadata or {}).get("type", "UNKNOWN"),
-            }
-            for row in keys_rows
-        ]
-
-        rows = signal_repo.list_all()
+        signal_rows = signal_repo.list_all()
         usage_index = SignalUsageRepository(session, tenant_id).usage_index()
-        signals = []
-        for row in rows:
-            usage = usage_index.get(row.signal_id)
-            signals.append(
+
+        def _mapped_payload(signal: TenantSignal) -> dict[str, Any]:
+            usage = usage_index.get(signal.signal_id)
+            return {
+                "signal_id": signal.signal_id,
+                "name": signal.name,
+                "tags": signal.tags or [],
+                "active_buys": usage.active_buy_count if usage else 0,
+                "last_ref": (
+                    usage.last_referenced_at.strftime("%Y-%m-%d") if usage and usage.last_referenced_at else None
+                ),
+            }
+
+        segments: list[dict[str, Any]] = []
+        for row in segments_rows:
+            mapped_sig = segment_index.get(row.inventory_id)
+            segments.append(
                 {
-                    "signal_id": row.signal_id,
+                    "id": row.inventory_id,
                     "name": row.name,
-                    "description": row.description,
-                    "value_type": row.value_type,
-                    "categories": row.categories or [],
-                    "tags": row.tags or [],
-                    "adapter_kind": (row.adapter_config or {}).get("kind"),
-                    "is_composed": (row.adapter_config or {}).get("type") == "composed",
-                    "is_complex": (row.adapter_config or {}).get("kind") == "gam_targeting_groups",
-                    "updated_at": row.updated_at,
-                    "active_buy_count": usage.active_buy_count if usage else 0,
-                    "last_referenced_at": usage.last_referenced_at if usage else None,
+                    "type": (row.inventory_metadata or {}).get("type") or "UNKNOWN",
+                    "reach": (row.inventory_metadata or {}).get("size"),
+                    "mapped": _mapped_payload(mapped_sig) if mapped_sig else None,
                 }
             )
-        tag_set: set[str] = set()
-        for row in rows:
-            tag_set.update(row.tags or [])
-        all_tags = sorted(tag_set)
 
-    has_inventory = bool(segments or keys)
-    # Bulk-map shows UN-mapped rows only — the mapped ones already appear
-    # in the Existing-signals library below. Surface a count so operators
-    # know how many have already been mapped (and can flip back via the
-    # signals library's edit page).
-    unmapped_segments = [s for s in segments if not s["mapped_signal_id"]]
-    mapped_segments_count = len(segments) - len(unmapped_segments)
-    # Multi-adapter source list (#480). Today every tenant has exactly one
-    # ad server, so this is always a single-element list. When Freewheel /
-    # Broadstreet sync land, this expands and the template renders
-    # adapter sub-tabs. The template's current rendering is the N=1 case.
-    adapter_sources = [
-        {
-            "adapter": tenant.ad_server or "mock",
-            "label": _ADAPTER_LABELS.get(tenant.ad_server or "mock", tenant.ad_server or "Mock"),
-            "segments": unmapped_segments,
-            "keys": keys,
-        }
-    ]
+        keys: list[dict[str, Any]] = []
+        for row in keys_rows:
+            key_id = row.inventory_id
+            key_name = (row.inventory_metadata or {}).get("display_name") or row.name
+            key_type = (row.inventory_metadata or {}).get("type") or "UNKNOWN"
+            value_rows = gam_repo.list_values_for_key(key_id) if key_type != "FREEFORM" else []
+            values: list[dict[str, Any]] = []
+            for v in value_rows:
+                mapped_sig = kv_index.get((str(key_id), str(v.inventory_id)))
+                values.append(
+                    {
+                        "id": v.inventory_id,
+                        "name": v.name,
+                        "display_name": (v.inventory_metadata or {}).get("display_name") or v.name,
+                        "key_name": key_name,
+                        "mapped": _mapped_payload(mapped_sig) if mapped_sig else None,
+                    }
+                )
+            keys.append(
+                {
+                    "id": key_id,
+                    "name": key_name,
+                    "raw_name": row.name,
+                    "type": key_type,
+                    "values": values,
+                    "mapped_count": sum(1 for v in values if v["mapped"]),
+                    "total_values": len(values),
+                    "is_freeform": key_type == "FREEFORM",
+                    "has_cached_values": len(value_rows) > 0,
+                }
+            )
+
+        composites: list[dict[str, Any]] = []
+        for sig in signal_rows:
+            cfg = sig.adapter_config or {}
+            kind = cfg.get("kind")
+            is_composed = cfg.get("type") == "composed"
+            is_complex = kind == "gam_targeting_groups"
+            if not (is_composed or is_complex):
+                continue
+            usage = usage_index.get(sig.signal_id)
+            composites.append(
+                {
+                    "signal_id": sig.signal_id,
+                    "name": sig.name,
+                    "tags": sig.tags or [],
+                    "active_buys": usage.active_buy_count if usage else 0,
+                    "last_ref": (
+                        usage.last_referenced_at.strftime("%Y-%m-%d") if usage and usage.last_referenced_at else None
+                    ),
+                    "expr": _summarize_composite_expr(cfg),
+                }
+            )
+
+    tag_set: set[str] = set()
+    for s in segments:
+        if s["mapped"]:
+            tag_set.update(s["mapped"]["tags"])
+    for k in keys:
+        for v in k["values"]:
+            if v["mapped"]:
+                tag_set.update(v["mapped"]["tags"])
+    for c in composites:
+        tag_set.update(c["tags"])
+    all_tags = sorted(tag_set)
+
+    seg_mapped = sum(1 for s in segments if s["mapped"])
+    seg_unmapped = sum(1 for s in segments if not s["mapped"])
+    kv_mapped = sum(1 for k in keys for v in k["values"] if v["mapped"])
+    kv_unmapped = sum(1 for k in keys for v in k["values"] if not v["mapped"])
+    counts = {
+        "mapped": seg_mapped + kv_mapped + len(composites),
+        "unmapped": seg_unmapped + kv_unmapped,
+        "total": seg_mapped + seg_unmapped + kv_mapped + kv_unmapped + len(composites),
+        "segments_mapped": seg_mapped,
+        "segments_total": len(segments),
+        "kv_mapped": kv_mapped,
+        "kv_total": kv_mapped + kv_unmapped,
+        "freeform_keys": sum(1 for k in keys if k["is_freeform"]),
+    }
+
+    has_inventory = bool(segments or keys or composites)
+    adapter_key = tenant.ad_server or "mock"
+    adapter_label = _ADAPTER_LABELS.get(adapter_key, adapter_key)
     return render_template(
         "tenant_signals_list.html",
         tenant_id=tenant_id,
         tenant_name=tenant.name,
-        signals=signals,
-        all_tags=all_tags,
-        segments=unmapped_segments,
-        mapped_segments_count=mapped_segments_count,
+        segments=segments,
         keys=keys,
-        kv_index_size=len(kv_index),
+        composites=composites,
+        all_tags=all_tags,
+        counts=counts,
         has_inventory=has_inventory,
-        adapter_sources=adapter_sources,
+        adapter_key=adapter_key,
+        adapter_label=adapter_label,
     )
+
+
+def _summarize_composite_expr(adapter_config: dict) -> str:
+    """One-line, mono-friendly expression summary for a composite signal."""
+    kind = adapter_config.get("kind")
+    if adapter_config.get("type") == "composed":
+        criteria = adapter_config.get("criteria") or []
+        parts = []
+        for c in criteria:
+            mode = "NOT " if c.get("mode") == "exclude" else ""
+            ckind = c.get("kind", "unknown")
+            sid = c.get("segment_id") or c.get("value_id") or ""
+            parts.append(f"{mode}{ckind}:{sid}")
+        return " AND ".join(parts)
+    if kind == "gam_targeting_groups":
+        groups = adapter_config.get("groups") or []
+        group_strs = []
+        for g in groups:
+            crits = g.get("criteria") or []
+            cstrs = []
+            for c in crits:
+                op = "NOT IN" if c.get("exclude") else "IN"
+                vals = ", ".join(str(v) for v in (c.get("values") or []))
+                cstrs.append(f"key{c.get('keyId')} {op} [{vals}]")
+            group_strs.append(" AND ".join(cstrs))
+        if len(group_strs) > 1:
+            return " OR ".join(f"({g})" for g in group_strs)
+        return group_strs[0] if group_strs else ""
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -734,6 +806,27 @@ def bulk_delete(tenant_id: str):
         session.commit()
 
     return jsonify({"deleted": len(deleted), "not_found": not_found, "signal_ids": deleted})
+
+
+@tenant_signals_bp.route("/<signal_id>/rename", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("rename_tenant_signal")
+def rename_signal(tenant_id: str, signal_id: str):
+    """Rename a signal in place — backs the inline-edit affordance on the
+    Signals page (PR 4 redesign). Body: ``{"name": "..."}``.
+    """
+    payload = request.get_json(silent=True) or {}
+    new_name = (payload.get("name") or "").strip()
+    if not new_name:
+        return jsonify({"error": "name is required"}), 400
+    with get_db_session() as session:
+        repo = TenantSignalRepository(session, tenant_id)
+        signal = repo.get_by_id(signal_id)
+        if signal is None:
+            return jsonify({"error": "signal not found"}), 404
+        signal.name = new_name
+        session.commit()
+    return jsonify({"ok": True, "signal_id": signal_id, "name": new_name})
 
 
 @tenant_signals_bp.route("/<signal_id>/delete", methods=["POST", "DELETE"])

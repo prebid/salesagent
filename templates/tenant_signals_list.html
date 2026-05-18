@@ -3,664 +3,554 @@
 {% block title %}Signals - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<style>
-    /* admin.css has a legacy ``.tab-content { display: none }`` rule from a
-       pre-Bootstrap tab system. Scope-override it so Bootstrap 5 tabs work
-       inside this page. */
-    #bulk-map-card .tab-content { display: block; }
-</style>
-<div class="container">
-    <header class="sa-page-header">
-        <div>
-            <h2 class="sa-page-header__title">Signals</h2>
-            <p class="sa-page-header__subtitle">
-                Operator-declared targeting capabilities. Tick the ad-server entities you want to expose,
-                then click <strong>Create signals</strong>. Storefronts discover them via AdCP
-                <code>get_signals</code>; buyers reference each in <code>audience_include</code> /
-                <code>audience_exclude</code> on <code>create_media_buy</code>.
-            </p>
-        </div>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_signals.css') }}">
+
+{# Source-centric Signals page (PR 4 — design handoff #496).
+   Every ad-server entity is one row; mapping state lives inline.
+   #}
+
+{%- macro pencil_svg() -%}
+<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+     style="vertical-align: middle; opacity: 0.55;">
+  <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+</svg>
+{%- endmacro -%}
+
+{%- macro dots_svg() -%}
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="6" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="18" r="1.2"/>
+</svg>
+{%- endmacro -%}
+
+{%- macro reach_compact(n) -%}
+  {%- if n is none -%}—
+  {%- elif n >= 10000000 -%}{{ (n / 1000000)|round|int }}M
+  {%- elif n >= 1000000 -%}{{ (n / 1000000)|round(1) }}M
+  {%- elif n >= 1000 -%}{{ (n / 1000)|round|int }}K
+  {%- else -%}{{ n }}
+  {%- endif -%}
+{%- endmacro -%}
+
+<div class="signals-page" data-tenant-id="{{ tenant_id }}" data-script-root="{{ request.script_root }}">
+  <div class="signals-container">
+
+    {# ===== Page header ===== #}
+    <header class="signals-page-header">
+      <h1>Signals</h1>
+      <p class="lead">
+        Operator-declared targeting capabilities. Each row below is one ad-server entity — tick the ones
+        you want to expose, then <strong>Create signals</strong>. Storefronts discover them via AdCP
+        <code>get_signals</code>; buyers reference each in <code>audience_include</code> /
+        <code>audience_exclude</code> on <code>create_media_buy</code>.
+      </p>
     </header>
 
-    {# ========= State A — no synced inventory ========= #}
     {% if not has_inventory %}
-    <div class="card mb-3">
-        <div class="card-body text-center py-5">
-            <h5 class="card-title">No inventory synced yet</h5>
-            <p class="text-muted mb-4">
-                Sync your ad server's custom targeting keys and audience segments before mapping signals.
-                Run inventory sync once, then come back here to tick what you want to expose.
-            </p>
-            <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}" class="btn btn-primary">
-                Go to inventory sync →
-            </a>
+    {# ===== Empty state ===== #}
+    <div class="sig-card">
+      <div class="sig-empty">
+        <div class="sig-empty__icon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
         </div>
+        <h3>Nothing synced from {{ adapter_label }} yet</h3>
+        <p>
+          Sync this adapter's audience segments and custom targeting keys, then come back to tick the
+          ones you want to expose to buyers.
+        </p>
+        <div class="actions">
+          <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}" class="sig-btn sig-btn--primary">
+            Run inventory sync
+          </a>
+        </div>
+      </div>
     </div>
     {% else %}
 
-    {# ========= State B / C — bulk-map table + library ========= #}
-    {# Multi-adapter (#480): when adapter_sources has >1 entry — i.e. the
-       tenant has Freewheel/Broadstreet alongside GAM — render a sub-tab
-       strip for adapter selection. Today this is always a single-element
-       list, so we render the flat single-adapter view. Re-adding sub-tabs
-       is mechanical: loop adapter_sources and emit one tab pane per
-       adapter with its own (segments, keys) pair. #}
-    <div class="card mb-3" id="bulk-map-card">
-        <div class="card-header d-flex align-items-center justify-content-between">
-            <h5 class="mb-0">
-                Map targeting to signals
-                {% if adapter_sources and adapter_sources|length == 1 %}
-                <span class="text-muted small ms-2">from {{ adapter_sources[0].label }}</span>
-                {% endif %}
-            </h5>
-            <ul class="nav nav-pills nav-sm" role="tablist">
-                {% set seg_unmapped = segments | rejectattr('mapped_signal_id') | list | length %}
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#segments-tab" type="button" role="tab">
-                        Audience segments
-                        <span class="badge bg-secondary-subtle text-secondary-emphasis ms-1">{{ segments | length }}</span>
-                        {% if seg_unmapped %}<span class="badge bg-primary ms-1">{{ seg_unmapped }} unmapped</span>{% endif %}
-                    </button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#keys-tab" type="button" role="tab">
-                        Custom keys
-                        <span class="badge bg-secondary-subtle text-secondary-emphasis ms-1">{{ keys | length }}</span>
-                    </button>
-                </li>
-            </ul>
-        </div>
-        <div class="card-body p-0">
-            <div class="tab-content">
-                {# ----- Segments tab — shows UN-mapped only ----- #}
-                <div class="tab-pane show active" id="segments-tab" role="tabpanel">
-                    {% if segments %}
-                    <table class="table table-sm table-hover mb-0">
-                        <thead>
-                            <tr>
-                                <th style="width:36px"></th>
-                                <th>Segment</th>
-                                <th>Type</th>
-                                <th>Reach (people)</th>
-                                <th class="gam-id-col d-none">GAM ID</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for s in segments %}
-                            <tr>
-                                <td>
-                                    <input type="checkbox" class="form-check-input bulk-map-row"
-                                           data-kind="audience_segment"
-                                           data-segment-id="{{ s.id }}"
-                                           data-segment-name="{{ s.name }}">
-                                </td>
-                                <td>{{ s.name }}</td>
-                                <td><span class="badge bg-light text-dark">{{ s.type or "—" }}</span></td>
-                                <td class="text-end">{{ "{:,}".format(s.size) if s.size else "—" }}</td>
-                                <td class="text-muted small font-monospace gam-id-col d-none">{{ s.id }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                    {% if mapped_segments_count %}
-                    <div class="p-2 text-center small text-muted bg-light border-top">
-                        {{ mapped_segments_count }} segment(s) already mapped — see the <strong>Existing signals</strong> list below to manage them.
-                    </div>
-                    {% endif %}
-                    {% else %}
-                    <div class="p-4 text-center text-muted">
-                        {% if mapped_segments_count %}
-                        All {{ mapped_segments_count }} synced segments are mapped. Manage them in <strong>Existing signals</strong> below,
-                        or <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">re-sync inventory →</a>
-                        to pick up new segments from your ad server.
-                        {% else %}
-                        No audience segments synced. <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">Run inventory sync →</a>
-                        {% endif %}
-                    </div>
-                    {% endif %}
-                </div>
+    {# ===== Filter bar ===== #}
+    <div class="filterbar">
+      <div class="seg" role="tablist">
+        <button type="button" class="active" data-status="all">All <span class="count">{{ counts.total }}</span></button>
+        <button type="button" data-status="mapped">Mapped <span class="count">{{ counts.mapped }}</span></button>
+        <button type="button" data-status="unmapped">Unmapped <span class="count">{{ counts.unmapped }}</span></button>
+      </div>
+      <div style="position: relative; flex: 1; max-width: 360px;">
+        <input type="search" id="signals-search" class="sig-input" style="width: 100%;"
+               placeholder="Filter by name, tag:premium, or id…" autocomplete="off">
+      </div>
+      <div style="flex: 1;"></div>
+      <label class="sig-toggle">
+        <input type="checkbox" id="show-ids-toggle">
+        <span class="sig-toggle__track"></span>
+        <span>Show IDs</span>
+      </label>
+      <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}" class="sig-btn sig-btn--outline sig-btn--sm">
+        Re-sync inventory
+      </a>
+    </div>
 
-                {# ----- Custom keys tab ----- #}
-                <div class="tab-pane" id="keys-tab" role="tabpanel">
-                    {% if keys %}
-                    <p class="text-muted small px-3 pt-3 mb-2">
-                        Pick a key to see its values, then tick which (key, value) pairs to expose as signals.
-                        FREEFORM keys can't be bulk-mapped — their values aren't enumerable from GAM.
-                    </p>
-                    <div class="row g-0">
-                        <div class="col-md-4 border-end">
-                            <div class="list-group list-group-flush" id="keys-list">
-                                {% for k in keys %}
-                                <button type="button"
-                                        class="list-group-item list-group-item-action key-row"
-                                        data-key-id="{{ k.id }}"
-                                        data-key-name="{{ k.display_name }}"
-                                        data-key-type="{{ k.type }}">
-                                    <div class="d-flex justify-content-between align-items-center">
-                                        <span>{{ k.display_name }}</span>
-                                        <span class="badge bg-light text-dark">{{ k.type }}</span>
-                                    </div>
-                                    <small class="text-muted font-monospace gam-id-col d-none">{{ k.id }}</small>
-                                </button>
-                                {% endfor %}
-                            </div>
-                        </div>
-                        <div class="col-md-8">
-                            <div id="key-values-panel" class="p-3 text-muted">
-                                Pick a key on the left to load its values.
-                            </div>
-                        </div>
-                    </div>
-                    {% else %}
-                    <div class="p-4 text-center text-muted">No custom targeting keys synced.</div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-        <div class="card-footer d-flex justify-content-between align-items-center">
-            <div class="text-muted small" id="bulk-footer-hint">Pick rows to map — they'll become signals on save.</div>
-            <div class="d-flex align-items-center gap-2">
-                <a href="{{ url_for('tenant_signals.composite_signal', tenant_id=tenant_id) }}" class="btn btn-outline-secondary">
-                    Build composite signal
-                </a>
-                <button type="button" class="btn btn-primary" id="bulk-create-btn" disabled>
-                    Create <span id="bulk-selection-count" class="d-none"></span> signals
-                </button>
-            </div>
-        </div>
+    {# ===== Adapter source banner ===== #}
+    <div class="adapter-banner">
+      <span>Showing inventory from</span>
+      <span class="sig-chip sig-chip--info" style="font-family: var(--sig-mono);">{{ adapter_label }}</span>
+      <span>— this Sales Agent is wired to one adapter.</span>
+    </div>
+
+    {# ===== Tag filter pills (page-wide) ===== #}
+    {% if all_tags %}
+    <div class="tag-bar" style="border-radius: 8px; border: 1px solid var(--sig-bd-hairline); margin-bottom: 16px;">
+      <span class="sig-caps">Filter by tag</span>
+      {% for tag in all_tags %}
+      <button type="button" class="pill" data-tag="{{ tag }}">{{ tag }}</button>
+      {% endfor %}
     </div>
     {% endif %}
 
-    {# ========= Existing signals library ========= #}
-    <div class="card">
-        <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-            <h5 class="mb-0">Existing signals ({{ signals | length }})</h5>
-            <div class="d-flex align-items-center gap-3 flex-wrap">
-                <input type="search" id="signals-search" class="form-control form-control-sm"
-                       placeholder="Filter by name or tag:foo…" style="max-width:260px"
-                       autocomplete="off">
-                <div class="form-check form-switch mb-0">
-                    <input type="checkbox" class="form-check-input" id="show-ids-toggle">
-                    <label class="form-check-label small text-muted" for="show-ids-toggle">Show IDs</label>
+    {# =========================================
+       Audience segments card
+       ========================================= #}
+    <div class="sig-card">
+      <div class="sig-card__header">
+        <h2 class="sig-card__title">
+          Audience segments
+          <span class="count">({{ segments|length }})</span>
+          <span class="from">from {{ adapter_label }}</span>
+        </h2>
+        <div class="sig-card__controls">
+          <span style="font-size: 12.5px; color: var(--sig-fg-tertiary);">
+            {{ counts.segments_mapped }} of {{ counts.segments_total }} mapped
+          </span>
+        </div>
+      </div>
+      <div class="sig-card__body">
+        {% if not segments %}
+        <div style="padding: 32px 20px; text-align: center; color: var(--sig-fg-tertiary);">
+          No audience segments synced from {{ adapter_label }}.
+          <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">Run inventory sync →</a>
+        </div>
+        {% else %}
+        <table class="sig-tbl">
+          <thead>
+            <tr>
+              <th class="col-check">
+                <input type="checkbox" class="sig-cb" data-select-all="segments">
+              </th>
+              <th>Segment · Mapping</th>
+              <th>Type</th>
+              <th class="num">Reach</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in segments %}
+            {% set tags = s.mapped.tags if s.mapped else [] %}
+            <tr class="row-selectable"
+                data-row-kind="segment"
+                data-scope="segments"
+                data-mapped="{{ '1' if s.mapped else '0' }}"
+                data-tags="{{ tags | join(',') }}"
+                data-segment-id="{{ s.id }}"
+                data-segment-name="{{ s.name }}"
+                {% if s.mapped %}
+                data-signal-id="{{ s.mapped.signal_id }}"
+                data-active-buys="{{ s.mapped.active_buys }}"
+                {% endif %}>
+              <td class="col-check">
+                <input type="checkbox" class="sig-cb"
+                       data-segment-id="{{ s.id }}"
+                       data-segment-name="{{ s.name }}">
+              </td>
+              <td>
+                <div class="row-main">
+                  <span class="row-main__name">{{ s.name }}</span>
+                  <span class="row-main__id">GAM&nbsp;{{ s.id }}</span>
                 </div>
-            </div>
-        </div>
-        {% if all_tags %}
-        <div class="card-body py-2 px-3 border-bottom">
-            <div class="d-flex align-items-center gap-2 flex-wrap">
-                <span class="small text-muted">Tags:</span>
-                {% for tag in all_tags %}
-                <button type="button" class="btn btn-sm btn-outline-secondary tag-filter-pill"
-                        data-tag="{{ tag }}">{{ tag }}</button>
-                {% endfor %}
-                <button type="button" class="btn btn-sm btn-link p-0 ms-2 d-none" id="clear-tag-filter">clear</button>
-            </div>
-        </div>
+                <div class="row-meta">
+                  {% if s.mapped %}
+                  <span class="sig-dot sig-dot--mapped"></span>
+                  <span>Mapped as</span>
+                  <span class="row-meta__signal-name"
+                        data-signal-id="{{ s.mapped.signal_id }}"
+                        data-signal-name="{{ s.mapped.name }}">{{ s.mapped.name }} {{ pencil_svg() }}</span>
+                  <span class="row-main__id">{{ s.mapped.signal_id }}</span>
+                  <span class="row-meta__sep">·</span>
+                  {% for t in s.mapped.tags %}
+                  <span class="sig-chip sig-chip--tag">{{ t }}</span>
+                  {% endfor %}
+                  {% if not s.mapped.tags %}<span style="color: var(--sig-fg-muted); font-style: italic;">no tags</span>{% endif %}
+                  <span class="row-meta__sep">·</span>
+                  <span class="row-meta__usage">
+                    {% if s.mapped.active_buys %}
+                    <strong>{{ s.mapped.active_buys }}</strong> active {{ 'buy' if s.mapped.active_buys == 1 else 'buys' }}
+                    {% else %}
+                    <span style="color: var(--sig-fg-muted);">no active buys</span>
+                    {% endif %}
+                  </span>
+                  {% if s.mapped.last_ref %}
+                  <span class="row-meta__sep">·</span>
+                  <span class="row-meta__usage">last ref. {{ s.mapped.last_ref }}</span>
+                  {% endif %}
+                  {% else %}
+                  <span class="row-meta__unmapped">Unmapped</span>
+                  <span style="color: var(--sig-fg-muted);">— tick to expose, or</span>
+                  <button type="button" class="sig-btn sig-btn--link sig-btn--xs"
+                          data-action="map-one"
+                          data-kind="segment"
+                          data-segment-id="{{ s.id }}"
+                          data-segment-name="{{ s.name }}">
+                    Map now →
+                  </button>
+                  {% endif %}
+                </div>
+              </td>
+              <td style="width: 1px;">
+                <span class="sig-chip sig-chip--type">{{ s.type }}</span>
+              </td>
+              <td class="num" style="width: 1px;">
+                <span style="font-weight: 500; font-variant-numeric: tabular-nums;">{{ reach_compact(s.reach) }}</span>
+                <div style="font-size: 10.5px; color: var(--sig-fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 1px;">people</div>
+              </td>
+              <td style="width: 1px; text-align: right;">
+                <span class="row-actions">
+                  {% if s.mapped %}
+                  <span class="rel">
+                    <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
+                    <div class="menu" hidden>
+                      <div class="menu__head">Mapping</div>
+                      <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ s.mapped.signal_id }}">
+                        <span>Rename signal</span>
+                      </a>
+                      <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item">
+                        <span>Edit tags…</span>
+                      </a>
+                      <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item">
+                        <span>View signal page</span>
+                      </a>
+                      <div class="menu__sep"></div>
+                      <a href="#" class="menu__item danger"
+                         data-action="delete"
+                         data-signal-id="{{ s.mapped.signal_id }}"
+                         data-active-buys="{{ s.mapped.active_buys }}">
+                        <span>Delete signal</span>
+                      </a>
+                    </div>
+                  </span>
+                  {% else %}
+                  <button type="button" class="sig-btn sig-btn--outline sig-btn--sm"
+                          data-action="map-one"
+                          data-kind="segment"
+                          data-segment-id="{{ s.id }}"
+                          data-segment-name="{{ s.name }}">Map</button>
+                  {% endif %}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
         {% endif %}
-        <div class="card-body p-0">
-            {% if signals %}
-            <table class="table table-sm table-hover mb-0" id="signals-table">
-                <thead>
-                    <tr>
-                        <th style="width:36px"><input type="checkbox" class="form-check-input" id="signals-select-all"></th>
-                        <th>Name</th>
-                        <th class="signal-id-col d-none">signal_id</th>
-                        <th>Tags</th>
-                        <th class="text-end">Active buys</th>
-                        <th>Last referenced</th>
-                        <th>Updated</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for s in signals %}
-                    <tr data-signal-id="{{ s.signal_id }}"
-                        data-signal-name="{{ s.name }}"
-                        data-active-buys="{{ s.active_buy_count }}"
-                        data-tags="{{ s.tags | join(',') }}">
-                        <td>
-                            <input type="checkbox" class="form-check-input signal-select"
-                                   data-signal-id="{{ s.signal_id }}">
+      </div>
+    </div>
+
+    {# =========================================
+       Custom targeting keys card
+       ========================================= #}
+    {% if keys %}
+    <div class="sig-card">
+      <div class="sig-card__header">
+        <h2 class="sig-card__title">
+          Custom targeting keys
+          <span class="count">({{ keys|length }})</span>
+          <span class="from">from {{ adapter_label }}</span>
+        </h2>
+        <div class="sig-card__controls" style="font-size: 12.5px; color: var(--sig-fg-tertiary);">
+          Expand a key to tick (key, value) pairs.
+        </div>
+      </div>
+      <div class="sig-card__body">
+        <table class="sig-tbl">
+          <thead>
+            <tr>
+              <th class="col-check"></th>
+              <th>Key · Mapping summary</th>
+              <th>Type</th>
+              <th class="num">Values</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for k in keys %}
+            <tr class="key-row" data-key-id="{{ k.id }}"
+                {% if k.has_cached_values %}data-lazy-load="0"{% else %}data-lazy-load="1"{% endif %}>
+              <td class="col-check"><span class="chev">▸</span></td>
+              <td>
+                <div class="row-main">
+                  <span class="row-main__name">{{ k.name }}</span>
+                  <span class="row-main__id">GAM&nbsp;{{ k.id }}</span>
+                </div>
+                <div class="row-meta">
+                  {% if k.is_freeform %}
+                  <span class="sig-dot sig-dot--composite"></span>
+                  <span style="color: var(--sig-fg-secondary);">Any value goes — can't enumerate.</span>
+                  {% else %}
+                  <span class="sig-dot sig-dot--mapped"></span>
+                  <span class="row-meta__usage">
+                    <strong>{{ k.mapped_count }}</strong> of {{ k.total_values }} values mapped
+                  </span>
+                  {% endif %}
+                </div>
+              </td>
+              <td style="width: 1px;"><span class="sig-chip sig-chip--type">{{ k.type }}</span></td>
+              <td class="num" style="width: 1px;">
+                <span style="font-weight: 500; font-variant-numeric: tabular-nums;">{% if k.is_freeform %}∞{% else %}{{ k.total_values }}{% endif %}</span>
+                <div style="font-size: 10.5px; color: var(--sig-fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 1px;">values</div>
+              </td>
+              <td style="width: 1px; text-align: right;">
+                <button type="button" class="sig-btn sig-btn--ghost sig-btn--sm">Expand</button>
+              </td>
+            </tr>
+            <tr class="key-values" data-key-id="{{ k.id }}" hidden>
+              <td colspan="5" style="padding: 0;">
+                <div class="key-values__wrap">
+                  {% if k.is_freeform %}
+                  <div class="freeform-callout">
+                    <div>
+                      <strong>Freeform key.</strong> GAM accepts any value for <code>{{ k.raw_name }}</code>,
+                      so there's nothing to enumerate. Bulk-mapping isn't possible here.
+                    </div>
+                  </div>
+                  {% elif not k['values'] %}
+                  <div class="kv-empty">No values cached yet. Click again to load from the ad server.</div>
+                  {% else %}
+                  <table class="sig-tbl">
+                    <tbody>
+                      {% for v in k['values'] %}
+                      {% set tags = v.mapped.tags if v.mapped else [] %}
+                      <tr class="row-selectable"
+                          data-row-kind="kv"
+                          data-scope="kv-{{ k.id }}"
+                          data-mapped="{{ '1' if v.mapped else '0' }}"
+                          data-tags="{{ tags | join(',') }}"
+                          data-key-id="{{ k.id }}"
+                          data-value-id="{{ v.id }}"
+                          data-key-name="{{ k.raw_name }}"
+                          data-value-name="{{ v.display_name }}"
+                          {% if v.mapped %}
+                          data-signal-id="{{ v.mapped.signal_id }}"
+                          data-active-buys="{{ v.mapped.active_buys }}"
+                          {% endif %}>
+                        <td class="col-check">
+                          <input type="checkbox" class="sig-cb"
+                                 data-key-id="{{ k.id }}"
+                                 data-value-id="{{ v.id }}"
+                                 data-key-name="{{ k.raw_name }}"
+                                 data-value-name="{{ v.display_name }}">
                         </td>
                         <td>
-                            {{ s.name }}
-                            {% if s.is_complex %}
-                            <span class="badge bg-light text-dark ms-1">composite</span>
-                            {% elif s.is_composed %}
-                            <span class="badge bg-light text-dark ms-1">composed</span>
-                            {% endif %}
-                            {% if s.active_buy_count %}
-                            <span class="badge bg-info-subtle text-info-emphasis ms-1"
-                                  title="Active media buys referencing this signal">in use by {{ s.active_buy_count }}</span>
-                            {% endif %}
-                        </td>
-                        <td class="signal-id-col d-none font-monospace small">{{ s.signal_id }}</td>
-                        <td class="small">
-                            {% for t in s.tags %}
-                            <span class="badge bg-secondary-subtle text-secondary-emphasis me-1">{{ t }}</span>
+                          <div class="row-main">
+                            <span class="row-main__name">
+                              <code style="font-family: var(--sig-mono); font-size: 12px; color: var(--sig-fg-secondary); background: var(--sig-bg-page); padding: 1px 6px; border-radius: 4px;">{{ k.raw_name }}={{ v.name }}</code>
+                            </span>
+                            <span class="row-main__id">gam&nbsp;{{ v.id }}</span>
+                          </div>
+                          {% if v.mapped %}
+                          <div class="row-meta">
+                            <span class="sig-dot sig-dot--mapped"></span>
+                            <span>Mapped as</span>
+                            <span class="row-meta__signal-name"
+                                  data-signal-id="{{ v.mapped.signal_id }}"
+                                  data-signal-name="{{ v.mapped.name }}">{{ v.mapped.name }} {{ pencil_svg() }}</span>
+                            {% for t in v.mapped.tags %}
+                            <span class="sig-chip sig-chip--tag">{{ t }}</span>
                             {% endfor %}
+                            <span class="row-meta__sep">·</span>
+                            <span class="row-meta__usage">
+                              {% if v.mapped.active_buys %}
+                              <strong>{{ v.mapped.active_buys }}</strong> active {{ 'buy' if v.mapped.active_buys == 1 else 'buys' }}
+                              {% else %}
+                              <span style="color: var(--sig-fg-muted);">no active buys</span>
+                              {% endif %}
+                            </span>
+                          </div>
+                          {% else %}
+                          <div class="row-meta">
+                            <span class="row-meta__unmapped">Unmapped</span>
+                            <span style="color: var(--sig-fg-muted);">— tick to expose</span>
+                          </div>
+                          {% endif %}
                         </td>
-                        <td class="text-end small">
-                            {% if s.active_buy_count %}
-                            <strong>{{ s.active_buy_count }}</strong>
-                            {% else %}
-                            <span class="text-muted">0</span>
-                            {% endif %}
+                        <td style="width: 1px; text-align: right;">
+                          {% if v.mapped %}
+                          <span class="rel">
+                            <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
+                            <div class="menu" hidden>
+                              <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ v.mapped.signal_id }}">
+                                <span>Rename signal</span>
+                              </a>
+                              <a href="#" class="menu__item danger"
+                                 data-action="delete"
+                                 data-signal-id="{{ v.mapped.signal_id }}"
+                                 data-active-buys="{{ v.mapped.active_buys }}">
+                                <span>Delete signal</span>
+                              </a>
+                            </div>
+                          </span>
+                          {% endif %}
                         </td>
-                        <td class="small text-muted">
-                            {% if s.last_referenced_at %}
-                            {{ s.last_referenced_at.strftime("%Y-%m-%d") }}
-                            {% else %}
-                            never
-                            {% endif %}
-                        </td>
-                        <td class="small text-muted">{{ s.updated_at.strftime("%Y-%m-%d") if s.updated_at else "—" }}</td>
-                        <td class="text-end">
-                            <a class="btn btn-sm btn-outline-secondary"
-                               href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}">Edit</a>
-                            <button type="button" class="btn btn-sm btn-outline-danger signal-delete-btn"
-                                    data-signal-id="{{ s.signal_id }}"
-                                    data-signal-name="{{ s.name }}"
-                                    data-active-buys="{{ s.active_buy_count }}"
-                                    data-delete-url="{{ url_for('tenant_signals.delete_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}">
-                                Delete
-                            </button>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="p-4 text-center text-muted">
-                No signals declared yet. Tick rows above and click <strong>Create signals</strong>.
-            </div>
-            {% endif %}
-        </div>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="sig-card__footer">
+        <span>
+          {{ counts.kv_mapped }} of {{ counts.kv_total }} values mapped
+          {% if counts.freeform_keys %}· {{ counts.freeform_keys }} freeform key{{ '' if counts.freeform_keys == 1 else 's' }} (not bulk-mappable){% endif %}
+        </span>
+      </div>
     </div>
-</div>
+    {% endif %}
 
-{# Sticky bulk-action toolbar — hidden until at least one row is selected. #}
-<div class="position-fixed bottom-0 start-0 end-0 bg-white border-top shadow-lg py-2 d-none"
-     id="signals-bulk-bar" style="z-index:1030">
-    <div class="container d-flex align-items-center gap-3 flex-wrap">
-        <strong><span id="signals-bulk-count">0</span> selected</strong>
-        <div class="vr"></div>
-        <div class="input-group input-group-sm" style="max-width:280px">
-            <input type="text" class="form-control" id="bulk-tag-input"
-                   placeholder="tag name" autocomplete="off">
-            <button type="button" class="btn btn-outline-secondary" id="bulk-add-tag">Add tag</button>
-            <button type="button" class="btn btn-outline-secondary" id="bulk-remove-tag">Remove tag</button>
+    {# =========================================
+       Composite signals card
+       ========================================= #}
+    <div class="sig-card">
+      <div class="sig-card__header">
+        <h2 class="sig-card__title">
+          Composite signals
+          <span class="count">({{ composites|length }})</span>
+          <span class="from">multi-key, AND / OR groups</span>
+        </h2>
+        <div class="sig-card__controls">
+          <a href="{{ url_for('tenant_signals.composite_signal', tenant_id=tenant_id) }}" class="sig-btn sig-btn--outline sig-btn--sm">
+            Build composite signal
+          </a>
         </div>
-        <div class="input-group input-group-sm" style="max-width:280px">
-            <input type="text" class="form-control" id="bulk-rename-input"
-                   placeholder="prefix or suffix text" autocomplete="off">
-            <button type="button" class="btn btn-outline-secondary" id="bulk-rename-prefix">Prefix</button>
-            <button type="button" class="btn btn-outline-secondary" id="bulk-rename-suffix">Suffix</button>
+      </div>
+      <div class="sig-card__body">
+        {% if not composites %}
+        <div style="padding: 24px 20px; text-align: center; color: var(--sig-fg-tertiary); font-size: 13.5px;">
+          No composite signals yet. Combine multiple keys (e.g.
+          <code style="background: var(--sig-bg-page); padding: 0 4px; border-radius: 3px; font-family: var(--sig-mono);">genre=news AND vertical=auto</code>)
+          into a single <code>signal_id</code>.
         </div>
-        <button type="button" class="btn btn-outline-danger btn-sm ms-auto" id="bulk-delete-btn">
-            Delete selected
+        {% else %}
+        <table class="sig-tbl">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" class="sig-cb" data-select-all="composites"></th>
+              <th>Signal · Expression</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in composites %}
+            <tr class="row-selectable"
+                data-row-kind="composite"
+                data-scope="composites"
+                data-mapped="1"
+                data-tags="{{ c.tags | join(',') }}"
+                data-signal-id="{{ c.signal_id }}"
+                data-active-buys="{{ c.active_buys }}">
+              <td class="col-check"><input type="checkbox" class="sig-cb"></td>
+              <td>
+                <div class="row-main">
+                  <span class="row-main__name">{{ c.name }}</span>
+                  <span class="sig-chip sig-chip--composite">composite</span>
+                  <span class="row-main__id">{{ c.signal_id }}</span>
+                </div>
+                <div class="row-meta">
+                  <span class="sig-dot sig-dot--composite"></span>
+                  {% if c.expr %}<span class="expr">{{ c.expr }}</span>{% endif %}
+                  {% for t in c.tags %}
+                  <span class="sig-chip sig-chip--tag">{{ t }}</span>
+                  {% endfor %}
+                  <span class="row-meta__sep">·</span>
+                  <span class="row-meta__usage">
+                    {% if c.active_buys %}
+                    <strong>{{ c.active_buys }}</strong> active {{ 'buy' if c.active_buys == 1 else 'buys' }}
+                    {% else %}
+                    <span style="color: var(--sig-fg-muted);">no active buys</span>
+                    {% endif %}
+                  </span>
+                </div>
+              </td>
+              <td style="width: 1px; text-align: right;">
+                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=c.signal_id) }}" class="sig-btn sig-btn--outline sig-btn--sm">Edit</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+    </div>
+
+    <div style="font-size: 12px; color: var(--sig-fg-muted); margin-top: 8px; line-height: 1.6;">
+      <strong style="color: var(--sig-fg-tertiary);">What you're looking at:</strong>
+      a source-centric view. Each row is one ad-server entity from your adapter, with mapping state inline.
+      Selection drives a single bulk-action bar that adapts to what you've ticked.
+    </div>
+
+    {% endif %}{# has_inventory #}
+  </div>
+
+  {# ===== Sticky adaptive bulk bar ===== #}
+  <div class="bulkbar" id="signals-bulkbar">
+    <div class="bulkbar__inner">
+      <div class="bulkbar__count">
+        <span><span data-bulk="count">0</span> selected</span>
+        <span class="summary" data-bulk="summary"></span>
+      </div>
+
+      <div class="bulkbar__group" data-bulk="map-group" hidden>
+        <span class="sig-caps">Map</span>
+        <button type="button" class="sig-btn sig-btn--primary sig-btn--sm" data-bulk-action="create">
+          Create <span data-bulk="map-count">0</span> signal(s)
         </button>
-    </div>
-</div>
+      </div>
 
-{# Delete confirmation modal — typed-DELETE gate for signals referenced by active buys #}
-<div class="modal fade" id="signal-delete-modal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog">
-    {# CSRF defense for this form lives in src/admin/app.py:enforce_admin_csrf
-       (Origin/Referer match against request.host_url). No token field is
-       wired in this stack — see security review on PR #482 + #498. #}
-    <form class="modal-content" method="POST" id="signal-delete-form">
-      <div class="modal-header">
-        <h5 class="modal-title">Delete signal <span class="font-monospace" id="del-signal-name"></span>?</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      <span class="bulkbar__divider" data-bulk="divider" hidden></span>
+
+      <div data-bulk="mapped-groups" hidden style="display: contents;">
+        <div class="bulkbar__group">
+          <span class="sig-caps">Tag</span>
+          <div class="bulkbar__input-group">
+            <input class="sig-input sig-input--sm" placeholder="tag name" data-bulk-input="tag">
+            <button type="button" class="sig-btn sig-btn--sm" data-bulk-action="add-tag">Add</button>
+            <button type="button" class="sig-btn sig-btn--sm" data-bulk-action="remove-tag">Remove</button>
+          </div>
+        </div>
+        <div class="bulkbar__group">
+          <span class="sig-caps">Rename</span>
+          <div class="bulkbar__input-group">
+            <input class="sig-input sig-input--sm" placeholder="prefix or suffix" data-bulk-input="rename">
+            <button type="button" class="sig-btn sig-btn--sm" data-bulk-action="prefix">Prefix</button>
+            <button type="button" class="sig-btn sig-btn--sm" data-bulk-action="suffix">Suffix</button>
+          </div>
+        </div>
       </div>
-      <div class="modal-body">
-        <p class="mb-2">
-          <code id="del-signal-id"></code> is referenced by
-          <strong><span id="del-active-buys"></span> active media buy(s)</strong>
-          in <code>audience_include</code> / <code>audience_exclude</code>.
-        </p>
-        <p class="text-danger small mb-3">
-          Deleting will cause those buys to fail at next materialization. This can't be undone.
-        </p>
-        <label class="form-label small">Type <strong>DELETE</strong> to confirm:</label>
-        <input type="text" class="form-control" name="confirm_typed" id="del-confirm-input" autocomplete="off">
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="submit" class="btn btn-danger" id="del-confirm-submit" disabled>Delete signal</button>
-      </div>
-    </form>
+
+      <div class="bulkbar__spacer"></div>
+
+      <button type="button" class="sig-btn sig-btn--danger-outline sig-btn--sm" data-bulk-action="delete" data-bulk="delete" hidden>
+        Delete <span data-bulk="delete-count">0</span> signal(s)
+      </button>
+      <button type="button" class="sig-btn sig-btn--ghost sig-btn--sm" data-bulk-action="clear">Clear</button>
+    </div>
   </div>
 </div>
 
-<script>
-// Delete-confirmation modal — wired regardless of whether bulk-map is rendered,
-// since the existing-signals library + delete buttons render in all states.
-(function() {
-    'use strict';
-    const modalEl = document.getElementById('signal-delete-modal');
-    if (!modalEl) return;
-    const modal = new bootstrap.Modal(modalEl);
-    const form = document.getElementById('signal-delete-form');
-    const nameEl = document.getElementById('del-signal-name');
-    const idEl = document.getElementById('del-signal-id');
-    const countEl = document.getElementById('del-active-buys');
-    const input = document.getElementById('del-confirm-input');
-    const submit = document.getElementById('del-confirm-submit');
-
-    document.querySelectorAll('.signal-delete-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const activeBuys = parseInt(btn.dataset.activeBuys, 10) || 0;
-            const signalName = btn.dataset.signalName;
-            const signalId = btn.dataset.signalId;
-            form.action = btn.dataset.deleteUrl;
-            nameEl.textContent = signalName;
-            idEl.textContent = signalId;
-            countEl.textContent = activeBuys;
-            input.value = '';
-            // Zero references → submit immediately, skip the typed gate.
-            if (activeBuys === 0) {
-                if (!confirm(`Delete signal "${signalName}"? It isn't referenced by any active media buy.`)) return;
-                form.submit();
-                return;
-            }
-            submit.disabled = true;
-            modal.show();
-            setTimeout(() => input.focus(), 200);
-        });
-    });
-
-    input.addEventListener('input', () => {
-        submit.disabled = input.value.trim() !== 'DELETE';
-    });
-})();
-</script>
-
-{# Library-wide controls — render in all states (no inventory required). #}
-<script>
-(function() {
-    'use strict';
-    const scriptRoot = '{{ request.script_root }}' || '';
-    const tenantId = {{ tenant_id | tojson }};
-    const bulkUpdateUrl = scriptRoot + '/tenant/' + tenantId + '/signals/bulk-update';
-    const bulkDeleteUrl = scriptRoot + '/tenant/' + tenantId + '/signals/bulk-delete';
-
-    const tableRows = document.querySelectorAll('#signals-table tbody tr');
-    if (!tableRows.length) return;
-
-    // ---- Show IDs toggle (covers signal_id columns and bulk-map GAM ids) ----
-    document.getElementById('show-ids-toggle')?.addEventListener('change', (e) => {
-        document.querySelectorAll('.signal-id-col, .gam-id-col').forEach(c => {
-            c.classList.toggle('d-none', !e.target.checked);
-        });
-    });
-
-    // ---- Filter by name OR by tag:foo prefix ----
-    let activeTag = null;
-    const searchInput = document.getElementById('signals-search');
-    const clearTag = document.getElementById('clear-tag-filter');
-    function applyFilters() {
-        const q = (searchInput?.value || '').trim().toLowerCase();
-        let qTag = activeTag;
-        let qText = q;
-        const m = q.match(/^tag:([a-z0-9_-]+)/);
-        if (m) {
-            qTag = m[1];
-            qText = q.slice(m[0].length).trim();
-        }
-        tableRows.forEach(row => {
-            const tags = (row.dataset.tags || '').split(',').filter(Boolean);
-            const text = row.textContent.toLowerCase();
-            const tagOk = !qTag || tags.includes(qTag);
-            const textOk = !qText || text.includes(qText);
-            row.style.display = tagOk && textOk ? '' : 'none';
-        });
-        // Pill state
-        document.querySelectorAll('.tag-filter-pill').forEach(p => {
-            p.classList.toggle('active', p.dataset.tag === activeTag);
-        });
-        if (clearTag) clearTag.classList.toggle('d-none', !activeTag);
-    }
-    searchInput?.addEventListener('input', applyFilters);
-    document.querySelectorAll('.tag-filter-pill').forEach(pill => {
-        pill.addEventListener('click', () => {
-            activeTag = (activeTag === pill.dataset.tag) ? null : pill.dataset.tag;
-            applyFilters();
-        });
-    });
-    clearTag?.addEventListener('click', () => { activeTag = null; applyFilters(); });
-
-    // ---- Selection + sticky bulk bar ----
-    const bulkBar = document.getElementById('signals-bulk-bar');
-    const bulkCount = document.getElementById('signals-bulk-count');
-    const selectAll = document.getElementById('signals-select-all');
-    function selectedIds() {
-        return [...document.querySelectorAll('.signal-select:checked')].map(cb => cb.dataset.signalId);
-    }
-    function refreshBulk() {
-        const ids = selectedIds();
-        bulkCount.textContent = ids.length;
-        bulkBar.classList.toggle('d-none', ids.length === 0);
-    }
-    document.querySelectorAll('.signal-select').forEach(cb => cb.addEventListener('change', refreshBulk));
-    selectAll?.addEventListener('change', () => {
-        document.querySelectorAll('#signals-table tbody tr').forEach(row => {
-            if (row.style.display === 'none') return;
-            const cb = row.querySelector('.signal-select');
-            if (cb) cb.checked = selectAll.checked;
-        });
-        refreshBulk();
-    });
-
-    async function postJson(url, body) {
-        const r = await fetch(url, {
-            method: 'POST', credentials: 'same-origin',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(body),
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        return data;
-    }
-    async function runBulkUpdate(op, value) {
-        const ids = selectedIds();
-        if (!ids.length) return;
-        if (!value) { alert('Enter a value first.'); return; }
-        try {
-            const data = await postJson(bulkUpdateUrl, {signal_ids: ids, op, value});
-            alert(`Updated ${data.updated} signal(s)${data.skipped.length ? `; skipped ${data.skipped.length}` : ''}.`);
-            window.location.reload();
-        } catch (e) { alert('Bulk update failed: ' + e.message); }
-    }
-    document.getElementById('bulk-add-tag')?.addEventListener('click',
-        () => runBulkUpdate('add_tag', document.getElementById('bulk-tag-input').value.trim()));
-    document.getElementById('bulk-remove-tag')?.addEventListener('click',
-        () => runBulkUpdate('remove_tag', document.getElementById('bulk-tag-input').value.trim()));
-    document.getElementById('bulk-rename-prefix')?.addEventListener('click',
-        () => runBulkUpdate('rename_prefix', document.getElementById('bulk-rename-input').value));
-    document.getElementById('bulk-rename-suffix')?.addEventListener('click',
-        () => runBulkUpdate('rename_suffix', document.getElementById('bulk-rename-input').value));
-
-    document.getElementById('bulk-delete-btn')?.addEventListener('click', async () => {
-        const ids = selectedIds();
-        if (!ids.length) return;
-        const referenced = [...document.querySelectorAll('.signal-select:checked')]
-            .filter(cb => parseInt(cb.closest('tr').dataset.activeBuys, 10) > 0)
-            .map(cb => cb.dataset.signalId);
-        let confirmTyped = '';
-        if (referenced.length) {
-            confirmTyped = prompt(
-                `${referenced.length} of ${ids.length} selected signal(s) are referenced by active media buys ` +
-                `and will break those buys. Type DELETE to confirm:`
-            );
-            if (confirmTyped !== 'DELETE') return;
-        } else if (!confirm(`Delete ${ids.length} selected signal(s)?`)) {
-            return;
-        }
-        try {
-            const data = await postJson(bulkDeleteUrl, {signal_ids: ids, confirm_typed: confirmTyped});
-            alert(`Deleted ${data.deleted} signal(s)` + (data.not_found.length ? `; ${data.not_found.length} not found` : ''));
-            window.location.reload();
-        } catch (e) { alert('Bulk delete failed: ' + e.message); }
-    });
-})();
-</script>
-
-{% if has_inventory %}
-<script>
-(function() {
-    'use strict';
-
-    const scriptRoot = '{{ request.script_root }}' || '';
-    const tenantId = {{ tenant_id | tojson }};
-    const apiBase = scriptRoot + '/admin/api/tenant/' + tenantId;
-    const bulkCreateUrl = scriptRoot + '/tenant/' + tenantId + '/signals/bulk-create';
-
-    const selected = [];
-    const countSpan = document.getElementById('bulk-selection-count');
-    const createBtn = document.getElementById('bulk-create-btn');
-    const footerHint = document.getElementById('bulk-footer-hint');
-
-    function refreshCount() {
-        createBtn.disabled = selected.length === 0;
-        if (selected.length === 0) {
-            countSpan.classList.add('d-none');
-            footerHint.textContent = "Pick rows to map — they'll become signals on save.";
-        } else {
-            countSpan.textContent = selected.length;
-            countSpan.classList.remove('d-none');
-            footerHint.textContent = `${selected.length} ticked. Click to create one signal per row.`;
-        }
-    }
-
-    document.querySelectorAll('.bulk-map-row').forEach(cb => {
-        cb.addEventListener('change', () => {
-            const payload = {
-                kind: cb.dataset.kind,
-                segment_id: cb.dataset.segmentId,
-                segment_name: cb.dataset.segmentName,
-            };
-            const key = JSON.stringify({k: payload.kind, id: payload.segment_id});
-            if (cb.checked) selected.push({key, payload});
-            else {
-                const idx = selected.findIndex(s => s.key === key);
-                if (idx >= 0) selected.splice(idx, 1);
-            }
-            refreshCount();
-        });
-    });
-
-    const valuesPanel = document.getElementById('key-values-panel');
-    if (valuesPanel) {
-        document.querySelectorAll('.key-row').forEach(row => {
-            row.addEventListener('click', async () => {
-                document.querySelectorAll('.key-row').forEach(r => r.classList.remove('active'));
-                row.classList.add('active');
-                const keyId = row.dataset.keyId;
-                const keyName = row.dataset.keyName;
-                const keyType = row.dataset.keyType;
-                valuesPanel.innerHTML = '<div class="text-muted">Loading values…</div>';
-
-                if (keyType === 'FREEFORM') {
-                    valuesPanel.innerHTML = `
-                        <div class="alert alert-info mb-0">
-                            <strong>FREEFORM key</strong> — GAM accepts any value for this key, so there's
-                            nothing to enumerate. Bulk-mapping isn't possible here. (A custom-targeting
-                            builder for these cases is coming in a follow-up.)
-                        </div>`;
-                    return;
-                }
-
-                try {
-                    const r = await fetch(apiBase + '/targeting/values/' + keyId, { credentials: 'same-origin' });
-                    const data = await r.json();
-                    if (data.error) {
-                        // Adapter-layer errors leak implementation detail — rewrite the
-                        // two we know we'll hit from this surface into operator-grade copy.
-                        const raw = String(data.error);
-                        if (raw.includes('No adapter configured') || raw.includes('GAM') && raw.includes('not configured')) {
-                            valuesPanel.innerHTML = `
-                                <div class="alert alert-warning mb-0">
-                                    GAM isn't connected for this tenant. Connect it under
-                                    <a href="${scriptRoot}/tenant/${tenantId}/settings/integrations/">Configure → Integrations</a>
-                                    to load this key's values.
-                                </div>`;
-                            return;
-                        }
-                        throw new Error(raw);
-                    }
-                    const values = data.values || [];
-                    if (!values.length) {
-                        valuesPanel.innerHTML = '<div class="text-muted">No values defined in GAM for this key.</div>';
-                        return;
-                    }
-                    const rows = values.map(v => {
-                        const key = JSON.stringify({k: 'custom_key_value', id: keyId + ':' + String(v.id)});
-                        const isSelected = selected.some(s => s.key === key);
-                        return `<tr>
-                            <td style="width:36px">
-                                <input type="checkbox" class="form-check-input kv-check"
-                                    ${isSelected ? 'checked' : ''}
-                                    data-key-id="${keyId}"
-                                    data-key-name="${keyName}"
-                                    data-value-id="${v.id}"
-                                    data-value-name="${v.name}">
-                            </td>
-                            <td>${v.name}</td>
-                            <td class="text-muted small font-monospace">${v.id}</td>
-                        </tr>`;
-                    }).join('');
-                    valuesPanel.innerHTML = `
-                        <p class="small text-muted px-1">Values for <strong>${keyName}</strong>:</p>
-                        <table class="table table-sm"><tbody>${rows}</tbody></table>`;
-
-                    document.querySelectorAll('.kv-check').forEach(cb => {
-                        cb.addEventListener('change', () => {
-                            const payload = {
-                                kind: 'custom_key_value',
-                                key_id: cb.dataset.keyId,
-                                key_name: cb.dataset.keyName,
-                                value_id: cb.dataset.valueId,
-                                value_name: cb.dataset.valueName,
-                            };
-                            const key = JSON.stringify({k: payload.kind, id: payload.key_id + ':' + payload.value_id});
-                            if (cb.checked) selected.push({key, payload});
-                            else {
-                                const idx = selected.findIndex(s => s.key === key);
-                                if (idx >= 0) selected.splice(idx, 1);
-                            }
-                            refreshCount();
-                        });
-                    });
-                } catch (e) {
-                    valuesPanel.innerHTML = `<div class="text-danger">Failed to load values: ${e.message}</div>`;
-                }
-            });
-        });
-    }
-
-    createBtn.addEventListener('click', async () => {
-        createBtn.disabled = true;
-        createBtn.textContent = 'Creating…';
-        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
-        try {
-            const r = await fetch(bulkCreateUrl, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
-                body: JSON.stringify({ items: selected.map(s => s.payload) }),
-            });
-            const data = await r.json();
-            if (!r.ok) throw new Error(data.error || 'create failed');
-            window.location.reload();
-        } catch (e) {
-            alert('Failed to create signals: ' + e.message);
-            createBtn.disabled = false;
-            createBtn.textContent = 'Create signals';
-        }
-    });
-})();
-</script>
-{% endif %}
+<script src="{{ url_for('static', filename='js/tenant_signals.js') }}"></script>
 {% endblock %}
