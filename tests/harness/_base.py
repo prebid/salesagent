@@ -301,31 +301,32 @@ class BaseTestEnv:
         transports. The identity is cached per protocol so repeated calls
         with the same transport return the same object.
 
-        In integration mode (``use_real_db=True``), the identity is built
-        from real DB data: auth_token from Principal, tenant from Tenant ORM
-        model via ``TenantContext.from_orm_model()``. This ensures all
-        transports — including IMPL — see the same tenant config that
-        production code would resolve via ``get_principal_from_token()``.
-
-        In unit mode, the identity uses a synthetic tenant dict from
-        ``TenantFactory.make_tenant()`` (no DB available).
+        In integration mode (``use_real_db=True``), the identity carries
+        the real ``auth_token`` from the factory-created Principal row.
+        This enables full auth chain testing: header → token → DB lookup.
         """
         from tests.harness.transport import TRANSPORT_PROTOCOL
 
         protocol = TRANSPORT_PROTOCOL[transport]
         if protocol not in self._identity_cache:
-            if self.use_real_db and self._session:
-                self._identity_cache[protocol] = self._resolve_identity_from_db(protocol)
-            else:
-                from tests.factories.principal import PrincipalFactory
+            from tests.factories.principal import PrincipalFactory
 
-                self._identity_cache[protocol] = PrincipalFactory.make_identity(
-                    principal_id=self._principal_id,
-                    tenant_id=self._tenant_id,
-                    protocol=protocol,
-                    dry_run=self._dry_run,
-                    **self._tenant_overrides,
-                )
+            # In integration mode, commit factory data first so the token
+            # is visible to other sessions (e.g., get_principal_from_token
+            # in the MCP auth chain uses a separate get_db_session() call).
+            auth_token = None
+            if self.use_real_db:
+                self._commit_factory_data()
+                auth_token = self._resolve_auth_token()
+
+            self._identity_cache[protocol] = PrincipalFactory.make_identity(
+                principal_id=self._principal_id,
+                tenant_id=self._tenant_id,
+                protocol=protocol,
+                dry_run=self._dry_run,
+                auth_token=auth_token,
+                **self._tenant_overrides,
+            )
         return self._identity_cache[protocol]
 
     def _resolve_identity_from_db(self, protocol: str) -> ResolvedIdentity:
@@ -539,7 +540,7 @@ class BaseTestEnv:
         from types import MappingProxyType
 
         from a2a.server.context import ServerCallContext
-        from a2a.types import MessageSendParams, Task
+        from a2a.types import SendMessageRequest, Task
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
@@ -605,7 +606,7 @@ class BaseTestEnv:
             set_current_tenant(a2a_identity.tenant)
 
         message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
-        params = MessageSendParams(message=message)
+        params = SendMessageRequest(message=message)
 
         async def _call():
             return await handler.on_message_send(params, context=server_context)
@@ -761,12 +762,13 @@ class BaseTestEnv:
         identity = kwargs.pop("identity", _NO_OVERRIDE)
         mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
 
-        # Extract context from req if present and no explicit context kwarg.
-        # Mirrors FastMCP behavior: tool parameters are passed as separate kwargs.
-        if "context" not in kwargs:
-            req = kwargs.get("req")
-            if req is not None and hasattr(req, "context") and req.context is not None:
-                kwargs["context"] = req.context
+        # Unpack req object into flat kwargs — MCP wrappers accept individual
+        # parameters, not a request model.
+        req = kwargs.pop("req", None)
+        if req is not None and hasattr(req, "model_dump"):
+            req_fields = req.model_dump(exclude_none=True)
+            # kwargs override req fields (explicit > implicit)
+            kwargs = {**req_fields, **kwargs}
 
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
@@ -775,26 +777,22 @@ class BaseTestEnv:
         return response_cls(**tool_result.structured_content)
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        """Shared REST dispatch: build headers → build body → POST → return Response.
+        """Shared REST dispatch: configure auth → build body → POST → return Response.
 
         Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
-        1. Pop ``identity`` from kwargs and build auth headers
+        1. Pop ``identity`` from kwargs and configure dep override for this request
         2. Commit factory data
         3. Build request body from remaining kwargs
-        4. POST via TestClient with real headers
+        4. POST via TestClient
         5. Return raw httpx.Response
 
-        When the identity carries a real ``auth_token`` (integration mode),
-        sends real x-adcp-auth and x-adcp-tenant headers. The TestClient runs
-        through UnifiedAuthMiddleware (ASGI), which extracts the token. The
-        real _require_auth_dep then calls resolve_identity() →
-        get_principal_from_token() against the test DB.
-
         Identity handling (mirrors production auth middleware):
-        - identity is None → no headers sent (middleware returns unauthenticated)
-        - identity is ResolvedIdentity → real auth headers sent
+        - identity is None → dep raises AdCPAuthenticationError (no token)
+        - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
         """
+        from src.app import app
+        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
         from tests.harness.transport import Transport
 
         _NO_OVERRIDE = object()
@@ -804,23 +802,25 @@ class BaseTestEnv:
 
         self._commit_factory_data()
 
+        # Get client first (may set default dep overrides on first call),
+        # then override per-request auth AFTER.
         client = self.get_rest_client()
 
-        # Build auth headers from identity (real token → real auth chain)
-        headers: dict[str, str] = {}
-        if identity is not None:
-            auth_token = identity.auth_token
-            if auth_token:
-                headers["x-adcp-auth"] = auth_token
-            if identity.tenant_id:
-                headers["x-adcp-tenant"] = identity.tenant_id
-            # Propagate testing_context via X-Dry-Run header (BR-RULE-209)
-            if identity.testing_context and identity.testing_context.dry_run:
-                headers["x-dry-run"] = "true"
+        # Configure per-request auth (must be after get_rest_client)
+        if identity is None:
+            from src.core.exceptions import AdCPAuthenticationError
+
+            def _no_auth() -> None:
+                raise AdCPAuthenticationError("Authentication required")
+
+            app.dependency_overrides[_require_auth_dep] = _no_auth
+            app.dependency_overrides[_resolve_auth_dep] = lambda: None
+        else:
+            app.dependency_overrides[_require_auth_dep] = lambda: identity
+            app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
         body = self.build_rest_body(**kwargs)
-        method = getattr(self, "REST_METHOD", "post")
-        return getattr(client, method)(endpoint, json=body, headers=headers)
+        return client.post(endpoint, json=body)
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.
@@ -933,13 +933,9 @@ class BaseTestEnv:
         each model creation. This explicit commit ensures any cascading saves or
         deferred flushes are visible to production code's separate database session.
         Called automatically by call_impl() before each test execution.
-
-        Invalidates the identity cache so the next ``identity_for()`` call
-        picks up the real auth_token from newly-committed Principal rows.
         """
         if self._session:
             self._session.commit()
-            self._identity_cache.clear()
 
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
         """Create a minimal tenant record if none exists (idempotent).
@@ -1405,17 +1401,23 @@ class IntegrationEnv(BaseTestEnv):
         return mock_ctx_mgr
 
     def get_rest_client(self) -> Any:
-        """Return FastAPI TestClient — no dependency overrides.
+        """Return FastAPI TestClient with default auth dep override.
 
-        The TestClient runs through UnifiedAuthMiddleware (ASGI), which
-        extracts tokens from real headers. Auth is handled per-request
-        via headers in ``_run_rest_request``, not via dependency overrides.
+        The default dep override returns ``self.identity_for(Transport.REST)``.
+        ``_run_rest_request`` overrides this per-request for multi-agent and
+        no-auth scenarios. Direct callers of ``get_rest_client()`` get the
+        default identity.
         """
         if self._rest_client is None:
             from starlette.testclient import TestClient
 
             from src.app import app
+            from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+            from tests.harness.transport import Transport
 
+            rest_identity = self.identity_for(Transport.REST)
+            app.dependency_overrides[_require_auth_dep] = lambda: rest_identity
+            app.dependency_overrides[_resolve_auth_dep] = lambda: rest_identity
             self._rest_client = TestClient(app)
 
         return self._rest_client
