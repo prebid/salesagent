@@ -198,7 +198,33 @@
                             <div class="ld-job__sub-row">
                                 <div>
                                     <div class="ld-job__sub-name">{{ sub.name }}</div>
-                                    <div class="ld-job__sub-hint">{{ sub.coverage_hint }}</div>
+                                    {# Coverage analytics for adapters we track (#485). Renders
+                                       real numbers when the tenant's adapter is supported and
+                                       has synced inventory; otherwise falls back to the
+                                       placeholder hint so the row still reads as actionable. #}
+                                    {% if sub.coverage and sub.coverage.has_synced_inventory %}
+                                        {% set cov = sub.coverage %}
+                                        {% if cov.all_reviewed %}
+                                            <div class="ld-job__sub-hint">
+                                                All ad units and placements reviewed
+                                                ({{ cov.ad_units.in_bundle + cov.placements.in_bundle }} in bundles,
+                                                {{ cov.ad_units.explicitly_skipped + cov.placements.explicitly_skipped }} skipped).
+                                            </div>
+                                        {% else %}
+                                            <div class="ld-job__sub-hint">
+                                                Ad units: {{ cov.ad_units.in_bundle }} of {{ cov.ad_units.total }} in bundles · {{ cov.ad_units.pending }} unreviewed.
+                                                Placements: {{ cov.placements.in_bundle }} of {{ cov.placements.total }} · {{ cov.placements.pending }} unreviewed.
+                                            </div>
+                                        {% endif %}
+                                    {% else %}
+                                        <div class="ld-job__sub-hint">
+                                            {% if sub.key == 'bundles' %}
+                                                Coverage analytics coming — review your full inventory and decide what to expose.
+                                            {% else %}
+                                                Coverage analytics coming — review your signal universe and decide what to expose.
+                                            {% endif %}
+                                        </div>
+                                    {% endif %}
                                 </div>
                                 <div class="ld-job__sub-right">
                                     <div class="ld-job__sub-count{% if sub.count == 0 %} is-zero{% endif %}">{{ sub.count }}</div>

@@ -27,6 +27,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.services.inventory_review_state_sync import recompute_in_bundle_status
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +331,10 @@ def add_inventory_profile(tenant_id: str):
                 )
 
                 session.add(profile)
+                # Keep InventoryReviewState in lockstep — promote newly bundled
+                # ad units / placements before the bundle commit so the two
+                # writes share a transaction (#485).
+                recompute_in_bundle_status(session, tenant_id)
                 session.commit()
 
                 flash(f"Inventory profile '{name}' created successfully!", "success")
@@ -542,6 +547,8 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                     or 0
                 )
 
+                # Reconcile InventoryReviewState for the new bundle config (#485).
+                recompute_in_bundle_status(session, tenant_id)
                 session.commit()
 
                 # Success message with warning about future updates
@@ -615,6 +622,9 @@ def delete_inventory_profile(tenant_id: str, profile_id: int):
 
         profile_name = profile.name
         session.delete(profile)
+        # Demote any ad units / placements that were exclusive to this bundle
+        # back to ``pending`` (#485).
+        recompute_in_bundle_status(session, tenant_id)
         session.commit()
 
         if request.method == "DELETE":

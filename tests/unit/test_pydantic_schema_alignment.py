@@ -72,6 +72,16 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "time_granularity",
         "include_window_breakdown",
     },
+    # Same pattern: the live spec adds purge + webhook-activity flags to
+    # ``ListCreativesRequest`` but the installed ``adcp`` Python library
+    # (5.5.0) doesn't expose them on ``LibraryListCreativesRequest``.
+    # Local runs with a stale cache pass; CI fetches the live spec and
+    # fails. Remove this entry when the library catches up.
+    "/schemas/latest/creative/list-creatives-request.json": {
+        "include_purged",
+        "include_webhook_activity",
+        "webhook_activity_limit",
+    },
 }
 
 

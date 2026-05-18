@@ -47,6 +47,42 @@ _setup_status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
+# Adapter slugs that have inventory_review_state coverage data today (#485).
+# FreeWheel and SpringServe land when their sync surfaces participate.
+_INVENTORY_COVERAGE_TRACKED_ADAPTERS: frozenset[str] = frozenset({"google_ad_manager", "gam"})
+
+
+def _build_inventory_coverage(repo: Any, tenant_ad_server: str | None) -> dict[str, Any] | None:
+    """Coverage payload for the Discovery card's bundles sub-item (#485).
+
+    Returns ``None`` for tenants on adapters we don't track yet — the widget
+    falls back to a placeholder hint. For tracked adapters, returns counts
+    for ad units and placements split out by review status:
+
+    * ``total`` — synced from the adapter (denominator)
+    * ``in_bundle`` — referenced by ≥1 InventoryProfile
+    * ``explicitly_skipped`` — operator decided not to sell
+    * ``pending`` — synced, not bundled, not skipped (the actionable bucket)
+
+    The ``all_reviewed`` flag is True when ``pending == 0`` — the end-state
+    of Job 1: every synced entity has either been bundled or skipped.
+    """
+    if tenant_ad_server not in _INVENTORY_COVERAGE_TRACKED_ADAPTERS:
+        return None
+    adapter_slug = "gam"
+    ad_units = repo.coverage_summary(adapter=adapter_slug, entity_type="ad_unit")
+    placements = repo.coverage_summary(adapter=adapter_slug, entity_type="placement")
+    all_reviewed = ad_units["pending"] == 0 and placements["pending"] == 0
+    total = ad_units["total"] + placements["total"]
+    return {
+        "adapter": adapter_slug,
+        "ad_units": ad_units,
+        "placements": placements,
+        "all_reviewed": all_reviewed,
+        "has_synced_inventory": total > 0,
+    }
+
+
 class SetupTask:
     """Represents a single setup task with status and metadata."""
 
@@ -1339,6 +1375,20 @@ class SetupChecklistService:
                 or 0
             )
 
+            # Inventory coverage analytics (#485). Only computed for tenants
+            # on an adapter we track (GAM today). Embedded tenants don't see
+            # publisher-side inventory coverage — their storefront drives the
+            # narrative — but they can still expose bundles, so the count
+            # remains accurate.
+            from src.core.database.repositories.inventory_review_state import (
+                InventoryReviewStateRepository,
+            )
+
+            inventory_coverage = _build_inventory_coverage(
+                InventoryReviewStateRepository(session, self.tenant_id),
+                tenant_ad_server=tenant.ad_server,
+            )
+
             discovery_job: dict[str, Any] = {
                 "key": "discovery",
                 "name": "Product discovery & matching",
@@ -1351,21 +1401,21 @@ class SetupChecklistService:
                         "started": inventory_bundle_count > 0,
                         "action_url": self._route_url("inventory_profiles.list_inventory_profiles"),
                         "action_label": "Review bundles" if inventory_bundle_count > 0 else "Author bundles",
-                        # Coverage analytics ("12 of 47 ad units exposed · 23 unreviewed") land in
-                        # the follow-up issue. Placeholder for now.
-                        "coverage_hint": "Coverage analytics coming — review your full inventory and decide what to expose.",
+                        # Real inventory coverage analytics (#485). ``None`` for adapters we
+                        # don't track yet — the widget falls back to a placeholder hint.
+                        "coverage": inventory_coverage,
                     },
                     {
                         "key": "signals",
                         "name": "Signal profiles",
                         "count": signal_profile_count,
                         # Signals are optional — a publisher with zero signals is valid, but only
-                        # if they've reviewed their signal universe and made the call. Today the
-                        # widget can't tell those apart; the follow-up surfaces the review state.
+                        # if they've reviewed their signal universe and made the call. Signal
+                        # coverage analytics land in #486 (parallel work).
                         "started": signal_profile_count > 0,
                         "action_url": self._route_url("tenant_signals.list_signals"),
                         "action_label": "Review signals" if signal_profile_count > 0 else "Author signals",
-                        "coverage_hint": "Coverage analytics coming — review your signal universe and decide what to expose.",
+                        "coverage": None,
                     },
                 ],
             }

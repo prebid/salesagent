@@ -1650,6 +1650,76 @@ class InventoryProfile(Base, JSONValidatorMixin):
     )
 
 
+class InventoryReviewState(Base):
+    """Operator review state for each synced inventory entity.
+
+    Backs the Job 1 (Discovery) coverage analytics on the dashboard
+    (#485). The dashboard answers "of all my synced ad units and
+    placements, how many are exposed to buyers via a bundle, how many
+    have I explicitly decided not to sell, how many are still unreviewed?"
+
+    The ``status`` state machine:
+
+    * ``pending`` — synced from the adapter, not yet decided. Default.
+    * ``in_bundle`` — referenced by ≥1 ``InventoryProfile``. Maintained
+      at bundle-save time by the inventory_profiles blueprint.
+    * ``explicitly_skipped`` — operator decided this entity isn't for
+      sale. Cleared if the operator later adds it to a bundle.
+
+    Keyed by ``(tenant_id, adapter, entity_type, external_id)``. The
+    ``entity_type`` slot leaves room for #486 to reuse the same table
+    with ``entity_type='signal_candidate'`` rather than duplicate the
+    schema for signals.
+    """
+
+    __tablename__ = "inventory_review_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # ``gam`` | ``freewheel`` | ``springserve`` — adapter that owns the entity.
+    adapter: Mapped[str] = mapped_column(String(50), nullable=False)
+    # ``ad_unit`` | ``placement`` today. ``signal_candidate`` reserved for #486.
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Adapter-native id. Strings — adapters vary (some are int-like, some not).
+    external_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    # ``pending`` | ``in_bundle`` | ``explicitly_skipped``.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now()
+    )
+
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "adapter",
+            "entity_type",
+            "external_id",
+            name="uq_inventory_review_state",
+        ),
+        Index(
+            "idx_inventory_review_state_tenant_type_status",
+            "tenant_id",
+            "entity_type",
+            "status",
+        ),
+        Index(
+            "idx_inventory_review_state_tenant_adapter_type",
+            "tenant_id",
+            "adapter",
+            "entity_type",
+        ),
+    )
+
+
 class TenantSignal(Base, JSONValidatorMixin):
     """Operator-authored map of one adapter targeting capability.
 
