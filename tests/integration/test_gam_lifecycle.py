@@ -15,6 +15,24 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal
 
 
+def _assert_unsupported_feature_for_action(response, action: str) -> None:
+    """Pin the GAM adapter's current UNSUPPORTED_FEATURE rejection for ``action``.
+
+    Three sites in this module exercise actions the GAM dry-run adapter
+    currently rejects (``submit_for_approval``, ``archive_order``,
+    ``approve_order``, ``activate_order`` non-guaranteed). When the
+    adapter is fixed (separate ticket), removing or flipping a caller
+    forces re-evaluation of that test's contract. Helper is private to
+    this module — DRY per CLAUDE.md, intentionally not exported.
+    """
+    assert (
+        response.errors is not None and len(response.errors) > 0
+    ), f"Expected Error response for action={action!r}; GAM currently rejects with UNSUPPORTED_FEATURE"
+    assert (
+        response.errors[0].code == "UNSUPPORTED_FEATURE"
+    ), f"Expected UNSUPPORTED_FEATURE for action={action!r}, got {response.errors[0].code}"
+
+
 class TestGAMOrderLifecycleIntegration:
     """Integration tests for GAM order lifecycle with real business logic."""
 
@@ -115,20 +133,11 @@ class TestGAMOrderLifecycleIntegration:
                     budget=None,
                     today=datetime.now(UTC),
                 )
-                # The GAM adapter currently returns UNSUPPORTED_FEATURE for
-                # ``submit_for_approval`` and ``archive_order`` even though
-                # ``allowed_actions`` documents them as user-permitted. Pin
-                # the actual current behavior so when the adapter is fixed
-                # (separate ticket — out of scope here), the assertion will
-                # force re-evaluation. The previous tolerant form
-                # ``... or response.errors`` admitted every state and hid
-                # this drift entirely.
-                assert (
-                    response.errors is not None and len(response.errors) > 0
-                ), f"Expected Error response for action={action!r}; GAM currently rejects with UNSUPPORTED_FEATURE"
-                assert (
-                    response.errors[0].code == "UNSUPPORTED_FEATURE"
-                ), f"Expected UNSUPPORTED_FEATURE for action={action!r}, got {response.errors[0].code}"
+                # ``submit_for_approval`` and ``archive_order`` are documented
+                # as user-permitted in ``allowed_actions`` but the GAM dry-run
+                # adapter currently rejects them with UNSUPPORTED_FEATURE; the
+                # helper pins this drift so an adapter fix forces re-evaluation.
+                _assert_unsupported_feature_for_action(response, action)
 
             # Admin-only action should fail for regular user
             response = regular_adapter.update_media_buy(
@@ -161,17 +170,9 @@ class TestGAMOrderLifecycleIntegration:
                 budget=None,
                 today=datetime.now(UTC),
             )
-            # The GAM adapter currently returns UNSUPPORTED_FEATURE for
-            # ``approve_order`` in dry-run mode even with an admin principal.
-            # Pin actual current behavior; when the adapter is fixed (separate
-            # ticket) this assertion forces re-evaluation. Previous tolerant
-            # form admitted every state and silently passed.
-            assert (
-                response.errors is not None and len(response.errors) > 0
-            ), "Expected Error response for approve_order; GAM dry-run currently returns UNSUPPORTED_FEATURE"
-            assert (
-                response.errors[0].code == "UNSUPPORTED_FEATURE"
-            ), f"Expected UNSUPPORTED_FEATURE for approve_order, got {response.errors[0].code}"
+            # GAM dry-run also rejects ``approve_order`` for admin principals
+            # — same UNSUPPORTED_FEATURE drift as the loop above. Pin it.
+            _assert_unsupported_feature_for_action(response, "approve_order")
 
     def test_guaranteed_line_item_classification(self):
         """Test line item type classification logic with real data structures."""
@@ -224,15 +225,10 @@ class TestGAMOrderLifecycleIntegration:
                     budget=None,
                     today=datetime.now(UTC),
                 )
-                # The GAM adapter currently rejects ``activate_order`` upfront
-                # with UNSUPPORTED_FEATURE before the ``_check_order_has_guaranteed_items``
-                # patch can branch — pin this drift so the assertion forces
-                # re-evaluation when the adapter is fixed (separate ticket).
-                # Previous form admitted every state and silently passed.
-                assert (
-                    response.errors is not None and len(response.errors) > 0
-                ), "Expected Error response for activate_order; GAM dry-run currently returns UNSUPPORTED_FEATURE"
-                assert response.errors[0].code == "UNSUPPORTED_FEATURE"
+                # ``activate_order`` is rejected upfront by GAM dry-run before
+                # the ``_check_order_has_guaranteed_items`` patch can branch.
+                # Same UNSUPPORTED_FEATURE drift; same helper pins it.
+                _assert_unsupported_feature_for_action(response, "activate_order")
 
             # Test activation with guaranteed items (should create workflow step)
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(True, ["STANDARD"])):
