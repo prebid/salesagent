@@ -163,13 +163,22 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
             message = str(parsed[1])
             recovery = str(parsed[2]) if len(parsed) > 2 else None
 
-            # 4th element is JSON-serialized details dict (if present)
+            # 4th element is JSON-serialized extra dict (if present).
+            # The extra dict may contain {details: {...}, field: ..., suggestion: ...}
+            # — we need to extract the inner "details" key to avoid nesting.
             details = None
             if len(parsed) > 3 and parsed[3] is not None:
                 import json
 
                 try:
-                    details = json.loads(str(parsed[3]))
+                    extra = json.loads(str(parsed[3]))
+                    if isinstance(extra, dict):
+                        details = extra.get("details")
+                        # Merge top-level suggestion/field into details for round-trip fidelity
+                        if extra.get("suggestion") and isinstance(details, dict):
+                            details.setdefault("suggestion", extra["suggestion"])
+                        elif extra.get("suggestion") and details is None:
+                            details = {"suggestion": extra["suggestion"]}
                 except (json.JSONDecodeError, TypeError):
                     pass
 

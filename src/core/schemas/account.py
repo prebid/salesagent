@@ -6,6 +6,8 @@ All classes are re-exported from ``src.core.schemas`` for backward compatibility
 beads: salesagent-x79
 """
 
+from typing import Any
+
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
@@ -30,6 +32,19 @@ class Account(LibraryAccountDomain):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # POST-S3: Buyer knows advertiser, rate_card, and payment_terms.
+    # Library model_dump defaults exclude_none=True which strips these when
+    # None.  Override to always include them so callers can distinguish
+    # "field absent" from "field=null".
+    _ALWAYS_INCLUDE = {"advertiser", "rate_card", "payment_terms"}
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        result = super().model_dump(**kwargs)
+        for field in self._ALWAYS_INCLUDE:
+            if field not in result:
+                result[field] = getattr(self, field, None)
+        return result
 
 
 # ---------------------------------------------------------------------------

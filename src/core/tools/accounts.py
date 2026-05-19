@@ -322,6 +322,7 @@ def _build_sync_result(
     operator: str,
     action: str,
     status: str,
+    account_id: str | None = None,
     name: str | None = None,
     billing: str | None = None,
     sandbox: bool | None = None,
@@ -330,6 +331,7 @@ def _build_sync_result(
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object."""
     return SyncResponseAccount(
+        account_id=account_id,
         brand=brand,
         operator=operator,
         action=action,
@@ -531,6 +533,7 @@ async def _sync_accounts_impl(
                     action = "updated" if changes else "unchanged"
                     results.append(
                         _build_sync_result(
+                            account_id=existing.account_id,
                             brand=entry.brand,
                             operator=operator,
                             action=action,
@@ -552,6 +555,7 @@ async def _sync_accounts_impl(
 
                 results.append(
                     _build_sync_result(
+                        account_id=existing.account_id,
                         brand=entry.brand,
                         operator=operator,
                         action=action,
@@ -583,6 +587,7 @@ async def _sync_accounts_impl(
                 if dry_run:
                     results.append(
                         _build_sync_result(
+                            account_id=account_id,
                             brand=entry.brand,
                             operator=operator,
                             action="created",
@@ -616,6 +621,7 @@ async def _sync_accounts_impl(
 
                 results.append(
                     _build_sync_result(
+                        account_id=account_id,
                         brand=entry.brand,
                         operator=operator,
                         action="created",
@@ -635,6 +641,7 @@ async def _sync_accounts_impl(
                     repo.update_status(db_acct.account_id, "closed")
                     results.append(
                         _build_sync_result(
+                            account_id=db_acct.account_id,
                             brand=db_acct.brand,
                             operator=db_acct.operator or "",
                             action="updated",

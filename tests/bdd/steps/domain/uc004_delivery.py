@@ -2019,3 +2019,341 @@ def _dispatch_partition(ctx: dict, field: str, value: str) -> None:
 
     # Pass as string
     dispatch_request(ctx, **{field: value_stripped})
+
+
+# ── Restored helpers (from pre-merge 89a6c4bb) ──────────────────────
+
+
+def _generate_unique_id(label: str) -> str:
+    """Generate a unique media_buy_id from a Gherkin label."""
+    import uuid
+
+    return f"{label}-{uuid.uuid4().hex[:8]}"
+
+
+def _register_media_buy_label(ctx: dict, label: str, real_id: str) -> None:
+    """Register a Gherkin label → real database ID mapping."""
+    ctx.setdefault("media_buy_labels", {})[label] = real_id
+
+
+def _resolve_media_buy_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin label to the real database media_buy_id."""
+    labels = ctx.get("media_buy_labels", {})
+    if label in labels:
+        return labels[label]
+    return label  # fallback: label IS the real ID (legacy/nonexistent-ID scenarios)
+
+
+def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
+    """Resolve a list of Gherkin labels to real database media_buy_ids."""
+    return [_resolve_media_buy_id(ctx, label) for label in labels]
+
+
+def _wire_webhook_db(ctx: dict) -> None:
+    """Wire ctx webhook config into the CircuitBreakerEnv mock DB.
+
+    Reads ctx["webhook_config"], ctx["webhook_secret"], ctx["webhook_bearer_token"]
+    and calls env.set_db_webhooks() so _send_webhook_enhanced finds the right configs.
+    """
+    env = ctx["env"]
+    wh_cfgs = ctx.get("webhook_config", {})
+    if not wh_cfgs:
+        return  # default mock config is fine
+
+    configs = []
+    for _mb_id, wh in wh_cfgs.items():
+        url = wh.get("url", "https://buyer.example.com/webhook")
+        scheme = wh.get("auth_scheme")
+        secret = ctx.get("webhook_secret")
+        bearer = ctx.get("webhook_bearer_token")
+
+        auth_type = None
+        auth_token = None
+        if scheme and scheme.lower() == "hmac-sha256":
+            auth_type = "hmac"
+        elif scheme and scheme.lower() == "bearer":
+            auth_type = "bearer"
+            auth_token = bearer
+
+        configs.append(
+            env.make_webhook_config(
+                url=url,
+                auth_type=auth_type,
+                auth_token=auth_token,
+                secret=secret,
+            )
+        )
+    if configs:
+        env.set_db_webhooks(configs)
+
+
+def _call_webhook_service(
+    ctx: dict,
+    mb_id: str | None = None,
+    is_final: bool = False,
+    is_adjusted: bool = False,
+    next_expected_interval_seconds: float | None = 3600.0,
+) -> bool:
+    """Dispatch webhook delivery through the CircuitBreakerEnv.call_send."""
+    if mb_id is None:
+        # Pick the first label from ctx, then resolve to real ID
+        label = next(iter(ctx.get("media_buys", {})), None) or next(iter(ctx.get("webhook_config", {})), None)
+        assert label, "No media buy in ctx or webhook_config — a Given step must create one first"
+        mb_id = _resolve_media_buy_id(ctx, label)
+    else:
+        mb_id = _resolve_media_buy_id(ctx, mb_id)
+    _wire_webhook_db(ctx)
+    env = ctx["env"]
+    kwargs: dict[str, Any] = {
+        "media_buy_id": mb_id,
+        "is_final": is_final,
+        "is_adjusted": is_adjusted,
+    }
+    if next_expected_interval_seconds is not None:
+        kwargs["next_expected_interval_seconds"] = next_expected_interval_seconds
+    return env.call_send(**kwargs)
+
+
+def _get_webhook_payload(ctx: dict) -> dict:
+    """Extract the JSON payload from the most recent webhook POST call."""
+    env = ctx["env"]
+    call_args = env.mock["post"].call_args
+    assert call_args is not None, "No POST call recorded"
+    return call_args.kwargs.get("json") or call_args[1].get("json", {})
+
+
+_DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [
+    {"placement_id": "pl-A", "impressions": 3000.0, "spend": 150.0, "clicks": 30.0},
+    {"placement_id": "pl-B", "impressions": 1500.0, "spend": 200.0, "clicks": 10.0},
+    {"placement_id": "pl-C", "impressions": 500.0, "spend": 50.0, "clicks": 50.0},
+]
+
+
+def _inject_placement_data(ctx: dict) -> None:
+    """Ensure adapter responses include placement breakdown data.
+
+    If responses already exist, mutate them. Otherwise, register a default
+    response for each media buy known in ctx. This must be called from Given
+    steps that declare placement support, before the When step dispatches.
+    """
+    env = ctx["env"]
+    if env._adapter_responses:
+        for resp in env._adapter_responses.values():
+            for pkg in resp.by_package:
+                if pkg.by_placement is None:
+                    pkg.by_placement = _DEFAULT_PLACEMENT_DATA
+    else:
+        media_buys = ctx.get("media_buys", {})
+        for label in media_buys:
+            real_id = _resolve_media_buy_id(ctx, label)
+            env.set_adapter_response(
+                media_buy_id=real_id,
+                by_placement=_DEFAULT_PLACEMENT_DATA,
+            )
+
+
+@when(parsers.parse('the Buyer Agent requests delivery metrics at status_filter boundary "{boundary_value}"'))
+def when_request_status_filter_boundary(ctx: dict, boundary_value: str) -> None:
+    """Request delivery metrics with a status_filter boundary value.
+
+    Parses boundary_value:
+      - '(field absent)' → omit status_filter entirely (server default)
+      - '[]' → empty list
+      - '["active", "paused"]' → parsed JSON list
+      - 'canceled' → single-element list ['canceled']
+    """
+    media_buys = ctx.get("media_buys", {})
+    labels = list(media_buys.keys())
+    real_ids = _resolve_media_buy_ids(ctx, labels) if labels else []
+    kwargs: dict[str, Any] = {}
+    if real_ids:
+        kwargs["media_buy_ids"] = real_ids
+
+    if boundary_value == "(field absent)":
+        pass  # omit status_filter — test server default behavior
+    elif boundary_value.startswith("["):
+        kwargs["status_filter"] = json.loads(boundary_value)
+    else:
+        kwargs["status_filter"] = [boundary_value]
+
+    dispatch_request(ctx, **kwargs)
+
+
+def _assert_no_error_for_mb(ctx: dict, mb_id: str) -> None:
+    """Shared: assert no error was returned for a specific media buy ID.
+
+    Checks three layers:
+    1. Top-level ctx["error"] exception must not mention the real_id
+    2. Response-level errors list must not reference the real_id
+    3. Per-delivery error field for this real_id must be None
+    """
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    resp = ctx.get("response")
+    error = ctx.get("error")
+    assert resp is not None or error is not None, "Neither error nor response in ctx — test setup failed"
+    # If a general error occurred, check it's not about this specific mb_id
+    if error is not None:
+        error_msg = str(error).lower()
+        assert real_id.lower() not in error_msg, f"Error mentions '{mb_id}' (real_id={real_id}): {error}"
+    # If response exists, check response-level errors list and per-delivery errors
+    if resp is not None:
+        # Check response-level errors array (e.g. resp.errors)
+        resp_errors = getattr(resp, "errors", None)
+        if resp_errors:
+            for err in resp_errors:
+                err_str = str(err).lower()
+                assert real_id.lower() not in err_str, (
+                    f"Response-level errors list mentions '{mb_id}' (real_id={real_id}): {err}"
+                )
+        # Check per-delivery error field
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        for d in deliveries:
+            d_id = getattr(d, "media_buy_id", None)
+            if d_id == real_id:
+                d_error = getattr(d, "error", None)
+                assert d_error is None, f"Delivery for '{mb_id}' (real_id={real_id}) has error: {d_error}"
+
+
+def _find_field_in_response(resp: object, field: str) -> tuple[object, str]:
+    """Find a boolean field in the response, searching through all nesting levels.
+
+    Truncation flags (by_*_truncated) live at the package level inside
+    media_buy_deliveries[*].by_package[*]. This function searches:
+    1. Top-level response
+    2. Delivery level (media_buy_deliveries[0])
+    3. Package level (media_buy_deliveries[*].by_package[*])
+
+    Returns (value, location_description) or raises AssertionError if not found.
+    """
+    resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    if isinstance(resp_dict, dict) and field in resp_dict:
+        return resp_dict[field], "top-level response"
+
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    for d in deliveries:
+        d_dict = d.model_dump() if hasattr(d, "model_dump") else d
+        if isinstance(d_dict, dict) and field in d_dict:
+            return d_dict[field], f"delivery {getattr(d, 'media_buy_id', '?')}"
+        # Check package level — where truncation flags actually live
+        packages = d_dict.get("by_package", []) if isinstance(d_dict, dict) else []
+        if not packages:
+            packages = getattr(d, "by_package", None) or []
+        for pkg in packages:
+            pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else (pkg if isinstance(pkg, dict) else {})
+            if field in pkg_dict:
+                pkg_id = pkg_dict.get("package_id", "?")
+                return pkg_dict[field], f"package {pkg_id}"
+
+    raise AssertionError(
+        f"Field '{field}' not found at any level (response, delivery, package). "
+        f"Deliveries: {len(deliveries)}, "
+        f"packages checked: {sum(len(getattr(d, 'by_package', None) or []) for d in deliveries)}"
+    )
+
+
+def _assert_placement_sorted_by(ctx: dict, metric: str) -> None:
+    """Assert by_placement in at least one package is sorted descending by *metric*."""
+    resp = ctx.get("response") or ctx.get("result")
+    assert resp is not None, "No response in ctx — When step must store ctx['response']"
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    assert deliveries, "No deliveries in response"
+    found_placement = False
+    for d in deliveries:
+        by_package = getattr(d, "by_package", None) or []
+        for pkg in by_package:
+            placements = getattr(pkg, "by_placement", None)
+            if not placements:
+                continue
+            found_placement = True
+            values = [(p.get(metric) if isinstance(p, dict) else getattr(p, metric, None)) or 0 for p in placements]
+            assert values == sorted(values, reverse=True), f"by_placement not sorted descending by '{metric}': {values}"
+    assert found_placement, "No by_placement breakdown found in any package"
+
+
+def _dispatch_webhook_credentials(ctx: dict, value: str) -> None:
+    """Configure webhook credentials from a partition/boundary value and validate.
+
+    Maps credential partition names to actual webhook credential configuration,
+    then runs the production WebhookVerifier to validate.
+    """
+    from src.services.webhook_verification import WebhookVerifier
+
+    value_stripped = value.strip()
+
+    # Map partition names to credential strings
+    if value_stripped in ("(field absent)", "(omitted)", "(not provided)", "empty"):
+        secret = ""
+    elif value_stripped.startswith("short_") or "below_minimum" in value_stripped:
+        # Short credentials — below 32 char minimum
+        secret = "x" * 16
+    elif value_stripped.startswith("minimum") or "exactly_32" in value_stripped:
+        # Exactly at boundary
+        secret = "x" * 32
+    elif value_stripped.startswith("long") or "above_minimum" in value_stripped:
+        # Above minimum
+        secret = "x" * 64
+    else:
+        # Use the partition value as-is (may be the literal credential string)
+        secret = value_stripped
+
+    ctx["webhook_secret"] = secret
+    # Configure full webhook config using existing label or creating a placeholder
+    label = next(iter(ctx.get("media_buys", {})), None)
+    if label is None:
+        label = "mb-creds"
+        real_id = _generate_unique_id(label)
+        _register_media_buy_label(ctx, label, real_id)
+        ctx.setdefault("media_buys", {})[label] = {"media_buy_id": real_id, "owner": "buyer-001"}
+    wh = ctx.setdefault("webhook_config", {}).setdefault(label, {})
+    wh["url"] = "https://buyer.example.com/webhook"
+    wh["active"] = True
+    wh["auth_scheme"] = "hmac-sha256"
+
+    try:
+        WebhookVerifier(webhook_secret=secret)
+        ctx["webhook_validated"] = True
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+def _dispatch_resolution(ctx: dict, partition: str) -> None:
+    """Translate resolution partition name to concrete request parameters.
+
+    Maps abstract partition names (media_buy_ids_only, etc.)
+    to real request fields so Then steps can verify the correct media buys
+    were resolved, not just that the request was accepted.
+    """
+    media_buys = ctx.get("media_buys", {})
+    labels = list(media_buys.keys())
+    real_ids = _resolve_media_buy_ids(ctx, labels)
+    partition_clean = partition.strip()
+    request_params = ctx.setdefault("request_params", {})
+
+    # Normalize boundary-style names to partition names
+    partition_norm = partition_clean.lower().replace(" ", "_")
+
+    if "media_buy_ids" in partition_norm and "only" in partition_norm:
+        # Resolve by media_buy_ids only
+        request_params["media_buy_ids"] = real_ids
+        dispatch_request(ctx, media_buy_ids=real_ids)
+    elif "neither_provided" in partition_norm or "neither" in partition_norm:
+        # Neither IDs nor refs — should return all owned media buys
+        dispatch_request(ctx)
+    elif "partial" in partition_norm:
+        # Partial resolution — request includes a nonexistent ID alongside a real one
+        partial_ids = real_ids[:1] + ["mb-nonexistent"]
+        request_params["media_buy_ids"] = partial_ids
+        dispatch_request(ctx, media_buy_ids=partial_ids)
+    elif "zero" in partition_norm:
+        # Zero resolution — request IDs that don't exist
+        request_params["media_buy_ids"] = ["mb-nonexistent-1", "mb-nonexistent-2"]
+        dispatch_request(ctx, media_buy_ids=["mb-nonexistent-1", "mb-nonexistent-2"])
+    elif "empty_array" in partition_norm or "empty" in partition_norm and "array" in partition_norm:
+        # Empty array — schema rejection expected
+        dispatch_request(ctx, media_buy_ids=[])
+    elif "all_buys" in partition_norm or "all" in partition_norm:
+        # All media buys — same as neither_provided
+        dispatch_request(ctx)
+    else:
+        # Fallback: pass through to generic dispatch
+        _dispatch_partition(ctx, "resolution", partition)

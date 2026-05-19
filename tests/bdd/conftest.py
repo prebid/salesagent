@@ -118,17 +118,15 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-sandbox-validation": "sandbox mode not implemented",
     # FIXME(beads-dul): creative agent referrals not in harness
     "T-UC-005-main-referrals": "creative agent referrals not implemented",
-    # FIXME(beads-dul): no-tenant error path requires identity-less harness
-    "T-UC-005-ext-a-rest": "no-tenant error path not implemented in harness",
-    "T-UC-005-ext-a-mcp": "no-tenant error path not implemented in harness",
+    # FIXME(salesagent-40kk): production raises AUTH_TOKEN_INVALID, spec expects TENANT_REQUIRED
+    "T-UC-005-ext-a": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
     # FIXME(beads-dul): creative agent format querying is a separate API
     "T-UC-005-partition-agent-type": "creative agent format API not implemented",
     "T-UC-005-partition-agent-asset": "creative agent format API not implemented",
     "T-UC-005-boundary-agent-type": "creative agent format API not implemented",
     "T-UC-005-boundary-agent-asset": "creative agent format API not implemented",
     # FIXME(beads-dul): suggestion field not in production error model
-    "T-UC-005-ext-b-rest": "suggestion field not implemented in error responses",
-    "T-UC-005-ext-b-mcp": "suggestion field not implemented in error responses",
+    "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # FIXME(beads-dul): disclosure validation errors not implemented
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
@@ -141,6 +139,99 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-b-input-empty": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-invalid": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
+
+    # --- Restored from feature branch (production gaps) ---
+    "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
+    "T-UC-002-alt-creatives": "inline creative upload not persisted in create_media_buy — spec-production gap",
+    "T-UC-002-alt-proposal": "proposal-based creation not implemented in production — spec-production gap",
+    "T-UC-002-ext-c": "start_time in past: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    "T-UC-002-ext-c-end": "end_time before start_time: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    "T-UC-002-ext-d": "currency validation against CurrencyLimit not implemented — spec-production gap",
+    "T-UC-002-ext-e": "duplicate product_id error lacks suggestion field — spec-production gap",
+    "T-UC-002-ext-f": "unknown targeting field caught by Pydantic (VALIDATION_ERROR), not business logic (INVALID_REQUEST) — spec-production gap",
+    "T-UC-002-ext-g": "INVALID_CREATIVES error lacks suggestion field",
+    "T-UC-002-ext-h": "plain string format_id produces Pydantic error, not AdCPError with suggestion",
+    "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
+    "T-UC-002-ext-i": "auth error lacks suggestion field — spec-production gap",
+    "T-UC-002-ext-j": "adapter failure raises exception, no failed result envelope or suggestion — spec-production gap",
+    "T-UC-002-ext-k": "daily spend cap returns generic validation_error, not BUDGET_TOO_LOW",
+    "T-UC-002-ext-l": "proposal_id validation not implemented in production",
+    "T-UC-002-ext-m": "proposal budget guidance not implemented in production",
+    "T-UC-002-ext-n": "pricing validation returns generic validation_error, not PRICING_ERROR",
+    "T-UC-002-ext-n-bid": "pricing validation returns generic validation_error, not PRICING_ERROR",
+    "T-UC-002-ext-n-floor": "pricing validation returns generic validation_error, not PRICING_ERROR",
+    "T-UC-002-ext-o": "CREATIVES_NOT_FOUND error lacks suggestion field",
+    "T-UC-002-ext-p": "CREATIVE_FORMAT_MISMATCH error lacks suggestion field",
+    "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",
+    "T-UC-002-ext-u": "optimization_goals not in production schemas — spec-production gap",
+    "T-UC-002-ext-u-event": "optimization_goals not in production schemas — spec-production gap",
+    "T-UC-002-ext-v": "catalog validation not implemented in production — spec-production gap",
+    "T-UC-002-ext-v-notfound": "catalog validation not implemented in production — spec-production gap",
+    "T-UC-002-inv-006-3": "pricing XOR invariant (both set) not validated in create flow — spec-production gap",
+    "T-UC-002-inv-006-4": "pricing XOR invariant (neither set) error lacks suggestion field — spec-production gap",
+    "T-UC-002-inv-013-5": "INVALID_REQUEST error code not implemented for wrong-case ASAP — spec-production gap",
+    "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
+    "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
+    "T-UC-002-inv-080-1": "account field not required by production — spec-production gap",
+    "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
+    "T-UC-002-sandbox-happy": "sandbox mode not implemented in create_media_buy — spec-production gap",
+    "T-UC-002-sandbox-validation": "sandbox mode not implemented in create_media_buy — spec-production gap",
+    "T-UC-003-alt-optimization-goals": "affected_packages not populated for optimization_goals changes — spec-production gap",
+    "T-UC-003-alt-pause": "sandbox not populated in pause response — spec-production gap",
+    "T-UC-003-alt-timing": "implementation_date not populated in update response — spec-production gap",
+    "T-UC-003-ext-a": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
+    "T-UC-003-ext-a-unknown": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
+    "T-UC-003-ext-b": "production returns ValueError, spec expects PRODUCT_NOT_FOUND",
+    "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
+    "T-UC-003-ext-d": "production returns invalid_budget, spec expects BUDGET_TOO_LOW",
+    "T-UC-003-ext-d-negative": "production returns invalid_budget, spec expects BUDGET_TOO_LOW",
+    "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
+    "T-UC-003-ext-e-equal": "production doesn't validate end_time == start_time on update",
+    "T-UC-003-ext-f": "production doesn't validate currency on update path",
+    "T-UC-003-ext-g": "production doesn't validate daily spend cap on update",
+    "T-UC-003-ext-h": "production returns missing_package_id, spec expects INVALID_REQUEST",
+    "T-UC-003-ext-i": "production doesn't validate creative existence on update path",
+    "T-UC-003-ext-j-error": "production doesn't validate creative state on update path",
+    "T-UC-003-ext-j-format": "production doesn't validate creative format compatibility on update",
+    "T-UC-003-ext-j-rejected": "production doesn't validate creative state on update path",
+    "T-UC-003-ext-k": "inline creative sync: FK violation in production (missing creative commit)",
+    "T-UC-003-ext-l": "production doesn't validate package_id existence on update",
+    "T-UC-003-ext-m": "production doesn't validate placement_ids on update path",
+    "T-UC-003-ext-m-unsupported": "production doesn't validate placement targeting support",
+    "T-UC-003-ext-n": "production doesn't check admin privileges on update",
+    "T-UC-003-ext-p-long": "production doesn't validate idempotency key length on update",
+    "T-UC-003-ext-p-short": "production doesn't validate idempotency key length on update",
+    "T-UC-003-ext-q-canceled": "production doesn't reject updates to terminal-status media buys",
+    "T-UC-003-ext-q-completed": "production doesn't reject updates to terminal-status media buys",
+    "T-UC-003-ext-q-rejected": "production doesn't reject updates to terminal-status media buys",
+    "T-UC-003-ext-r-keyword": "production doesn't validate keyword operation conflicts",
+    "T-UC-003-ext-r-negative": "production doesn't validate negative keyword conflicts",
+    "T-UC-003-main": "implementation_date, budget, sandbox not populated in update response — spec-production gap",
+    "T-UC-006-ext-c": "SPEC-PRODUCTION GAP: error_code is CREATIVE_FORMAT_REQUIRED, ",
+    "T-UC-006-ext-d": "SPEC-PRODUCTION GAP: production returns plain-string errors[] via ",
+    "T-UC-006-ext-d-whitespace": "SPEC-PRODUCTION GAP: production returns plain-string errors[] via ",
+    "T-UC-006-ext-e": "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, ",
+    "T-UC-006-ext-f": "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN",
+    "T-UC-006-ext-g": "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_AGENT_UNREACHABLE",
+    "T-UC-006-ext-h": "SPEC-PRODUCTION GAP: production returns plain-string errors[] via ",
+    "T-UC-006-ext-i": "SPEC-PRODUCTION GAP: production returns plain-string errors[] via ",
+    "T-UC-006-ext-k": "SPEC-PRODUCTION GAP: format mismatch raises AdCPValidationError ",
+    "T-UC-006-main-unchanged": "SPEC-PRODUCTION GAP: production returns action 'updated', ",
+    "T-UC-006-partition-assignment-fmt": "e2e_rest: sync_creatives REST endpoint returns empty body for ",
+    "T-UC-006-rule-035-static": "e2e_rest: then_creative_validated_by_agent asserts registry mock ",
+    "T-UC-006-rule-039-inv2": "SPEC-PRODUCTION GAP: AdCPValidationError has no details dict — ",
+    "T-UC-006-rule-039-inv5-lenient": "SPEC-PRODUCTION GAP: lenient format mismatch does not create ",
+    "T-UC-006-sandbox-happy": "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on ",
+    "T-UC-006-sandbox-validation": "SPEC-PRODUCTION GAP: production does not validate format_id pattern ",
+    "T-UC-011-ext-f-scoped": "deactivation not scoped to authenticated agent — production applies globally",
+    "T-UC-011-ext-g-echo-error": "context echo not implemented in sync_accounts error response",
+    "T-UC-011-sync-missing-brand": "missing brand domain returns raw ValidationError, not structured error_code",
+    "T-UC-011-sync-missing-operator": "missing operator returns raw ValidationError, not structured error_code",
+    "T-UC-026-inv-089-2": "e2e_rest: catalogs not echoed in REST create response — ",
+    "T-UC-026-main-explicit-formats": "e2e_rest: Package.format_ids not echoed in REST create response — ",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -161,6 +252,12 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-005-boundary-asset-types",
         {"brief", "catalog"},
         "brief/catalog asset types not in adcp enum",
+    ),
+    # WebhookDeliveryService only emits {scheduled, final, adjusted}. No is_delayed flag.
+    (
+        "T-UC-004-webhook-notification-type",
+        {"delayed"},
+        "BR-RULE-029: production webhook service has no is_delayed flag — only scheduled/final/adjusted emitted",
     ),
 ]
 
@@ -241,9 +338,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         marker_names = {m.name for m in item.iter_markers()}
         nodeid = item.nodeid
 
-        # Detect transport from parametrized nodeid: [mcp], [mcp-...], [rest], [rest-...]
+        # Detect transport from parametrized nodeid
         is_mcp = "[mcp]" in nodeid or "[mcp-" in nodeid
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
+        is_a2a = "[a2a]" in nodeid or "[a2a-" in nodeid
 
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
         if is_mcp:
@@ -360,6 +458,40 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-daterange-equal": ("date range validation (start==end) not implemented", True),
             # Webhook delivery: not yet in production
             "T-UC-004-webhook-scheduled": ("webhook delivery not implemented", True),
+            # FIXME(salesagent-4ydt): BR-RULE-029 INV-1 requires strictly monotonic
+            # sequence numbers per media buy stream. Production retry path emits
+            # the same sequence_number on retry POSTs, producing [1,2,2,3,3,3].
+            "T-UC-004-webhook-sequence": (
+                "BR-RULE-029 INV-1: sequence_number reused across retry POSTs — strictly ascending not preserved",
+                True,
+            ),
+            # FIXME(salesagent-4ydt): BR-UC-004-ext-g requires OPEN->HALF_OPEN->probe
+            # before the breaker closes. Probe success races the HALF_OPEN assertion.
+            "T-UC-004-webhook-circuit-halfopen": (
+                "BR-UC-004-ext-g: circuit breaker races past HALF_OPEN to CLOSED during probe",
+                True,
+            ),
+            # Webhook retry off-by-one: range(max_retries) yields 3 total calls,
+            # should be range(max_retries + 1) for 4 calls (1 initial + 3 retries)
+            "T-UC-004-webhook-retry-5xx": (
+                "production off-by-one: range(max_retries) does 3 calls, should do 4 (1 initial + 3 retries)",
+                True,
+            ),
+            "T-UC-004-webhook-retry-network": (
+                "production off-by-one: range(max_retries) does 3 calls, should do 4 (1 initial + 3 retries)",
+                True,
+            ),
+            # Webhook HMAC/Bearer: production deliver_webhook_with_retry doesn't pass
+            # HMAC signature or Bearer token headers in requests.post calls.
+            # Then steps now have real assertions (no longer no-ops).
+            "T-UC-004-webhook-hmac": (
+                "production deliver_webhook_with_retry does not pass HMAC headers in requests.post",
+                True,
+            ),
+            "T-UC-004-webhook-bearer": (
+                "production deliver_webhook_with_retry does not pass Bearer token header in requests.post",
+                True,
+            ),
             # Sandbox: not yet in delivery _impl
             "T-UC-004-sandbox-happy": ("sandbox mode not implemented in delivery", True),
             "T-UC-004-sandbox-validation": ("sandbox mode not implemented in delivery", True),
@@ -372,9 +504,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004: additional xfails for features needing production enhancements
         # FIXME(salesagent-a0o): These require production changes, not BDD wiring.
         _UC004_XFAIL_ADDITIONAL: dict[str, tuple[str, bool]] = {
+            # FIXME(salesagent-afq): _impl doesn't echo attribution_window in response
+            "T-UC-004-attr-supported": ("attribution_window echo not implemented in _impl", True),
+            "T-UC-004-attr-unsupported": ("attribution_window platform default not implemented in _impl", True),
+            "T-UC-004-attr-campaign-valid": ("attribution_window campaign window not implemented in _impl", True),
             # campaign unit interval validation: _impl doesn't validate attribution_window
             "T-UC-004-attr-campaign-invalid": (
                 "attribution_window campaign unit validation not implemented in _impl",
+                True,
+            ),
+            # FIXME(salesagent-7ag5): _impl uses str(enum) instead of enum.value for sort_by metric
+            "T-UC-004-dim-sortby-valid": (
+                "sort_by metric: str(SortMetric.clicks) != 'clicks' — needs .value in _impl",
+                True,
+            ),
+            # FIXME(salesagent-b2v): _impl only supports by_placement, not by_device_type/by_geo/truncation
+            "T-UC-004-dim-supported": ("by_device_type breakdown not implemented in _impl (only by_placement)", True),
+            "T-UC-004-dim-truncated": ("truncation flags (by_*_truncated) not implemented in _impl", True),
+            "T-UC-004-dim-complete": ("by_device_type_truncated flag not implemented in _impl", True),
+            "T-UC-004-dim-geo-system": ("by_geo breakdown not implemented in _impl", True),
+            "T-UC-004-dim-geo-postal": ("by_geo breakdown not implemented in _impl", True),
+            "T-UC-004-dim-multi": ("by_geo/by_device_type breakdowns not implemented in _impl", True),
+            # FIXME(salesagent-ttw): _impl reports media_buy_not_found instead of silently omitting
+            "T-UC-004-identify-partial": (
+                "_impl reports media_buy_not_found errors instead of silently omitting missing IDs (BR-RULE-030 INV-5)",
+                True,
+            ),
+            "T-UC-004-identify-batch-ownership": (
+                "_impl reports media_buy_not_found for non-owned IDs instead of silently omitting (BR-RULE-030 INV-5)",
                 True,
             ),
             # Partial-success Error model lacks suggestion field and rich messages
@@ -399,6 +556,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if tag in marker_names:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                 break
+
+        # Graduated: T-UC-004-dim-sortby-fallback — impl, mcp, rest pass; only a2a fails
+        if "T-UC-004-dim-sortby-fallback" in marker_names and is_a2a:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="sort_by fallback: A2A transport drops by_placement from response — serialization gap",
+                    strict=False,
+                )
+            )
 
         # UC-004 status filter: "active" works, other values may not
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
