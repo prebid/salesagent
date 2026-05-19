@@ -11,7 +11,7 @@ from tests.harness.delivery_poll import DeliveryPollEnv
 from tests.harness.transport import Transport
 from tests.helpers.account_resolution import create_accessible_delivery_account
 
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.delivery]
 
 ALL_TRANSPORTS = (Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST)
 
