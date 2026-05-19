@@ -14,7 +14,7 @@ for upstream inclusion in AdCP.
 
 from typing import TYPE_CHECKING, Any
 
-from src.core.schemas import Targeting, TargetingCapability
+from src.core.schemas import Error, Targeting, TargetingCapability
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
@@ -211,10 +211,24 @@ def supports_property_list_filtering(adapter: object | None) -> bool:
     return bool(getattr(adapter.__class__, "supports_property_list_filtering", False))
 
 
+# ─── property_list targeting helpers ────────────────────────────────────
+#
+# Spec scope: these helpers only handle ``property_list``. The AdCP 3.0.7
+# spec governs ``property_list`` via a per-product flag
+# (``Product.property_targeting_allowed``) and a per-capability declaration
+# (``MediaBuyFeatures.property_list_filtering``). ``collection_list`` and
+# ``collection_list_exclude`` use a different mechanism — capability-level
+# only — declared in ``get_adcp_capabilities`` per
+# ``core/targeting.json:collection_list``: "Seller must declare support in
+# get_adcp_capabilities." There is no per-product flag for collection_list,
+# so the asymmetry below is spec-defined, not an oversight. Collection-list
+# capability infrastructure lands separately (PR #1313).
+
+
 def build_property_list_unsupported_advisories(
     packages: list[Any] | None,
     capability_supported: bool,
-) -> list[Any]:
+) -> list[Error]:
     """Build per-package ``UNSUPPORTED_FEATURE`` advisories for property_list use.
 
     AdCP spec 3.0.7 ``error-handling.mdx`` describes non-fatal errors as
@@ -229,9 +243,8 @@ def build_property_list_unsupported_advisories(
     """
     if capability_supported or not packages:
         return []
-    from src.core.schemas import Error
 
-    advisories: list[Any] = []
+    advisories: list[Error] = []
     for index, package in enumerate(packages):
         overlay = getattr(package, "targeting_overlay", None)
         if overlay is None or getattr(overlay, "property_list", None) is None:
@@ -254,6 +267,23 @@ def build_property_list_unsupported_advisories(
     return advisories
 
 
+def property_list_unsupported_advisories(
+    packages: list[Any] | None,
+    adapter: object | None,
+) -> list[Error] | None:
+    """High-level wrapper: build advisories or return ``None`` when none apply.
+
+    Single entry point for both create and update paths; mirrors
+    ``MediaBuyFeatures.property_list_filtering`` source-of-truth via
+    ``supports_property_list_filtering()`` so the per-call advisory and the
+    capability declaration cannot drift. ``None`` (not ``[]``) so the
+    optional ``errors`` field round-trips cleanly through
+    ``model_dump(exclude_none=True)``.
+    """
+    advisories = build_property_list_unsupported_advisories(packages, supports_property_list_filtering(adapter))
+    return advisories or None
+
+
 def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
@@ -261,7 +291,9 @@ def validate_property_targeting_allowed(product: "Product | None", targeting_ove
     error if the product has property_targeting_allowed: false."
 
     Used at both create_media_buy and update_media_buy validation sites; pulled
-    here so the rule lives in one place.
+    here so the rule lives in one place. Pair with
+    ``raise_if_property_targeting_violations`` to convert collected violations
+    into the wire-shape AdCPValidationError.
 
     Returns a violation message string, or None when targeting is allowed or
     when the product is missing (caller is responsible for surfacing the
@@ -276,6 +308,27 @@ def validate_property_targeting_allowed(product: "Product | None", targeting_ove
     ):
         return f"Product {product.product_id} does not allow property_list targeting (property_targeting_allowed=false)"
     return None
+
+
+def raise_if_property_targeting_violations(violations: list[str]) -> None:
+    """Raise ``AdCPValidationError`` when any property_targeting violations were collected.
+
+    Centralizes the wire-error envelope shape for property_list rejection so
+    create and update paths emit byte-identical error responses (same code,
+    same field, same details shape). Caller collects ``violations`` using
+    ``validate_property_targeting_allowed()`` — product resolution differs
+    between create's in-memory ``product_map`` and update's
+    ``uow.products.get_by_id`` lookup, so the collection stays at the call
+    site; only the raise shape is shared.
+    """
+    if violations:
+        from src.core.exceptions import AdCPValidationError
+
+        raise AdCPValidationError(
+            f"Targeting validation failed: {'; '.join(violations)}",
+            field="packages[].targeting_overlay.property_list",
+            details={"violations": violations},
+        )
 
 
 def validate_overlay_targeting(targeting: Targeting) -> list[str]:

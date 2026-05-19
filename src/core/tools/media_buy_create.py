@@ -128,8 +128,8 @@ from src.core.tools.financial_validation import validate_max_daily_package_spend
 from src.core.validation_helpers import format_validation_error
 from src.services.activity_feed import activity_feed
 from src.services.targeting_capabilities import (
-    build_property_list_unsupported_advisories,
-    supports_property_list_filtering,
+    property_list_unsupported_advisories,
+    raise_if_property_targeting_violations,
     validate_property_targeting_allowed,
 )
 
@@ -155,27 +155,6 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
         List of creative IDs if present, None otherwise
     """
     return getattr(package, "creative_ids", None)
-
-
-def _property_list_unsupported_advisories(
-    req: "CreateMediaBuyRequest",
-    adapter: Any | None,
-) -> "list[Error] | None":
-    """Return advisory errors for property_list submitted to a non-compiling adapter.
-
-    Spec basis: AdCP 3.0.7 ``error-handling.mdx`` non-fatal-in-payload rule —
-    fields the seller persists but cannot honor get reported on the success
-    envelope so the buyer sees the silent-drop window. When PR #1314 / #1313
-    flip the adapter capability, this returns None automatically.
-
-    Returns ``None`` (not ``[]``) so the optional ``errors`` field round-trips
-    cleanly through ``model_dump(exclude_none=True)``.
-    """
-    advisories = build_property_list_unsupported_advisories(
-        req.packages,
-        supports_property_list_filtering(adapter),
-    )
-    return advisories or None
 
 
 def _determine_media_buy_status(
@@ -1342,7 +1321,7 @@ def _build_idempotency_hit_result(
         # have flipped supports_property_list_filtering=True (e.g. #1314 merged).
         # The advisory must reflect the current capability state, not whatever
         # was true at the original Day-1 call.
-        advisories = _property_list_unsupported_advisories(req, adapter) if req is not None else None
+        advisories = property_list_unsupported_advisories(req.packages, adapter) if req is not None else None
 
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
@@ -1691,12 +1670,7 @@ async def _create_media_buy_impl(
                         )
                     )
                 ]
-                if property_targeting_violations:
-                    raise AdCPValidationError(
-                        f"Targeting validation failed: {'; '.join(property_targeting_violations)}",
-                        field="packages[].targeting_overlay.property_list",
-                        details={"violations": property_targeting_violations},
-                    )
+                raise_if_property_targeting_violations(property_targeting_violations)
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
@@ -2498,7 +2472,7 @@ async def _create_media_buy_impl(
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
                     context=req.context,
-                    errors=_property_list_unsupported_advisories(req, adapter),
+                    errors=property_list_unsupported_advisories(req.packages, adapter),
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -2657,7 +2631,7 @@ async def _create_media_buy_impl(
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                     workflow_step_id=step.step_id,
                     context=req.context,
-                    errors=_property_list_unsupported_advisories(req, adapter),
+                    errors=property_list_unsupported_advisories(req.packages, adapter),
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -2999,7 +2973,7 @@ async def _create_media_buy_impl(
                 packages=simulated_packages,
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
-                errors=_property_list_unsupported_advisories(req, adapter),
+                errors=property_list_unsupported_advisories(req.packages, adapter),
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3587,7 +3561,7 @@ async def _create_media_buy_impl(
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
-            errors=_property_list_unsupported_advisories(req, adapter),
+            errors=property_list_unsupported_advisories(req.packages, adapter),
         )
 
         # Log activity

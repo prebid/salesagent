@@ -71,29 +71,10 @@ from src.core.tools.financial_validation import (
 )
 from src.core.validation_helpers import format_validation_error
 from src.services.targeting_capabilities import (
-    build_property_list_unsupported_advisories,
-    supports_property_list_filtering,
+    property_list_unsupported_advisories,
+    raise_if_property_targeting_violations,
     validate_property_targeting_allowed,
 )
-
-
-def _property_list_unsupported_advisories(
-    req: UpdateMediaBuyRequest,
-    adapter: Any | None,
-) -> list[Error] | None:
-    """Return advisory errors for property_list submitted to a non-compiling adapter.
-
-    Mirrors ``media_buy_create._property_list_unsupported_advisories``. Spec
-    basis: AdCP 3.0.7 non-fatal-in-payload rule — fields the seller persists
-    but cannot honor get reported on the success envelope so the buyer sees
-    the silent-drop window. Returns ``None`` (not ``[]``) so the optional
-    ``errors`` field round-trips cleanly through ``model_dump(exclude_none=True)``.
-    """
-    advisories = build_property_list_unsupported_advisories(
-        req.packages,
-        supports_property_list_filtering(adapter),
-    )
-    return advisories or None
 
 
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
@@ -317,11 +298,10 @@ def _update_media_buy_impl(
             # AdCP 3.0.6 spec (core/targeting.json:191): reject property_list targeting
             # on products with property_targeting_allowed=False. Runs before the dry_run
             # early return so dry_run requests are also rejected (parity with create).
-            # Raises AdCPValidationError so the transport boundary translates to the
-            # spec-compliant two-layer envelope — mirrors media_buy_create.py:1647
-            # exactly (same error code, same field, same details shape, same wire
-            # output). The boundary's existing AdCPError handler updates any
-            # in-flight workflow step to status="failed" for the audit trail.
+            # Raise shape is shared with create via ``raise_if_property_targeting_violations``
+            # so both paths emit byte-identical error envelopes (same code, same field,
+            # same details). The boundary's AdCPError handler updates any in-flight
+            # workflow step to status="failed" for the audit trail.
             if req.packages:
                 assert uow.products is not None, "MediaBuyUoW.products required for product targeting validation"
                 property_targeting_violations: list[str] = []
@@ -342,12 +322,7 @@ def _update_media_buy_impl(
                     violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
                     if violation:
                         property_targeting_violations.append(violation)
-                if property_targeting_violations:
-                    raise AdCPValidationError(
-                        f"Targeting validation failed: {'; '.join(property_targeting_violations)}",
-                        field="packages[].targeting_overlay.property_list",
-                        details={"violations": property_targeting_violations},
-                    )
+                raise_if_property_targeting_violations(property_targeting_violations)
 
             # Dry-run mode: Return simulated response without any database writes
             # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
@@ -377,7 +352,7 @@ def _update_media_buy_impl(
                     affected_packages=simulated_affected,
                     valid_actions=valid_actions_for_status(_dry_run_status),
                     context=req.context,
-                    errors=_property_list_unsupported_advisories(req, adapter),
+                    errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
 
                 return dry_run_response
@@ -401,7 +376,7 @@ def _update_media_buy_impl(
                     affected_packages=[],  # Not yet applied — pending approval
                     valid_actions=valid_actions_for_status(_approval_status),
                     context=req.context,
-                    errors=_property_list_unsupported_advisories(req, adapter),
+                    errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
                 approval_data = approval_response.model_dump(mode="json")
                 approval_data["request_data"] = req.model_dump(mode="json")
@@ -567,7 +542,7 @@ def _update_media_buy_impl(
                         media_buy_id=media_buy_id,
                         affected_packages=affected_pkgs,
                         valid_actions=valid_actions_for_status(_post_action_status),
-                        errors=_property_list_unsupported_advisories(req, adapter),
+                        errors=property_list_unsupported_advisories(req.packages, adapter),
                     )
                     # Log successful update_media_buy (pause/resume)
                     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -1417,7 +1392,7 @@ def _update_media_buy_impl(
                 affected_packages=affected_packages_list,
                 valid_actions=valid_actions_for_status(_final_status),
                 context=req.context,
-                errors=_property_list_unsupported_advisories(req, adapter),
+                errors=property_list_unsupported_advisories(req.packages, adapter),
             )
 
             # Log successful update_media_buy call

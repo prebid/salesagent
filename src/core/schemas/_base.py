@@ -2367,7 +2367,7 @@ class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """
 
     media_buys: list[GetMediaBuysMediaBuy] = Field(..., description="List of matching media buys")
-    errors: list[Any] | None = Field(default=None, description="Errors encountered during retrieval")
+    errors: list[Error] | None = Field(default=None, description="Errors encountered during retrieval")
     context: ContextObject | None = Field(default=None, description="Application-level context from the request")
 
     def model_dump(self, **kwargs):

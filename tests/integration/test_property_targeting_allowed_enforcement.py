@@ -148,13 +148,16 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    # The validation rule must not fire for an allowing product — but unrelated
-    # downstream errors are acceptable in this happy-path assertion so the test
-    # doesn't churn on unrelated failures. The bare `if isinstance` body alone
-    # made this vacuous (zero assertions ran on the success branch).
-    assert not isinstance(response, CreateMediaBuyError) or all(
-        "property_targeting_allowed" not in err.message for err in response.errors
-    )
+    # The validation rule must not fire for an allowing product. Separate
+    # assertion gates the success branch — without it the compound
+    # ``isinstance(...) or all(...)`` short-circuits on success and runs zero
+    # checks, leaving the happy-path proof vacuous. If the response IS an
+    # error variant, accept any failure cause that isn't the property_targeting
+    # rule itself (test stays decoupled from unrelated downstream errors).
+    assert not isinstance(
+        response, CreateMediaBuyError
+    ), f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
+    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
 @pytest.mark.requires_db
