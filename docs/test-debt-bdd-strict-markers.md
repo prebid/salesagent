@@ -123,21 +123,6 @@ here and the corresponding marker block.
 - **Severity:** P3
 - **Origin:** Batch 2 audit
 
-### C8 — MCP `list_creative_formats` wrapper missing `output_format_ids`, `input_format_ids`
-- **Scope:** `T-UC-005-inv-049-9-violated`, `-9-nofield`, `-10-violated`,
-  `-10-nofield` on the `[mcp]` transport (currently strict=False, labeled
-  "vacuous pass")
-- **Where:** `src/core/tools/creative_formats.py:440-494` — MCP wrapper
-  signature does not accept these filter params; `mcp_compat_middleware`
-  strips them
-- **Impact:** Tests pass on MCP for the wrong reason (the param disappears
-  before reaching the filter). 4 vacuous xpasses.
-- **Unblocks:** add both params to the MCP wrapper signature so MCP becomes
-  a real test surface. Then flip strict=True (the underlying filter is
-  already implemented in `_impl`).
-- **Severity:** P2
-- **Origin:** Batch 5 audit
-
 ### C10 — Description-only spec constraints in adcp library
 - **Scope:** Two specific Examples rows already xfailed strict=True:
   - `geo with geo_level=metro but no system` (`T-UC-004-boundary-reporting-dims`)
@@ -328,12 +313,12 @@ that scenario causes a hard suite failure rather than silent xpass.
 
 ## Tally
 
-- **Production gaps:** 10 (C1–C11, with C9 retired by 2026-05-08 cleanup)
+- **Production gaps:** 9 (C1–C11, with C8 and C9 retired)
 - **Test rewrites:** 7 (B1–B7)
 - **Test-helper improvements:** 2 (H1, H2)
-- **Total:** ~19 items
+- **Total:** ~18 items
 
-Severity distribution: 3× P1 (security/correctness), 7× P2, 9× P3.
+Severity distribution: 3× P1 (security/correctness), 8× P2, 7× P3.
 
 If filed as one umbrella GH issue with a checklist, this fits comfortably
 in a single tracking issue. If filed individually, only the 3 P1s warrant
