@@ -18,6 +18,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.helpers.account_resolution import create_accessible_delivery_account
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -52,6 +53,41 @@ def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
     assert mock_post.called, "No webhook POST was made"
     call_kwargs = mock_post.call_args_list[-1][1]
     return call_kwargs.get("headers", {})
+
+
+def _ensure_delivery_account_fixture(ctx: dict) -> None:
+    """Create the account records referenced by UC-004 delivery account rows."""
+    if ctx.get("_delivery_account_fixture_ready"):
+        return
+
+    env = ctx["env"]
+    if env is None or not hasattr(env, "_session") or env._session is None:
+        return
+
+    from tests.factories import PrincipalFactory, TenantFactory
+
+    tenant = ctx.get("db_tenant")
+    if tenant is None:
+        tenant = TenantFactory(tenant_id=ctx.get("tenant_id", "test_tenant"))
+        ctx["db_tenant"] = tenant
+
+    principal_id = getattr(env, "_principal_id", "buyer-001")
+    principal_key = f"db_principal_{principal_id}"
+    principal = ctx.get(principal_key)
+    if principal is None:
+        principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
+        ctx[principal_key] = principal
+
+    account = create_accessible_delivery_account(tenant=tenant, principal=principal)
+
+    from src.core.database.models import MediaBuy
+
+    for mb_id in ctx.get("media_buys", {}):
+        media_buy = env._session.get(MediaBuy, mb_id)
+        if media_buy is not None:
+            media_buy.account_id = account.account_id
+    env._session.commit()
+    ctx["_delivery_account_fixture_ready"] = True
 
 
 def _resolve_media_buy_id(ctx: dict, mb_id: str) -> str:
@@ -912,12 +948,14 @@ def when_boundary_daily_breakdown(ctx: dict, value: str) -> None:
 @when(parsers.parse("the Buyer Agent requests delivery metrics with account {value}"))
 def when_partition_account(ctx: dict, value: str) -> None:
     """Partition test: account value."""
+    _ensure_delivery_account_fixture(ctx)
     _dispatch_partition(ctx, "account", value)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics at account boundary {value}"))
 def when_boundary_account(ctx: dict, value: str) -> None:
     """Boundary test: account value."""
+    _ensure_delivery_account_fixture(ctx)
     _dispatch_partition(ctx, "account", value)
 
 

@@ -1967,6 +1967,7 @@ class AdCPRequestHandler(RequestHandler):
                 status_filter=params.get("status_filter"),
                 start_date=params.get("start_date"),
                 end_date=params.get("end_date"),
+                account=req.account,
                 context=params.get("context"),
                 identity=identity,
             )
