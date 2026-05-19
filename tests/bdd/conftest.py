@@ -791,6 +791,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         _UC004_XFAIL_TAGS: dict[str, tuple[str, bool]] = {
             # Empty array validation: schema allows [] but spec says reject
             "T-UC-004-identify-empty": ("empty media_buy_ids=[] not rejected by schema", True),
+            "T-UC-004-identify-buyer-refs-empty": (
+                "buyer_refs removed in adcp 3.12 — empty buyer_refs=[] is now an unknown field, silently ignored",
+                True,
+            ),
             # Invalid status filter: production doesn't validate enum values
             "T-UC-004-filter-invalid": ("invalid status_filter values not rejected", True),
             # Date range validation: production doesn't validate start>end
