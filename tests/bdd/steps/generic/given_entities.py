@@ -3,24 +3,36 @@
 These steps establish the pre-conditions for scenarios — a running seller agent,
 registered creative agents, and format catalogs.
 
-Steps construct real Format objects via FormatFactory and push them
-to the harness via ``_sync_registry(ctx)``.
+Steps load real Format objects from .creative-agent-catalog.json via
+``load_real_catalog()`` and push them to the harness via ``_sync_registry(ctx)``.
 """
 
 from __future__ import annotations
 
 from pytest_bdd import given, parsers
 
+from tests.bdd.steps.generic._registry import load_real_catalog
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
-from tests.factories.format import (
-    CATEGORY_MAP,
-    FormatFactory,
-    FormatIdFactory,
-    make_asset,
-    make_fixed_renders,
-    make_renders,
-    make_responsive_renders,
-)
+from tests.factories.format import FormatFactory, FormatIdFactory
+
+
+def _get_format_type(f: object) -> str | None:
+    """Get format type string, handling both enum (pre-3.12) and plain string (post-3.12)."""
+    t = getattr(f, "type", None)
+    if t is None:
+        return None
+    # Pre-3.12: enum with .value; post-3.12: plain string
+    return t.value if hasattr(t, "value") else str(t)
+
+
+def _group_by_type(formats: list[object]) -> dict[str, list[object]]:
+    """Group Format objects by their type value string."""
+    by_type: dict[str, list[object]] = {}
+    for f in formats:
+        t = _get_format_type(f) or "unknown"
+        by_type.setdefault(t, []).append(f)
+    return by_type
+
 
 # ── Background steps (apply to every scenario) ──────────────────────
 
@@ -73,9 +85,18 @@ def given_authenticated_request(ctx: dict, principal_id: str) -> None:
 
 @given("at least one creative agent is registered with format definitions")
 def given_creative_agent_registered(ctx: dict) -> None:
-    """At least one creative agent has format definitions (Background)."""
+    """Background precondition: creative agents exist with real catalog.
+
+    Loads the 50-format real catalog from .creative-agent-catalog.json and
+    feeds it to the harness mock. Scenarios that need specific formats
+    override via their own Given steps (which call _sync_registry).
+    """
+    real_formats = load_real_catalog()
+    ctx["env"].set_registry_formats(real_formats)
+    ctx["real_catalog"] = real_formats
+    ctx["real_catalog_by_type"] = _group_by_type(real_formats)
+    ctx["registry_formats"] = list(real_formats)
     ctx["creative_agents_registered"] = True
-    ctx.setdefault("registry_formats", [])
 
 
 # ── Creative agent registry: multi-category / type-specific ──────────
@@ -83,34 +104,47 @@ def given_creative_agent_registered(ctx: dict) -> None:
 
 @given("the creative agent registry has formats across multiple categories")
 def given_registry_multi_categories(ctx: dict) -> None:
-    """Registry has formats spanning multiple categories (display, video, etc.)."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name="banner", type=CATEGORY_MAP["display"]),
-        FormatFactory.build(name="pre-roll", type=CATEGORY_MAP["video"]),
-        FormatFactory.build(name="audio-spot", type=CATEGORY_MAP["audio"]),
-    ]
+    """Registry has formats spanning multiple categories (display, video, etc.).
+
+    Uses the real catalog loaded in Background and asserts it has the
+    required category diversity rather than building fake formats.
+    """
+    real_formats = load_real_catalog()
+    categories = {_get_format_type(f) for f in real_formats if _get_format_type(f)}
+    assert len(categories) >= 3, f"Real catalog needs 3+ categories, got: {categories}"
+    ctx["registry_formats"] = list(real_formats)
     _sync_registry(ctx)
 
 
 @given(parsers.parse('the creative agent registry has formats of types "{type_a}" and "{type_b}"'))
 def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
-    """Registry has formats of exactly two specified types."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name=f"{type_a}-format", type=CATEGORY_MAP.get(type_a)),
-        FormatFactory.build(name=f"{type_b}-format", type=CATEGORY_MAP.get(type_b)),
-    ]
+    """Registry has formats of exactly two specified types, selected from the real catalog."""
+    real_formats = load_real_catalog()
+    selected = [f for f in real_formats if _get_format_type(f) in (type_a, type_b)]
+    assert len(selected) >= 2, f"Real catalog needs formats of types {type_a} and {type_b}"
+    ctx["registry_formats"] = selected
     _sync_registry(ctx)
 
 
 @given("the seller has additional creative agents beyond the default")
 def given_additional_creative_agents(ctx: dict) -> None:
-    """Seller has additional creative agent referrals."""
-    ctx["creative_agent_referrals"] = [
-        {
-            "agent_url": "https://extra-creatives.example.com",
-            "capabilities": ["display", "video"],
-        },
+    """Seller has additional creative agent referrals.
+
+    Puts agent data in ctx AND wires it into the harness env so
+    production's registry._get_tenant_agents() returns these agents.
+    E2E: no-op — Docker's real creative agent registers itself.
+    """
+    from adcp.types import CreativeAgent as LibraryCreativeAgent
+    from adcp.types.generated_poc.enums.creative_agent_capability import CreativeAgentCapability
+
+    agents = [
+        LibraryCreativeAgent(
+            agent_url="https://extra-creatives.example.com",
+            capabilities=[CreativeAgentCapability.assembly, CreativeAgentCapability.delivery],
+        ),
     ]
+    ctx["creative_agent_referrals"] = agents
+    ctx["env"].set_creative_agents(agents)
 
 
 @given("no creative agents have any registered formats")
@@ -126,61 +160,70 @@ def given_no_formats(ctx: dict) -> None:
 
 @given("a seller with formats of various types")
 def given_seller_various_types(ctx: dict) -> None:
-    """Seller has formats across various type categories (partition/boundary)."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name="display-ad", type=CATEGORY_MAP["display"]),
-        FormatFactory.build(name="video-ad", type=CATEGORY_MAP["video"]),
-        FormatFactory.build(name="native-card", type=CATEGORY_MAP["native"]),
-    ]
+    """Seller has formats across various type categories, from real catalog."""
+    real_formats = load_real_catalog()
+    # Select one format per type to keep partition tests focused
+    seen_types: set[str] = set()
+    selected: list[object] = []
+    for f in real_formats:
+        t = _get_format_type(f)
+        if t and t not in seen_types:
+            seen_types.add(t)
+            selected.append(f)
+    assert len(selected) >= 3, f"Need 3+ types, got {seen_types}"
+    ctx["registry_formats"] = selected
     _sync_registry(ctx)
 
 
 @given("a seller with known format IDs in the catalog")
 def given_seller_known_ids(ctx: dict) -> None:
-    """Seller has formats with known IDs (partition/boundary)."""
+    """Seller has formats with known IDs from the real catalog."""
     from src.core.schemas import FormatId
 
-    fid_1 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-001")
-    fid_2 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-002")
-    ctx["registry_formats"] = [
-        FormatFactory.build(name="fmt-a", format_id=fid_1),
-        FormatFactory.build(name="fmt-b", format_id=fid_2),
-    ]
-    ctx["known_format_ids"] = [
-        FormatId(agent_url="https://a.example.com", id="fmt-001"),
-        FormatId(agent_url="https://a.example.com", id="fmt-002"),
-    ]
+    real_formats = load_real_catalog()
+    # Pick two formats from the real catalog
+    selected = real_formats[:2]
+    ctx["registry_formats"] = list(real_formats)
+    ctx["known_format_ids"] = [FormatId(agent_url=str(f.format_id.agent_url), id=f.format_id.id) for f in selected]
     _sync_registry(ctx)
 
 
 @given("a seller with formats containing various asset types")
 def given_seller_various_assets(ctx: dict) -> None:
-    """Seller has formats with various asset types (partition/boundary)."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name="image-ad", assets=[make_asset("image")]),
-        FormatFactory.build(name="video-ad", assets=[make_asset("video")]),
-        FormatFactory.build(name="rich-ad", assets=[make_asset("image"), make_asset("html")]),
-    ]
+    """Seller has formats with various asset types from the real catalog."""
+    real_formats = load_real_catalog()
+    # Select formats that have assets with various types
+    ctx["registry_formats"] = [f for f in real_formats if f.assets]
     _sync_registry(ctx)
 
 
 @given("a seller with formats of various render dimensions")
 def given_seller_various_dimensions(ctx: dict) -> None:
-    """Seller has formats with various render dimensions (partition/boundary)."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name="banner", renders=[make_renders(width=728, height=90)]),
-        FormatFactory.build(name="skyscraper", renders=[make_renders(width=160, height=600)]),
-    ]
+    """Seller has formats with various render dimensions from the real catalog."""
+    real_formats = load_real_catalog()
+    ctx["registry_formats"] = [f for f in real_formats if f.renders]
     _sync_registry(ctx)
 
 
 @given("a seller with both responsive and fixed-dimension formats")
 def given_seller_responsive_and_fixed(ctx: dict) -> None:
-    """Seller has both responsive and fixed-dimension formats (partition/boundary)."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name="responsive-banner", renders=[make_responsive_renders()]),
-        FormatFactory.build(name="fixed-banner", renders=[make_fixed_renders()]),
-    ]
+    """Seller has both responsive and fixed-dimension formats from the real catalog."""
+    real_formats = load_real_catalog()
+    ctx["registry_formats"] = [f for f in real_formats if f.renders]
+    # Verify the real catalog has both responsive and fixed
+    has_responsive = any(
+        r.dimensions and r.dimensions.responsive and r.dimensions.responsive.width
+        for f in ctx["registry_formats"]
+        for r in (f.renders or [])
+        if hasattr(r, "dimensions") and r.dimensions
+    )
+    has_fixed = any(
+        r.dimensions and r.dimensions.width and not (r.dimensions.responsive and r.dimensions.responsive.width)
+        for f in ctx["registry_formats"]
+        for r in (f.renders or [])
+        if hasattr(r, "dimensions") and r.dimensions
+    )
+    assert has_responsive and has_fixed, "Real catalog needs both responsive and fixed formats"
     _sync_registry(ctx)
 
 
@@ -219,15 +262,21 @@ def given_seller_various_disclosure(ctx: dict) -> None:
 
 @given("a seller with formats that produce various output formats")
 def given_seller_various_output_formats(ctx: dict) -> None:
-    """Seller has formats with various output_format_ids (partition/boundary)."""
+    """Seller has formats with various output_format_ids.
+
+    Uses real catalog as base and adds two formats with specific
+    output_format_ids for partition/boundary testing.
+    """
     from src.core.schemas import FormatId
 
+    real_formats = load_real_catalog()
     out_1 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-1")
     out_2 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-2")
-    ctx["registry_formats"] = [
+    extra = [
         FormatFactory.build(name="builder-a", output_format_ids=[out_1]),
         FormatFactory.build(name="builder-b", output_format_ids=[out_2]),
     ]
+    ctx["registry_formats"] = list(real_formats) + extra
     ctx["known_output_format_ids"] = [
         FormatId(agent_url="https://a.example.com", id="fmt-1"),
         FormatId(agent_url="https://a.example.com", id="fmt-2"),
@@ -237,15 +286,21 @@ def given_seller_various_output_formats(ctx: dict) -> None:
 
 @given("a seller with formats that accept various input formats")
 def given_seller_various_input_formats(ctx: dict) -> None:
-    """Seller has formats with various input_format_ids (partition/boundary)."""
+    """Seller has formats with various input_format_ids.
+
+    Uses real catalog as base and adds two formats with specific
+    input_format_ids for partition/boundary testing.
+    """
     from src.core.schemas import FormatId
 
+    real_formats = load_real_catalog()
     in_1 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-1")
     in_2 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-2")
-    ctx["registry_formats"] = [
+    extra = [
         FormatFactory.build(name="resizer", input_format_ids=[in_1]),
         FormatFactory.build(name="transcoder", input_format_ids=[in_2]),
     ]
+    ctx["registry_formats"] = list(real_formats) + extra
     ctx["known_input_format_ids"] = [
         FormatId(agent_url="https://a.example.com", id="fmt-1"),
         FormatId(agent_url="https://a.example.com", id="fmt-2"),
@@ -255,20 +310,30 @@ def given_seller_various_input_formats(ctx: dict) -> None:
 
 @given("a seller with creative agent formats of various types")
 def given_seller_creative_agent_various_types(ctx: dict) -> None:
-    """Seller has creative agent formats of various types (partition/boundary)."""
-    ctx["creative_agent_formats"] = [
-        {"name": "audio-format", "type": "audio"},
-        {"name": "video-format", "type": "video"},
-        {"name": "display-format", "type": "display"},
-        {"name": "dooh-format", "type": "dooh"},
-    ]
+    """Seller has creative agent formats of various types from the real catalog."""
+    real_formats = load_real_catalog()
+    # Select one format per type for the creative agent format list
+    seen_types: set[str] = set()
+    selected: list[object] = []
+    for f in real_formats:
+        t = _get_format_type(f)
+        if t and t not in seen_types:
+            seen_types.add(t)
+            selected.append(f)
+    ctx["creative_agent_formats"] = selected
 
 
 @given("a seller with creative agent formats containing various asset types")
 def given_seller_creative_agent_various_assets(ctx: dict) -> None:
-    """Seller has creative agent formats with various asset types (partition/boundary)."""
-    ctx["creative_agent_formats"] = [
-        {"name": "image-format", "assets": [{"type": "image"}]},
-        {"name": "video-format", "assets": [{"type": "video"}]},
-        {"name": "text-format", "assets": [{"type": "text"}]},
-    ]
+    """Seller has creative agent formats with various asset types from the real catalog."""
+    real_formats = load_real_catalog()
+    # Select formats that have distinct asset types
+    seen_asset_types: set[str] = set()
+    selected: list[object] = []
+    for f in real_formats:
+        if f.assets:
+            asset_type = getattr(f.assets[0], "asset_type", None)
+            if asset_type and asset_type not in seen_asset_types:
+                seen_asset_types.add(asset_type)
+                selected.append(f)
+    ctx["creative_agent_formats"] = selected

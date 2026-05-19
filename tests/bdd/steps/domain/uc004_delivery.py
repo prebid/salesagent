@@ -1910,6 +1910,12 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
 @then(parsers.re(r"the (?P<field>.+) check should result in (?P<expected>.+)"))
 @then(parsers.re(r"the (?P<field>.+) check should be (?P<expected>.+)"))
 @then(parsers.re(r"the (?P<field>ownership|resolution) should be (?P<expected>.+)"))
+@then(
+    parsers.re(
+        r"the (?P<field>reporting_dimensions|attribution_window|daily breakdown"
+        r"|account|status|date|sampling) handling should be (?P<expected>.+)"
+    )
+)
 def then_partition_or_boundary_outcome(ctx: dict, field: str, expected: str) -> None:
     """Partition/boundary test: assert outcome matches expected for the given field."""
     _assert_partition_or_boundary(ctx, expected, field)
