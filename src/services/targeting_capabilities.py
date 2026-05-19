@@ -14,6 +14,7 @@ for upstream inclusion in AdCP.
 
 from typing import TYPE_CHECKING, Any
 
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
 
 if TYPE_CHECKING:
@@ -322,8 +323,6 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
     site; only the raise shape is shared.
     """
     if violations:
-        from src.core.exceptions import AdCPValidationError
-
         raise AdCPValidationError(
             f"Targeting validation failed: {'; '.join(violations)}",
             field="packages[].targeting_overlay.property_list",

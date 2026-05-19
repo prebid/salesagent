@@ -35,6 +35,7 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +159,6 @@ def _get_adcp_capabilities_impl(
 
     # Build features - be honest about what we actually support
     # These should be adapter-dependent in the future
-    from src.services.targeting_capabilities import supports_property_list_filtering
-
     features = MediaBuyFeatures(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,

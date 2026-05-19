@@ -130,7 +130,10 @@ from src.services.activity_feed import activity_feed
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    validate_geo_overlap,
+    validate_overlay_targeting,
     validate_property_targeting_allowed,
+    validate_unknown_targeting_fields,
 )
 
 # --- Helper Functions ---
@@ -654,8 +657,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     targeting_overlay = None
                     targeting_raw = package_config.get("targeting_overlay") or package_config.get("targeting")
                     if targeting_raw:
-                        from src.core.schemas import Targeting
-
                         try:
                             targeting_overlay = Targeting(**targeting_raw)
                         except (TypeError, ValidationError) as exc:
@@ -684,16 +685,14 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         delivery_type_str = "non_guaranteed"  # Default fallback
 
                     # Convert formats to FormatId objects with comprehensive validation
-                    from src.core.schemas import FormatId as FormatIdType
-
-                    format_ids_list: list[FormatIdType] = []
+                    format_ids_list: list[FormatId] = []
                     formats = product.format_ids or []
 
                     logger.debug(f"[APPROVAL] Converting {len(formats)} formats for package {package_id}")
 
                     for idx, fmt in enumerate(formats):
                         try:
-                            validated = FormatIdType.model_validate(fmt)
+                            validated = FormatId.model_validate(fmt)
                             url_str = str(validated.agent_url)
                             if not url_str.startswith(("http://", "https://")):
                                 raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
@@ -1964,12 +1963,6 @@ async def _create_media_buy_impl(
         if req.packages:
             for pkg in req.packages:
                 if pkg.targeting_overlay is not None:
-                    from src.services.targeting_capabilities import (
-                        validate_geo_overlap,
-                        validate_overlay_targeting,
-                        validate_unknown_targeting_fields,
-                    )
-
                     # Reject unknown targeting fields (typos, bogus names) via model_extra
                     unknown_violations = validate_unknown_targeting_fields(pkg.targeting_overlay)
 

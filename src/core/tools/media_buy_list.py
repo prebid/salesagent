@@ -105,14 +105,14 @@ def _get_media_buys_impl(
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "PRINCIPAL_ID_MISSING", "message": "Principal ID not found in context"}],
+            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
         )
 
     principal = get_principal_object(principal_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "PRINCIPAL_NOT_FOUND", "message": f"Principal {principal_id} not found"}],
+            errors=[Error(code="AUTH_REQUIRED", message=f"Principal {principal_id} not found")],
         )
 
     tenant = identity.tenant

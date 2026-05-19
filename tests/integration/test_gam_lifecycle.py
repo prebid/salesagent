@@ -115,17 +115,20 @@ class TestGAMOrderLifecycleIntegration:
                     budget=None,
                     today=datetime.now(UTC),
                 )
-                # Tolerant form: PR #1276 round-4 added optional `errors` to
-                # UpdateMediaBuySuccess for non-fatal advisories (AdCP 3.0.7
-                # error-handling.mdx). The old "Success has no errors field"
-                # assumption no longer holds — accept None, [], or any truthy
-                # list (the latter would mean Error response; FIXME below).
-                # FIXME(gam-lifecycle): the GAM adapter currently returns
-                # UNSUPPORTED_FEATURE for `submit_for_approval`/`archive_order`,
-                # so this loop has been silently testing the Error path with
-                # `errors=[Error(...)]`. Untangle in a separate ticket — fixing
-                # it here would expand scope of the property_list review work.
-                assert not hasattr(response, "errors") or response.errors is None or response.errors
+                # The GAM adapter currently returns UNSUPPORTED_FEATURE for
+                # ``submit_for_approval`` and ``archive_order`` even though
+                # ``allowed_actions`` documents them as user-permitted. Pin
+                # the actual current behavior so when the adapter is fixed
+                # (separate ticket — out of scope here), the assertion will
+                # force re-evaluation. The previous tolerant form
+                # ``... or response.errors`` admitted every state and hid
+                # this drift entirely.
+                assert (
+                    response.errors is not None and len(response.errors) > 0
+                ), f"Expected Error response for action={action!r}; GAM currently rejects with UNSUPPORTED_FEATURE"
+                assert (
+                    response.errors[0].code == "UNSUPPORTED_FEATURE"
+                ), f"Expected UNSUPPORTED_FEATURE for action={action!r}, got {response.errors[0].code}"
 
             # Admin-only action should fail for regular user
             response = regular_adapter.update_media_buy(
@@ -158,8 +161,17 @@ class TestGAMOrderLifecycleIntegration:
                 budget=None,
                 today=datetime.now(UTC),
             )
-            # Tolerant form — see note above on the `errors` field tolerance.
-            assert not hasattr(response, "errors") or response.errors is None or response.errors
+            # The GAM adapter currently returns UNSUPPORTED_FEATURE for
+            # ``approve_order`` in dry-run mode even with an admin principal.
+            # Pin actual current behavior; when the adapter is fixed (separate
+            # ticket) this assertion forces re-evaluation. Previous tolerant
+            # form admitted every state and silently passed.
+            assert (
+                response.errors is not None and len(response.errors) > 0
+            ), "Expected Error response for approve_order; GAM dry-run currently returns UNSUPPORTED_FEATURE"
+            assert (
+                response.errors[0].code == "UNSUPPORTED_FEATURE"
+            ), f"Expected UNSUPPORTED_FEATURE for approve_order, got {response.errors[0].code}"
 
     def test_guaranteed_line_item_classification(self):
         """Test line item type classification logic with real data structures."""
@@ -212,9 +224,15 @@ class TestGAMOrderLifecycleIntegration:
                     budget=None,
                     today=datetime.now(UTC),
                 )
-                # adcp v1.2.1 oneOf pattern: Success response has no errors field
-                assert not hasattr(response, "errors") or (hasattr(response, "errors") and response.errors)
-                # Success response verified by absence of errors above
+                # The GAM adapter currently rejects ``activate_order`` upfront
+                # with UNSUPPORTED_FEATURE before the ``_check_order_has_guaranteed_items``
+                # patch can branch — pin this drift so the assertion forces
+                # re-evaluation when the adapter is fixed (separate ticket).
+                # Previous form admitted every state and silently passed.
+                assert (
+                    response.errors is not None and len(response.errors) > 0
+                ), "Expected Error response for activate_order; GAM dry-run currently returns UNSUPPORTED_FEATURE"
+                assert response.errors[0].code == "UNSUPPORTED_FEATURE"
 
             # Test activation with guaranteed items (should create workflow step)
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(True, ["STANDARD"])):
@@ -229,10 +247,13 @@ class TestGAMOrderLifecycleIntegration:
                         budget=None,
                         today=datetime.now(UTC),
                     )
-                    # Tolerant form — see lifecycle_workflow_validation note.
-                    # `workflow_step_id` is a salesagent-internal field for tracking
-                    # activation approvals and is the actual semantic check here.
-                    assert not hasattr(response, "errors") or response.errors is None or response.errors
+                    # Guaranteed activation actually creates the workflow
+                    # step (the patched ``create_activation_workflow_step``
+                    # runs even though the adapter logs "Unsupported action"
+                    # for activate_order). The response is Success with
+                    # ``workflow_step_id`` populated and ``errors=None`` —
+                    # the workflow_step_id below is the semantic anchor.
+                    assert response.errors is None or response.errors == []
                     assert response.workflow_step_id == "test_step_id"
 
     # Helper method for line item classification (no external dependencies)
