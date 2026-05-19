@@ -19,7 +19,6 @@ import pytest
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from pydantic import RootModel, ValidationError
 
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
@@ -51,9 +50,11 @@ def make_identity(
     testing_context=None,
 ):
     """Create a ResolvedIdentity for testing."""
+    from tests.factories import PrincipalFactory
+
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "adapter_type": "mock"}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,

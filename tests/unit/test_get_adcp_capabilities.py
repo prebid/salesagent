@@ -226,10 +226,9 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
-                # Pass identity with tenant info directly (no auth extraction in _impl)
-                from src.core.resolved_identity import ResolvedIdentity
+                from tests.factories import PrincipalFactory
 
-                identity = ResolvedIdentity(
+                identity = PrincipalFactory.make_identity(
                     principal_id=None,
                     tenant_id="test-tenant-123",
                     tenant=mock_tenant,
@@ -305,9 +304,9 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
-                from src.core.resolved_identity import ResolvedIdentity
+                from tests.factories import PrincipalFactory
 
-                identity = ResolvedIdentity(
+                identity = PrincipalFactory.make_identity(
                     principal_id="principal-123",
                     tenant_id="test-tenant-456",
                     tenant=mock_tenant,
@@ -371,11 +370,11 @@ def _make_capabilities_identity(
     tenant: dict | None = None,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity for capabilities tests."""
-    from src.core.resolved_identity import ResolvedIdentity
+    from tests.factories import PrincipalFactory
 
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "name": "Test Publisher", "subdomain": "testpub"}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,

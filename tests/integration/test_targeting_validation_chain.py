@@ -71,12 +71,13 @@ def targeting_tenant(integration_db):
 
 
 def _make_identity() -> ResolvedIdentity:
-    return ResolvedIdentity(
+    from tests.factories import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
         principal_id="test_adv",
         tenant_id=TENANT_ID,
-        tenant={"tenant_id": TENANT_ID},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_targeting"),
         protocol="mcp",
+        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_targeting"),
     )
 
 

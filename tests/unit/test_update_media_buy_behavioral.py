@@ -30,7 +30,6 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 # ---------------------------------------------------------------------------
@@ -47,12 +46,14 @@ def _make_identity(
     dry_run: bool = False,
 ) -> ResolvedIdentity:
     """Create a ResolvedIdentity for tests."""
-    return ResolvedIdentity(
+    from tests.factories import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "name": "Test"},
         protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=dry_run),
+        dry_run=dry_run,
     )
 
 
