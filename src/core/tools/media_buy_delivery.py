@@ -105,6 +105,13 @@ def _get_media_buy_delivery_impl(
             context=context_val,
         )
 
+    account_ref = getattr(req, "account", None)
+    if account_ref is not None:
+        from src.core.transport_helpers import enrich_identity_with_account
+
+        identity = enrich_identity_with_account(identity, account_ref)
+        assert identity is not None  # identity was validated above
+
     # Get the Principal object
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
@@ -614,12 +621,6 @@ async def get_media_buy_delivery(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Handle account resolution at boundary (same as sync_creatives pattern)
-    if account is not None and identity is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
-        identity = enrich_identity_with_account(identity, account)
-
     # Create AdCP-compliant request object
     try:
         req = GetMediaBuyDeliveryRequest(
@@ -630,6 +631,7 @@ async def get_media_buy_delivery(
             reporting_dimensions=reporting_dimensions,
             attribution_window=attribution_window,
             include_package_daily_breakdown=include_package_daily_breakdown,
+            account=account,
             context=cast(ContextObject | None, context),
         )
 
@@ -676,12 +678,6 @@ def get_media_buy_delivery_raw(
 
         identity = resolve_identity_from_context(ctx)
 
-    # Handle account resolution at boundary (same as sync_creatives pattern)
-    if account is not None and identity is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
-        identity = enrich_identity_with_account(identity, account)
-
     # Create request object
     req = GetMediaBuyDeliveryRequest(
         media_buy_ids=media_buy_ids,
@@ -691,6 +687,7 @@ def get_media_buy_delivery_raw(
         reporting_dimensions=reporting_dimensions,
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
+        account=account,
         context=cast(ContextObject | None, context),
     )
 
