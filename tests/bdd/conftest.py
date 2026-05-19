@@ -2068,15 +2068,19 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx[f"db_principal_{env._principal_id}"] = principal
                 yield
         elif harness_type == "webhook":
+            request.getfixturevalue("integration_db")
             from tests.harness.delivery_webhook import WebhookEnv
 
             with WebhookEnv() as env:
+                env.setup_default_data()
                 ctx["env"] = env
                 yield
         elif harness_type == "circuit-breaker":
+            request.getfixturevalue("integration_db")
             from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 
             with CircuitBreakerEnv() as env:
+                env.setup_default_data()
                 ctx["env"] = env
                 yield
         else:
