@@ -353,6 +353,104 @@ def test_something(integration_db, sample_tenant):
 
 All tracked by `salesagent-qo8a`.
 
+### Silent Except Guard
+
+**File:** `tests/unit/test_architecture_no_silent_except.py`
+
+**What it enforces:** Broad-exception handlers (`except Exception:` or bare
+`except:`) in `src/` must not silently swallow the exception. Three patterns
+are banned:
+
+1. **Empty / `pass` / `continue`** — single-statement bodies that drop the
+   exception entirely.
+2. **`print(...)` / `console.print(...)` / `traceback.print_exc()`** without
+   re-raising — failures only reach stdout or Rich console output, never
+   reach structured logging or alerting. Whether the body ends with a
+   terminator (`continue`/`return`/etc.) or falls through, the result is
+   the same: the failure is invisible.
+
+**Why it matters:** Both shapes hide bugs and data loss. The
+`print/console.print` variant is especially dangerous because reviewers see
+"we logged it" and stop reading — but stdout/Rich output never reaches log
+aggregation or alerting in production. A handler that catches `Exception`
+must use structured logging (`logger.exception(...)` is preferred — it
+auto-attaches the traceback) and either re-raise when the failure must
+propagate or document why a silent skip is correct (e.g., a fire-and-forget
+done-callback where re-raise can't propagate anyway).
+
+#### How it works
+
+Two AST predicates walk every `ast.ExceptHandler` node in `src/`:
+
+**`_handler_body_is_silent`** matches the empty / `pass` / `continue` shape:
+
+```python
+# FLAGGED
+except Exception:
+    pass
+
+except Exception:
+    continue
+```
+
+**`_handler_body_is_print_swallow`** matches handlers whose body contains a
+`print` / `console.print` / `*.print_exc` / `*.print_stack` call AND no
+`raise` anywhere — regardless of how the body terminates:
+
+```python
+# FLAGGED — print/console.print without re-raise
+except Exception as e:
+    print(f"Warning: {e}")
+    continue
+
+except Exception as e:
+    console.print(f"[red]Error: {e}[/red]")          # falls through
+
+except Exception as e:
+    console.print(f"[red]Error: {e}[/red]")
+    traceback.print_exc()                             # still falls through
+
+# NOT FLAGGED — logger.* reaches structured logging
+except Exception as e:
+    logger.error(f"Error: {e}", exc_info=True)
+    return None
+
+# NOT FLAGGED — re-raise propagates the failure
+except Exception:
+    logger.exception("Error during operation")
+    raise
+```
+
+Only `print`, `console.print`, and `*.print_exc` / `*.print_stack` are
+matched. `logger.error`, `logger.warning`, `logger.exception`, etc. are
+intentionally NOT flagged — they reach structured logging and are not
+silent swallows.
+
+The `has_raise` check skips into nested `FunctionDef`/`AsyncFunctionDef`/
+`Lambda` so that a closure which *defines* a `raise` doesn't mask the
+enclosing handler's swallow.
+
+`_is_broad_exception_handler` recognizes `except Exception:`, bare `except:`,
+qualified `except builtins.Exception:`, and tuple-of-types
+`except (Exception, KeyError):`.
+
+#### Tests
+
+| Test | What It Checks |
+|------|---------------|
+| `test_no_silent_broad_except_in_src` | Scans `src/` for either silent pattern; fails on any unallowlisted violation |
+| `test_known_violations_not_stale` | Allowlisted entries must still exist in source; stale entries fail the test |
+| `test_is_broad_exception_handler[...]` | Predicate self-test: bare/Name/Attribute/Tuple-of-types matching |
+| `test_has_raise_excluding_closures[...]` | Predicate self-test: detects `raise` in body but skips nested closures |
+| `test_print_swallow_predicate_positive_cases[...]` | Predicate self-test: positive shapes including the 3 fixed sites |
+| `test_print_swallow_predicate_negative_cases[...]` | Predicate self-test: rejects re-raised handlers, logger calls, single pass/continue |
+
+#### Allowlist policy
+
+`_KNOWN_VIOLATIONS` is shared between both predicates and is currently empty —
+all pre-existing violations have been fixed in-source. New violations in
+either shape fail CI immediately.
+
 ### BDD Step Quality Guards
 
 Five AST-scanning guards enforce step definition quality in `tests/bdd/steps/`.
