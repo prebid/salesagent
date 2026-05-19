@@ -196,24 +196,37 @@ class AdCPRequestHandler(RequestHandler):
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     @staticmethod
-    def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
-        """Build the dispatcher result dict for a failed skill invocation.
+    def _build_error_envelope(exc: Exception) -> dict[str, Any]:
+        """Build a spec-compliant two-layer envelope for any exception.
 
-        Both the typed-AdCPError branch and the untyped fallthrough land here so
-        the artifact DataPart always carries a spec-compliant two-layer envelope
-        — never a flat ``{"error": "..."}`` dict that would force the storyboard
-        runner to synthesize ``MCP_ERROR``. Untyped exceptions are wrapped in a
-        synthetic ``AdCPError`` (``INTERNAL_ERROR`` → ``SERVICE_UNAVAILABLE``
-        via ``wire_error_code``) so the wire output stays in STANDARD_ERROR_CODES.
+        Single source of truth for "wrap-arbitrary-exception → wire envelope"
+        used by both the per-skill dispatcher (``_build_failed_skill_result``)
+        and the top-level ``on_message_send`` error handler. Untyped exceptions
+        are wrapped in a synthetic ``AdCPError`` (``INTERNAL_ERROR`` →
+        ``SERVICE_UNAVAILABLE`` via ``wire_error_code``) so the wire output
+        stays in ``STANDARD_ERROR_CODES`` and the envelope shape never
+        degrades to a flat ``{"error": "..."}`` dict the storyboard runner
+        would synthesize as ``MCP_ERROR``.
         """
         from src.core.exceptions import AdCPError, build_two_layer_error_envelope
 
         if not isinstance(exc, AdCPError):
             exc = AdCPError(str(exc) or type(exc).__name__)
+        return build_two_layer_error_envelope(exc)
+
+    @staticmethod
+    def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
+        """Build the dispatcher result dict for a failed skill invocation.
+
+        Both the typed-AdCPError branch and the untyped fallthrough land here so
+        the artifact DataPart always carries a spec-compliant two-layer envelope
+        — never a flat ``{"error": "..."}`` dict.
+        """
+        envelope = AdCPRequestHandler._build_error_envelope(exc)
         return {
             "skill": skill_name,
-            "error": exc.message,
-            "error_envelope": build_two_layer_error_envelope(exc),
+            "error": envelope["errors"][0]["message"],
+            "error_envelope": envelope,
             "success": False,
         }
 
@@ -960,13 +973,16 @@ class AdCPRequestHandler(RequestHandler):
 
             # Send protocol-level webhook notification for failure if configured
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-            # Attach error to task artifacts
+            # Attach error to task artifacts as a spec-compliant two-layer
+            # envelope (same shape as failed-skill DataParts) so storyboard
+            # runners can ``JSON.parse`` the artifact uniformly regardless of
+            # which failure path produced it.
             del task.artifacts[:]
             task.artifacts.append(
                 Artifact(
                     artifact_id="error_1",
                     name="processing_error",
-                    parts=[Part(data=_dict_to_value({"error": str(e), "error_type": type(e).__name__}))],
+                    parts=[Part(data=_dict_to_value(self._build_error_envelope(e)))],
                 )
             )
 
