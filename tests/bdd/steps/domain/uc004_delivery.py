@@ -638,21 +638,26 @@ def when_webhook_fires(ctx: dict, mb_id: str) -> None:
 
 @when(parsers.parse('the system delivers a webhook report for "{mb_id}"'))
 def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
-    """System delivers a webhook report for a specific media buy."""
-    env = ctx["env"]
+    """System delivers a webhook report via WebhookDeliveryService."""
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+        result = _call_webhook_service(ctx, mb_id=mb_id)
+        ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
 
 
 @when(parsers.parse('the system delivers a "{report_type}" webhook report for "{mb_id}"'))
 def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
-    """System delivers a typed webhook report."""
+    """System delivers a typed webhook report via WebhookDeliveryService."""
     ctx["report_type"] = report_type
-    env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id, notification_type=report_type)
+        result = _call_webhook_service(
+            ctx,
+            mb_id=mb_id,
+            is_final=(report_type == "final"),
+            is_adjusted=(report_type == "adjusted"),
+        )
+        ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1466,8 +1471,8 @@ def then_hmac_computation(ctx: dict) -> None:
     raw_sig = headers.get("X-ADCP-Signature") or headers.get("X-Webhook-Signature", "")
     signature = raw_sig.removeprefix("sha256=")
     assert signature, "Expected HMAC signature header to be present and non-empty"
-    signing_secret: str = ctx.get("signing_secret", "")
-    assert signing_secret, "Test setup must store signing_secret in ctx['signing_secret']"
+    signing_secret: str = ctx.get("webhook_secret", "")
+    assert signing_secret, "Test setup must store webhook_secret in ctx['webhook_secret']"
     payload_str = json_lib.dumps(payload, sort_keys=True, separators=(",", ":"))
     message = f"{timestamp}.{payload_str}".encode()
     expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()

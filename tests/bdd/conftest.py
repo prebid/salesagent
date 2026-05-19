@@ -1969,7 +1969,10 @@ def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
     if "webhook-reliability" in marker_names:
         return "circuit-breaker"
     if "webhook" in marker_names:
-        return "webhook"
+        # Webhook scenarios (HMAC, bearer, sequence, notification_type) use
+        # WebhookDeliveryService which lives in CircuitBreakerEnv, not the
+        # older deliver_webhook_with_retry from WebhookEnv.
+        return "circuit-breaker"
     return "poll"
 
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.core.database.models import PushNotificationConfig
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import CircuitBreakerMixin
@@ -67,3 +68,39 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
 
         # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
         self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
+
+    def make_webhook_config(
+        self,
+        url: str = "https://example.com/webhook",
+        auth_type: str | None = None,
+        auth_token: str | None = None,
+        secret: str | None = None,
+    ) -> PushNotificationConfig:
+        """Create a real PushNotificationConfig via factory.
+
+        Uses the env's tenant/principal (from setup_default_data) so the
+        webhook config is discoverable by call_send which queries by
+        self._tenant_id.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Principal, Tenant
+        from tests.factories import PushNotificationConfigFactory
+
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).one()
+        principal = self._session.scalars(
+            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
+        ).one()
+
+        return PushNotificationConfigFactory(
+            tenant=tenant,
+            principal=principal,
+            url=url,
+            authentication_type=auth_type,
+            authentication_token=auth_token,
+            webhook_secret=secret,
+        )
+
+    def set_db_webhooks(self, configs: list[PushNotificationConfig]) -> None:
+        """Commit webhook configs to the real database."""
+        self._commit_factory_data()
