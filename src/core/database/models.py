@@ -1329,6 +1329,8 @@ class TMPProvider(Base):
     timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    auth_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    auth_credentials: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -1370,6 +1372,7 @@ class TMPProvider(Base):
         else:
             result["countries"] = self.countries
             result["uid_types"] = self.uid_types
+            result["properties"] = self.properties
         return result
 
 

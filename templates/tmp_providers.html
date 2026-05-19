@@ -120,6 +120,11 @@ Sales Agent Admin{% endblock %} {% block content %}
           {% else %}
           <span style="color: #9ca3af">Inactive</span>
           {% endif %}
+          {% if provider.auth_type %}
+          <span class="badge" style="background: #d1fae5; color: #065f46; margin-left: 0.25rem">🔑 Auth</span>
+          {% else %}
+          <span class="badge" style="background: #fef3c7; color: #92400e; margin-left: 0.25rem">⚠️ No Auth</span>
+          {% endif %}
         </td>
         <td>
           <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
@@ -158,13 +163,12 @@ Sales Agent Admin{% endblock %} {% block content %}
 </div>
 
 <script>
+  const scriptRoot = '{{ script_name }}' || '';
+  const tenantId = '{{ tenant_id }}';
+  const providerBase = `${scriptRoot}/tenant/${tenantId}/tmp-providers/`;
+
   function healthCheck(providerId, providerName) {
-    fetch(
-      `{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant_id) }}${providerId}/health`,
-      {
-        method: "GET",
-      },
-    )
+    fetch(`${providerBase}${providerId}/health`, { method: "GET" })
       .then((r) => r.json())
       .then((data) => {
         if (data.success) {
@@ -185,16 +189,13 @@ Sales Agent Admin{% endblock %} {% block content %}
       )
     )
       return;
-    fetch(
-      `{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant_id) }}${providerId}/deactivate`,
-      {
-        method: "POST",
-        headers: {
-          "X-CSRFToken":
-            document.querySelector('meta[name="csrf-token"]')?.content || "",
-        },
+    fetch(`${providerBase}${providerId}/deactivate`, {
+      method: "POST",
+      headers: {
+        "X-CSRFToken":
+          document.querySelector('meta[name="csrf-token"]')?.content || "",
       },
-    )
+    })
       .then((r) => r.json())
       .then((data) => {
         if (data.success) {
@@ -213,16 +214,13 @@ Sales Agent Admin{% endblock %} {% block content %}
       )
     )
       return;
-    fetch(
-      `{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant_id) }}${providerId}/delete`,
-      {
-        method: "DELETE",
-        headers: {
-          "X-CSRFToken":
-            document.querySelector('meta[name="csrf-token"]')?.content || "",
-        },
+    fetch(`${providerBase}${providerId}/delete`, {
+      method: "DELETE",
+      headers: {
+        "X-CSRFToken":
+          document.querySelector('meta[name="csrf-token"]')?.content || "",
       },
-    )
+    })
       .then((r) => r.json())
       .then((data) => {
         if (data.success) {
