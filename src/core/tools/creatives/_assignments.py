@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPPackageNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
 
 logger = logging.getLogger(__name__)
@@ -77,9 +77,7 @@ def _process_assignments(
                             # Use the specific subclass so the wire code is PACKAGE_NOT_FOUND
                             # (STANDARD); the base AdCPNotFoundError would emit INVALID_REQUEST
                             # via the wire-safe translation and lose buyer-facing specificity.
-                            from src.core.exceptions import AdCPPackageNotFoundError
-
-                            raise AdCPPackageNotFoundError(error_msg, recovery="correctable")
+                            raise AdCPPackageNotFoundError(error_msg)
                         else:
                             logger.warning(f"Package not found during assignment: {package_id}, skipping")
                             continue

@@ -164,6 +164,28 @@ async def permission_error_handler(request: Request, exc: PermissionError) -> JS
     return _envelope_response(AdCPAuthorizationError(str(exc)))
 
 
+from fastmcp.exceptions import ToolError  # noqa: E402
+
+
+@app.exception_handler(ToolError)
+async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
+    """Global ToolError handler — catches MCP boundary errors that reach REST.
+
+    The MCP boundary translator (``with_error_logging``) converts typed
+    AdCPErrors into ``AdCPToolError`` carrying a two-layer envelope and
+    ``status_code``. When MCP-wrapped tools are invoked from REST paths and
+    that envelope bubbles up, this handler forwards it unchanged — removing
+    the need for every REST route to duplicate a ``try/except ToolError``
+    block. Plain ``ToolError`` (no typed source) falls through
+    ``_handle_tool_error``'s ``_ERROR_CODE_TO_STATUS`` lookup.
+
+    Matches subclasses, so ``AdCPToolError`` is caught here too.
+    """
+    from src.routes.api_v1 import _handle_tool_error
+
+    return _handle_tool_error(exc)
+
+
 # ---------------------------------------------------------------------------
 # A2A Integration — add routes directly to the FastAPI app (not as sub-app)
 # so middleware and scope["state"] propagate correctly within the same ASGI app.

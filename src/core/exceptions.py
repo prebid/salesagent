@@ -227,6 +227,15 @@ class AdCPError(Exception):
 
         ``context`` flows into ``details["context"]`` so the SDK helper
         doesn't drop request-correlation data on the floor.
+
+        .. deprecated::
+            Effectively legacy now that ``build_two_layer_error_envelope()``
+            is the single source of truth for the wire envelope. Prefer the
+            envelope builder for any new code path. This method intentionally
+            differs in shape — ``context`` is nested under ``details`` here
+            but appears at the top level in the two-layer envelope — and is
+            retained only for non-envelope callers (audit logging, SDK
+            interop) that still want the flat ``{"errors": [...]}`` payload.
         """
         merged_details = dict(self.details) if self.details else {}
         serialized_context = _serialize_context(self.context)
@@ -448,14 +457,22 @@ class AdCPBudgetTooLowError(AdCPError):
 class AdCPCapabilityNotSupportedError(AdCPError):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
-    Recovery=correctable here is an **intentional divergence** from the AdCP
-    spec, which classifies ``UNSUPPORTED_FEATURE`` as ``terminal``. The
-    salesagent emits this when the buyer can correct by dropping the
-    unsupported feature from the request (e.g. removing ``property_list``
-    targeting against an adapter that doesn't compile it) — i.e. the buyer
-    holds the lever for recovery. We keep ``correctable`` so retry-on-fix
-    semantics work end-to-end; revisit if the SDK runtime starts enforcing
-    the spec's ``terminal`` classification.
+    .. note::
+        **Intentional spec divergence.** The AdCP spec classifies
+        ``UNSUPPORTED_FEATURE`` as ``terminal``; we emit ``correctable``.
+        The salesagent raises this exception only when the buyer holds the
+        recovery lever — they can fix the request by dropping the
+        unsupported feature (e.g. removing ``property_list`` targeting
+        against an adapter that doesn't compile it). Classifying it
+        ``terminal`` would tell the buyer agent to give up on a recoverable
+        condition.
+
+        **Revisit condition:** if the SDK runtime starts enforcing the
+        spec's ``terminal`` classification at the wire (rejecting our
+        ``correctable`` recovery hint), drop this override and update
+        affected raise-site call sites to either select a different code or
+        accept the ``terminal`` retry semantics. Until then this is the
+        documented, expected behavior — not a TODO.
     """
 
     status_code = 422
