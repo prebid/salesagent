@@ -53,6 +53,7 @@ from src.core.auth import (
     get_principal_object,
 )
 from src.core.context_manager import get_context_manager
+from src.core.database.models import ObjectWorkflowMapping
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -390,10 +391,8 @@ def _update_media_buy_impl(
                     },
                 )
 
-                # Create ObjectWorkflowMapping so the admin approval flow can find
-                # this update and execute it after human approval (#1041).
-                from src.core.database.models import ObjectWorkflowMapping
-
+                # Create ObjectWorkflowMapping so the admin approval flow can
+                # find this update and execute it after human approval.
                 mapping = ObjectWorkflowMapping(
                     step_id=step.step_id,
                     object_type="media_buy",
@@ -1367,8 +1366,6 @@ def _update_media_buy_impl(
 
             # Create ObjectWorkflowMapping to link media buy update to workflow step
             # This enables webhook delivery when the update completes
-            from src.core.database.models import ObjectWorkflowMapping
-
             mapping = ObjectWorkflowMapping(
                 step_id=step.step_id,
                 object_type="media_buy",
