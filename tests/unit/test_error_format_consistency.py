@@ -10,7 +10,7 @@ Verifies that:
 These are unit tests that mock database/adapter calls to isolate error formatting.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from a2a.utils.errors import A2AError
@@ -26,38 +26,58 @@ class TestMCPErrorShapes:
     """Test that MCP tool errors have consistent structure."""
 
     @pytest.mark.asyncio
-    async def test_missing_required_field_raises_error(self):
-        """MCP create_media_buy raises AdCPValidationError when context is missing."""
-        from src.core.tools.media_buy_create import create_media_buy
+    async def test_missing_identity_raises_adcp_validation_error(self):
+        """_create_media_buy_impl raises AdCPValidationError when identity is missing.
 
-        # Call with missing context triggers AdCPValidationError (transport-agnostic)
-        with pytest.raises((AdCPValidationError, ToolError)) as exc_info:
-            await create_media_buy(
-                brand={"domain": "test.com"},
-                packages=[],  # Empty but present; validation will catch the issue
-                start_time="2026-01-01T00:00:00Z",
-                end_time="2026-02-01T00:00:00Z",
-                ctx=None,  # Missing context triggers AdCPValidationError
-            )
+        Pins on the typed exception (not ``(AdCPValidationError, ToolError)``):
+        boundary translation to ToolError is the transport wrapper's job, so
+        calling ``_impl`` directly bypasses it and we can assert the
+        production code's actual contract — typed exception + error_code +
+        message — without the union dilution.
+        """
+        from src.core.schemas import CreateMediaBuyRequest
+        from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Error should have a meaningful message string
+        req = CreateMediaBuyRequest(
+            brand={"domain": "test.com"},
+            packages=[],
+            start_time="2026-01-01T00:00:00Z",
+            end_time="2026-02-01T00:00:00Z",
+        )
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            await _create_media_buy_impl(req=req, identity=None)
+
         error = exc_info.value
-        assert len(str(error)) > 0, "Error message must not be empty"
+        assert error.error_code == "VALIDATION_ERROR"
+        assert "Identity is required" in error.message
 
-    @pytest.mark.asyncio
-    async def test_validation_error_raises_error_with_details(self):
-        """MCP create_media_buy raises error for Pydantic validation failures."""
-        from src.core.tools.media_buy_create import create_media_buy
+    def test_pydantic_validation_error_for_invalid_request_shape(self):
+        """CreateMediaBuyRequest raises Pydantic ValidationError for malformed input.
 
-        # Provide invalid types that fail Pydantic validation
-        with pytest.raises((AdCPValidationError, ToolError, ValidationError)):
-            await create_media_buy(
-                brand={"invalid_key": "no_domain"},  # Wrong structure: missing required 'domain' field
-                packages="not_a_list",  # Wrong type: should be list
+        Pre-_impl Pydantic validation owns request-shape errors; ``_impl`` itself
+        never sees them. The test is most meaningful when run at the schema
+        layer it actually fires from, pinned to ``ValidationError`` rather
+        than a union with the runtime exceptions.
+        """
+        from src.core.schemas import CreateMediaBuyRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            CreateMediaBuyRequest(
+                brand={"invalid_key": "no_domain"},  # Wrong structure: missing required 'domain'
+                packages="not_a_list",  # type: ignore[arg-type]  # Wrong type: should be list
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
-                ctx=MagicMock(),
             )
+
+        # Pydantic's ValidationError surfaces every offending field — at least one
+        # of these errors should point at the malformed packages payload or the
+        # missing brand.domain field. We don't pin on a specific code because
+        # Pydantic v2's error codes vary by union/discriminator path.
+        error_msg = str(exc_info.value)
+        assert (
+            "packages" in error_msg or "domain" in error_msg
+        ), f"Pydantic error should reference the malformed field, got: {error_msg}"
 
     @pytest.mark.asyncio
     async def test_auth_error_raises_validation_error(self):

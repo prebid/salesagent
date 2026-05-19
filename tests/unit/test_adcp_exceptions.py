@@ -291,22 +291,13 @@ class TestRecoveryClassification:
 
 
 def _assert_two_layer_envelope(body: dict, expected_code: str, expected_message_substr: str | None = None):
-    """Verify the AdCP spec two-layer envelope wire shape.
+    """Thin wrapper for callers in this module — delegates to the shared helper.
 
-    Both ``adcp_error.code`` and ``errors[0].code`` must equal ``expected_code``
-    — storyboard runners read whichever layer they're configured for.
+    See ``tests.helpers.assert_envelope_shape`` for the canonical definition.
     """
-    assert "adcp_error" in body, f"missing envelope-level adcp_error: {body}"
-    assert "errors" in body, f"missing payload-level errors[]: {body}"
-    assert body["errors"], "errors[] must contain at least one entry"
-    assert (
-        body["adcp_error"]["code"] == expected_code
-    ), f"adcp_error.code={body['adcp_error']['code']!r}, expected {expected_code!r}"
-    assert (
-        body["errors"][0]["code"] == expected_code
-    ), f"errors[0].code={body['errors'][0]['code']!r}, expected {expected_code!r}"
-    if expected_message_substr is not None:
-        assert expected_message_substr in body["errors"][0]["message"]
+    from tests.helpers import assert_envelope_shape
+
+    assert_envelope_shape(body, expected_code, message_substr=expected_message_substr)
 
 
 class TestFastAPIExceptionHandlers:

@@ -1473,20 +1473,18 @@ class AdCPRequestHandler(RequestHandler):
             # failures, breaking the storyboard invalid_transitions contract.
             raise
         except ValueError as e:
-            # ValueError → synthetic AdCPValidationError so the envelope path runs.
-            # Without this, A2A data carried only `message` and the storyboard
-            # runner synthesized MCP_ERROR (no errors[]/adcp_error layers).
+            # Wrap as typed AdCPValidationError so the outer dispatcher's
+            # `except AdCPError` branch produces a failed Task with a two-layer
+            # envelope — same wire shape as natively-raised AdCPErrors.
             logger.error(f"ValueError in skill handler {skill_name}: {e}")
-            raise _adcp_to_a2a_error(AdCPValidationError(str(e))) from e
+            raise AdCPValidationError(str(e)) from e
         except PermissionError as e:
-            # Same envelope-shape treatment for PermissionError → AUTH_REQUIRED.
+            # Same wrap-and-raise treatment for PermissionError → AUTH_REQUIRED.
             logger.error(f"PermissionError in skill handler {skill_name}: {e}")
-            raise _adcp_to_a2a_error(AdCPAuthorizationError(str(e))) from e
-        except Exception as e:
-            # Catch-all: build a synthetic AdCPError so the envelope is uniform.
-            # Recovery defaults to terminal (matches AdCPError class default).
-            logger.error(f"Error in skill handler {skill_name}: {e}")
-            raise _adcp_to_a2a_error(AdCPError(f"Skill {skill_name} failed: {e}")) from e
+            raise AdCPAuthorizationError(str(e)) from e
+        # Untyped exceptions fall through to the dispatcher's `except Exception`
+        # at the call site, which routes them through `_build_failed_skill_result`
+        # for uniform envelope shape. No catch-all here.
 
     async def _handle_get_products_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_products skill invocation.

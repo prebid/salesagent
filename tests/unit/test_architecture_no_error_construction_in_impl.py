@@ -62,10 +62,10 @@ def _rel(path: Path) -> str:
 
 def _count_pattern_a_sites(filepath: Path) -> list[int]:
     """Return line numbers of ``Error(code=...)`` literals in the file."""
-    # Reuse the shared alias collector from the existing code-compliance guard
-    # rather than duplicate the AST walk; both guards target the same Error
-    # imports.
-    from tests.unit.test_architecture_error_code_compliance import _collect_error_aliases
+    # Shared alias collector lives in ``tests/unit/_ast_helpers`` so multiple
+    # guards target the same Error-import surface without cross-importing
+    # from each other's test modules.
+    from tests.unit._ast_helpers import collect_error_aliases
 
     if not filepath.exists():
         return []
@@ -74,7 +74,7 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
     except SyntaxError:
         return []
 
-    aliases = _collect_error_aliases(tree)
+    aliases = collect_error_aliases(tree)
     lines: list[int] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):

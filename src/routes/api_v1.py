@@ -47,6 +47,37 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # ---------------------------------------------------------------------------
 
 
+# Plain ``ToolError("CODE", "message")`` legacy paths don't carry the typed
+# AdCPError that owns ``status_code``. Map well-known wire codes to their
+# canonical HTTP status so the fallback doesn't mislabel 4xx errors as 5xx.
+# Mirrors the per-class ``status_code`` declared on the typed exceptions in
+# ``src.core.exceptions``. Unknown codes fall through to 500.
+_ERROR_CODE_TO_STATUS: dict[str, int] = {
+    "VALIDATION_ERROR": 400,
+    "AUTH_REQUIRED": 401,
+    "FORBIDDEN": 403,
+    "NOT_FOUND": 404,
+    "ACCOUNT_NOT_FOUND": 404,
+    "MEDIA_BUY_NOT_FOUND": 404,
+    "PACKAGE_NOT_FOUND": 404,
+    "ACCOUNT_SETUP_REQUIRED": 422,
+    "ACCOUNT_SUSPENDED": 403,
+    "ACCOUNT_PAYMENT_REQUIRED": 402,
+    "CONFLICT": 409,
+    "ACCOUNT_AMBIGUOUS": 409,
+    "GONE": 410,
+    "BUDGET_EXHAUSTED": 422,
+    "BUDGET_EXCEEDED": 422,
+    "BUDGET_TOO_LOW": 422,
+    "CAPABILITY_NOT_SUPPORTED": 422,
+    "PRODUCT_UNAVAILABLE": 422,
+    "CREATIVE_REJECTED": 422,
+    "RATE_LIMIT_EXCEEDED": 429,
+    "SERVICE_UNAVAILABLE": 503,
+    "ADAPTER_ERROR": 502,
+}
+
+
 def _handle_tool_error(e: ToolError) -> JSONResponse:
     """Convert MCP ToolError to the spec-compliant two-layer envelope body.
 
@@ -54,8 +85,9 @@ def _handle_tool_error(e: ToolError) -> JSONResponse:
     is the typed ``AdCPToolError`` raised by the MCP boundary translator, its
     envelope and status_code are forwarded unchanged so 4xx errors don't get
     mislabeled as 5xx. Plain ``ToolError`` (raised by other paths) is rebuilt
-    into an envelope via a synthetic ``AdCPError`` and defaults to 500 —
-    the only sensible default when no typed source is available.
+    into an envelope via a synthetic ``AdCPError``; its HTTP status is
+    resolved from ``_ERROR_CODE_TO_STATUS`` for known wire codes and falls
+    through to 500 only when the code is unrecognized.
     """
     from src.core.exceptions import AdCPError, build_two_layer_error_envelope
     from src.core.tool_error_logging import AdCPToolError, extract_error_info
@@ -66,6 +98,7 @@ def _handle_tool_error(e: ToolError) -> JSONResponse:
     error_code, error_message, recovery = extract_error_info(e)
     synthetic = AdCPError(error_message)
     synthetic.error_code = error_code
+    synthetic.status_code = _ERROR_CODE_TO_STATUS.get(error_code, 500)
     if recovery in ("transient", "correctable", "terminal"):
         synthetic.recovery = recovery  # type: ignore[assignment]
     return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))
@@ -171,18 +204,17 @@ class SyncAccountsBody(BaseModel):
 
 @router.post("/products")
 async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
-    """Get available products matching the brief (auth-optional discovery skill)."""
+    """Get available products matching the brief (auth-optional discovery skill).
+
+    ``ToolError`` propagates to the global handler in ``src.app`` for envelope
+    translation; no defensive catch needed here.
+    """
     req = products_module.create_get_products_request(
         brief=body.brief,
         brand=body.brand,
         filters=body.filters,
     )
-
-    try:
-        response = await products_module._get_products_impl(req, identity)
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")
     return apply_version_compat("get_products", result, body.adcp_version)
 
@@ -190,24 +222,14 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
 @router.get("/capabilities")
 async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
-
-    try:
-        response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
     return response.model_dump(mode="json")
 
 
 @router.post("/creative-formats")
 async def list_creative_formats(body: ListCreativeFormatsBody, identity: ResolvedIdentity | None = resolve_auth):
     """List available creative formats (auth-optional discovery skill)."""
-
-    try:
-        response = creative_formats_module.list_creative_formats_raw(identity=identity)
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = creative_formats_module.list_creative_formats_raw(identity=identity)
     return response.model_dump(mode="json")
 
 
@@ -216,12 +238,7 @@ async def list_authorized_properties(
     body: ListAuthorizedPropertiesBody, identity: ResolvedIdentity | None = resolve_auth
 ):
     """List authorized properties (auth-optional discovery skill)."""
-
-    try:
-        response = properties_module.list_authorized_properties_raw(identity=identity)
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = properties_module.list_authorized_properties_raw(identity=identity)
     return response.model_dump(mode="json")
 
 
@@ -237,121 +254,96 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
-    try:
-        response = await media_buy_create_module.create_media_buy_raw(
-            brand=body.brand,
-            packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
-            start_time=body.start_time,
-            end_time=body.end_time,
-            po_number=body.po_number,
-            identity=identity,
-        )
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = await media_buy_create_module.create_media_buy_raw(
+        brand=body.brand,
+        packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
+        start_time=body.start_time,
+        end_time=body.end_time,
+        po_number=body.po_number,
+        identity=identity,
+    )
     return response.model_dump(mode="json")
 
 
 @router.put("/media-buys/{media_buy_id}")
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Update an existing media buy (auth required)."""
-    try:
-        response = media_buy_update_module.update_media_buy_raw(
-            media_buy_id=media_buy_id,
-            paused=body.paused,
-            flight_start_date=body.flight_start_date,
-            flight_end_date=body.flight_end_date,
-            budget=body.budget,
-            currency=body.currency,
-            start_time=body.start_time,
-            end_time=body.end_time,
-            identity=identity,
-        )
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = media_buy_update_module.update_media_buy_raw(
+        media_buy_id=media_buy_id,
+        paused=body.paused,
+        flight_start_date=body.flight_start_date,
+        flight_end_date=body.flight_end_date,
+        budget=body.budget,
+        currency=body.currency,
+        start_time=body.start_time,
+        end_time=body.end_time,
+        identity=identity,
+    )
     return response.model_dump(mode="json")
 
 
 @router.post("/media-buys/delivery")
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
-    try:
-        # Handle account resolution at boundary
-        if body.account is not None:
-            from adcp.types import AccountReference as LibraryAccountReference
+    if body.account is not None:
+        from adcp.types import AccountReference as LibraryAccountReference
 
-            from src.core.transport_helpers import enrich_identity_with_account
+        from src.core.transport_helpers import enrich_identity_with_account
 
-            account_ref = LibraryAccountReference(**body.account)
-            enriched = enrich_identity_with_account(identity, account_ref)
-            assert enriched is not None  # identity is non-None (from require_auth)
-            identity = enriched
+        account_ref = LibraryAccountReference(**body.account)
+        enriched = enrich_identity_with_account(identity, account_ref)
+        assert enriched is not None  # identity is non-None (from require_auth)
+        identity = enriched
 
-        response = media_buy_delivery_module.get_media_buy_delivery_raw(
-            media_buy_ids=body.media_buy_ids,
-            status_filter=body.status_filter,
-            start_date=body.start_date,
-            end_date=body.end_date,
-            reporting_dimensions=body.reporting_dimensions,
-            attribution_window=body.attribution_window,
-            include_package_daily_breakdown=body.include_package_daily_breakdown,
-            identity=identity,
-        )
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = media_buy_delivery_module.get_media_buy_delivery_raw(
+        media_buy_ids=body.media_buy_ids,
+        status_filter=body.status_filter,
+        start_date=body.start_date,
+        end_date=body.end_date,
+        reporting_dimensions=body.reporting_dimensions,
+        attribution_window=body.attribution_window,
+        include_package_daily_breakdown=body.include_package_daily_breakdown,
+        identity=identity,
+    )
     return response.model_dump(mode="json")
 
 
 @router.post("/creatives/sync")
 async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = require_auth):
     """Sync creatives (auth required)."""
-    try:
-        response = creatives_sync_module.sync_creatives_raw(
-            creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
-            assignments=body.assignments,
-            creative_ids=body.creative_ids,
-            delete_missing=body.delete_missing,
-            dry_run=body.dry_run,
-            validation_mode=body.validation_mode,
-            identity=identity,
-        )
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = creatives_sync_module.sync_creatives_raw(
+        creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
+        assignments=body.assignments,
+        creative_ids=body.creative_ids,
+        delete_missing=body.delete_missing,
+        dry_run=body.dry_run,
+        validation_mode=body.validation_mode,
+        identity=identity,
+    )
     return response.model_dump(mode="json")
 
 
 @router.post("/creatives")
 async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
-    try:
-        response = creatives_listing_module.list_creatives_raw(
-            media_buy_id=body.media_buy_id,
-            media_buy_ids=body.media_buy_ids,
-            status=body.status,
-            format=body.format,
-            identity=identity,
-        )
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = creatives_listing_module.list_creatives_raw(
+        media_buy_id=body.media_buy_id,
+        media_buy_ids=body.media_buy_ids,
+        status=body.status,
+        format=body.format,
+        identity=identity,
+    )
     return response.model_dump(mode="json")
 
 
 @router.post("/performance-index")
 async def update_performance_index(body: UpdatePerformanceIndexBody, identity: ResolvedIdentity = require_auth):
     """Update performance index for a media buy (auth required)."""
-    try:
-        response = performance_module.update_performance_index_raw(
-            media_buy_id=body.media_buy_id,
-            performance_data=body.performance_data,
-            identity=identity,
-        )
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    response = performance_module.update_performance_index_raw(
+        media_buy_id=body.media_buy_id,
+        performance_data=body.performance_data,
+        identity=identity,
+    )
     return response.model_dump(mode="json")
 
 
@@ -360,12 +352,8 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
     """List accounts accessible to the authenticated agent (auth required)."""
     from src.core.schemas.account import ListAccountsRequest
 
-    try:
-        req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
-        response = accounts_module.list_accounts_raw(req=req, identity=identity)
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    response = accounts_module.list_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 
@@ -374,10 +362,6 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
 
-    try:
-        req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
-        response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
-    except ToolError as e:
-        return _handle_tool_error(e)
-
+    req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

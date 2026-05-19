@@ -23,49 +23,30 @@ from src.core.exceptions import (
 )
 
 # ---------------------------------------------------------------------------
-# Wire-shape helpers — each boundary now produces the AdCP spec two-layer
-# envelope. Tests assert the envelope shape via these helpers instead of
-# repeating the structural checks in every test body.
+# Wire-shape helpers — every boundary produces the AdCP spec two-layer
+# envelope, so the boundary-specific wrappers below delegate to a single
+# shared ``assert_envelope_shape`` in ``tests/helpers/``. A spec change to
+# the envelope is now a one-place update.
 # ---------------------------------------------------------------------------
+from tests.helpers import assert_envelope_shape  # noqa: E402
 
 
 def _assert_mcp_envelope(exc, code, recovery=None, message_substr=None):
-    """Verify a ToolError raised by the MCP boundary carries the envelope."""
+    """MCP-boundary wrapper: validates ``AdCPToolError.envelope`` shape."""
     from src.core.tool_error_logging import AdCPToolError
 
     assert isinstance(exc, AdCPToolError), f"expected AdCPToolError, got {type(exc).__name__}"
-    err = exc.envelope["errors"][0]
-    assert err["code"] == code, f"errors[0].code={err['code']!r}, expected {code!r}"
-    assert (
-        exc.envelope["adcp_error"]["code"] == code
-    ), f"adcp_error.code={exc.envelope['adcp_error']['code']!r}, expected {code!r}"
-    if recovery is not None:
-        assert err.get("recovery") == recovery, f"errors[0].recovery={err.get('recovery')!r}, expected {recovery!r}"
-    if message_substr is not None:
-        assert message_substr in err.get("message", "")
+    assert_envelope_shape(exc, code, recovery=recovery, message_substr=message_substr)
 
 
 def _assert_a2a_envelope(exc_data, code, recovery):
-    """Verify A2AError.data carries the envelope plus backward-compat keys."""
-    assert isinstance(exc_data, dict)
-    assert exc_data["adcp_error"]["code"] == code
-    assert exc_data["errors"][0]["code"] == code
-    assert exc_data["adcp_error"]["recovery"] == recovery
-    assert exc_data["errors"][0]["recovery"] == recovery
-    # Backward-compat top-level keys consumed by the test harness unwrapper.
-    assert exc_data["error_code"] == code
-    assert exc_data["recovery"] == recovery
+    """A2A wrapper: validates envelope plus top-level backward-compat mirrors."""
+    assert_envelope_shape(exc_data, code, recovery=recovery, check_backward_compat=True)
 
 
 def _assert_rest_envelope(body, code, recovery=None, message_substr=None):
-    """Verify a REST JSON body has the two-layer envelope shape."""
-    assert body["adcp_error"]["code"] == code, f"adcp_error.code={body['adcp_error']['code']!r}, expected {code!r}"
-    assert body["errors"][0]["code"] == code, f"errors[0].code={body['errors'][0]['code']!r}, expected {code!r}"
-    if recovery is not None:
-        assert body["adcp_error"]["recovery"] == recovery
-        assert body["errors"][0]["recovery"] == recovery
-    if message_substr is not None:
-        assert message_substr in body["errors"][0]["message"]
+    """REST wrapper: validates JSON body envelope shape."""
+    assert_envelope_shape(body, code, recovery=recovery, message_substr=message_substr)
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +652,52 @@ class TestRESTBoundaryAdCPErrorTranslation:
             _assert_rest_envelope(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
 
+class TestGlobalToolErrorHandler:
+    """Global ``@app.exception_handler(ToolError)`` translates ToolError to envelope.
+
+    Removes the need for every REST route to wrap its body in
+    ``try/except ToolError`` — the global handler catches both plain ``ToolError``
+    and ``AdCPToolError`` (subclass) and produces the same envelope shape as
+    the per-route ``_handle_tool_error`` did. Verifies the wiring works
+    end-to-end through the REST stack.
+    """
+
+    def test_adcp_tool_error_through_global_handler_preserves_status(self):
+        """AdCPToolError from _impl is caught by the global handler with original status_code."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.exceptions import AdCPMediaBuyNotFoundError, build_two_layer_error_envelope
+        from src.core.tool_error_logging import AdCPToolError
+
+        source = AdCPMediaBuyNotFoundError("buy_x missing")
+        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=tool_error,
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 404
+            _assert_rest_envelope(response.json(), "MEDIA_BUY_NOT_FOUND", recovery="correctable")
+
+    def test_plain_tool_error_with_known_code_through_global_handler(self):
+        """Plain ToolError("VALIDATION_ERROR", "msg") → 400 via global handler + status map."""
+        from fastmcp.exceptions import ToolError
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=ToolError("VALIDATION_ERROR", "missing field"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 400
+
+
 class TestRESTSymmetricValueErrorAndPermissionError:
     """REST mirrors MCP/A2A by wrapping ValueError and PermissionError in envelopes.
 
@@ -812,12 +839,54 @@ class TestHandleToolErrorPreservesStatusCode:
         assert response.status_code == 502
 
     def test_plain_tool_error_falls_back_to_500(self):
-        """Plain ToolError (no typed source) defaults to 500 — the only sensible value."""
+        """Plain ToolError with no recognized wire code defaults to 500."""
         from fastmcp.exceptions import ToolError
 
         from src.routes.api_v1 import _handle_tool_error
 
         response = _handle_tool_error(ToolError("unstructured failure"))
+        assert response.status_code == 500
+
+    def test_plain_tool_error_with_known_code_uses_status_map(self):
+        """Plain ToolError("VALIDATION_ERROR", "msg") → 400 via _ERROR_CODE_TO_STATUS.
+
+        Legacy paths that construct ToolError directly (without going through
+        AdCPToolError) used to land at 500 because ``AdCPError`` defaulted to
+        500 and only ``error_code`` was overridden. The map ensures the HTTP
+        status matches the wire code on this defensive fallback path.
+        """
+        from fastmcp.exceptions import ToolError
+
+        from src.routes.api_v1 import _handle_tool_error
+
+        response = _handle_tool_error(ToolError("VALIDATION_ERROR", "missing required field"))
+        assert response.status_code == 400
+
+    def test_plain_tool_error_with_auth_code_returns_401(self):
+        """Plain ToolError("AUTH_REQUIRED", "msg") → 401 via _ERROR_CODE_TO_STATUS."""
+        from fastmcp.exceptions import ToolError
+
+        from src.routes.api_v1 import _handle_tool_error
+
+        response = _handle_tool_error(ToolError("AUTH_REQUIRED", "missing token"))
+        assert response.status_code == 401
+
+    def test_plain_tool_error_with_not_found_code_returns_404(self):
+        """Plain ToolError("MEDIA_BUY_NOT_FOUND", "msg") → 404 via _ERROR_CODE_TO_STATUS."""
+        from fastmcp.exceptions import ToolError
+
+        from src.routes.api_v1 import _handle_tool_error
+
+        response = _handle_tool_error(ToolError("MEDIA_BUY_NOT_FOUND", "buy_x missing"))
+        assert response.status_code == 404
+
+    def test_plain_tool_error_with_unknown_code_falls_back_to_500(self):
+        """Plain ToolError with an unmapped wire code defaults to 500."""
+        from fastmcp.exceptions import ToolError
+
+        from src.routes.api_v1 import _handle_tool_error
+
+        response = _handle_tool_error(ToolError("WEIRD_LEGACY_CODE", "what is this"))
         assert response.status_code == 500
 
 

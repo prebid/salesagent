@@ -53,7 +53,6 @@ def _adcp_error_from_code(
         AdCPAccountSuspendedError,
         AdCPAdapterError,
         AdCPAuthenticationError,
-        AdCPAuthorizationError,
         AdCPBudgetExceededError,
         AdCPBudgetExhaustedError,
         AdCPBudgetTooLowError,
@@ -74,11 +73,6 @@ def _adcp_error_from_code(
         cls.error_code: cls
         for cls in (
             AdCPValidationError,
-            # AdCPAuthorizationError listed before AdCPAuthenticationError so the
-            # latter wins the dict comprehension for the shared AUTH_REQUIRED code
-            # — at the wire we can't disambiguate auth-missing from auth-insufficient,
-            # and Authentication is the more common case (missing tenant/token).
-            AdCPAuthorizationError,
             AdCPAuthenticationError,
             AdCPNotFoundError,
             AdCPAccountNotFoundError,
@@ -103,6 +97,12 @@ def _adcp_error_from_code(
             AdCPProductUnavailableError,
         )
     }
+    # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED
+    # wire code — we can't disambiguate auth-missing from auth-insufficient at
+    # the wire, and Authentication (missing token/tenant) is the more common
+    # buyer-facing case. Pin Authentication explicitly here so the mapping
+    # doesn't depend on dict-comprehension insertion order.
+    _CODE_TO_CLASS[AdCPAuthenticationError.error_code] = AdCPAuthenticationError
     exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
     reconstructed = exc_cls(
         message=message,

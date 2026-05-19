@@ -507,3 +507,71 @@ class TestA2AErrorResponseStructure:
             ), "Custom recovery='transient' override must be preserved, not default 'terminal'"
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
+
+    async def test_valueerror_wraps_to_adcp_validation_error(self, integration_db, handler):
+        """ValueError in a skill handler propagates as AdCPValidationError.
+
+        Post-R3 fix: ``_handle_explicit_skill`` no longer translates ValueError
+        to a JSON-RPC ``InvalidParamsError``. It wraps the ValueError as a
+        synthetic ``AdCPValidationError`` and re-raises, so the outer dispatcher
+        catches it via ``except AdCPError`` and produces a failed Task with a
+        two-layer envelope — same wire shape as natively-raised AdCPErrors.
+        """
+        from unittest.mock import patch
+
+        from src.core.exceptions import AdCPValidationError
+
+        async def mock_valueerror(params, identity):
+            raise ValueError("missing required field")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_valueerror):
+            with pytest.raises(AdCPValidationError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+            assert "missing required field" in str(exc_info.value)
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            # AdCPValidationError class default — preserved through the wrap.
+            assert exc_info.value.recovery == "correctable"
+            # Original ValueError is chained via __cause__ for traceability.
+            assert isinstance(exc_info.value.__cause__, ValueError)
+
+    async def test_permissionerror_wraps_to_adcp_authorization_error(self, integration_db, handler):
+        """PermissionError in a skill handler propagates as AdCPAuthorizationError.
+
+        Symmetric with ValueError handling. Outer dispatcher produces a failed
+        Task with envelope (AUTH_REQUIRED, recovery=terminal).
+        """
+        from unittest.mock import patch
+
+        from src.core.exceptions import AdCPAuthorizationError
+
+        async def mock_permerror(params, identity):
+            raise PermissionError("tenant scope mismatch")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_permerror):
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+            assert "tenant scope mismatch" in str(exc_info.value)
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert isinstance(exc_info.value.__cause__, PermissionError)
+
+    async def test_untyped_exception_falls_through_to_dispatcher(self, integration_db, handler):
+        """Untyped exceptions from a skill handler are no longer caught locally.
+
+        Post-R3 fix: the ``except Exception`` catch-all in ``_handle_explicit_skill``
+        was removed. Untyped exceptions propagate to the outer dispatcher's
+        ``except Exception`` branch, which routes them through
+        ``_build_failed_skill_result`` for uniform envelope shape — no double
+        wrapping, no JSON-RPC translation.
+        """
+        from unittest.mock import patch
+
+        async def mock_runtime_error(params, identity):
+            raise RuntimeError("downstream service exploded")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_runtime_error):
+            with pytest.raises(RuntimeError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+            assert "downstream service exploded" in str(exc_info.value)

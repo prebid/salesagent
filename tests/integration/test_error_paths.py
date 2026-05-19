@@ -383,20 +383,38 @@ class TestSyncCreativesErrorPaths:
             }
         ]
 
-        # Should handle gracefully, not crash
+        # The contract under test: sync_creatives_raw must surface a typed,
+        # buyer-visible validation error for a malformed creative. Either it
+        # returns a response carrying failed-creative entries, or it raises
+        # a typed AdCPError / Pydantic ValidationError / ValueError —
+        # anything else (e.g. RuntimeError, KeyError, NameError) is a bug,
+        # not an "ok" outcome the original ``except Exception: pass`` was
+        # silently accepting.
+        from pydantic import ValidationError
+
+        from src.core.exceptions import AdCPError
+
         try:
-            response = await sync_creatives_raw(
+            response = sync_creatives_raw(
                 creatives=invalid_creatives,
                 identity=identity,
             )
-            # If it returns, check for errors
-            assert response is not None
-        except NameError:
-            # ❌ FAIL: NameError means Error class wasn't imported
-            pytest.fail("sync_creatives_raw raised NameError - Error class not imported")
-        except Exception:
-            # ✅ Other exceptions are fine (validation errors, etc.)
-            pass
+        except (AdCPError, ValidationError, ValueError):
+            return  # typed validation surface — the contract is honored
+
+        # sync_creatives_raw returned a response: it must report the failure
+        # explicitly via a per-creative ``action == failed`` entry, not silently
+        # accept the malformed creative as a success.
+        from src.core.schemas import CreativeAction
+
+        assert response is not None, "sync_creatives_raw must not return None for invalid input"
+        failed = [c for c in response.creatives if c.action == CreativeAction.failed]
+        succeeded = [c for c in response.creatives if c.action in (CreativeAction.created, CreativeAction.updated)]
+        assert len(failed) >= 1, (
+            f"Invalid creative should land in creatives[] with action=failed, "
+            f"got {[c.action for c in response.creatives]}"
+        )
+        assert not succeeded, f"Invalid creative must not be reported as created/updated, got {succeeded!r}"
 
 
 @pytest.mark.integration

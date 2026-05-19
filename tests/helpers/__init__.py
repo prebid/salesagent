@@ -20,9 +20,9 @@ def assert_effective_properties_normalized(
         for key, value in orig.items():
             assert key in eff, f"[{i}] Missing key {key!r} from original"
             assert eff[key] == value, f"[{i}] {key!r}: {eff[key]!r} != {value!r}"
-        assert eff.get("selection_type") == expected_selection_type, (
-            f"[{i}] selection_type: {eff.get('selection_type')!r} != {expected_selection_type!r}"
-        )
+        assert (
+            eff.get("selection_type") == expected_selection_type
+        ), f"[{i}] selection_type: {eff.get('selection_type')!r} != {expected_selection_type!r}"
 
 
 from tests.helpers.adcp_factories import (
@@ -42,8 +42,11 @@ from tests.helpers.adcp_factories import (
     create_test_property,
     create_test_property_dict,
 )
+from tests.helpers.envelope_assertions import assert_envelope_shape
 
 __all__ = [
+    # Envelope assertions
+    "assert_envelope_shape",
     # Product factories
     "create_test_product",
     "create_minimal_product",

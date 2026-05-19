@@ -207,6 +207,29 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
     raise
 
 
+def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, kwargs: dict) -> NoReturn:
+    """Shared exception path for both sync and async ``with_error_logging`` wrappers.
+
+    Extracts tenant/principal from a Context found in positional or keyword args,
+    logs the error to activity feed + audit log, then translates to AdCPToolError
+    at the MCP boundary. Always raises — never returns.
+    """
+    context = None
+    for arg in args:
+        if isinstance(arg, FastMCPContext) or hasattr(arg, "tenant_id"):
+            context = arg
+            break
+    if context is None:
+        for v in kwargs.values():
+            if isinstance(v, FastMCPContext) or hasattr(v, "tenant_id"):
+                context = v
+                break
+
+    tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
+    _log_tool_error(tool_func.__name__, error, tenant_id, principal_id)
+    _translate_to_tool_error(error)
+
+
 def with_error_logging(tool_func: Callable) -> Callable:
     """Decorator to add centralized error logging to an MCP tool.
 
@@ -234,48 +257,15 @@ def with_error_logging(tool_func: Callable) -> Callable:
             try:
                 return await tool_func(*args, **kwargs)
             except Exception as e:
-                # Extract context from args/kwargs
-                context = None
-                for arg in args:
-                    if isinstance(arg, FastMCPContext) or hasattr(arg, "tenant_id"):
-                        context = arg
-                        break
-                for v in kwargs.values():
-                    if isinstance(v, FastMCPContext) or hasattr(v, "tenant_id"):
-                        context = v
-                        break
-
-                # Extract tenant/principal and log error
-                tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
-                _log_tool_error(tool_func.__name__, e, tenant_id, principal_id)
-
-                # Translate typed exceptions to ToolError at the MCP boundary
-                _translate_to_tool_error(e)
+                _handle_tool_exception(tool_func, e, args, kwargs)
 
         return async_wrapper
-    else:
 
-        @functools.wraps(tool_func)
-        def sync_wrapper(*args, **kwargs) -> Any:
-            try:
-                return tool_func(*args, **kwargs)
-            except Exception as e:
-                # Extract context from args/kwargs
-                context = None
-                for arg in args:
-                    if isinstance(arg, FastMCPContext) or hasattr(arg, "tenant_id"):
-                        context = arg
-                        break
-                for v in kwargs.values():
-                    if isinstance(v, FastMCPContext) or hasattr(v, "tenant_id"):
-                        context = v
-                        break
+    @functools.wraps(tool_func)
+    def sync_wrapper(*args, **kwargs) -> Any:
+        try:
+            return tool_func(*args, **kwargs)
+        except Exception as e:
+            _handle_tool_exception(tool_func, e, args, kwargs)
 
-                # Extract tenant/principal and log error
-                tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
-                _log_tool_error(tool_func.__name__, e, tenant_id, principal_id)
-
-                # Translate typed exceptions to ToolError at the MCP boundary
-                _translate_to_tool_error(e)
-
-        return sync_wrapper
+    return sync_wrapper
