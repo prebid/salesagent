@@ -160,8 +160,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 ]
 
 
-# MCP selective xfails: the MCP wrapper doesn't accept wcag_level,
-# output_format_ids, or input_format_ids params. Only xfail examples
+# MCP selective xfails: the MCP wrapper doesn't accept wcag_level params. Only xfail examples
 # that actually SEND the param — "omitted"/"not_provided" variants
 # send no param and pass fine.
 # (tag, example_substrings, reason, strict)
@@ -170,38 +169,6 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
     ("T-UC-005-partition-wcag", {"level_a", "level_aa", "level_aaa"}, "MCP wrapper does not accept wcag_level", True),
     ("T-UC-005-boundary-wcag", {"first enum value", "last enum value"}, "MCP wrapper does not accept wcag_level", True),
-    (
-        "T-UC-005-partition-output-fmtids",
-        {"single_format_id", "multiple_ids_any_match", "no_matching_formats", "format_without_output_ids"},
-        "MCP wrapper does not accept output_format_ids",
-        True,
-    ),
-    (
-        "T-UC-005-boundary-output-fmtids",
-        {"single FormatId", "multiple FormatIds", "format has no output", "no formats match requested output"},
-        "MCP wrapper does not accept output_format_ids",
-        True,
-    ),
-    (
-        "T-UC-005-partition-input-fmtids",
-        {"single_format_id", "multiple_ids_any_match", "no_matching_formats", "format_without_input_ids"},
-        "MCP wrapper does not accept input_format_ids",
-        True,
-    ),
-    (
-        "T-UC-005-boundary-input-fmtids",
-        {"single FormatId", "multiple FormatIds", "format has no input", "no formats match requested input"},
-        "MCP wrapper does not accept input_format_ids",
-        True,
-    ),
-    # Invariant scenarios — "holds" genuinely fails (asserts presence);
-    # "violated"/"nofield" pass vacuously (asserts absence → empty list satisfies)
-    ("T-UC-005-inv-049-9-holds", set(), "MCP wrapper does not accept output_format_ids", True),
-    ("T-UC-005-inv-049-9-violated", set(), "MCP wrapper does not accept output_format_ids (vacuous pass)", False),
-    ("T-UC-005-inv-049-9-nofield", set(), "MCP wrapper does not accept output_format_ids (vacuous pass)", False),
-    ("T-UC-005-inv-049-10-holds", set(), "MCP wrapper does not accept input_format_ids", True),
-    ("T-UC-005-inv-049-10-violated", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
-    ("T-UC-005-inv-049-10-nofield", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
 ]
 
 # REST xfails: REST endpoint drops all filter params (build_rest_body returns {}).
