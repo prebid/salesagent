@@ -445,6 +445,8 @@ def _list_creative_formats_impl(
 
 async def list_creative_formats(
     format_ids: list[FormatId] | None = None,
+    output_format_ids: list[FormatId] | None = None,
+    input_format_ids: list[FormatId] | None = None,
     is_responsive: Annotated[bool | None, Field(description="Filter for responsive formats only")] = None,
     name_search: Annotated[str | None, Field(description="Search formats by name substring")] = None,
     asset_types: list[AssetContentType] | None = None,
@@ -462,6 +464,8 @@ async def list_creative_formats(
 
     Args:
         format_ids: Filter by FormatId objects
+        output_format_ids: Filter by formats that can generate any of these output format IDs
+        input_format_ids: Filter by formats that can consume any of these input format IDs
         is_responsive: Filter for responsive formats (True/False)
         name_search: Search formats by name (case-insensitive partial match)
         asset_types: Filter by asset content types (e.g., ["image", "video"])
@@ -483,6 +487,8 @@ async def list_creative_formats(
         )
         req = ListCreativeFormatsRequest(
             format_ids=format_ids,
+            output_format_ids=output_format_ids,
+            input_format_ids=input_format_ids,
             is_responsive=is_responsive,
             name_search=name_search,
             asset_types=asset_types_strs,
