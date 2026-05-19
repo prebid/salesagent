@@ -371,8 +371,8 @@ class TestApprovalModeUpdate:
     def test_update_auto_approve_sets_approved(self, integration_db):
         """Update with auto-approve → status=approved in DB."""
         with CreativeSyncEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            tenant.approval_mode = "auto-approve"
+            env.setup_default_data()
+            env.identity.tenant["approval_mode"] = "auto-approve"
 
             # Create (auto-approve)
             env.call_impl(creatives=[_creative(creative_id="c_auto_up")])
@@ -399,13 +399,13 @@ class TestApprovalModeUpdate:
         mock_executor.submit.return_value = MagicMock()
 
         with CreativeSyncEnv() as env:
-            tenant, _principal = env.setup_default_data()
+            env.setup_default_data()
 
             # Create with require-human first
             env.call_impl(creatives=[_creative(creative_id="c_ai_up")])
 
             # Switch to ai-powered for update
-            tenant.approval_mode = "ai-powered"
+            env.identity.tenant["approval_mode"] = "ai-powered"
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
@@ -733,8 +733,8 @@ class TestCreateAutoApprove:
     def test_create_auto_approve_status(self, integration_db):
         """Create with auto-approve → DB status=approved."""
         with CreativeSyncEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            tenant.approval_mode = "auto-approve"
+            env.setup_default_data()
+            env.identity.tenant["approval_mode"] = "auto-approve"
 
             result = env.call_impl(creatives=[_creative(creative_id="c_auto_create")])
             assert result.creatives[0].action == CreativeAction.created
@@ -759,8 +759,8 @@ class TestCreateAIPoweredApproval:
         mock_executor.submit.return_value = MagicMock()
 
         with CreativeSyncEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            tenant.approval_mode = "ai-powered"
+            env.setup_default_data()
+            env.identity.tenant["approval_mode"] = "ai-powered"
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
