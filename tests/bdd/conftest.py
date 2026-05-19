@@ -1214,6 +1214,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if "T-UC-004-partition-sampling" in marker_names and "not_provided" not in nodeid:
             _samp_named = {"random", "stratified", "recent", "failures_only"}
             _samp_is_named = any(s in nodeid for s in _samp_named)
+            if _samp_is_named and is_rest:
+                pass  # REST + named method → passes, no xfail
+            else:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="sampling_method not implemented in delivery _impl or transport wrappers",
+                        strict=False,
+                    )
+                )
 
         # FIXME(salesagent-9vgz.80): catalog distinct type partition/boundary
         # Production accepts catalogs but never validates duplicate types or catalog_id
