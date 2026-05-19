@@ -2370,11 +2370,20 @@ components:
       type: object
     ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse:
       additionalProperties: false
-      description: "Initial principal returned from provision.\n\nNote: embedded-mode\
-        \ buyer-protocol auth flows through the identity-propagation\ncontract, not\
-        \ per-principal tokens (see sprint 2 \xA7 Auth boundary). No\n``api_token``\
-        \ field is emitted here."
+      description: "Initial principal returned from provision.\n\nIncludes the principal's\
+        \ ``access_token`` so the host product can stamp\n``x-adcp-auth`` on buyer-protocol\
+        \ calls (or store the token for the host's\nown buyer agents to use). The\
+        \ token is the value already persisted in\n``Principal.access_token`` \u2014\
+        \ exposing it here just avoids forcing host\nproducts into out-of-band DB\
+        \ reads to discover something we already minted.\n\nIdentity-propagation via\
+        \ ``X-Identity-*`` headers (the sprint 2 buyer-protocol\nmiddleware) is still\
+        \ the long-term direction; this token is what unblocks\nhost products today\
+        \ and remains the canonical bearer for any caller that\nisn't routing through\
+        \ the trusted-network identity proxy."
       properties:
+        access_token:
+          title: Access Token
+          type: string
         name:
           title: Name
           type: string
@@ -2384,6 +2393,7 @@ components:
       required:
       - principal_id
       - name
+      - access_token
       title: ProvisionedPrincipalResponse
       type: object
     RefreshConflictResponse.f44f287:

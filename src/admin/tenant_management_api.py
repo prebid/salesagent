@@ -1079,6 +1079,7 @@ def provision_tenant():
 
     initial_principal_id: str | None = None
     initial_principal_name: str | None = None
+    initial_principal_token: str | None = None
 
     with get_db_session() as session:
         session.info["management_api_caller"] = True
@@ -1142,17 +1143,24 @@ def provision_tenant():
                     "mock": {"advertiser_id": req.initial_principal.external_advertiser_id or "default"}
                 }
 
-            # Embedded-mode principals don't carry a buyer-protocol token (see sprint 2).
-            # We still need a non-null access_token for backward compatibility with non-managed
-            # callers that read this column; use a marker prefix so it can never be confused
-            # with a real bearer token.
+            # Mint the principal's access_token here and return it in the
+            # provision response. ``Principal.access_token`` is what the
+            # buyer-protocol auth chain looks up on ``x-adcp-auth`` — a host
+            # product that holds this token can authenticate buyer-protocol
+            # calls without depending on the (still-pending) sprint 2
+            # identity-propagation middleware. The ``embedded-mode-no-token:``
+            # prefix is retained so any code path that prefix-checks the token
+            # to distinguish embedded principals from open-instance principals
+            # continues to work; the prefix is informational, not a guard —
+            # the salesagent's auth lookup is pure string equality.
+            initial_principal_token = f"embedded-mode-no-token:{secrets.token_urlsafe(8)}"
             session.add(
                 Principal(
                     tenant_id=tenant_id,
                     principal_id=initial_principal_id,
                     name=initial_principal_name,
                     platform_mappings=platform_mappings,
-                    access_token=f"embedded-mode-no-token:{secrets.token_urlsafe(8)}",
+                    access_token=initial_principal_token,
                 )
             )
 
@@ -1221,8 +1229,12 @@ def provision_tenant():
             connection_test_error=None,
         ),
         initial_principal=(
-            ProvisionedPrincipalResponse(principal_id=initial_principal_id, name=initial_principal_name)
-            if initial_principal_id and initial_principal_name
+            ProvisionedPrincipalResponse(
+                principal_id=initial_principal_id,
+                name=initial_principal_name,
+                access_token=initial_principal_token,
+            )
+            if initial_principal_id and initial_principal_name and initial_principal_token
             else None
         ),
     )

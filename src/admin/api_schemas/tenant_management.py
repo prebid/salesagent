@@ -320,15 +320,23 @@ class ProvisionTenantRequest(BaseModel):
 class ProvisionedPrincipalResponse(BaseModel):
     """Initial principal returned from provision.
 
-    Note: embedded-mode buyer-protocol auth flows through the identity-propagation
-    contract, not per-principal tokens (see sprint 2 § Auth boundary). No
-    ``api_token`` field is emitted here.
+    Includes the principal's ``access_token`` so the host product can stamp
+    ``x-adcp-auth`` on buyer-protocol calls (or store the token for the host's
+    own buyer agents to use). The token is the value already persisted in
+    ``Principal.access_token`` — exposing it here just avoids forcing host
+    products into out-of-band DB reads to discover something we already minted.
+
+    Identity-propagation via ``X-Identity-*`` headers (the sprint 2 buyer-protocol
+    middleware) is still the long-term direction; this token is what unblocks
+    host products today and remains the canonical bearer for any caller that
+    isn't routing through the trusted-network identity proxy.
     """
 
     model_config = _config()
 
     principal_id: str
     name: str
+    access_token: str
 
 
 class AdapterStatusResponse(BaseModel):

@@ -222,8 +222,11 @@ class TestProvision:
         body = response.get_json()
         cleanup_tenants.append(body["tenant_id"])
         assert body["initial_principal"]["name"] == "Default Advertiser"
-        # Sprint 1 contract: no api_token in response.
-        assert "api_token" not in body["initial_principal"]
+        # The principal's access_token is returned so host products can stamp
+        # x-adcp-auth on buyer-protocol calls without out-of-band DB reads.
+        # Value is the same string persisted in Principal.access_token.
+        assert isinstance(body["initial_principal"]["access_token"], str)
+        assert body["initial_principal"]["access_token"]
 
     def test_provision_rolls_back_on_adapter_failure(self, client, auth_headers, monkeypatch):
         import src.admin.tenant_management_api as api_module

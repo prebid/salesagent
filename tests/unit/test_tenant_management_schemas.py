@@ -234,11 +234,14 @@ def test_initial_principal_request_rejects_blank_name():
         InitialPrincipalRequest(name="")
 
 
-def test_provisioned_principal_response_has_no_token_field():
-    # Sprint 1 contract: embedded-mode principals do not carry per-principal API tokens.
+def test_provisioned_principal_response_exposes_access_token():
+    # ProvisionedPrincipalResponse surfaces the principal's `access_token`
+    # so host products can stamp x-adcp-auth on buyer-protocol calls
+    # without out-of-band DB reads. `api_token` is intentionally NOT used
+    # as the field name — the value is the Principal.access_token column.
     fields = set(ProvisionedPrincipalResponse.model_fields.keys())
     assert "api_token" not in fields
-    assert fields == {"principal_id", "name"}
+    assert fields == {"principal_id", "name", "access_token"}
 
 
 def test_provision_response_managed_externally_is_locked_to_true():
