@@ -882,14 +882,14 @@ def when_boundary_credentials(ctx: dict, boundary_point: str) -> None:
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with resolution "(?P<partition>[^"]+)"'))
 def when_partition_resolution(ctx: dict, partition: str) -> None:
-    """Partition test: resolution."""
-    _dispatch_partition(ctx, "resolution", partition)
+    """Partition test: resolution — translate partition name to actual request params."""
+    _dispatch_resolution(ctx, partition)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at resolution boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_resolution(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: resolution."""
-    _dispatch_partition(ctx, "resolution", boundary_point)
+    """Boundary test: resolution — translate boundary name to actual request params."""
+    _dispatch_resolution(ctx, boundary_point)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with principal "(?P<partition>[^"]+)"'))
