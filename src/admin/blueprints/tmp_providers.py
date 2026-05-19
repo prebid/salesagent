@@ -20,22 +20,29 @@ import logging
 
 import requests
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.core.database.database_session import get_db_session
-from src.core.database.models import TMPProvider, Tenant
-from src.core.database.repositories.tmp_provider import TMPProviderRepository
+from src.core.database.models import TMPProvider
+from src.core.database.repositories.uow import TMPProviderUoW
 from src.core.security.url_validator import check_url_ssrf
 
 logger = logging.getLogger(__name__)
 
 # Valid uid_type values per AdCP spec (uid-type enum).
-VALID_UID_TYPES = frozenset([
-    "uid2", "rampid", "id5", "euid", "pairid",
-    "maid", "hashed_email", "publisher_first_party", "other",
-])
+VALID_UID_TYPES = frozenset(
+    [
+        "uid2",
+        "rampid",
+        "id5",
+        "euid",
+        "pairid",
+        "maid",
+        "hashed_email",
+        "publisher_first_party",
+        "other",
+    ]
+)
 
 # Valid status values for TMP providers.
 VALID_STATUSES = frozenset(["active", "inactive", "draining"])
@@ -79,15 +86,15 @@ def _validate_provider_form(form: dict) -> tuple[dict, str | None]:
 
     # Validate status against allowed values
     if status not in VALID_STATUSES:
-        return {}, (
-            f"Invalid status '{status}'. "
-            f"Valid values: {', '.join(sorted(VALID_STATUSES))}"
-        )
+        return {}, (f"Invalid status '{status}'. Valid values: {', '.join(sorted(VALID_STATUSES))}")
 
     # Parse comma-separated lists
     countries = [c.strip().upper() for c in countries_raw.split(",") if c.strip()] or None
     uid_types = [u.strip() for u in uid_types_raw.split(",") if u.strip()] or None
     properties_list = [p.strip() for p in properties_raw.split(",") if p.strip()] or None
+
+    if not name:
+        return {}, "Provider name is required"
 
     if not endpoint:
         return {}, "Endpoint URL is required"
@@ -96,9 +103,6 @@ def _validate_provider_form(form: dict) -> tuple[dict, str | None]:
     if not is_safe:
         logger.warning("[SECURITY] TMP provider rejected unsafe URL %r: %s", endpoint, ssrf_error)
         return {}, f"Endpoint URL is not allowed: {ssrf_error}"
-
-    if not name:
-        return {}, "Provider name is required"
 
     # At least one of context_match or identity_match must be true
     if not context_match and not identity_match:
@@ -114,9 +118,11 @@ def _validate_provider_form(form: dict) -> tuple[dict, str | None]:
         invalid_types = [u for u in uid_types if u not in VALID_UID_TYPES]
         if invalid_types:
             return {}, (
-                f"Invalid uid_type(s): {', '.join(invalid_types)}. "
-                f"Valid values: {', '.join(sorted(VALID_UID_TYPES))}"
+                f"Invalid uid_type(s): {', '.join(invalid_types)}. Valid values: {', '.join(sorted(VALID_UID_TYPES))}"
             )
+
+    auth_type = form.get("auth_type", "").strip() or None
+    auth_credentials = form.get("auth_credentials", "").strip() or None
 
     data = {
         "name": name,
@@ -129,6 +135,8 @@ def _validate_provider_form(form: dict) -> tuple[dict, str | None]:
         "timeout_ms": timeout_ms,
         "priority": priority,
         "status": status,
+        "auth_type": auth_type,
+        "auth_credentials": auth_credentials,
     }
     return data, None
 
@@ -138,14 +146,15 @@ def _validate_provider_form(form: dict) -> tuple[dict, str | None]:
 def list_tmp_providers(tenant_id):
     """List all TMP providers for a tenant."""
     try:
-        with get_db_session() as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        with TMPProviderUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            assert uow.tmp_providers is not None
+            tenant = uow.tenant_config.get_tenant()
             if not tenant:
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            repo = TMPProviderRepository(session, tenant_id)
-            providers = repo.list_all()
+            providers = uow.tmp_providers.list_all()
 
             providers_list = []
             for p in providers:
@@ -177,8 +186,9 @@ def list_tmp_providers(tenant_id):
 def add_tmp_provider(tenant_id):
     """Add a new TMP provider."""
     if request.method == "GET":
-        with get_db_session() as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        with TMPProviderUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            tenant = uow.tenant_config.get_tenant()
             if not tenant:
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
@@ -194,8 +204,10 @@ def add_tmp_provider(tenant_id):
 
     # POST — create new TMP provider
     try:
-        with get_db_session() as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        with TMPProviderUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            assert uow.tmp_providers is not None
+            tenant = uow.tenant_config.get_tenant()
             if not tenant:
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
@@ -217,10 +229,10 @@ def add_tmp_provider(tenant_id):
                 timeout_ms=data["timeout_ms"],
                 priority=data["priority"],
                 status=data["status"],
+                auth_type=data["auth_type"],
+                auth_credentials=data["auth_credentials"],
             )
-            repo = TMPProviderRepository(session, tenant_id)
-            repo.create(provider)
-            session.commit()
+            uow.tmp_providers.create(provider)
 
             flash(f"TMP provider '{data['name']}' added successfully", "success")
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
@@ -237,14 +249,15 @@ def add_tmp_provider(tenant_id):
 def edit_tmp_provider(tenant_id, provider_id):
     """Edit an existing TMP provider."""
     if request.method == "GET":
-        with get_db_session() as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        with TMPProviderUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            assert uow.tmp_providers is not None
+            tenant = uow.tenant_config.get_tenant()
             if not tenant:
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            repo = TMPProviderRepository(session, tenant_id)
-            provider = repo.get_by_id(provider_id)
+            provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:
                 flash("TMP provider not found", "error")
                 return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
@@ -261,6 +274,8 @@ def edit_tmp_provider(tenant_id, provider_id):
                 "timeout_ms": provider.timeout_ms,
                 "priority": provider.priority,
                 "status": provider.status,
+                "auth_type": provider.auth_type,
+                "auth_credentials": provider.auth_credentials,
             }
 
             return render_template(
@@ -274,9 +289,9 @@ def edit_tmp_provider(tenant_id, provider_id):
 
     # POST — update TMP provider
     try:
-        with get_db_session() as session:
-            repo = TMPProviderRepository(session, tenant_id)
-            provider = repo.get_by_id(provider_id)
+        with TMPProviderUoW(tenant_id) as uow:
+            assert uow.tmp_providers is not None
+            provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:
                 flash("TMP provider not found", "error")
                 return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
@@ -288,7 +303,7 @@ def edit_tmp_provider(tenant_id, provider_id):
                     url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
                 )
 
-            repo.update_fields(
+            uow.tmp_providers.update_fields(
                 provider_id,
                 name=data["name"],
                 endpoint=data["endpoint"],
@@ -300,8 +315,12 @@ def edit_tmp_provider(tenant_id, provider_id):
                 timeout_ms=data["timeout_ms"],
                 priority=data["priority"],
                 status=data["status"],
+                auth_type=data["auth_type"],
             )
-            session.commit()
+
+            # Only update credentials if a new non-empty value was provided
+            if data["auth_credentials"]:
+                provider.auth_credentials = data["auth_credentials"]
 
             flash(f"TMP provider '{data['name']}' updated successfully", "success")
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
@@ -309,9 +328,7 @@ def edit_tmp_provider(tenant_id, provider_id):
     except Exception as e:
         logger.error("Error updating TMP provider: %s", e, exc_info=True)
         flash("Error updating TMP provider", "error")
-        return redirect(
-            url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
-        )
+        return redirect(url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id))
 
 
 @tmp_providers_bp.route("/<provider_id>/deactivate", methods=["POST"])
@@ -320,13 +337,11 @@ def edit_tmp_provider(tenant_id, provider_id):
 def deactivate_tmp_provider(tenant_id, provider_id):
     """Soft-deactivate a TMP provider (set status='inactive')."""
     try:
-        with get_db_session() as session:
-            repo = TMPProviderRepository(session, tenant_id)
-            provider = repo.deactivate(provider_id)
+        with TMPProviderUoW(tenant_id) as uow:
+            assert uow.tmp_providers is not None
+            provider = uow.tmp_providers.deactivate(provider_id)
             if not provider:
                 return jsonify({"error": "TMP provider not found"}), 404
-
-            session.commit()
 
             return jsonify({"success": True, "message": f"TMP provider '{provider.name}' deactivated"})
 
@@ -341,16 +356,15 @@ def deactivate_tmp_provider(tenant_id, provider_id):
 def delete_tmp_provider(tenant_id, provider_id):
     """Hard-delete a TMP provider."""
     try:
-        with get_db_session() as session:
-            repo = TMPProviderRepository(session, tenant_id)
+        with TMPProviderUoW(tenant_id) as uow:
+            assert uow.tmp_providers is not None
             # Get name before deleting for the response message
-            provider = repo.get_by_id(provider_id)
+            provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:
                 return jsonify({"error": "TMP provider not found"}), 404
 
             provider_name = provider.name
-            repo.delete(provider_id)
-            session.commit()
+            uow.tmp_providers.delete(provider_id)
 
             return jsonify({"success": True, "message": f"TMP provider '{provider_name}' deleted successfully"})
 
@@ -372,9 +386,9 @@ def health_check_tmp_provider(tenant_id, provider_id):
        or unreachable, this stalls the admin UI for the requesting user.
     """
     try:
-        with get_db_session() as session:
-            repo = TMPProviderRepository(session, tenant_id)
-            provider = repo.get_by_id(provider_id)
+        with TMPProviderUoW(tenant_id) as uow:
+            assert uow.tmp_providers is not None
+            provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:
                 return jsonify({"error": "TMP provider not found"}), 404
 
@@ -389,9 +403,7 @@ def health_check_tmp_provider(tenant_id, provider_id):
                 if resp.status_code == 200:
                     return jsonify({"success": True, "status": "healthy", "provider": provider.name})
                 else:
-                    return jsonify(
-                        {"success": False, "status": f"HTTP {resp.status_code}", "provider": provider.name}
-                    )
+                    return jsonify({"success": False, "status": f"HTTP {resp.status_code}", "provider": provider.name})
             except requests.RequestException as req_err:
                 return jsonify({"success": False, "error": str(req_err), "provider": provider.name})
 

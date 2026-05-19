@@ -1,8 +1,8 @@
-"""Add tmp_providers table for Trusted Match Protocol provider registrations
+"""Add tmp_providers table with auth fields for Trusted Match Protocol provider registrations
 
-Revision ID: 20260413120000
-Revises: 018bd7bdeed8
-Create Date: 2026-04-13 12:00:00.000000
+Revision ID: 2fa4c97166ab
+Revises: b4e2bffdd4f8
+Create Date: 2026-05-21 09:31:00.000000
 
 Schema aligned with provider-registration.json (AdCP spec PR #2210):
   - status string (active/inactive/draining) instead of is_active boolean
@@ -10,6 +10,12 @@ Schema aligned with provider-registration.json (AdCP spec PR #2210):
   - uid_types (JSONB, conditional on identity_match)
   - properties (JSONB, optional property RIDs)
   - priority (integer, default 0)
+  - auth_type (string, e.g. "bearer", "api_key") — nullable
+  - auth_credentials (text, stores token/key value) — nullable
+
+TMP Provider sync always uses the standard Authorization: Bearer header,
+so auth_header is intentionally omitted (unlike CreativeAgent/SignalsAgent).
+Both auth columns are nullable — existing rows have no auth configured.
 """
 
 from collections.abc import Sequence
@@ -20,14 +26,14 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "20260413120000"
-down_revision: str | Sequence[str] | None = "018bd7bdeed8"
+revision: str = "2fa4c97166ab"
+down_revision: str | Sequence[str] | None = "b4e2bffdd4f8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Create tmp_providers table aligned with provider-registration.json schema."""
+    """Create tmp_providers table with auth fields aligned with provider-registration.json schema."""
     op.create_table(
         "tmp_providers",
         sa.Column(
@@ -46,9 +52,26 @@ def upgrade() -> None:
         sa.Column("properties", postgresql.JSONB(), nullable=True),
         sa.Column("timeout_ms", sa.Integer(), nullable=False, server_default=sa.text("50")),
         sa.Column("priority", sa.Integer(), nullable=False, server_default=sa.text("0")),
-        sa.Column("status", sa.String(length=20), nullable=False, server_default=sa.text("'active'")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column(
+            "status",
+            sa.String(length=20),
+            nullable=False,
+            server_default=sa.text("'active'"),
+        ),
+        sa.Column("auth_type", sa.String(length=50), nullable=True),
+        sa.Column("auth_credentials", sa.Text(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=True,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=True,
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("provider_id"),
     )

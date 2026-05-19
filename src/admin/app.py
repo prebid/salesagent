@@ -33,10 +33,10 @@ from src.admin.blueprints.publisher_partners import publisher_partners_bp
 from src.admin.blueprints.schemas import schemas_bp
 from src.admin.blueprints.settings import settings_bp, tenant_management_settings_bp
 from src.admin.blueprints.signals_agents import signals_agents_bp
-from src.admin.blueprints.tmp_providers_bp import tmp_providers_bp
 
 # from src.admin.blueprints.tasks import tasks_bp  # Disabled - tasks eliminated in favor of workflow system
 from src.admin.blueprints.tenants import tenants_bp
+from src.admin.blueprints.tmp_providers import tmp_providers_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
 from src.core.config_loader import is_single_tenant_mode

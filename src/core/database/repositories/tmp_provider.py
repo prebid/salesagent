@@ -8,8 +8,6 @@ beads: salesagent-m44
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -87,9 +85,7 @@ class TMPProviderRepository:
         """List all providers for the tenant, ordered by name."""
         return list(
             self._session.scalars(
-                select(TMPProvider)
-                .where(TMPProvider.tenant_id == self._tenant_id)
-                .order_by(TMPProvider.name)
+                select(TMPProvider).where(TMPProvider.tenant_id == self._tenant_id).order_by(TMPProvider.name)
             ).all()
         )
 
@@ -159,4 +155,3 @@ class TMPProviderRepository:
         self._session.delete(provider)
         self._session.flush()
         return True
-

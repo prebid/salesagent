@@ -6,9 +6,16 @@ Exposes:
 This endpoint is polled by the TMP Router every 30 s to discover which
 provider endpoints to fan out context and identity match requests to.
 
-The endpoint is **unauthenticated** — it is intended for internal network
-use only (Docker network / VPC). Do not expose it on a public interface
-without adding authentication.
+The endpoint requires API key authentication via the ``TMP_DISCOVERY_API_KEYS``
+environment variable (comma-separated list of accepted keys).  When the
+variable is not set the endpoint is open (suitable for internal-network-only
+deployments).  In production, set ``TMP_DISCOVERY_API_KEYS`` to restrict
+access to the TMP Router.
+
+Accepted auth headers (any one is sufficient):
+  - ``x-adcp-auth: <key>``
+  - ``X-API-Key: <key>``
+  - ``Authorization: Bearer <key>``
 
 Response schema (mirrors the plan's discovery response format):
 {
@@ -36,8 +43,9 @@ Providers with status 'inactive' are excluded entirely.
 from __future__ import annotations
 
 import logging
+import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.core.database.repositories.uow import TenantConfigUoW, TMPProviderUoW
@@ -47,11 +55,39 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tmp-providers"])
 
 
+async def require_api_key(request: Request) -> None:
+    """Require API key for the TMP discovery endpoint.
+
+    Reads allowed keys from the ``TMP_DISCOVERY_API_KEYS`` environment variable
+    (comma-separated).  When the variable is not set or empty the check is
+    skipped (open / dev mode — suitable for internal-network-only deployments).
+
+    Accepted headers (first non-empty value wins):
+      - ``x-adcp-auth``
+      - ``X-API-Key``
+      - ``Authorization: Bearer <key>``
+    """
+    allowed = {k.strip() for k in os.environ.get("TMP_DISCOVERY_API_KEYS", "").split(",") if k.strip()}
+    if not allowed:
+        return  # Open if not configured (dev mode)
+    api_key = (
+        request.headers.get("x-adcp-auth", "")
+        or request.headers.get("X-API-Key", "")
+        or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    )
+    if api_key not in allowed:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_REQUIRED", "message": "Authentication required"},
+        )
+
+
 @router.get("/tenant/{tenant_id}/tmp-providers/discovery")
-async def tmp_providers_discovery(tenant_id: str) -> JSONResponse:
+async def tmp_providers_discovery(tenant_id: str, _: None = Depends(require_api_key)) -> JSONResponse:
     """Return the active TMP provider set for a tenant.
 
-    Polled by the TMP Router every 30 s.  Internal network only — no auth.
+    Polled by the TMP Router every 30 s.  Requires API key authentication
+    via ``TMP_DISCOVERY_API_KEYS`` (open when env var is unset).
 
     Lifecycle filtering:
       active   → included
@@ -61,7 +97,10 @@ async def tmp_providers_discovery(tenant_id: str) -> JSONResponse:
     with TenantConfigUoW(tenant_id) as uow:
         assert uow.tenant_config is not None
         if uow.tenant_config.get_tenant() is None:
-            raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "TENANT_NOT_FOUND", "message": f"Tenant '{tenant_id}' not found"},
+            )
 
     with TMPProviderUoW(tenant_id) as uow:
         assert uow.tmp_providers is not None

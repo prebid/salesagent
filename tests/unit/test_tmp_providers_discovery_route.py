@@ -220,9 +220,16 @@ class TestDiscoveryResponseShape:
         entry = response.json()["providers"][0]
 
         required_fields = {
-            "provider_id", "name", "endpoint", "context_match",
-            "identity_match", "countries", "uid_types", "timeout_ms",
-            "priority", "status",
+            "provider_id",
+            "name",
+            "endpoint",
+            "context_match",
+            "identity_match",
+            "countries",
+            "uid_types",
+            "timeout_ms",
+            "priority",
+            "status",
         }
         assert required_fields.issubset(set(entry.keys()))
 
@@ -269,3 +276,122 @@ class TestDiscoveryOrdering:
         assert response.status_code == 200
         names = [p["name"] for p in response.json()["providers"]]
         assert names == ["Alpha", "Beta", "Gamma"]
+
+
+# ---------------------------------------------------------------------------
+# TMP_DISCOVERY_API_KEYS gating tests
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoveryApiKeyAuth:
+    """GET /tenant/{tenant_id}/tmp-providers/discovery enforces TMP_DISCOVERY_API_KEYS."""
+
+    def test_open_when_tmp_discovery_api_keys_not_set(self, client):
+        """When TMP_DISCOVERY_API_KEYS is unset the endpoint is open (dev mode)."""
+        tenant = _make_tenant()
+        mock_tenant_uow_cls = _make_tenant_uow(tenant)
+        mock_tmp_uow_cls = _make_tmp_uow([])
+
+        with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
+            with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
+                with patch.dict("os.environ", {}, clear=False):
+                    import os
+
+                    os.environ.pop("TMP_DISCOVERY_API_KEYS", None)
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
+
+        assert response.status_code == 200
+
+    def test_open_when_tmp_discovery_api_keys_is_empty_string(self, client):
+        """When TMP_DISCOVERY_API_KEYS is set to empty string the endpoint is open."""
+        tenant = _make_tenant()
+        mock_tenant_uow_cls = _make_tenant_uow(tenant)
+        mock_tmp_uow_cls = _make_tmp_uow([])
+
+        with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
+            with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": ""}):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
+
+        assert response.status_code == 200
+
+    def test_returns_401_when_no_key_provided_and_keys_configured(self, client):
+        """When TMP_DISCOVERY_API_KEYS is set and no key is sent, returns 401."""
+        with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "secret-key-1,secret-key-2"}):
+            response = client.get("/tenant/si-host/tmp-providers/discovery")
+
+        assert response.status_code == 401
+
+    def test_returns_401_when_wrong_key_provided(self, client):
+        """When TMP_DISCOVERY_API_KEYS is set and a wrong key is sent, returns 401."""
+        with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "correct-key"}):
+            response = client.get(
+                "/tenant/si-host/tmp-providers/discovery",
+                headers={"x-adcp-auth": "wrong-key"},
+            )
+
+        assert response.status_code == 401
+
+    def test_accepts_valid_key_via_x_adcp_auth_header(self, client):
+        """Valid key in x-adcp-auth header is accepted."""
+        tenant = _make_tenant()
+        mock_tenant_uow_cls = _make_tenant_uow(tenant)
+        mock_tmp_uow_cls = _make_tmp_uow([])
+
+        with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
+            with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "valid-key"}):
+                    response = client.get(
+                        "/tenant/si-host/tmp-providers/discovery",
+                        headers={"x-adcp-auth": "valid-key"},
+                    )
+
+        assert response.status_code == 200
+
+    def test_accepts_valid_key_via_x_api_key_header(self, client):
+        """Valid key in X-API-Key header is accepted."""
+        tenant = _make_tenant()
+        mock_tenant_uow_cls = _make_tenant_uow(tenant)
+        mock_tmp_uow_cls = _make_tmp_uow([])
+
+        with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
+            with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "valid-key"}):
+                    response = client.get(
+                        "/tenant/si-host/tmp-providers/discovery",
+                        headers={"X-API-Key": "valid-key"},
+                    )
+
+        assert response.status_code == 200
+
+    def test_accepts_valid_key_via_authorization_bearer_header(self, client):
+        """Valid key in Authorization: Bearer header is accepted."""
+        tenant = _make_tenant()
+        mock_tenant_uow_cls = _make_tenant_uow(tenant)
+        mock_tmp_uow_cls = _make_tmp_uow([])
+
+        with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
+            with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "valid-key"}):
+                    response = client.get(
+                        "/tenant/si-host/tmp-providers/discovery",
+                        headers={"Authorization": "Bearer valid-key"},
+                    )
+
+        assert response.status_code == 200
+
+    def test_accepts_one_of_multiple_configured_keys(self, client):
+        """Any key from the comma-separated TMP_DISCOVERY_API_KEYS list is accepted."""
+        tenant = _make_tenant()
+        mock_tenant_uow_cls = _make_tenant_uow(tenant)
+        mock_tmp_uow_cls = _make_tmp_uow([])
+
+        with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
+            with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "key-a,key-b,key-c"}):
+                    response = client.get(
+                        "/tenant/si-host/tmp-providers/discovery",
+                        headers={"x-adcp-auth": "key-b"},
+                    )
+
+        assert response.status_code == 200

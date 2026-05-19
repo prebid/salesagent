@@ -224,6 +224,24 @@ block content %}
     </div>
     {% endif %}
 
+    <!-- Auth Configuration -->
+    <div class="form-group">
+      <label for="auth_type">Auth Type</label>
+      <select name="auth_type" id="auth_type" class="form-control">
+        <option value="">None (unauthenticated)</option>
+        <option value="bearer" {% if provider and provider.auth_type == 'bearer' %}selected{% endif %}>Bearer Token</option>
+        <option value="api_key" {% if provider and provider.auth_type == 'api_key' %}selected{% endif %}>API Key</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="auth_credentials">API Key / Token</label>
+      <input type="password" name="auth_credentials" id="auth_credentials" class="form-control"
+             placeholder="{% if provider and provider.auth_credentials %}(set — leave blank to keep){% else %}Paste API key here{% endif %}">
+      {% if provider and provider.auth_credentials %}
+      <small class="form-text text-muted">Credentials are set. Leave blank to keep existing value.</small>
+      {% endif %}
+    </div>
+
     <div style="display: flex; gap: 1rem; margin-top: 2rem">
       <button type="submit" class="btn btn-primary">
         {% if provider %}Save Changes{% else %}Add TMP Provider{% endif %}

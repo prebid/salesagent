@@ -29,6 +29,7 @@ from src.core.database.repositories.uow import (
     ProductUoW,
     PushNotificationConfigUoW,
     TenantConfigUoW,
+    TMPProviderUoW,
     WorkflowUoW,
 )
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -46,6 +47,7 @@ __all__ = [
     "PushNotificationConfigRepository",
     "PushNotificationConfigUoW",
     "TMPProviderRepository",
+    "TMPProviderUoW",
     "TenantConfigRepository",
     "TenantConfigUoW",
     "WorkflowRepository",
