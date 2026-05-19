@@ -35,7 +35,7 @@ def _sandbox_identity(ctx: dict, transport: Transport | None = None) -> Resolved
 
     env = ctx["env"]
 
-    if transport in (Transport.REST, Transport.E2E_REST):
+    if transport is Transport.REST:
         # REST goes through middleware — need real DB-backed auth token.
         # Clone the env's default REST identity with dry_run=True.
         base = env.identity_for(transport)
