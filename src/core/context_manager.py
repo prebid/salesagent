@@ -335,6 +335,79 @@ class ContextManager(DatabaseManager):
         finally:
             session.close()
 
+    def fail_workflow_step_for_exception(self, step_id: str, exc: Exception) -> None:
+        """Mark a workflow step failed with BOTH ``error_message`` AND structured ``response_data``.
+
+        The webhook delivery path at ``_send_push_notifications`` emits
+        ``step.response_data`` (not ``error_message``) to push notification
+        subscribers. Without structured payload, async subscribers receive
+        ``status=failed`` with an empty body — they don't see the error
+        code, field path, or recovery classification the synchronous caller
+        gets via the spec-compliant payload. This helper builds a one-element
+        ``errors[]`` payload (same shape as the SDK's ``adcp_error()`` helper)
+        from the exception so async and sync paths are at parity.
+
+        Uses ``wire_error_code`` so internal-only codes (``NOT_FOUND``,
+        ``INTERNAL_ERROR``, etc.) get translated to ``STANDARD_ERROR_CODES``
+        before reaching the webhook subscriber — same translation the
+        synchronous transport boundaries apply.
+
+        Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
+        hiccup during audit doesn't replace the original exception that the
+        caller is about to re-raise. Python's bare ``raise`` would otherwise
+        pick up the new exception fired here and the buyer would see an
+        unrelated DB error instead of the actual ``AdCPError``.
+        """
+        from adcp.server.helpers import STANDARD_ERROR_CODES
+        from adcp.server.helpers import adcp_error as _sdk_adcp_error
+
+        from src.core.exceptions import AdCPError
+
+        try:
+            if isinstance(exc, AdCPError):
+                source: AdCPError = exc
+            else:
+                # Untyped exception — base ``AdCPError`` defaults to
+                # ``INTERNAL_ERROR`` which is in ``INTERNAL_CODES`` (never
+                # leaves the server).
+                source = AdCPError(str(exc) or type(exc).__name__)
+
+            # Defensive wire-code enforcement: webhook subscribers must only
+            # see codes in ``STANDARD_ERROR_CODES``. ``wire_error_code``
+            # applies the explicit ``ERROR_CODE_MAPPING`` translation; if any
+            # source code still falls outside the standard set after that,
+            # fall back to ``SERVICE_UNAVAILABLE`` so async subscribers never
+            # receive an internal-only code that the synchronous boundary
+            # would have rejected.
+            wire_code = source.wire_error_code
+            if wire_code not in STANDARD_ERROR_CODES:
+                wire_code = "SERVICE_UNAVAILABLE"
+
+            payload = _sdk_adcp_error(
+                wire_code,
+                source.message or str(source),
+                recovery=source.recovery,
+                field=source.field,
+                suggestion=source.suggestion,
+                details=source.details,
+            )
+            response_data = {"errors": payload["errors"]}
+            error_message = source.message or str(source)
+
+            self.update_workflow_step(
+                step_id,
+                status="failed",
+                error_message=error_message,
+                response_data=response_data,
+            )
+        except Exception:
+            # Original exception must survive — log and swallow so the caller's
+            # bare ``raise`` propagates the real error to the buyer.
+            logger.exception(
+                "Failed to audit workflow_step %s after exception — original exception will still re-raise",
+                step_id,
+            )
+
     def mark_human_needed(
         self,
         context_id: str,

@@ -1425,17 +1425,20 @@ def _update_media_buy_impl(
     except AdCPError as adcp_err:
         # Mark the workflow step failed so the push notification fires
         # (context_manager.update_workflow_step → _send_push_notifications).
-        # Re-raise so the transport boundary builds the two-layer envelope.
+        # fail_workflow_step_for_exception threads the two-layer envelope into
+        # response_data so async webhook subscribers see the same wire shape
+        # the synchronous caller receives, AND wraps in try/except so a DB
+        # hiccup during audit can't shadow the original AdCPError on re-raise.
         if step is not None:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(adcp_err))
+            ctx_manager.fail_workflow_step_for_exception(step.step_id, adcp_err)
         raise
 
     except Exception as e:
         # Same idea for non-AdCPError raises (ValueError, IntegrityError, etc.)
         # — the buyer-facing webhook still needs to fire so polling clients
-        # don't hang. Mirror create's pattern (media_buy_create.py:3694-3697).
+        # don't hang. Mirror create's pattern (media_buy_create.py:3691-3700).
         if step is not None:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
+            ctx_manager.fail_workflow_step_for_exception(step.step_id, e)
         raise
 
 

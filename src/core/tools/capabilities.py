@@ -171,8 +171,14 @@ def _get_adcp_capabilities_impl(
         # this True (PR #1314) and the other 4 adapters hard-reject (PR #1313)
         # — same source of truth via `supports_property_list_filtering()`.
         property_list_filtering=supports_property_list_filtering(adapter),
-        # catalog_management: We have product catalog management
-        catalog_management=True,
+        # catalog_management: declared False until a sync_catalogs tool ships.
+        # AdCP spec binds this flag to the buyer-driven sync_catalogs task
+        # (SyncCatalogsRequest with account + catalogs[] + delete_missing) —
+        # NOT the internal admin CRUD over the products table. Declaring True
+        # without the tool would let buyers reach the boundary and get
+        # UNSUPPORTED_FEATURE there instead of being warned at capability
+        # discovery. Mirrors the property_list_filtering=False rationale above.
+        catalog_management=False,
     )
 
     # Build targeting capabilities from adapter

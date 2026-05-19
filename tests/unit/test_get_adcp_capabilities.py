@@ -96,7 +96,11 @@ class TestGetAdcpCapabilitiesSchema:
                 features=MediaBuyFeatures(
                     inline_creative_management=True,
                     property_list_filtering=True,
-                    catalog_management=True,
+                    # catalog_management example must match production (False until
+                    # sync_catalogs ships). Schema-construction tests are
+                    # documentation by example; declaring True here while
+                    # production declares False would mislead future readers.
+                    catalog_management=False,
                 ),
                 execution=Execution(
                     targeting=Targeting(
@@ -252,6 +256,15 @@ class TestGetAdcpCapabilitiesWithTenant:
                 # Should have features
                 assert response.media_buy.features is not None
                 assert response.media_buy.features.inline_creative_management is True
+
+                # Honesty assertions: capabilities the seller can't actually fulfill
+                # MUST declare False so buyers see the gap at discovery time, not at
+                # task-dispatch time. property_list_filtering: no adapter compiles it
+                # yet (flips True via PR #1314 / supports_property_list_filtering()).
+                # catalog_management: no sync_catalogs tool ships in this codebase;
+                # admin product CRUD is NOT the spec's buyer-driven catalog sync.
+                assert response.media_buy.features.property_list_filtering is False
+                assert response.media_buy.features.catalog_management is False
 
                 # Should have execution with targeting
                 assert response.media_buy.execution is not None

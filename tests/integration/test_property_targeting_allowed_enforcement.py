@@ -185,12 +185,15 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    # Same shape as the happy path above — assert the rule didn't fire even if
-    # an unrelated error did. The original body skipped assertions entirely on
-    # the success branch (vacuous pass).
-    assert not isinstance(response, CreateMediaBuyError) or all(
-        "property_targeting_allowed" not in err.message for err in response.errors
-    )
+    # Mirror the line-157 split for the sister test — the compound
+    # ``isinstance(...) or all(...)`` short-circuits on success, leaving the
+    # happy-path proof vacuous. Separate ``not isinstance`` gates the success
+    # branch with a real check; the follow-up ``all(...)`` ensures the
+    # property_list rule still doesn't fire if an unrelated error did appear.
+    assert not isinstance(
+        response, CreateMediaBuyError
+    ), f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
+    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
 # ---------------------------------------------------------------------------

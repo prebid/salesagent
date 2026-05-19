@@ -642,13 +642,29 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         }
 
                     # Get targeting_overlay from package_config if present
-                    # Fallback to "targeting" key for data written before salesagent-dzr fix
+                    # Fallback to "targeting" key for data written before salesagent-dzr fix.
+                    # Corrupt targeting in package_config (non-dict input, schema drift)
+                    # would otherwise surface from the outer ``except Exception`` below as
+                    # an opaque message like "'str' object is not a mapping" — admin sees
+                    # something cryptic, has to grep the audit log to find which package.
+                    # Narrow exception + targeted message gives the approver actionable
+                    # context immediately. Abort (not skip) — execute_approved_media_buy
+                    # is a mutating operation; silently dropping targeting would ship
+                    # a buy without the buyer's intended targeting.
                     targeting_overlay = None
                     targeting_raw = package_config.get("targeting_overlay") or package_config.get("targeting")
                     if targeting_raw:
                         from src.core.schemas import Targeting
 
-                        targeting_overlay = Targeting(**targeting_raw)
+                        try:
+                            targeting_overlay = Targeting(**targeting_raw)
+                        except (TypeError, ValidationError) as exc:
+                            error_msg = (
+                                f"Failed to reconstruct package {package_id}: "
+                                f"targeting_overlay corrupt in package_config: {exc}"
+                            )
+                            logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
+                            return False, error_msg
 
                     # Create MediaPackage object (what adapters expect)
                     # Note: Product model has 'formats' not 'format_ids'
@@ -3689,15 +3705,20 @@ async def _create_media_buy_impl(
         return CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
 
     except AdCPError as adcp_err:
-        # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping
+        # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping.
+        # fail_workflow_step_for_exception threads the two-layer envelope into
+        # response_data so push notification subscribers see the same wire shape
+        # the synchronous caller receives, AND wraps in try/except so a DB hiccup
+        # during audit can't shadow the original AdCPError on re-raise.
         if step:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(adcp_err))
+            ctx_manager.fail_workflow_step_for_exception(step.step_id, adcp_err)
         raise
 
     except Exception as e:
-        # Update workflow step as failed on any error during execution
+        # Untyped exception — same audit treatment (wire-shape response_data +
+        # original exception preserved on re-raise).
         if step:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
+            ctx_manager.fail_workflow_step_for_exception(step.step_id, e)
 
         # Send Slack notification for failed media buy creation
         try:
