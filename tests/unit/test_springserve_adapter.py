@@ -175,9 +175,11 @@ class TestLiveCreateMediaBuy:
     """Mapping A: AdCP MediaBuy -> SpringServe Campaign,
     AdCP Package -> SpringServe Demand Tag."""
 
-    def _adapter_with_mock_client(self, mock_principal):
+    def _adapter_with_mock_client(self, mock_principal, **extra_config):
+        config = {"api_token": "tok"}
+        config.update(extra_config)
         adapter = SpringServeAdapter(
-            config={"api_token": "tok"},
+            config=config,
             principal=mock_principal,
             dry_run=False,
             tenant_id="tenant_ss_1",
@@ -253,7 +255,7 @@ class TestLiveCreateMediaBuy:
         lands so geo/device/supply targeting can take effect."""
         from src.adapters.springserve import SpringServeValidationError
 
-        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter = self._adapter_with_mock_client(mock_principal, enable_key_value_targeting=True)
         adapter._client.demand_tags.add_kv_entry.side_effect = SpringServeValidationError(
             "POST /demand_tag_keys -> HTTP 422",
             status_code=422,
@@ -280,7 +282,7 @@ class TestLiveCreateMediaBuy:
         upstream_error -- not silently mask a real validation failure."""
         from src.adapters.springserve import SpringServeValidationError
 
-        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter = self._adapter_with_mock_client(mock_principal, enable_key_value_targeting=True)
         adapter._client.demand_tags.add_kv_entry.side_effect = SpringServeValidationError(
             "POST /demand_tag_keys -> HTTP 422",
             status_code=422,
@@ -330,7 +332,7 @@ class TestLiveCreateMediaBuy:
         the narrow KV blocker handler. Each error class is exercised
         explicitly so a future refactor that re-broadens the catch fails
         loudly here."""
-        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter = self._adapter_with_mock_client(mock_principal, enable_key_value_targeting=True)
         adapter._client.demand_tags.add_kv_entry.side_effect = exc_factory()
         with patch(
             "src.adapters.springserve.adapter.build_demand_tag_kv_entries",
@@ -340,6 +342,46 @@ class TestLiveCreateMediaBuy:
 
         assert isinstance(response, CreateMediaBuyError), f"{exc_label} should surface as upstream_error"
         assert response.errors[0].code == "upstream_error"
+
+    def test_kv_targeting_off_by_default_skips_add_kv_entry(self, mock_principal, sample_request, sample_packages):
+        """Default tenant config (enable_key_value_targeting=False) MUST NOT
+        POST any demand_tag_keys entries -- supply-tag selection is the
+        primary targeting surface for most publishers, and we don't want
+        to make sub-resource writes the buyer didn't ask for."""
+        adapter = self._adapter_with_mock_client(mock_principal)
+        with patch(
+            "src.adapters.springserve.adapter.build_demand_tag_kv_entries",
+            return_value=[{"key_id": "3997", "list_type": "white_list", "group": "1", "free_values": ["x"]}],
+        ) as mock_build:
+            response = invoke_create_media_buy(adapter, sample_request, sample_packages)
+
+        assert isinstance(response, CreateMediaBuySuccess)
+        adapter._client.demand_tags.add_kv_entry.assert_not_called()
+        # And the materializer is never invoked when the flag is off, so we
+        # don't pay the cost of resolving signals we'll never write.
+        mock_build.assert_not_called()
+
+    def test_demand_class_defaults_to_line_item_on_wire(self, mock_principal, sample_request, sample_packages):
+        """The default config maps to SpringServe's "Line Item" demand class
+        on the create body -- that's the class that supports hosted creative
+        binding via line_item_ratios."""
+        adapter = self._adapter_with_mock_client(mock_principal)
+        invoke_create_media_buy(adapter, sample_request, sample_packages)
+
+        kw = adapter._client.demand_tags.create.call_args.kwargs
+        assert kw["demand_class"] == "line_item"  # internal value; wire mapping done in _demand_tags.py
+
+    def test_demand_class_tag_passes_through_to_demand_tag_create(
+        self, mock_principal, sample_request, sample_packages
+    ):
+        """When the tenant is provisioned for passthrough demand (third-party
+        VAST/audio URLs), the adapter ships demand_class='tag' through to
+        the demand_tag create body."""
+        adapter = self._adapter_with_mock_client(mock_principal, demand_class="tag")
+        invoke_create_media_buy(adapter, sample_request, sample_packages)
+
+        kw = adapter._client.demand_tags.create.call_args.kwargs
+        assert kw["demand_class"] == "tag"
 
 
 class TestLiveCreatives:
@@ -505,7 +547,11 @@ class TestLiveCreatives:
         adapter = self._adapter(mock_principal)
         results = adapter.associate_creatives(line_item_ids=["800001"], platform_creative_ids=["1182735"])
 
-        adapter._client.demand_tags.update.assert_called_once_with(800001, creative_id=1182735, is_active=True)
+        adapter._client.demand_tags.update.assert_called_once_with(
+            800001,
+            line_item_ratios=[{"creative_id": 1182735, "ratio": 1}],
+            is_active=True,
+        )
         assert results == [{"line_item_id": "800001", "creative_id": "1182735", "status": "success"}]
 
     def test_associate_creatives_multiple_per_tag_keeps_last_marks_others_skipped(self, mock_principal):
@@ -516,7 +562,11 @@ class TestLiveCreatives:
         )
 
         # Only the last creative is bound; earlier ones recorded as skipped.
-        adapter._client.demand_tags.update.assert_called_once_with(800001, creative_id=3, is_active=True)
+        adapter._client.demand_tags.update.assert_called_once_with(
+            800001,
+            line_item_ratios=[{"creative_id": 3, "ratio": 1}],
+            is_active=True,
+        )
         statuses = [r["status"] for r in results]
         assert statuses == ["skipped", "skipped", "success"]
 
@@ -527,6 +577,28 @@ class TestLiveCreatives:
         adapter._client.demand_tags.update.side_effect = SpringServeError("rejected", status_code=400, body="bad")
         results = adapter.associate_creatives(line_item_ids=["800001"], platform_creative_ids=["1"])
         assert results[0]["status"] == "failed"
+
+    def test_associate_creatives_demand_class_tag_skips_binding(self, mock_principal):
+        """demand_class=tag means the demand tag IS a third-party VAST/audio
+        URL -- there's no Creatives surface on the SpringServe side to bind
+        to. The adapter must return skipped results and MUST NOT issue a
+        PUT against the demand tag."""
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok", "demand_class": "tag"},
+            principal=mock_principal,
+            dry_run=False,
+            tenant_id="tenant_ss_1",
+        )
+        adapter._client = MagicMock()
+
+        results = adapter.associate_creatives(
+            line_item_ids=["800001", "800002"],
+            platform_creative_ids=["1"],
+        )
+
+        adapter._client.demand_tags.update.assert_not_called()
+        assert [r["status"] for r in results] == ["skipped", "skipped"]
+        assert all("demand_class=tag" in r["message"] for r in results)
 
 
 class TestLiveCheckStatus:

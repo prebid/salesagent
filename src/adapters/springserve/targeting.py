@@ -44,16 +44,22 @@ This module exports two helpers:
 - :func:`build_demand_tag_kv_entries` returns the list of sub-resource
   payloads the adapter POSTs separately after creating the demand tag.
 
-**Open API blocker (May 2026):** Creating sub-resource entries
-returns ``HTTP 422 "Targeter must have key_value_targeting set to
-true"`` -- the parent demand_tag's ``key_value_targeting`` flag must
-be ``true`` before the entry post is accepted. That flag is **not
-writable** on our AdOps role (POST/PUT silently keep it ``false``).
-Tags created via SpringServe's own UI have the flag set somehow; the
-v0 API path to flip it is undocumented. Tracking: open question to
-Mathijs (likely needs a higher API scope or an admin pre-step). The
-materializer logs a warning at the call site so the runtime gap is
-visible until unblocked.
+**Tenant-level opt-in.** KV-targeting writes are gated by the
+``enable_key_value_targeting`` flag on the SpringServe connection config;
+off by default because most publishers express audience / content / device
+through supply-tag selection and demand-tag priorities rather than
+demand_tag_keys. Turn it on only when the publisher has free-form KV
+keys not reflected in their supply taxonomy.
+
+If a tenant opts in, the parent demand_tag's ``key_value_targeting``
+flag must be ``true`` for the sub-resource POST to be accepted -- the
+API rejects with ``HTTP 422 "Targeter must have key_value_targeting
+set to true"`` otherwise. Whether the v0 API exposes that flag for
+write depends on the SpringServe account configuration on the
+publisher side. The adapter catches that specific 422 and emits a
+warning so the buy succeeds without targeting; any other 422 (bad
+key_id, malformed values, etc) propagates to the buyer as an
+``upstream_error``.
 """
 
 from __future__ import annotations

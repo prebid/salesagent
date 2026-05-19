@@ -130,6 +130,40 @@ class TestEnvironmentAndOptional:
         assert "production" in SPRINGSERVE_HOSTS
 
 
+class TestProvisioningModelDefaults:
+    """The per-tenant provisioning knobs that decide how AdCP buyers ship
+    demand into this tenant's SpringServe account."""
+
+    def test_demand_class_defaults_to_line_item(self):
+        """Most AdCP integrations expect SpringServe to host the creative
+        (POST /videos + bind via creative_id), so the default class matches
+        that path."""
+        cfg = SpringServeConnectionConfig(api_token="t")
+        assert cfg.demand_class == "line_item"
+
+    def test_demand_class_accepts_tag(self):
+        """Passthrough integrations where the buyer's third-party VAST/audio
+        URL is the creative."""
+        cfg = SpringServeConnectionConfig(api_token="t", demand_class="tag")
+        assert cfg.demand_class == "tag"
+
+    def test_demand_class_rejects_unknown_value(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            SpringServeConnectionConfig(api_token="t", demand_class="anything_else")
+
+    def test_enable_key_value_targeting_defaults_off(self):
+        """Audience / content / device are typically supply-side selectors
+        in SpringServe -- KV targeting is opt-in."""
+        cfg = SpringServeConnectionConfig(api_token="t")
+        assert cfg.enable_key_value_targeting is False
+
+    def test_enable_key_value_targeting_opt_in(self):
+        cfg = SpringServeConnectionConfig(api_token="t", enable_key_value_targeting=True)
+        assert cfg.enable_key_value_targeting is True
+
+
 class TestSpringServeProductConfig:
     def test_defaults_are_empty(self):
         cfg = SpringServeProductConfig()

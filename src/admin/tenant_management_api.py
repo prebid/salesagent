@@ -344,6 +344,8 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             api_token=adapter.api_token.get_secret_value() if adapter.api_token else None,
             environment=adapter.environment,
             default_demand_partner_id=adapter.default_demand_partner_id,
+            demand_class=adapter.demand_class,
+            enable_key_value_targeting=adapter.enable_key_value_targeting,
         )
         ac = AdapterConfig(
             tenant_id=tenant_id,

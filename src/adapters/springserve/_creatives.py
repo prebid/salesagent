@@ -20,9 +20,8 @@ Two upload paths:
    covers our hosted-asset case.
 
 Binding a creative to a demand tag is NOT part of this client -- that
-edit goes on the demand tag itself (``client.demand_tags.update(...,
-creative_id=ID)`` for single, or via ``line_item_ratios`` for rotation).
-The adapter's ``associate_creatives`` method composes those calls.
+edit goes on the demand tag itself via ``line_item_ratios``. The adapter's
+``associate_creatives`` method composes those calls.
 """
 
 from __future__ import annotations

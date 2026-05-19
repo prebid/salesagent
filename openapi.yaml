@@ -268,6 +268,13 @@ components:
           - type: 'null'
           default: null
           title: Default Demand Partner Id
+        demand_class:
+          default: line_item
+          enum:
+          - line_item
+          - tag
+          title: Demand Class
+          type: string
         email:
           anyOf:
           - maxLength: 255
@@ -275,6 +282,10 @@ components:
           - type: 'null'
           default: null
           title: Email
+        enable_key_value_targeting:
+          default: false
+          title: Enable Key Value Targeting
+          type: boolean
         environment:
           const: production
           default: production
@@ -1847,6 +1858,13 @@ components:
           - type: 'null'
           default: null
           title: Default Demand Partner Id
+        demand_class:
+          default: line_item
+          enum:
+          - line_item
+          - tag
+          title: Demand Class
+          type: string
         email:
           anyOf:
           - maxLength: 255
@@ -1854,6 +1872,10 @@ components:
           - type: 'null'
           default: null
           title: Email
+        enable_key_value_targeting:
+          default: false
+          title: Enable Key Value Targeting
+          type: boolean
         environment:
           const: production
           default: production
@@ -2258,6 +2280,13 @@ components:
           - type: 'null'
           default: null
           title: Default Demand Partner Id
+        demand_class:
+          default: line_item
+          enum:
+          - line_item
+          - tag
+          title: Demand Class
+          type: string
         email:
           anyOf:
           - maxLength: 255
@@ -2265,6 +2294,10 @@ components:
           - type: 'null'
           default: null
           title: Email
+        enable_key_value_targeting:
+          default: false
+          title: Enable Key Value Targeting
+          type: boolean
         environment:
           const: production
           default: production

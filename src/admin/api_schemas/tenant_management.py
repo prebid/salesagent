@@ -178,6 +178,8 @@ class SpringServeAdapterConfig(BaseModel):
     api_token: SecretStr | None = None
     environment: Literal["production"] = "production"
     default_demand_partner_id: int | None = None
+    demand_class: Literal["line_item", "tag"] = "line_item"
+    enable_key_value_targeting: bool = False
 
     @model_validator(mode="after")
     def _require_credentials(self) -> SpringServeAdapterConfig:

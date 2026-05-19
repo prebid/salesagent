@@ -144,6 +144,24 @@ class SpringServeAdapter(AdServerAdapter):
         self.api_token = decrypt_secret_value(self.config.get("api_token"))
         self.environment = self.config.get("environment", "production")
         self.base_url = SPRINGSERVE_HOSTS.get(self.environment, SPRINGSERVE_HOSTS["production"])
+        # Per-tenant provisioning model: 'line_item' = SpringServe hosts the
+        # creative (line_item_ratios bind on demand tag); 'tag' = passthrough to
+        # a third-party VAST/audio URL (no creative bind). KV targeting is
+        # opt-in -- most publishers route audience/context through supply
+        # tag selection, not demand_tag_keys. Both are tenant-level adapter
+        # config; see SpringServeConnectionConfig for the full rationale.
+        # Validate eagerly -- stored ``config_json`` can bypass the Pydantic
+        # schema enum if it was written by a path that doesn't round-trip
+        # through model_validate (raw DB writes, legacy admin code, etc).
+        from src.adapters.springserve._demand_tags import DEMAND_CLASS_WIRE_VALUES
+
+        self.demand_class = self.config.get("demand_class", "line_item")
+        if self.demand_class not in DEMAND_CLASS_WIRE_VALUES:
+            raise ValueError(
+                f"SpringServe demand_class={self.demand_class!r} is not one of "
+                f"{sorted(DEMAND_CLASS_WIRE_VALUES.keys())}"
+            )
+        self.enable_key_value_targeting = bool(self.config.get("enable_key_value_targeting", False))
 
         if self.dry_run:
             self.log(
@@ -295,6 +313,7 @@ class SpringServeAdapter(AdServerAdapter):
                 f"Package: {package.name or package.package_id}, Impressions: {package.impressions or 0:,}, CPM: {rate}"
             ),
             "is_active": False,  # Inactive until a creative is bound.
+            "demand_class": self.demand_class,
         }
         kwargs.update(
             build_demand_tag_targeting(
@@ -378,11 +397,14 @@ class SpringServeAdapter(AdServerAdapter):
                 created_tag = self._client.demand_tags.create(**kwargs)
                 # KV / audience targeting goes through a separate sub-resource
                 # POST per the SpringServe docs (page 1628471383). The parent
-                # /demand_tags POST silently drops these fields if included
-                # in the body. See src/adapters/springserve/targeting.py.
-                kv_entries = build_demand_tag_kv_entries(package.targeting_overlay, tenant_id=self.tenant_id)
-                for entry in kv_entries:
-                    self._post_kv_entry_or_raise(created_tag.id, entry)
+                # /demand_tags POST silently drops these fields if included in
+                # the body. Tenant-level opt-in: most publishers express
+                # audience/content through supply-tag selection, so KV writes
+                # are off by default and have to be enabled explicitly.
+                if self.enable_key_value_targeting:
+                    kv_entries = build_demand_tag_kv_entries(package.targeting_overlay, tenant_id=self.tenant_id)
+                    for entry in kv_entries:
+                        self._post_kv_entry_or_raise(created_tag.id, entry)
         except SpringServeError as exc:
             logger.warning("SpringServe create_media_buy failed: %s body=%s", exc, exc.body)
             return CreateMediaBuyError(
@@ -513,16 +535,35 @@ class SpringServeAdapter(AdServerAdapter):
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:
         """Bind SpringServe creatives to demand tags.
 
-        Demand tags carry a single ``creative_id`` (1:1) or a
-        ``line_item_ratios`` rotation list. Stage 3 writes only the
-        single-creative path; if multiple creative_ids are supplied for
-        the same demand tag, the LAST one wins and earlier ones are
-        recorded as ``skipped``. The tag is flipped active on a
-        successful bind so it can deliver. Rotation via
-        ``line_item_ratios`` lands in a later stage.
+        SpringServe's Line Item demand class stores hosted creative rotation
+        in ``line_item_ratios``; writing ``creative_id`` to this class is
+        accepted by the API but ignored. Stage 3 still wires only one creative
+        per demand tag; if multiple creative_ids are supplied for the same
+        demand tag, the LAST one wins and earlier ones are recorded as
+        ``skipped``. The tag is flipped active on a successful bind so it can
+        deliver.
+
+        When ``demand_class="tag"`` the demand tag is a passthrough to a
+        third-party VAST/audio URL and has no Creatives surface, so
+        creative binding is a no-op -- the buyer's tag URL is the
+        creative and the bind step is skipped with status ``skipped``.
         """
         if not platform_creative_ids:
             return []
+        if self.demand_class == "tag":
+            return [
+                {
+                    "line_item_id": li,
+                    "creative_id": ci,
+                    "status": "skipped",
+                    "message": (
+                        "demand_class=tag -- the third-party VAST/audio URL on the "
+                        "demand tag is the creative; no separate binding is needed."
+                    ),
+                }
+                for li in line_item_ids
+                for ci in platform_creative_ids
+            ]
         winner = platform_creative_ids[-1]
         losers = platform_creative_ids[:-1]
         results: list[dict[str, Any]] = []
@@ -531,15 +572,17 @@ class SpringServeAdapter(AdServerAdapter):
             results.append(self._bind_creative_to_demand_tag(li, winner))
         return results
 
-    # The specific 422 SpringServe returns when ``key_value_targeting`` on
-    # the parent demand_tag isn't set — the v0 API doesn't let us flip
-    # that flag on our AdOps role, so the sub-resource POST is blocked
-    # publisher-wide until the scope is granted. ``targeting.py`` docstring
-    # has the full story.
-    _KV_SCOPE_BLOCKER_TOKENS = ("key_value_targeting set to true",)
+    # The specific 422 SpringServe returns when the parent demand_tag's
+    # ``key_value_targeting`` flag isn't set. Tenants who turn KV on need
+    # the publisher's SpringServe account configured to allow that flag
+    # on demand tags they own; if it isn't, the entry POST fails with
+    # this body and we surface it as a warning rather than failing the
+    # whole buy. Different 422s (bad key_id, malformed values, etc) still
+    # propagate so the buyer sees the real error.
+    _KV_PARENT_FLAG_BLOCKER_TOKENS = ("key_value_targeting set to true",)
 
     def _post_kv_entry_or_raise(self, demand_tag_id: int, entry: dict[str, Any]) -> None:
-        """POST one KV-targeting entry; tolerate ONLY the known scope-blocker.
+        """POST one KV-targeting entry; tolerate ONLY the parent-flag 422.
 
         Anything else (5xx, 401, 429, a different 422) re-raises so the
         outer ``create_media_buy`` error path surfaces it to the buyer.
@@ -552,12 +595,12 @@ class SpringServeAdapter(AdServerAdapter):
             return
         except SpringServeValidationError as exc:
             body = (exc.body or "").lower()
-            if not any(tok in body for tok in self._KV_SCOPE_BLOCKER_TOKENS):
-                # Different 422 -- not the known blocker. Let it propagate.
+            if not any(tok in body for tok in self._KV_PARENT_FLAG_BLOCKER_TOKENS):
+                # Different 422 -- not the parent-flag blocker. Let it propagate.
                 raise
             logger.warning(
                 "SpringServe KV entry rejected for demand_tag %s key_id=%s "
-                "(known API blocker on key_value_targeting flag; targeting will not apply)",
+                "(parent demand_tag.key_value_targeting=false; targeting will not apply)",
                 demand_tag_id,
                 entry.get("key_id"),
             )
@@ -574,11 +617,18 @@ class SpringServeAdapter(AdServerAdapter):
 
     def _bind_creative_to_demand_tag(self, line_item_id: str, creative_id: str) -> dict[str, Any]:
         if self.dry_run:
-            self.log(f"Would PUT .../demand_tags/{line_item_id} creative_id={creative_id} is_active=true")
+            self.log(
+                f"Would PUT .../demand_tags/{line_item_id} "
+                f"line_item_ratios=[{{creative_id: {creative_id}, ratio: 1}}] is_active=true"
+            )
             return {"line_item_id": line_item_id, "creative_id": creative_id, "status": "success"}
         assert self._client is not None
         try:
-            self._client.demand_tags.update(int(line_item_id), creative_id=int(creative_id), is_active=True)
+            self._client.demand_tags.update(
+                int(line_item_id),
+                line_item_ratios=[{"creative_id": int(creative_id), "ratio": 1}],
+                is_active=True,
+            )
         except SpringServeError as exc:
             logger.warning("SpringServe bind creative=%s -> demand_tag=%s failed: %s", creative_id, line_item_id, exc)
             return {

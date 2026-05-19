@@ -178,6 +178,10 @@ class TestWriteRoundTrip:
             logger.info("created campaign id=%s name=%s", campaign.id, campaign.name)
 
             # Create one demand tag (also paused) under the campaign.
+            # demand_class=line_item is the AdCP-canonical provisioning path
+            # (SpringServe hosts the creative). Omitting it falls back to the
+            # account default, which on Talpa's account is Tag-class and
+            # requires a vast_endpoint_url we don't have here.
             demand_tag = client.demand_tags.create(
                 name=f"{smoke_label}_dt_1",
                 campaign_id=campaign.id,
@@ -191,6 +195,7 @@ class TestWriteRoundTrip:
                 secondary_code="pkg_smoke",
                 note="Stage 2 demand tag -- safe to delete",
                 country_codes=["NL"],
+                demand_class="line_item",
             )
             assert demand_tag.id > 0
             assert demand_tag.campaign_id == campaign.id
@@ -238,7 +243,7 @@ class TestCreativeRoundTrip:
     the POST path returns a typed VideoCreative).
     """
 
-    SAMPLE_VIDEO_URL = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+    SAMPLE_VIDEO_URL = "https://www.w3schools.com/html/mov_bbb.mp4"
 
     def test_create_video_and_bind_to_demand_tag(
         self, client: SpringServeClient, demand_partner_id: int, smoke_label: str
@@ -276,6 +281,11 @@ class TestCreativeRoundTrip:
                 rate_currency="EUR",
                 is_active=False,
                 secondary_code="pkg_creative_smoke",
+                # Line Item class is what supports the Creatives tab + hosted
+                # binding. Without this, SpringServe accounts whose default
+                # class is "Tag" silently produce a demand tag that can't be
+                # bound to hosted creatives.
+                demand_class="line_item",
             )
 
             try:
@@ -296,9 +306,13 @@ class TestCreativeRoundTrip:
             assert creative.creative_format == "video"
 
             # Bind creative -> demand_tag and verify.
-            client.demand_tags.update(demand_tag.id, creative_id=creative.id, is_active=True)
+            client.demand_tags.update(
+                demand_tag.id,
+                line_item_ratios=[{"creative_id": creative.id, "ratio": 1}],
+                is_active=True,
+            )
             refetched = client.demand_tags.get(demand_tag.id)
-            assert refetched.creative_id == creative.id
+            assert refetched.line_item_ratios == [{"creative_id": creative.id, "ratio": 1}]
             assert refetched.is_active is True
         finally:
             if creative is not None:

@@ -82,6 +82,15 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "include_webhook_activity",
         "webhook_activity_limit",
     },
+    # AdCP added conditional-fetch version pins to ``GetProductsRequest``;
+    # the installed ``adcp`` Python library (5.5.0) does not yet expose
+    # them on ``LibraryGetProductsWholesaleRequest``. Local runs with a
+    # stale cache pass; CI fetches the live spec and fails. Remove this
+    # entry when the library catches up.
+    "/schemas/latest/media-buy/get-products-request.json": {
+        "if_catalog_version",
+        "if_pricing_version",
+    },
 }
 
 

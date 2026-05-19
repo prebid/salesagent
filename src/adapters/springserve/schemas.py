@@ -74,6 +74,33 @@ class SpringServeConnectionConfig(BaseConnectionConfig):
         ),
         json_schema_extra={"ui_order": 5},
     )
+    demand_class: Literal["line_item", "tag"] = Field(
+        default="line_item",
+        description=(
+            "How this tenant's buyers ship demand. 'line_item' = buyers ship raw "
+            "creative assets that SpringServe hosts; the adapter uploads via "
+            "POST /videos and binds via line_item_ratios on the demand tag. 'tag' = "
+            "buyers ship a third-party VAST/audio URL; SpringServe passes through "
+            "to that URL and no creative binding happens. The two classes have "
+            "different UI affordances in SpringServe (Line Item class has a "
+            "Creatives tab; Tag class does not), so this is a per-tenant "
+            "provisioning decision tied to the buyer integration model."
+        ),
+        json_schema_extra={"ui_order": 6, "enum": ["line_item", "tag"]},
+    )
+    enable_key_value_targeting: bool = Field(
+        default=False,
+        description=(
+            "Whether to translate AdCP signals into demand_tag_keys sub-resource "
+            "entries on each created demand tag. Off by default — for most "
+            "publishers, content / device / audience are expressed through "
+            "supply-tag selection and demand-tag priorities, not KV targeting. "
+            "Turn this on only when the publisher has free-form KV keys that "
+            "aren't reflected in their supply taxonomy and you want AdCP signals "
+            "to drive those keys directly."
+        ),
+        json_schema_extra={"ui_order": 7},
+    )
 
     @property
     def base_url(self) -> str:
