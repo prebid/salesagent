@@ -85,9 +85,12 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
 
     Library provides: accounts, errors, pagination, context, ext.
     NestedModelSerializerMixin ensures nested Account objects serialize correctly.
+    Accounts field redeclared for Pattern #4 (nested serialization with local subclass).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    accounts: list[Account] = []  # type: ignore[assignment]  # Pattern #4: use local Account subclass
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
