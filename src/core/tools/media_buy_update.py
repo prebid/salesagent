@@ -275,10 +275,10 @@ def _update_media_buy_impl(
         # AdCP 3.0.6 spec (core/targeting.json:191): reject property_list targeting
         # on products with property_targeting_allowed=False. Runs before the dry_run
         # early return so dry_run requests are also rejected (parity with create).
-        # FIXME(inventory-targeting-A1-update): convert the return-envelope below to
-        # `raise AdCPValidationError(...)` when PR #1307 sub-batch 3 drains the
-        # remaining Pattern A sites in this file. Kept as return-envelope here to
-        # mirror the existing local convention (AUTH_REQUIRED at lines 258-274).
+        # FIXME(inventory-targeting-A1-update): convert the return-envelope below
+        # to `raise AdCPValidationError(...)` when the broader Pattern A migration
+        # drains the remaining sites in this file. Kept as return-envelope here
+        # to mirror the existing local convention (AUTH_REQUIRED at lines 258-274).
         if req.packages:
             from src.core.database.repositories.product import ProductRepository
             from src.services.targeting_capabilities import (

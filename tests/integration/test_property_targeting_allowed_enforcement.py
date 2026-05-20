@@ -96,8 +96,8 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
     to the spec-compliant two-layer envelope. The previous raw ValueError shape was caught
     by an inner (ValueError, PermissionError) catchall and re-emitted via Pattern A
     (Error(code=...) construction in _impl) — anti-pattern that the error-emission
-    architecture work eliminates. After PR #1306 / PR #1307 land, this raise propagates
-    cleanly through the narrowed except AdCPError boundary.
+    architecture work eliminates. Once the wider error-emission migration lands, this
+    raise propagates cleanly through the narrowed except AdCPError boundary.
     """
     start, end = _future_dates()
     request = CreateMediaBuyRequest(

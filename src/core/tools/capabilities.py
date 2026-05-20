@@ -247,11 +247,10 @@ def _get_adcp_capabilities_impl(
     # The runner gates scenarios by specialism, not by `supported_protocols` alone.
     #
     # We declare the specialism even though `pending_creatives_to_start` and
-    # `invalid_transitions` are not yet fully green (gaps #9-#12 in issue #1247;
-    # error-code casing fixes land via PRs #1306/#1307). The CI storyboard job
-    # is advisory pending #1247 gap #1 (see `.github/workflows/test.yml`), so
-    # those scenario failures don't block merge — and the public declaration
-    # forces prioritization of the remaining gaps instead of hiding them.
+    # `invalid_transitions` are not yet fully green; the CI storyboard job is
+    # advisory while the related gaps are tracked separately, so those scenario
+    # failures don't block merge — and the public declaration forces
+    # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
             major_versions=[MajorVersion(root=3)],
