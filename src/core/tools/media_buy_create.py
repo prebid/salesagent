@@ -127,6 +127,7 @@ from src.core.tools.financial_validation import validate_max_daily_package_spend
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
 from src.services.activity_feed import activity_feed
+from src.services.order_approval_service import start_order_approval_background
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -998,8 +999,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     # Hand off to background polling. start_order_approval_background
                     # owns the terminal MediaBuy.status transition (active/failed) and
                     # the audit/Slack notification (see order_approval_service.py).
-                    from src.services.order_approval_service import start_order_approval_background
-
                     try:
                         approval_id = start_order_approval_background(
                             order_id=response.media_buy_id,

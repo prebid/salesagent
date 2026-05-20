@@ -98,7 +98,7 @@ class TestExecuteApprovedHandsOffToBackgroundOnApprovalFailure:
             patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
             patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
             patch(
-                "src.services.order_approval_service.start_order_approval_background",
+                "src.core.tools.media_buy_create.start_order_approval_background",
                 return_value="approval_mb_b2_001_xyz",
             ) as mock_start_bg,
         ):
