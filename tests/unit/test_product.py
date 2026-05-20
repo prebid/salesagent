@@ -45,7 +45,7 @@ class TestProductPreconditions:
 
         Identity is required to determine tenant and principal.
         """
-        from src.core.exceptions import AdCPAuthRequiredError
+        from src.core.exceptions import AdCPValidationError
 
         with ProductEnv() as env:
             # Bypass the harness identity by calling impl directly
@@ -53,7 +53,7 @@ class TestProductPreconditions:
             from src.core.tools.products import _get_products_impl
 
             req = GetProductsRequestGenerated(brief="test", brand={"domain": "test.com"})
-            with pytest.raises(AdCPAuthRequiredError, match="Identity is required"):
+            with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
                 await _get_products_impl(req, identity=None)
 
     async def test_no_principal_requires_auth_policy_rejects(self):

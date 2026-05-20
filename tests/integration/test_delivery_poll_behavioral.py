@@ -646,6 +646,9 @@ class TestNoIdentifiersReturnAll:
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
+                    # Serving buy: persisted status is authoritative (salesagent-18h.1).
+                    # The flight window alone no longer implies "active".
+                    status="active",
                     start_date=today - timedelta(days=30),
                     end_date=today + timedelta(days=30),
                     budget=10000.0 + i * 1000,
@@ -689,6 +692,8 @@ class TestNoIdentifiersReturnAll:
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
+                    # Serving buy: persisted status is authoritative (salesagent-18h.1).
+                    status="active",
                     start_date=today - timedelta(days=30),
                     end_date=today + timedelta(days=30),
                 )
@@ -958,6 +963,10 @@ class TestPackageDeliveryStatus:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_past",
+                # Buy that WAS serving (active) and whose flight has ended →
+                # persisted "active" is date-refined to "completed"
+                # (salesagent-18h.1). A pending_approval buy never served.
+                status="active",
                 start_date=date(2024, 1, 1),
                 end_date=date(2024, 12, 31),
             )
@@ -2411,23 +2420,15 @@ class TestPrincipalNotFoundReturnsError:
 
         Covers: UC-004-EXT-B-01
         """
-        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.factories import TenantFactory
         from tests.harness import DeliveryPollEnv
 
-        # Create tenant with a real principal for auth, then call with a
-        # different principal_id that doesn't exist in the DB.
-        with DeliveryPollEnv(tenant_id="t1", principal_id="real_principal") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            PrincipalFactory(tenant=tenant, principal_id="real_principal")
+        # Create tenant but NO principal — principal_id won't exist in DB
+        with DeliveryPollEnv(tenant_id="t1", principal_id="ghost_principal") as env:
+            TenantFactory(tenant_id="t1")
+            # Don't create any principal — ghost_principal doesn't exist
 
-            # Build identity with non-existent principal_id
-            ghost_identity = PrincipalFactory.make_identity(
-                principal_id="ghost_principal",
-                tenant_id="t1",
-                protocol="mcp",
-            )
-
-            response = env.call_impl(identity=ghost_identity)
+            response = env.call_impl()
 
         assert response.errors is not None
         assert len(response.errors) == 1
@@ -2582,6 +2583,7 @@ class TestPartialFailureTolerance:
         """Given 2 media buys, when processing of buy_2 raises an exception,
         buy_1's delivery data is still present in the response.
         """
+        from unittest.mock import patch
 
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -2606,23 +2608,29 @@ class TestPartialFailureTolerance:
             env.set_adapter_response("mb_ok", impressions=5000, spend=250.0)
             env.set_adapter_response("mb_fail", impressions=3000, spend=150.0)
 
-            # Patch the adapter to raise for mb_fail specifically,
-            # triggering the outer except handler while mb_ok processes normally.
-            original_get_delivery = env.mock["adapter"].return_value.get_delivery_metrics
+            # Patch _is_circuit_breaker_open to raise on the second call,
+            # triggering the outer except handler (lines 485-487) for buy_2
+            # while buy_1 processes normally.
+            call_count = {"n": 0}
 
-            def selective_failure(media_buy_id, **kwargs):
-                if media_buy_id == "mb_fail":
-                    raise RuntimeError("Simulated processing error for mb_fail")
-                return original_get_delivery(media_buy_id, **kwargs)
+            def circuit_breaker_side_effect(tenant_id):
+                call_count["n"] += 1
+                if call_count["n"] == 2:
+                    raise RuntimeError("Simulated processing error for buy_2")
+                return False
 
-            env.mock["adapter"].return_value.get_delivery_metrics.side_effect = selective_failure
-
-            response = env.call_impl(media_buy_ids=["mb_ok", "mb_fail"])
+            with patch(
+                "src.core.tools.media_buy_delivery._is_circuit_breaker_open",
+                side_effect=circuit_breaker_side_effect,
+            ):
+                response = env.call_impl(media_buy_ids=["mb_ok", "mb_fail"])
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            # mb_ok should be present in the response
+            # buy_1 should be present in the response
             returned_ids = {d.media_buy_id for d in response.media_buy_deliveries}
             assert "mb_ok" in returned_ids, f"Expected mb_ok in deliveries, got: {returned_ids}"
+            # buy_2 should be absent (skipped due to outer exception)
+            assert "mb_fail" not in returned_ids, f"Expected mb_fail to be absent from deliveries, got: {returned_ids}"
 
 
 # ---------------------------------------------------------------------------

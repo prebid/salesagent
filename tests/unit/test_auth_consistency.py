@@ -111,16 +111,15 @@ class TestMissingTokenConsistency:
     @pytest.mark.asyncio
     async def test_all_authenticated_tools_reject_none_identity(self):
         """Authenticated tools that require identity should fail when identity is None."""
-        # create_media_buy raises auth error with None identity
-        from src.core.exceptions import AdCPAuthRequiredError
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        with pytest.raises((AdCPValidationError, AdCPAuthRequiredError, ValueError)):
+        # create_media_buy raises AdCPAuthenticationError with None identity
+        with pytest.raises((AdCPAuthenticationError, AdCPValidationError, ValueError)):
             await _create_media_buy_impl(req=MagicMock(), identity=None)
 
-        # update_media_buy raises ValueError with None identity
-        with pytest.raises((ValueError, AdCPAuthenticationError)):
+        # update_media_buy raises AdCPAuthenticationError with None identity
+        with pytest.raises((AdCPAuthenticationError, ValueError)):
             _update_media_buy_impl(req=MagicMock(), identity=None)
 
 

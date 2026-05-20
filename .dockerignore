@@ -1,9 +1,3 @@
-# Claude Code / Beads (agent worktrees can be 10GB+)
-.claude/
-.beads/
-coverage.json
-.duplication-baseline
-
 # Python
 __pycache__/
 *.py[cod]

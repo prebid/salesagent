@@ -255,7 +255,13 @@ class TestFormatConversionApproval:
             if media_buy:
                 session.delete(media_buy)
 
-            # Delete Product (CASCADE handles PricingOption — avoids prevent_empty_pricing_options trigger)
+            # Delete PricingOption (foreign key constraint to Product)
+            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
+            pricing_options = session.scalars(stmt_pricing).all()
+            for pricing in pricing_options:
+                session.delete(pricing)
+
+            # Finally delete Product
             stmt_prod = select(Product).filter_by(product_id=product_id)
             product = session.scalars(stmt_prod).first()
             if product:
@@ -553,7 +559,13 @@ class TestFormatConversionApproval:
             if media_buy:
                 session.delete(media_buy)
 
-            # Delete Product (CASCADE handles PricingOption — avoids prevent_empty_pricing_options trigger)
+            # Delete PricingOption (foreign key constraint to Product)
+            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
+            pricing_options = session.scalars(stmt_pricing).all()
+            for pricing in pricing_options:
+                session.delete(pricing)
+
+            # Finally delete Product
             stmt_prod = select(Product).filter_by(product_id=product_id)
             product = session.scalars(stmt_prod).first()
             if product:
@@ -750,7 +762,13 @@ class TestFormatConversionApproval:
             if media_buy:
                 session.delete(media_buy)
 
-            # Delete Product (CASCADE handles PricingOption — avoids prevent_empty_pricing_options trigger)
+            # Delete PricingOption (foreign key constraint to Product)
+            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
+            pricing_options = session.scalars(stmt_pricing).all()
+            for pricing in pricing_options:
+                session.delete(pricing)
+
+            # Finally delete Product
             stmt_prod = select(Product).filter_by(product_id=product_id)
             product = session.scalars(stmt_prod).first()
             if product:
@@ -939,7 +957,13 @@ class TestFormatConversionApproval:
             if media_buy:
                 session.delete(media_buy)
 
-            # Delete Product (CASCADE handles PricingOption — avoids prevent_empty_pricing_options trigger)
+            # Delete PricingOption (foreign key constraint to Product)
+            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
+            pricing_options = session.scalars(stmt_pricing).all()
+            for pricing in pricing_options:
+                session.delete(pricing)
+
+            # Finally delete Product
             stmt_prod = select(Product).filter_by(product_id=product_id)
             product = session.scalars(stmt_prod).first()
             if product:
@@ -1044,7 +1068,13 @@ class TestFormatConversionApproval:
             if media_buy:
                 session.delete(media_buy)
 
-            # Delete Product (CASCADE handles PricingOption — avoids prevent_empty_pricing_options trigger)
+            # Delete PricingOption (foreign key constraint to Product)
+            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
+            pricing_options = session.scalars(stmt_pricing).all()
+            for pricing in pricing_options:
+                session.delete(pricing)
+
+            # Finally delete Product
             stmt_prod = select(Product).filter_by(product_id=product_id)
             product = session.scalars(stmt_prod).first()
             if product:

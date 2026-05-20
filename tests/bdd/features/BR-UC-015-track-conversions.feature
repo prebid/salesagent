@@ -954,7 +954,7 @@ Feature: BR-UC-015 Track Conversions
   @T-UC-015-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account log_event produces simulated processing with sandbox flag
     Given an event source "src_web" is configured
-    Given the request targets a sandbox account
+    And the request targets a sandbox account
     When the Buyer Agent logs valid events
     Then the response should include sandbox equals true
     And no real attribution or reporting pipelines should have been triggered

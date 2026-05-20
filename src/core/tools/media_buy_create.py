@@ -52,10 +52,6 @@ class PackageAssignmentDict(TypedDict):
     weight: int
 
 
-logger = logging.getLogger(__name__)
-console = Console()
-
-
 class _StructuredValidationError(ValueError):
     """ValueError subclass carrying AdCP-standard error metadata.
 
@@ -78,6 +74,10 @@ class _StructuredValidationError(ValueError):
         self.recovery = recovery
         self.suggestion = suggestion
         self.field = field
+
+
+logger = logging.getLogger(__name__)
+console = Console()
 
 
 def validate_agent_url(url: str | None) -> bool:
@@ -1966,8 +1966,8 @@ async def _create_media_buy_impl(
                         raise _StructuredValidationError(
                             error_msg,
                             code="INVALID_REQUEST",
-                            recovery="correctable",
-                            suggestion="Check targeting_overlay fields against the AdCP targeting spec.",
+                            suggestion="Check targeting constraints.",
+                            field="targeting_overlay",
                         )
 
     except (ValueError, PermissionError) as e:
@@ -1975,30 +1975,15 @@ async def _create_media_buy_impl(
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
 
-        # Extract structured error metadata if available
-        if isinstance(e, _StructuredValidationError):
-            error_code = e.code
-            suggestion = e.suggestion
-            recovery = e.recovery
-            field = e.field
-        else:
-            error_code = "validation_error"
-            suggestion = None
-            recovery = None
-            field = None
-
         # Return error response with failed status
+        # Use structured error info from _StructuredValidationError when available
+        if isinstance(e, _StructuredValidationError):
+            error = Error(code=e.code, message=str(e), details={"suggestion": e.suggestion} if e.suggestion else None)
+        else:
+            error = Error(code="VALIDATION_ERROR", message=str(e), details=None)
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[
-                    Error(
-                        code=error_code,
-                        message=str(e),
-                        suggestion=suggestion,
-                        recovery=recovery,
-                        field=field,
-                    )
-                ],
+                errors=[error],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,
@@ -3563,12 +3548,9 @@ async def _create_media_buy_impl(
                     pricing_option_id=package.pricing_option_id,
                     pacing=package.pacing,
                     targeting_overlay=package.targeting_overlay,
-                    impressions=package.impressions,
+                    impressions=getattr(package, "impressions", None),
                     creative_assignments=package.creative_assignments,
-                    format_ids=package.format_ids,
-                    format_ids_to_provide=package.format_ids,
-                    catalogs=package.catalogs,
-                    optimization_goals=package.optimization_goals,
+                    format_ids_to_provide=getattr(package, "format_ids", None),
                 )
             )
 

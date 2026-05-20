@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bde820295040e6bbb079c1d1a429571286fafd06 on 2026-04-28T11:41:10Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-019 Query Media Buys
@@ -23,11 +23,25 @@ Feature: BR-UC-019 Query Media Buys
     And the principal "buyer-001" exists in the tenant database
 
 
-  @T-UC-019-main @main-flow
-  Scenario: Query media buys with default filters
+  @T-UC-019-main-rest @main-flow @rest
+  Scenario: Query media buys via REST with default filters
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
-    When the Buyer Agent sends a get_media_buys request with no filters
+    When the Buyer Agent sends a get_media_buys request via A2A with no filters
+    Then the response should include media buy "mb-001" with status "active"
+    And each media buy should include package-level details with budget, bid_price, product_id, flight dates, and paused state
+    And each package should include creative approval state when creatives are assigned
+    And each media buy should include buyer_ref and buyer_campaign_ref for correlation
+    # POST-S1: Status computed from flight dates
+    # POST-S2: Package-level details present
+    # POST-S3: Creative approval state present
+    # POST-S6: Buyer refs present for correlation
+
+  @T-UC-019-main-mcp @main-flow @mcp
+  Scenario: Query media buys via MCP with default filters
+    Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
+    And today is "2026-03-15"
+    When the Buyer Agent invokes the get_media_buys MCP tool with no filters
     Then the response should include media buy "mb-001" with status "active"
     And each media buy should include package-level details with budget, bid_price, product_id, flight dates, and paused state
     And each package should include creative approval state when creatives are assigned

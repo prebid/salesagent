@@ -9,7 +9,7 @@ from decimal import Decimal
 import pytest
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
+from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, GetProductsRequest, PricingModel
 from src.core.testing_hooks import AdCPTestContext
@@ -227,14 +227,14 @@ def setup_tenant_with_pricing_products(integration_db):
             session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(tenant_media_buy_ids)))
         session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == "test_pricing_tenant"))
 
-        # 2. Delete product-related records (Product CASCADE deletes PricingOption)
+        # 2. Delete product-related records
+        session.execute(delete(PricingOption).where(PricingOption.tenant_id == "test_pricing_tenant"))
         session.execute(delete(Product).where(Product.tenant_id == "test_pricing_tenant"))
         session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == "test_pricing_tenant"))
 
         # 3. Delete principal and tenant records
         session.execute(delete(Principal).where(Principal.tenant_id == "test_pricing_tenant"))
         session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_pricing_tenant"))
-        session.execute(delete(AuditLog).where(AuditLog.tenant_id == "test_pricing_tenant"))
         session.execute(delete(Tenant).where(Tenant.tenant_id == "test_pricing_tenant"))
         session.commit()
 

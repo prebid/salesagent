@@ -38,12 +38,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import (
-    AdCPAdapterError,
-    AdCPAuthenticationError,
-    AdCPNotFoundError,
-    AdCPValidationError,
-)
+from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -236,11 +231,11 @@ class _PatchContext:
 
 
 class TestProductNotFound:
-    """GAP-001: Product not found returns CreateMediaBuyError with PRODUCT_NOT_FOUND."""
+    """GAP-001: Product not found returns CreateMediaBuyError with validation_error."""
 
     @pytest.mark.asyncio
     async def test_product_not_found_returns_error(self):
-        """When packages reference non-existent product_ids, return PRODUCT_NOT_FOUND
+        """When packages reference non-existent product_ids, return validation_error
         with missing IDs listed.
 
         Anchors: media_buy_create.py:1470-1473
@@ -312,7 +307,7 @@ class TestMaxDailySpendExceeded:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code.upper() == "VALIDATION_ERROR"
+        assert errors[0].code == "VALIDATION_ERROR"
         assert "daily" in errors[0].message.lower()
 
     @pytest.mark.asyncio
@@ -1316,12 +1311,13 @@ class TestPreconditionObligations:
 
         Covers: UC-002-PRECOND-02
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises((AdCPValidationError, AdCPAuthenticationError), match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
 
@@ -2047,15 +2043,17 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-I-03
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises((AdCPValidationError, AdCPAuthenticationError), match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
         # Identity with no principal_id -> requires authentication
+
         identity_no_principal = ResolvedIdentity(
             principal_id=None,
             tenant_id="test_tenant",

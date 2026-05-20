@@ -13,6 +13,7 @@ from adcp.webhooks import GeneratedTaskStatus
 from rich.console import Console
 from sqlalchemy import select
 
+from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
@@ -22,14 +23,11 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
-# Strong references to in-flight fire-and-forget webhook tasks. asyncio only
-# keeps weak references to tasks, so a task whose only strong reference is a
-# local variable can be garbage-collected mid-execution if the calling
-# function returns before the task finishes — silently dropping webhooks.
-# Push tasks here on create, remove via add_done_callback. (Leak triage #6
-# from the production OOM-cycle investigation: untracked create_task at
-# context_manager.py was the smoking gun.)
-_pending_webhook_tasks: set[asyncio.Task] = set()
+# Fire-and-forget webhook tasks are pinned against asyncio's weak-ref GC via
+# the shared src.core.async_utils.pin_task helper (single source of truth;
+# see its docstring). (Leak triage #6 from the production OOM-cycle
+# investigation: untracked create_task at context_manager.py was the smoking
+# gun.)
 
 
 class ContextManager(DatabaseManager):
@@ -743,25 +741,21 @@ class ContextManager(DatabaseManager):
                                 )
                             )
 
-                            # Strong-ref pin to the module-level set so asyncio's
-                            # weak-ref task tracker doesn't GC the task before it
-                            # completes — see _pending_webhook_tasks docstring.
-                            _pending_webhook_tasks.add(task)
-
                             def _log_task_result(
                                 t: asyncio.Task, config_url: str = push_notification_config.url
                             ) -> None:
-                                # Always remove from pending set first so the
-                                # log-and-swallow below can't hold the ref past
-                                # completion.
-                                _pending_webhook_tasks.discard(t)
+                                # Runs AFTER pin_task's discard (see pin_task
+                                # docstring), so this log-and-swallow can't hold
+                                # the strong ref past completion.
                                 try:
                                     t.result()
                                     console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
                                 except Exception as e:
                                     console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
 
-                            task.add_done_callback(_log_task_result)
+                            # Strong-ref pin against asyncio's weak-ref task
+                            # tracker; discard runs before _log_task_result.
+                            pin_task(task, on_done=_log_task_result)
                         except RuntimeError:
                             # No running loop; safe to run synchronously
                             asyncio.run(

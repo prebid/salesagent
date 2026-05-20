@@ -1320,13 +1320,11 @@ class TestFormatCompatibilityExtended:
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-            # Product uses canonical 'id' key (DB trigger validates this).
-            # The dual-key matching is tested at the application level where
-            # FormatId objects normalize both 'format_id' and 'id' keys.
+            # Product uses 'format_id' key instead of 'id'
             product = ProductFactory(
                 tenant=tenant,
                 format_ids=[
-                    {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+                    {"agent_url": DEFAULT_AGENT_URL, "format_id": "display_300x250"},
                 ],
             )
             media_buy = MediaBuyFactory(tenant=tenant, principal=principal)

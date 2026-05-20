@@ -14,34 +14,16 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
 
-# Global registry of running sync threads
-_active_syncs: dict[str, threading.Thread] = {}
-_sync_lock = threading.Lock()
-
-
-def _reap_dead_syncs() -> None:
-    """Drop ``_active_syncs`` entries whose threads are no longer alive.
-
-    Defensive against any path where the worker's ``finally`` block in
-    ``_run_sync_thread`` doesn't run — e.g. ``KeyboardInterrupt`` /
-    ``SystemExit`` raised during sync, or a bug that lets the thread
-    exit before the cleanup. Without this reap, dead threads keep
-    references to their captured DB sessions, GAM clients, and result
-    payloads — slow growth as syncs fail abnormally over weeks of
-    uptime (leak triage #5 from the production OOM-cycle).
-
-    Called from every accessor so the dict reflects live state on read.
-    O(n) over the live + recently-dead set; n is small (one entry per
-    in-flight sync, capped by the per-tenant concurrency check upstream).
-
-    Caller MUST hold ``_sync_lock``.
-    """
-    dead = [sid for sid, t in _active_syncs.items() if not t.is_alive()]
-    for sid in dead:
-        _active_syncs.pop(sid, None)
+# Global registry of running sync threads. ThreadRegistry reaps dead threads
+# on every read — defensive against KeyboardInterrupt/SystemExit/signal-killed
+# workers whose finally block in _run_sync_thread didn't run, which would
+# otherwise pin captured DB sessions, GAM clients, and result payloads (leak
+# triage #5 from the production OOM-cycle).
+_active_syncs = ThreadRegistry()
 
 
 def start_inventory_sync_background(
@@ -144,8 +126,7 @@ def start_inventory_sync_background(
         name=f"sync-{sync_id}",
     )
 
-    with _sync_lock:
-        _active_syncs[sync_id] = thread
+    _active_syncs.add(sync_id, thread)
 
     thread.start()
     logger.info(f"Started background sync thread: {sync_id}")
@@ -500,8 +481,7 @@ def _run_sync_thread(
 
     finally:
         # Remove from active syncs
-        with _sync_lock:
-            _active_syncs.pop(sync_id, None)
+        _active_syncs.remove(sync_id)
 
 
 def _update_sync_progress(sync_id: str, progress_data: dict[str, Any]):
@@ -559,20 +539,16 @@ def get_active_syncs() -> list[str]:
 
     Reaps dead threads on read so the returned list reflects live state
     even if the worker's ``finally`` block didn't fire (e.g. abnormal
-    exit). See :func:`_reap_dead_syncs`.
+    exit). See :class:`src.core.thread_registry.ThreadRegistry`.
     """
-    with _sync_lock:
-        _reap_dead_syncs()
-        return list(_active_syncs.keys())
+    return _active_syncs.list_active()
 
 
 def is_sync_running(sync_id: str) -> bool:
     """Check if a sync is currently running in a background thread.
 
     Reaps dead threads on read — a sync_id with a dead thread is no
-    longer running, so this returns False (and the dict entry is
+    longer running, so this returns False (and the registry entry is
     pruned as a side effect).
     """
-    with _sync_lock:
-        _reap_dead_syncs()
-        return sync_id in _active_syncs
+    return _active_syncs.contains(sync_id)

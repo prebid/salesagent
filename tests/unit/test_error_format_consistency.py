@@ -30,8 +30,8 @@ class TestMCPErrorShapes:
         """MCP create_media_buy raises AdCPValidationError when context is missing."""
         from src.core.tools.media_buy_create import create_media_buy
 
-        # Call with missing context triggers AdCPAuthRequiredError (transport-agnostic)
-        with pytest.raises((AdCPAuthenticationError, AdCPValidationError, ToolError)) as exc_info:
+        # Call with missing context triggers AdCPValidationError (transport-agnostic)
+        with pytest.raises((AdCPValidationError, AdCPAuthenticationError, ToolError)) as exc_info:
             await create_media_buy(
                 brand={"domain": "test.com"},
                 packages=[],  # Empty but present; validation will catch the issue
@@ -73,7 +73,7 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # _create_media_buy_impl requires identity; passing None triggers AdCPAuthRequiredError
+        # _create_media_buy_impl requires identity; passing None triggers AdCPAuthenticationError
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
@@ -244,7 +244,7 @@ class TestUpdateMediaBuyErrorShapes:
 
     @pytest.mark.asyncio
     async def test_missing_context_raises_value_error(self):
-        """update_media_buy _impl raises AdCPAuthRequiredError when identity is None."""
+        """update_media_buy _impl raises ValueError when identity is None."""
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 

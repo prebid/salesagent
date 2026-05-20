@@ -23,7 +23,7 @@ _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 # Allowlist for empty Given/When steps. Must only shrink — never add entries.
 # Fixed in #1181: given_tenant_exists and given_account_not_exists now have real bodies.
 _EMPTY_GIVEN_WHEN_ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(beads-5rt): buyer_ref steps need real setup logic
+    # FIXME(salesagent-ebb5): uc019/uc026 stubs pending implementation
     ("bdd/steps/domain/uc019_query_media_buys.py", "when_query_by_refs"),
     ("bdd/steps/domain/uc026_package_media_buy.py", "given_request_with_buyer_ref"),
     ("bdd/steps/domain/uc026_package_media_buy.py", "given_resubmit_buyer_ref"),

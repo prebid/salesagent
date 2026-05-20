@@ -38,11 +38,11 @@ _HASATTR_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc003_update_media_buy.py:793 then_implementation_date_not_null",
     "bdd/steps/domain/uc004_delivery.py:1496 then_has_deliveries_field",
     "bdd/steps/domain/uc011_accounts.py:451 then_accounts_array_count",
-    "bdd/steps/domain/uc011_accounts.py:534 then_empty_accounts",
-    "bdd/steps/domain/uc011_accounts.py:588 then_accounts_from_first_page",
-    "bdd/steps/domain/uc011_accounts.py:1014 then_has_accounts_array",
-    "bdd/steps/domain/uc011_accounts.py:1032 then_response_is_success_variant",
-    "bdd/steps/domain/uc011_accounts.py:1041 then_each_error_has_code_message",
+    "bdd/steps/domain/uc011_accounts.py:535 then_empty_accounts",
+    "bdd/steps/domain/uc011_accounts.py:589 then_accounts_from_first_page",
+    "bdd/steps/domain/uc011_accounts.py:1015 then_has_accounts_array",
+    "bdd/steps/domain/uc011_accounts.py:1033 then_response_is_success_variant",
+    "bdd/steps/domain/uc011_accounts.py:1042 then_each_error_has_code_message",
     # FIXME(salesagent-beq4): replace hasattr with value assertion
 }
 
@@ -50,7 +50,7 @@ _GETATTR_EXISTENCE_ALLOWLIST: set[str] = set()
 # FIXME(salesagent-beq4): all getattr-existence violations fixed
 
 _COUNT_ONLY_ALLOWLIST: set[str] = {
-    "bdd/steps/generic/then_error.py:184 then_error_invalid_params",
+    "bdd/steps/generic/then_success.py:24 then_response_status",
     "bdd/steps/generic/then_payload.py:153 then_referral_fields",
     "bdd/steps/generic/then_payload.py:208 then_format_assets",
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
@@ -63,12 +63,12 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc004_delivery.py:1614 then_packages_limited",
     "bdd/steps/domain/uc004_delivery.py:1646 then_packages_include_field",
     "bdd/steps/domain/uc004_delivery.py:1659 then_packages_include_two",
-    "bdd/steps/domain/uc011_accounts.py:511 then_other_statuses_excluded",
-    "bdd/steps/domain/uc011_accounts.py:588 then_accounts_from_first_page",
-    "bdd/steps/domain/uc011_accounts.py:1082 then_all_accounts_action",
-    "bdd/steps/domain/uc011_accounts.py:1098 then_failed_has_errors",
-    "bdd/steps/domain/uc011_accounts.py:1475 then_account_in_db",
-    "bdd/steps/domain/uc011_accounts.py:2009 then_governance_agents_stored",
+    "bdd/steps/domain/uc011_accounts.py:512 then_other_statuses_excluded",
+    "bdd/steps/domain/uc011_accounts.py:589 then_accounts_from_first_page",
+    "bdd/steps/domain/uc011_accounts.py:1083 then_all_accounts_action",
+    "bdd/steps/domain/uc011_accounts.py:1099 then_failed_has_errors",
+    "bdd/steps/domain/uc011_accounts.py:1476 then_account_in_db",
+    "bdd/steps/domain/uc011_accounts.py:2010 then_governance_agents_stored",
     "bdd/steps/domain/uc026_package_media_buy.py:1636 then_package_has_id",
     "bdd/steps/domain/uc026_package_media_buy.py:1676 then_package_default_formats",
     "bdd/steps/domain/uc026_package_media_buy.py:1710 then_package_formats_to_provide",

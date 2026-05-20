@@ -52,6 +52,30 @@ SCHEMA_TO_MODEL_MAP = {
     # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
+# get-products schema drift — tracked in #1308.
+# The live AdCP `/schemas/latest/media-buy/get-products-request.json` carries
+# fields the pinned adcp library does not yet model on `GetProductsRequest`:
+# the `adcp_major_version` envelope plus `if_catalog_version` and `if_pricing_version`.
+# Only the parametrizations below that genuinely fail today are xfailed (strict=True);
+# the same parametrize set is used by other tests in this file that still pass on
+# get-products and therefore is NOT swapped in for them.
+_GET_PRODUCTS_SCHEMA_DRIFT_REASON = (
+    "get-products schema drift: pinned adcp library does not model "
+    "adcp_major_version / if_catalog_version / if_pricing_version — tracked in #1308"
+)
+SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
+    pytest.param(
+        schema_ref,
+        model_class,
+        marks=(
+            pytest.mark.xfail(strict=True, reason=_GET_PRODUCTS_SCHEMA_DRIFT_REASON)
+            if "get-products-request" in schema_ref
+            else ()
+        ),
+    )
+    for schema_ref, model_class in SCHEMA_TO_MODEL_MAP.items()
+]
+
 # Version metadata fields present in AdCP JSON schemas that models don't declare explicitly.
 # These have defaults or are managed by the library base class — exclude from all comparisons.
 _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
@@ -429,7 +453,10 @@ def generate_full_valid_request(schema: dict[str, Any]) -> dict[str, Any]:
 class TestPydanticSchemaAlignment:
     """Test that Pydantic models accept all fields from AdCP JSON schemas."""
 
-    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    @pytest.mark.parametrize(
+        "schema_ref,model_class",
+        SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL,
+    )
     def test_model_accepts_all_schema_fields(self, schema_ref: str, model_class: type):
         """Test that Pydantic model accepts ALL fields defined in JSON schema.
 
@@ -644,7 +671,10 @@ class TestSpecificFieldValidation:
 class TestFieldNameConsistency:
     """Test that field names match between Pydantic models and JSON schemas."""
 
-    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    @pytest.mark.parametrize(
+        "schema_ref,model_class",
+        SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL,
+    )
     def test_field_names_match_schema(self, schema_ref: str, model_class: type):
         """Test that Pydantic model field names match JSON schema property names."""
         # Load the JSON schema

@@ -56,10 +56,6 @@ from src.core.schemas import (
     Product as ProductSchema,
 )
 
-# AdCP schema compliance tests — opt-in; skipped by default.
-# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
-pytestmark = pytest.mark.adcp_schema
-
 
 class TestSchemaMatchesLibrary:
     """Validate that our schemas match the adcp library schemas.
@@ -134,8 +130,11 @@ class TestSchemaMatchesLibrary:
         # GetMediaBuyDeliveryRequest - local extends library with spec fields
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        # adcp 3.9: all fields now in library — no local extensions remaining
-        local_extensions: set[str] = set()
+        # adcp library lags the spec: time_granularity + include_window_breakdown
+        # are defined in get-media-buy-delivery-request.json but not yet in the
+        # adcp library's GetMediaBuyDeliveryRequest (gh-#1299). Declared locally
+        # via Pattern #1 (extend library type) until the library catches up.
+        local_extensions: set[str] = {"time_granularity", "include_window_breakdown"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
         )
