@@ -65,6 +65,7 @@ from src.core.exceptions import (
     AdCPConflictError,
     AdCPError,
     AdCPValidationError,
+    build_two_layer_error_envelope,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
@@ -149,8 +150,6 @@ def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestErr
     harness unwrapper. Non-standard codes are translated to
     STANDARD_ERROR_CODES via ``exc.wire_error_code`` inside the envelope.
     """
-    from src.core.exceptions import build_two_layer_error_envelope
-
     envelope = build_two_layer_error_envelope(exc)
     data: dict[str, Any] = {
         **envelope,

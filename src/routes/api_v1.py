@@ -24,6 +24,8 @@ from fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
+from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+from src.core.tool_error_logging import AdCPToolError, extract_error_info
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -56,9 +58,6 @@ def _handle_tool_error(e: ToolError) -> JSONResponse:
     paths) is rebuilt into an envelope via a synthetic ``AdCPError`` so the
     wire output is uniform across all REST routes.
     """
-    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
-    from src.core.tool_error_logging import AdCPToolError, extract_error_info
-
     if isinstance(e, AdCPToolError):
         return JSONResponse(status_code=500, content=e.envelope)
 

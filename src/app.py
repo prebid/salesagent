@@ -96,7 +96,7 @@ app.mount("/mcp", mcp_app)
 # AdCP exception handlers — translate typed exceptions to HTTP responses.
 # ---------------------------------------------------------------------------
 
-from src.core.exceptions import AdCPError  # noqa: E402
+from src.core.exceptions import AdCPError, build_two_layer_error_envelope  # noqa: E402
 
 
 @app.exception_handler(AdCPError)
@@ -116,8 +116,6 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
     own boundary translators. Wire codes are translated through
     ``ERROR_CODE_MAPPING`` inside the envelope builder.
     """
-    from src.core.exceptions import build_two_layer_error_envelope
-
     return JSONResponse(
         status_code=exc.status_code,
         content=build_two_layer_error_envelope(exc),

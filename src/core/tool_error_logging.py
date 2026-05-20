@@ -14,6 +14,13 @@ from typing import Any, NoReturn
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
 
+from src.core.exceptions import (
+    AdCPAuthorizationError,
+    AdCPError,
+    AdCPValidationError,
+    build_two_layer_error_envelope,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,8 +97,6 @@ def extract_error_info(error: Exception) -> tuple[str, str, str | None]:
     Returns:
         Tuple of (error_code, error_message, recovery) where recovery may be None
     """
-    from src.core.exceptions import AdCPError
-
     if isinstance(error, AdCPToolError):
         first = error.envelope["errors"][0]
         return first["code"], first.get("message", ""), first.get("recovery")
@@ -179,13 +184,6 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
 
     This function always raises — it never returns.
     """
-    from src.core.exceptions import (
-        AdCPAuthorizationError,
-        AdCPError,
-        AdCPValidationError,
-        build_two_layer_error_envelope,
-    )
-
     if isinstance(error, ToolError):
         # Includes AdCPToolError — already in wire shape.
         raise

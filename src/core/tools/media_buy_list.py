@@ -19,6 +19,7 @@ from pydantic import Field, RootModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
@@ -60,7 +61,7 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -255,8 +256,6 @@ async def get_media_buys(
         # Raise AdCPValidationError so the MCP boundary translator runs the
         # envelope builder; the prior ToolError raise bypassed it and produced
         # a tuple-stringified wire response with no adcp_error/errors layers.
-        from src.core.exceptions import AdCPValidationError
-
         raise AdCPValidationError(format_validation_error(e, context="get_media_buys request")) from e
 
 
