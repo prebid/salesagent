@@ -473,6 +473,9 @@ class AdCPCapabilityNotSupportedError(AdCPError):
         affected raise-site call sites to either select a different code or
         accept the ``terminal`` retry semantics. Until then this is the
         documented, expected behavior — not a TODO.
+
+        FIXME(salesagent-unsupported-feature-recovery): grep tag for the
+        revisit condition above. Remove when the SDK enforces terminal.
     """
 
     status_code = 422

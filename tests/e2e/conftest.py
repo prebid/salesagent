@@ -124,6 +124,12 @@ def docker_services_e2e(request):
 
         # Wait for server to be ready. /health is proxied to the upstream
         # (not returned by nginx directly), so this confirms the app is serving.
+        # 60s budget covers: alembic migration run on a fresh schema (~5-15s
+        # in CI), MCP/A2A/REST router registration, and the first-call cold
+        # path through the import graph (typed creative-format registry +
+        # adcp library module load). Empirically 25-45s in CI; 60s leaves
+        # ~30% headroom. Drop only if the startup cold-path measurably
+        # shrinks — don't widen further without root-causing the slowness.
         max_wait = 60
         start_time = time.time()
         for _ in range(max_wait // 2):
