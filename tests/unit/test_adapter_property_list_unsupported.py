@@ -1,6 +1,6 @@
 """Tests for B4: 4 adapters explicitly raise UNSUPPORTED_FEATURE on property_list.
 
-AdCP #1302 contract 5: each enabled adapter MUST translate OR raise
+AdCP honest-declaration contract: each enabled adapter MUST translate OR raise
 UNSUPPORTED_FEATURE for unsupported targeting features. Mock/Broadstreet/Xandr/
 Triton don't compile ``targeting_overlay.property_list`` today, so they must
 return a clean ``UNSUPPORTED_FEATURE`` envelope rather than silently dropping.

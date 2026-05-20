@@ -1,8 +1,9 @@
 """Tests for Kevel adapter's property_list compilation (B3).
 
-Backs the contract item from #1302 that "an enabled adapter MUST translate
-property_list" — Kevel is the first salesagent adapter to satisfy that side
-of the contract (vs B4's UNSUPPORTED_FEATURE raises for adapters that can't).
+Backs the AdCP honest-declaration contract item that "an enabled adapter MUST
+translate property_list" — Kevel is the first salesagent adapter to satisfy
+that side of the contract (vs B4's UNSUPPORTED_FEATURE raises for adapters
+that can't).
 
 These tests pin the three observable behaviors:
 

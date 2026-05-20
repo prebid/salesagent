@@ -190,7 +190,7 @@ class AdServerAdapter(ABC):
 
     # Whether this adapter compiles AdCP targeting_overlay.property_list to native
     # ad-server targeting. Default is False — adapters that silently drop
-    # property_list are explicitly unsupported per AdCP #1302 contract 5
+    # property_list are explicitly unsupported per AdCP honest-declaration contract
     # ("Each enabled adapter MUST translate OR raise UNSUPPORTED_FEATURE").
     # Override to True only when the adapter has a working property_list
     # compilation path (e.g. resolving the list to native publisher identifiers).
@@ -390,11 +390,13 @@ class AdServerAdapter(ABC):
         - any package's ``targeting_overlay.property_list`` is non-None.
 
         Returns ``None`` when the buyer didn't request property_list targeting OR the
-        adapter has compilation support. Callers should invoke this early in
-        ``create_media_buy`` and return the error immediately when it's non-None.
+        adapter has compilation support. Callers should prefer
+        ``_reject_property_list_if_unsupported`` which adds the standard log + return
+        pattern; this method exists for the rare caller that needs granular access to
+        the raw error without the audit log line.
 
-        AdCP #1302 contract 5: "Each enabled adapter MUST translate OR raise
-        UNSUPPORTED_FEATURE" — silent dropping is a contract violation.
+        Per the AdCP "honest-declaration" contract: each enabled adapter MUST translate
+        OR raise UNSUPPORTED_FEATURE — silent dropping is a contract violation.
         """
         if self.supports_property_list_filtering:
             return None
@@ -414,6 +416,22 @@ class AdServerAdapter(ABC):
                     errors=[Error(code="UNSUPPORTED_FEATURE", message=message, details=None)],
                 )
         return None
+
+    def _reject_property_list_if_unsupported(self, packages: list[MediaPackage]) -> CreateMediaBuyError | None:
+        """Adapter entry-point helper: check property_list support + log + return error.
+
+        Used by all 4 honest-declaration adapters (Broadstreet, Mock, Triton, Xandr)
+        as the standard ``create_media_buy`` early-return: the inline check + audit
+        log + early-return pattern was identical 4-line copy-paste at every site.
+        Callers use::
+
+            if err := self._reject_property_list_if_unsupported(packages):
+                return err
+        """
+        error = self._check_property_list_supported(packages)
+        if error is not None:
+            self.log(f"[red]Error: {error.errors[0].message}[/red]")
+        return error
 
     @abstractmethod
     def create_media_buy(
