@@ -2101,7 +2101,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     transports = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
     ids = ["impl", "a2a", "mcp", "rest"]
 
-    if os.environ.get("BDD_E2E_ENABLED", "true") != "false":
+    if os.environ.get("BDD_E2E_ENABLED") == "true":
         transports.append(Transport.E2E_REST)
         ids.append("e2e_rest")
 
