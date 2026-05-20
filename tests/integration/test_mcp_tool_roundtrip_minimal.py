@@ -141,7 +141,7 @@ class TestMCPToolRoundtripMinimal:
     async def test_get_media_buy_delivery_invalid_date_range(self, mcp_client):
         """Test get_media_buy_delivery raises ToolError with spec-compliant envelope for invalid date ranges.
 
-        After PR #1307, _impl raises AdCPValidationError; the MCP boundary
+        After the error-emission architecture migration, _impl raises AdCPValidationError; the MCP boundary
         translator emits a ToolError whose message is the JSON envelope
         ``{adcp_error: {...}, errors: [...]}`` per the AdCP 3.0.6 spec.
         """

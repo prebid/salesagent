@@ -450,7 +450,7 @@ class TestAdapterFailureAuditTrail:
 
         Covers: UC-004-EXT-F-03
 
-        After the error-emission architecture migration (PR #1307), the impl raises
+        After the error-emission architecture migration, the impl raises
         AdCPAdapterError; the UoW context manager rolls back on exception, so
         session.add(audit_log) is not persisted to the DB. The production code
         does log the failure via logger.error before raising, which satisfies

@@ -25,10 +25,10 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
 # Sub-batch 3 (PR 2) drained 15 entries via ContextManager.fail_step adoption;
-# the 6 remaining update entries serialize success-shape payloads (approval step,
+# the 7 remaining update entries serialize success-shape payloads (approval step,
 # adapter result wrappers) that fail_step does not cover.
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 6 violations (success-shape persistence, not failure)
+    # _update_media_buy_impl: 7 violations (success-shape persistence, not failure)
     ("media_buy_update.py", 330),
     ("media_buy_update.py", 331),
     ("media_buy_update.py", 451),

@@ -379,7 +379,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         protocol="mcp",
     )
 
-    # PR #1307: errors are now raised as typed exceptions, not returned in response.errors.
+    # Errors are raised as typed exceptions, not returned in response.errors.
     with pytest.raises(AdCPValidationError, match="(?i)floor"):
         await _create_media_buy_impl(req=request, identity=identity)
 
@@ -444,7 +444,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         protocol="mcp",
     )
 
-    # PR #1307: errors are now raised as typed exceptions, not returned in response.errors.
+    # Errors are raised as typed exceptions, not returned in response.errors.
     with pytest.raises(AdCPValidationError, match="(?i)minimum spend"):
         await _create_media_buy_impl(req=request, identity=identity)
 
@@ -509,6 +509,6 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         protocol="mcp",
     )
 
-    # PR #1307: errors are now raised as typed exceptions, not returned in response.errors.
+    # Errors are raised as typed exceptions, not returned in response.errors.
     with pytest.raises(AdCPValidationError, match="pricing_option_id"):
         await _create_media_buy_impl(req=request, identity=identity)

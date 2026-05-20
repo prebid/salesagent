@@ -95,7 +95,7 @@ class TestGAMOrderLifecycleIntegration:
     def test_lifecycle_workflow_validation(self, test_principals, gam_config):
         """Test lifecycle action workflows with business validation.
 
-        After PR #1307, the GAM adapter raises typed AdCPError subclasses for
+        After the error-emission architecture migration, the GAM adapter raises typed AdCPError subclasses for
         unsupported actions and authorization failures. Only ``approve_order``,
         ``activate_order``, and ``update_package_budget`` are supported.
         """
@@ -187,7 +187,7 @@ class TestGAMOrderLifecycleIntegration:
     def test_activation_validation_with_guaranteed_items(self, test_principals, gam_config):
         """Test activation validation blocking guaranteed line items.
 
-        After PR #1307, ``activate_order`` raises AdCPCapabilityNotSupportedError
+        After the error-emission architecture migration, ``activate_order`` raises AdCPCapabilityNotSupportedError
         when there are no guaranteed items (the code path only handles the
         guaranteed-items case explicitly). With guaranteed items it returns
         a workflow step in the success response.

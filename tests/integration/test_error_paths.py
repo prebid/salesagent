@@ -145,7 +145,7 @@ class TestCreateMediaBuyErrorPaths:
     async def test_missing_principal_returns_authentication_error(self, test_tenant_minimal):
         """Test that missing principal raises AdCPAuthenticationError.
 
-        After the error-emission architecture migration (PR #1307), _impl functions raise
+        After the error-emission architecture migration, _impl functions raise
         typed AdCPError subclasses; the boundary translator builds the spec-compliant envelope.
         """
         identity = PrincipalFactory.make_identity(

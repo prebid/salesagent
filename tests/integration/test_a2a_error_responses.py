@@ -211,7 +211,7 @@ class TestA2AErrorPropagation:
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Test that authentication errors are translated to A2A InvalidRequestError.
 
-        After PR #1307, AdCPAuthenticationError raised by _impl is caught by the
+        After the error-emission architecture migration, AdCPAuthenticationError raised by _impl is caught by the
         A2A boundary translator (_adcp_to_a2a_error) and re-raised as
         ``a2a.utils.errors.InvalidRequestError`` with an envelope payload that
         carries the spec-compliant adcp_error/errors[] layers via the

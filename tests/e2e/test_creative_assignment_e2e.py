@@ -275,7 +275,7 @@ class TestCreativeAssignment:
             products_data = parse_tool_result(products_result)
 
             # Need at least 2 distinct products — duplicate product_ids in packages
-            # are now rejected with AdCPConflictError (PR #1307).
+            # are now rejected with AdCPConflictError.
             num_products = len(products_data["products"])
             assert num_products >= 2, f"Test requires at least 2 distinct products, got {num_products}"
             product = products_data["products"][0]
@@ -321,7 +321,7 @@ class TestCreativeAssignment:
             )
 
             # Override packages to have 2 distinct packages — must use distinct product_ids
-            # (PR #1307: duplicate product_ids per package now raise AdCPConflictError).
+            # Duplicate product_ids per package now raise AdCPConflictError.
             media_buy_request["packages"] = [
                 {
                     "product_id": product_id,
