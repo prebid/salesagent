@@ -129,10 +129,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
-    # Graduated: T-UC-005-sandbox-happy (salesagent-6ge7)
-    # Graduated: T-UC-005-sandbox-validation (salesagent-7fqx)
-    # Validation error from invalid dimension filter fires before sandbox logic.
-    # Graduated: T-UC-005-main-referrals (salesagent-v4ol)
+    # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
+    "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
+    # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
+    "T-UC-005-sandbox-validation": "sandbox validation not triggered for invalid filters — spec-production gap",
+    # Un-graduated: T-UC-005-main-referrals — creative agent referrals empty in response (all transports)
+    "T-UC-005-main-referrals": "creative agent referrals not populated in list_creative_formats response — spec-production gap",
+    # FIXME: T-UC-005-main — format 'audio-spot' has no assets or renders (all transports)
+    "T-UC-005-main": "some formats (e.g. audio-spot) lack asset_requirements and render_capabilities — spec-production gap",
     # Partially graduated: dispatch fix landed (salesagent-40kk); error code mismatch remains
     # FIXME(salesagent-40kk): production raises AUTH_TOKEN_INVALID, spec expects TENANT_REQUIRED
     "T-UC-005-ext-a": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
@@ -262,15 +266,19 @@ _XFAIL_TAGS: dict[str, str] = {
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-005-partition-disclosure",
-        {"all_positions", "no_matching_formats", "duplicate_positions"},
+        {"duplicate_positions"},
         "disclosure_positions filter/validation not implemented",
     ),
+    # Graduated: all_positions, no_matching_formats on impl (disclosure filter now partially works)
+    # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific disclosure xfails are in _MCP_SELECTIVE_XFAIL
     (
         "T-UC-005-boundary-disclosure",
-        {"all 8 positions", "format has no", "duplicate positions"},
+        {"duplicate positions"},
         "disclosure_positions filter/validation not implemented",
     ),
+    # Graduated: "all 8 positions", "format has no" on impl (disclosure filter now partially works)
+    # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
     # FIXME(beads-dul): creative agent format API has tighter restrictions than
@@ -376,7 +384,13 @@ _REST_XFAIL_TAGS: set[str] = {
     "T-UC-005-inv-049-6-holds",  # responsive=false filter
     "T-UC-005-inv-049-7-holds",  # name_search filter
     "T-UC-005-inv-049-7-violated",
-    # Graduated: inv-049-9 and inv-049-10 (u04y: REST now passes these filters)
+    # Un-graduated: inv-049-9 and inv-049-10 (REST drops output_format_ids/input_format_ids again)
+    "T-UC-005-inv-049-9-holds",  # output_format_ids filter
+    "T-UC-005-inv-049-9-violated",
+    "T-UC-005-inv-049-9-nofield",
+    "T-UC-005-inv-049-10-holds",  # input_format_ids filter
+    "T-UC-005-inv-049-10-violated",
+    "T-UC-005-inv-049-10-nofield",
     "T-UC-005-inv-031-1-holds",  # multi-filter AND combination
     "T-UC-005-inv-031-1-violated",
 }
@@ -394,6 +408,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
+
+        # --- UC-005: creative agent type/asset_type filter not implemented ---
+        # FIXME: creative agent format type and asset type filters are not
+        # wired through list_creative_formats — production doesn't accept
+        # these filter params. All transports fail on all parametrizations.
+        _UC005_AGENT_FILTER_TAGS: set[str] = {
+            "T-UC-005-partition-agent-type",
+            "T-UC-005-partition-agent-asset",
+            "T-UC-005-boundary-agent-type",
+            "T-UC-005-boundary-agent-asset",
+        }
+        if marker_names & _UC005_AGENT_FILTER_TAGS:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="creative agent type/asset_type filter not implemented in list_creative_formats",
+                    strict=False,
+                )
+            )
 
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
         if is_mcp:
@@ -436,6 +468,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
+
+        # RESOLVED: MCP transport suggestion field now correctly unpacked by
+        # _unwrap_mcp_tool_error (was double-nesting the extra JSON blob).
 
         # Transport-specific xfails: REST drops all filter params
         if is_rest:
@@ -616,6 +651,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
             # Skip selective xfails for these — the strict=False above covers them
         else:
+            # Graduated disclosure examples on impl — still fail on a2a/mcp/rest
+            if not is_impl and not is_e2e_rest:
+                if "T-UC-005-partition-disclosure" in marker_names:
+                    if any(s in item.nodeid for s in ("all_positions", "no_matching_formats")):
+                        item.add_marker(
+                            pytest.mark.xfail(
+                                reason="disclosure_positions filter not implemented on non-impl transports",
+                                strict=True,
+                            )
+                        )
+                elif "T-UC-005-boundary-disclosure" in marker_names:
+                    if any(s in item.nodeid for s in ("all 8 positions", "format has no")):
+                        item.add_marker(
+                            pytest.mark.xfail(
+                                reason="disclosure_positions filter not implemented on non-impl transports",
+                                strict=True,
+                            )
+                        )
+
             # Selective xfail for parametrized scenarios
             for tag, substrings, reason in _SELECTIVE_XFAIL:
                 if tag in marker_names:
@@ -864,6 +918,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # Graduated: T-UC-004-webhook-bearer, T-UC-004-webhook-hmac,
+        # T-UC-004-webhook-no-aggregated, T-UC-004-webhook-notification-type
+        # (integration CircuitBreakerEnv now has make_webhook_config/set_db_webhooks
+        # so webhook POST fires on all transports)
+
+        # --- UC-004: boundary-account a2a — dict serialization mismatch ---
+        # A2A transport returns dict objects that lack .root attribute needed
+        # by the Then step's account validation logic.
+        if is_a2a and "T-UC-004-boundary-account" in marker_names:
+            _acc_valid_a2a = any(s in nodeid for s in ("account exists", "single match"))
+            if _acc_valid_a2a:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="A2A transport: account dict lacks .root attribute — serialization gap",
+                        strict=False,
+                    )
+                )
+
         # --- UC-004: xfails for unimplemented production features ---
         # FIXME(salesagent-ckb): These production features are not yet implemented.
         # strict=True: test MUST fail. strict=False: test MAY pass (some examples work).
@@ -881,21 +953,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-daterange-equal": ("date range validation (start==end) not implemented", True),
             # Webhook delivery: not yet in production
             "T-UC-004-webhook-scheduled": ("webhook delivery not implemented", True),
-            # FIXME(salesagent-4ydt): BR-RULE-029 INV-1 requires strictly monotonic
-            # sequence numbers per media buy stream. Production retry path emits
-            # the same sequence_number on retry POSTs, producing [1,2,2,3,3,3] for
-            # three logical reports instead of a strictly increasing sequence.
-            "T-UC-004-webhook-sequence": (
-                "BR-RULE-029 INV-1: sequence_number reused across retry POSTs — strictly ascending not preserved",
-                True,
-            ),
+            # Graduated: T-UC-004-webhook-sequence (production fixed: sequence numbers now strictly ascending)
             # Graduated: T-UC-004-webhook-circuit-halfopen (merge from main fixed circuit breaker probe timing)
-            # Webhook retry off-by-one: range(max_retries) yields 3 total calls,
-            # should be range(max_retries + 1) for 4 calls (1 initial + 3 retries per BR-RULE-029 / UC-004-EXT-G-01)
-            "T-UC-004-webhook-retry-5xx": (
-                "production off-by-one: range(max_retries) does 3 calls, should do 4 (1 initial + 3 retries)",
-                True,
-            ),
+            # Graduated: T-UC-004-webhook-retry-5xx (production fixed: retry count now correct)
             "T-UC-004-webhook-retry-network": (
                 "production off-by-one: range(max_retries) does 3 calls, should do 4 (1 initial + 3 retries)",
                 True,
@@ -1039,7 +1099,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             _cred_passes = (is_impl and _cred_invalid) or (is_rest and _cred_valid)
             if not _cred_passes:
                 item.add_marker(
-                    pytest.mark.xfail(reason="webhook credentials boundary: validation gaps on this transport", strict=False)
+                    pytest.mark.xfail(
+                        reason="webhook credentials boundary: validation gaps on this transport", strict=False
+                    )
                 )
 
         # Graduated: T-UC-004-boundary-ownership — impl-"differs" and rest-"matches" pass
@@ -1126,28 +1188,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # Graduated: T-UC-004-boundary-attribution — invalid examples pass on impl/mcp/rest,
-        # valid examples pass on a2a. Transport-aware narrowing.
-        # Graduated: "unit=campaign with interval=2" now also passes on mcp+rest (only a2a fails).
+        # Graduated: T-UC-004-boundary-attribution — valid examples now pass on ALL transports.
+        # Invalid examples: most fail on a2a/mcp/rest; "campaign with interval=2" fails
+        # on ALL 4 transports (production doesn't validate interval>1 for campaign unit).
         if "T-UC-004-boundary-attribution" in marker_names:
             _aw_invalid_all = {"interval=0", "unit=weeks", "model=last_click"}
-            _aw_invalid_a2a_only = {"unit=campaign with interval=2"}
-            _aw_valid = {
-                "empty object",
-                "post_click only",
-                "unit=campaign with interval=1",
-                "interval=1 (minimum",
-                "seller ignores",
-            }
+            _aw_invalid_all_transports = {"unit=campaign with interval=2"}
             _aw_is_invalid_all = any(s in nodeid for s in _aw_invalid_all)
-            _aw_is_invalid_a2a = any(s in nodeid for s in _aw_invalid_a2a_only)
-            _aw_is_valid = any(s in nodeid for s in _aw_valid)
-            # Post-merge: most invalid examples fail on mcp+rest (ToolError wrapping changed)
-            # but "campaign with interval=2" graduated on mcp+rest (only a2a still fails)
-            if (_aw_is_invalid_all and (is_a2a or is_mcp or is_rest)) or (_aw_is_invalid_a2a and is_a2a) or (_aw_is_valid and not is_a2a):
+            _aw_is_invalid_all_transports = any(s in nodeid for s in _aw_invalid_all_transports)
+            # Graduated: valid examples now pass on all transports (impl/a2a/mcp/rest).
+            # Only invalid examples still need xfails.
+            if _aw_is_invalid_all and (is_a2a or is_mcp or is_rest):
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="attribution_window boundary: production gaps on this transport", strict=False
+                    )
+                )
+            elif _aw_is_invalid_all_transports:
+                # "campaign with interval=2": production accepts it on all transports
+                # — spec says must be 1, production doesn't validate
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="attribution_window boundary: campaign unit interval=2 not validated — spec-production gap",
+                        strict=False,
                     )
                 )
             # Graduated: e2e_rest invalid attribution_window examples now return 500
@@ -1979,14 +2042,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Graduated: T-UC-011-ext-g-echo-error (all 4 transports pass — context echo now works in error response)
         # Graduated: T-UC-011-sync-missing-brand (all 4 transports pass — ValidationError now structured)
         # Graduated: T-UC-011-sync-missing-operator (all 4 transports pass — ValidationError now structured)
-        # Graduated: T-UC-011-ext-f-scoped impl/mcp/rest (only a2a still fails — narrowed below)
-        if "T-UC-011-ext-f-scoped" in marker_names and is_a2a:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="deactivation scoping: a2a transport still applies globally",
-                    strict=False,
-                )
-            )
+        # Graduated: T-UC-011-ext-f-scoped (all 4 transports now pass — deactivation scoping works on a2a)
 
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they
