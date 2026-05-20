@@ -1333,9 +1333,9 @@ def _build_idempotency_hit_result(
 
         # Rebuild the property_list advisory live rather than reading a cached
         # copy: between the original request and this replay, an adapter could
-        # have flipped supports_property_list_filtering=True (e.g. #1314 merged).
-        # The advisory must reflect the current capability state, not whatever
-        # was true at the original Day-1 call.
+        # have flipped supports_property_list_filtering=True. The advisory
+        # must reflect the current capability state, not whatever was true at
+        # the original Day-1 call.
         advisories = property_list_unsupported_advisories(req.packages, adapter) if req is not None else None
 
         return CreateMediaBuyResult(
@@ -1446,7 +1446,7 @@ async def _create_media_buy_impl(
                     req=req,
                     # FIXME(idempotency-adapter): adapter isn't initialized yet
                     # at this early happy-path check, so the advisory may
-                    # misfire after #1314 flips Kevel's capability to True
+                    # misfire once Kevel's capability flips to True
                     # (Kevel tenants would see a stale UNSUPPORTED_FEATURE
                     # on replay). Today no adapter compiles property_list,
                     # so the advisory is always correct. Untangle when the

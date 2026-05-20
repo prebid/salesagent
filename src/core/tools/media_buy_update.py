@@ -42,6 +42,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPError,
     AdCPGoneError,
+    AdCPNotFoundError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -53,7 +54,18 @@ from src.core.auth import (
     get_principal_object,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import ObjectWorkflowMapping
+from src.core.database.models import (
+    Creative as DBCreative,
+)
+from src.core.database.models import (
+    CreativeAssignment as DBAssignment,
+)
+from src.core.database.models import (
+    ObjectWorkflowMapping,
+)
+from src.core.database.models import (
+    Product as DBProduct,
+)
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -65,6 +77,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools.creatives import _sync_creatives_impl
 from src.core.tools.financial_validation import (
     validate_max_campaign_budget,
     validate_max_daily_package_spend,
@@ -130,7 +143,7 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     media_buy = repo.get_by_id(media_buy_id)
 
     if not media_buy:
-        raise ValueError(f"Media buy '{media_buy_id}' not found.")
+        raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
     if media_buy.principal_id != principal_id:
         # CRITICAL: Verify principal_id is set (security check, not assertion)
@@ -209,7 +222,7 @@ def _update_media_buy_impl(
             media_buy_id_to_use = req.media_buy_id
 
             if not media_buy_id_to_use:
-                raise ValueError("media_buy_id is required")
+                raise AdCPValidationError("media_buy_id is required")
 
             # Verify principal owns this media buy
             _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
@@ -697,9 +710,6 @@ def _update_media_buy_impl(
                             )
                             return response_data
 
-                        from src.core.database.models import Creative as DBCreative
-                        from src.core.database.models import CreativeAssignment as DBAssignment
-
                         # Resolve media_buy_id
                         media_buy_obj = uow.media_buys.get_by_id(req.media_buy_id)
 
@@ -757,8 +767,6 @@ def _update_media_buy_impl(
 
                         # Validate creative formats against package product formats
                         # Get package and product to check supported formats
-                        from src.core.database.models import Product
-
                         db_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
 
                         # Get product_id from package_config
@@ -770,8 +778,8 @@ def _update_media_buy_impl(
 
                         if product_id:
                             # Get product to check supported formats
-                            product_stmt = select(Product).where(
-                                Product.tenant_id == tenant["tenant_id"], Product.product_id == product_id
+                            product_stmt = select(DBProduct).where(
+                                DBProduct.tenant_id == tenant["tenant_id"], DBProduct.product_id == product_id
                             )
                             product = session.scalars(product_stmt).first()
 
@@ -923,8 +931,6 @@ def _update_media_buy_impl(
                             )
                             return response_data
 
-                        from src.core.tools.creatives import _sync_creatives_impl
-
                         # Sync creatives (upload/update)
                         sync_response = _sync_creatives_impl(
                             creatives=pkg_update.creatives,
@@ -984,9 +990,6 @@ def _update_media_buy_impl(
                             )
                             return response_data
 
-                        from src.core.database.models import CreativeAssignment as DBAssignment
-                        from src.core.database.models import Product as ProductModel
-
                         # Resolve media_buy_id
                         media_buy_obj = uow.media_buys.get_by_id(req.media_buy_id)
 
@@ -1027,9 +1030,9 @@ def _update_media_buy_impl(
 
                             if product_id:
                                 # Get product's placements
-                                prod_stmt = select(ProductModel).where(
-                                    ProductModel.tenant_id == tenant["tenant_id"],
-                                    ProductModel.product_id == product_id,
+                                prod_stmt = select(DBProduct).where(
+                                    DBProduct.tenant_id == tenant["tenant_id"],
+                                    DBProduct.product_id == product_id,
                                 )
                                 product_obj = session.scalars(prod_stmt).first()
 

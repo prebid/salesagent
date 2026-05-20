@@ -167,8 +167,8 @@ def _get_adcp_capabilities_impl(
         # Today no adapter sets this — capability remains False; create/update
         # emit per-package UNSUPPORTED_FEATURE advisories on the success envelope
         # so buyers can see the silent-drop window. Kevel's siteId resolver flips
-        # this True (PR #1314) and the other 4 adapters hard-reject (PR #1313)
-        # — same source of truth via `supports_property_list_filtering()`.
+        # this True and the other 4 adapters hard-reject — same source of truth
+        # via `supports_property_list_filtering()`.
         property_list_filtering=supports_property_list_filtering(adapter),
         # catalog_management: declared False until a sync_catalogs tool ships.
         # AdCP spec binds this flag to the buyer-driven sync_catalogs task
@@ -255,11 +255,10 @@ def _get_adcp_capabilities_impl(
     # The runner gates scenarios by specialism, not by `supported_protocols` alone.
     #
     # We declare the specialism even though `pending_creatives_to_start` and
-    # `invalid_transitions` are not yet fully green (gaps #9-#12 in issue #1247;
-    # error-code casing fixes land via PRs #1306/#1307). The CI storyboard job
-    # is advisory pending #1247 gap #1 (see `.github/workflows/test.yml`), so
-    # those scenario failures don't block merge — and the public declaration
-    # forces prioritization of the remaining gaps instead of hiding them.
+    # `invalid_transitions` are not yet fully green. The CI storyboard job is
+    # advisory (see `.github/workflows/test.yml`), so those scenario failures
+    # don't block merge — and the public declaration forces prioritization of
+    # the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
             major_versions=[MajorVersion(root=3)],

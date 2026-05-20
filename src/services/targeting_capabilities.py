@@ -199,13 +199,12 @@ def supports_property_list_filtering(adapter: object | None) -> bool:
 
     Today no adapter sets ``supports_property_list_filtering=True``; the
     declaration in ``get_adcp_capabilities`` is the canonical "False until an
-    adapter actually compiles it" anchor. When Kevel's siteId resolver lands
-    (PR #1314 / B3), Kevel's adapter class will set this ClassVar to True and
-    the helper will start returning True for tenants on Kevel. Other adapters
-    will hard-reject via PR #1313 / B4, at which point this advisory path is
-    unreachable for them. Centralizing the check here keeps the wire
-    declaration (capabilities) and the per-call advisory (this module) in
-    lockstep with one source of truth.
+    adapter actually compiles it" anchor. When Kevel's siteId resolver lands,
+    Kevel's adapter class will set this ClassVar to True and the helper will
+    start returning True for tenants on Kevel. Other adapters hard-reject, at
+    which point this advisory path is unreachable for them. Centralizing the
+    check here keeps the wire declaration (capabilities) and the per-call
+    advisory (this module) in lockstep with one source of truth.
     """
     if adapter is None:
         return False
@@ -223,7 +222,7 @@ def supports_property_list_filtering(adapter: object | None) -> bool:
 # ``core/targeting.json:collection_list``: "Seller must declare support in
 # get_adcp_capabilities." There is no per-product flag for collection_list,
 # so the asymmetry below is spec-defined, not an oversight. Collection-list
-# capability infrastructure lands separately (PR #1313).
+# capability infrastructure lands separately.
 
 
 def build_property_list_unsupported_advisories(
@@ -235,8 +234,8 @@ def build_property_list_unsupported_advisories(
     AdCP spec 3.0.7 ``error-handling.mdx`` describes non-fatal errors as
     "populate only the payload... MUST NOT populate ``adcp_error``" — i.e.
     advisories ride on the success envelope. Buyers see the silent-drop
-    window (PR #1276 lands property_list round-trip; PR #1314 / #1313
-    activate compilation) without the request being rejected.
+    window during the rollout of property_list round-trip and adapter
+    compilation, without the request being rejected.
 
     Returns Error objects for each package whose ``targeting_overlay.property_list``
     is set when the bound adapter does not compile the field. Caller appends
