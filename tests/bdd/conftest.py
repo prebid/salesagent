@@ -393,6 +393,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_a2a = "[a2a]" in nodeid or "[a2a-" in nodeid
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
+        is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
 
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
         if is_mcp:
