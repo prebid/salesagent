@@ -276,7 +276,7 @@ def _update_media_buy_impl(
         # on products with property_targeting_allowed=False. Runs before the dry_run
         # early return so dry_run requests are also rejected (parity with create).
         # FIXME(inventory-targeting-A1-update): convert the return-envelope below to
-        # `raise AdCPValidationError(...)` when PR #1307 sub-batch 3 drains the
+        # `raise AdCPValidationError(...)` when the broader Pattern A migration drains the
         # remaining Pattern A sites in this file. Kept as return-envelope here to
         # mirror the existing local convention (AUTH_REQUIRED at lines 258-274).
         if req.packages:

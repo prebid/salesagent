@@ -80,7 +80,7 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "include_window_breakdown",  # Schema defines windowed pull breakdown, library doesn't have it yet
     },
     "/schemas/latest/media-buy/sync-creatives-request.json": {
-        "account_id",  # Schema defines 'account_id' (string); library/local model uses 'account' (AccountReference object). Tracked under #1247.
+        "account_id",  # Schema defines 'account_id' (string); library/local model uses 'account' (AccountReference object).
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
     "/schemas/latest/media-buy/list-creatives-request.json": {
