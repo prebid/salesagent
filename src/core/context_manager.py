@@ -16,6 +16,7 @@ from sqlalchemy import select
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
+from src.core.exceptions import AdCPError
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -360,8 +361,6 @@ class ContextManager(DatabaseManager):
         """
         from adcp.server.helpers import STANDARD_ERROR_CODES
         from adcp.server.helpers import adcp_error as _sdk_adcp_error
-
-        from src.core.exceptions import AdCPError
 
         try:
             if isinstance(exc, AdCPError):
