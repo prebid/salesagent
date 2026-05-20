@@ -1,6 +1,6 @@
 """IdempotencyAttempt repository — tenant-scoped access to cached rejection envelopes.
 
-AdCP spec contract item 7 (issue #1303): retrying a tool call with the same
+AdCP replay-after-rejection contract: retrying a tool call with the same
 idempotency_key must return the original answer. Successful media buys handle
 this via media_buys.idempotency_key. This repository handles the rejection
 path — when the original request was rejected, the buyer retrying with the
