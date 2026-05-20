@@ -52,6 +52,20 @@ async def app_lifespan(app: FastAPI):
     logger.info("FastAPI application starting up")
     yield
     logger.info("FastAPI application shutting down")
+    # Close long-lived HTTP sessions / connection pools so the worker's
+    # file descriptors are released before process exit. The webhook
+    # service's ``requests.Session`` has a ``close()`` method that was
+    # never wired here — that's leak triage item #3 from the production
+    # OOM-cycle investigation. Adding more shutdown hooks below as
+    # we close out items #4-#6.
+    try:
+        from src.services.protocol_webhook_service import _webhook_service
+
+        if _webhook_service is not None:
+            await _webhook_service.close()
+    except Exception:
+        # Shutdown errors must not mask the actual yielded exit.
+        logger.exception("Error closing protocol_webhook_service on shutdown")
 
 
 # Build the MCP sub-application.
