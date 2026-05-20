@@ -420,7 +420,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "not_found",
                 "not found",
                 "no match",
-                "ambiguous",
+                "key_ambiguous",
                 "multiple matches",
                 "setup_required",
                 "setup incomplete",
@@ -950,15 +950,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # T-UC-004-boundary-resolution, T-UC-004-boundary-ownership,
         # T-UC-004-boundary-reporting-dims, T-UC-004-boundary-sampling,
         # T-UC-004-boundary-date-range
-        _UC004_BOUNDARY_TAGS = {
-            "T-UC-004-boundary-credentials",
-            # Graduated: T-UC-004-boundary-reporting-dims (transport-aware selective below)
-            # Graduated: T-UC-004-boundary-sampling (transport-aware selective below)
-            # Graduated: T-UC-004-boundary-date-range (transport-aware selective below)
-            # Graduated: T-UC-004-boundary-ownership (transport-aware below)
-        }
+        _UC004_BOUNDARY_TAGS: set[str] = set()
+        # Graduated: T-UC-004-boundary-credentials (transport-aware selective below)
+        # Graduated: T-UC-004-boundary-reporting-dims (transport-aware selective below)
+        # Graduated: T-UC-004-boundary-sampling (transport-aware selective below)
+        # Graduated: T-UC-004-boundary-date-range (transport-aware selective below)
+        # Graduated: T-UC-004-boundary-ownership (transport-aware below)
         if marker_names & _UC004_BOUNDARY_TAGS:
             item.add_marker(pytest.mark.xfail(reason="boundary validation partially implemented", strict=False))
+
+        # Graduated: T-UC-004-boundary-credentials — impl passes invalid examples,
+        # rest passes valid examples. A2A and MCP still fail on all examples.
+        if "T-UC-004-boundary-credentials" in marker_names:
+            _cred_invalid = any(s in nodeid for s in ("31 chars (rejected)", "Unknown auth scheme"))
+            _cred_valid = any(s in nodeid for s in ("Bearer scheme", "HMAC-SHA256 scheme", "credentials = 32 chars"))
+            _cred_passes = (is_impl and _cred_invalid) or (is_rest and _cred_valid)
+            if not _cred_passes:
+                item.add_marker(
+                    pytest.mark.xfail(reason="webhook credentials boundary: validation gaps on this transport", strict=False)
+                )
 
         # Graduated: T-UC-004-boundary-ownership — impl-"differs" and rest-"matches" pass
         # Remaining failures: impl-matches, a2a-both, mcp-both, rest-differs
@@ -1022,8 +1032,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # Graduated: T-UC-004-boundary-attribution — invalid examples pass on impl/mcp/rest,
         # valid examples pass on a2a. Transport-aware narrowing.
+        # Graduated: "unit=campaign with interval=2" now also passes on mcp+rest (only a2a fails).
         if "T-UC-004-boundary-attribution" in marker_names:
-            _aw_invalid = {"interval=0", "unit=weeks", "model=last_click", "unit=campaign with interval=2"}
+            _aw_invalid_all = {"interval=0", "unit=weeks", "model=last_click"}
+            _aw_invalid_a2a_only = {"unit=campaign with interval=2"}
             _aw_valid = {
                 "empty object",
                 "post_click only",
@@ -1031,10 +1043,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "interval=1 (minimum",
                 "seller ignores",
             }
-            _aw_is_invalid = any(s in nodeid for s in _aw_invalid)
+            _aw_is_invalid_all = any(s in nodeid for s in _aw_invalid_all)
+            _aw_is_invalid_a2a = any(s in nodeid for s in _aw_invalid_a2a_only)
             _aw_is_valid = any(s in nodeid for s in _aw_valid)
-            # Post-merge: invalid examples also fail on mcp+rest (ToolError wrapping changed)
-            if (_aw_is_invalid and (is_a2a or is_mcp or is_rest)) or (_aw_is_valid and not is_a2a):
+            # Post-merge: most invalid examples fail on mcp+rest (ToolError wrapping changed)
+            # but "campaign with interval=2" graduated on mcp+rest (only a2a still fails)
+            if (_aw_is_invalid_all and (is_a2a or is_mcp or is_rest)) or (_aw_is_invalid_a2a and is_a2a) or (_aw_is_valid and not is_a2a):
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="attribution_window boundary: production gaps on this transport", strict=False
@@ -1070,12 +1084,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"non-boolean", "non_boolean", "string 'true'"},
                 "include_package_daily_breakdown boundary: non-boolean validation not implemented",
             ),
-            # media_buy_resolution: buyer_refs, partial, zero fail on all transports
+            # media_buy_resolution: partial still fails on all transports
+            # Graduated: "buyer_refs only" and "zero resolution" (all 4 transports pass)
             # Graduated: "empty array" passes on impl/mcp/rest (only a2a fails)
             # Clean-pass: media_buy_ids only, both provided, neither provided
             (
                 "T-UC-004-boundary-resolution",
-                {"buyer_refs only", "partial resolution", "zero resolution"},
+                {"partial resolution"},
                 "media_buy_resolution boundary: production gaps on some transports",
             ),
             # Graduated: status_filter "not in AdCP enum" passes on impl+rest,
@@ -1147,15 +1162,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004 partition scenarios: adcp 3.10 changed schema validation behavior.
         # Partition tests exercise valid/invalid value ranges per field.
         # strict=False: some partition values pass, others fail depending on schema version.
-        _UC004_PARTITION_TAGS = {
-            # Graduated (all 4 transports pass with strong assertions):
-            # T-UC-004-partition-reporting-dims, T-UC-004-partition-attribution,
-            # T-UC-004-partition-daily-breakdown, T-UC-004-partition-account,
-            # T-UC-004-partition-sampling, T-UC-004-partition-status-filter,
-            # T-UC-004-partition-date-range, T-UC-004-partition-resolution,
-            # T-UC-004-partition-ownership
-            "T-UC-004-partition-credentials",
-        }
+        _UC004_PARTITION_TAGS: set[str] = set()
+        # Graduated (all 4 transports pass with strong assertions):
+        # T-UC-004-partition-reporting-dims, T-UC-004-partition-attribution,
+        # T-UC-004-partition-daily-breakdown, T-UC-004-partition-account,
+        # T-UC-004-partition-sampling, T-UC-004-partition-status-filter,
+        # T-UC-004-partition-date-range, T-UC-004-partition-resolution,
+        # T-UC-004-partition-ownership
+        # Graduated: T-UC-004-partition-credentials (transport-aware selective below)
         if marker_names & _UC004_PARTITION_TAGS:
             item.add_marker(
                 pytest.mark.xfail(reason="partition validation behavior varies with adcp schema version", strict=False)
@@ -1222,6 +1236,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 if not substrings or any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
+
+        # Graduated: T-UC-004-partition-credentials — impl passes invalid examples,
+        # rest passes valid examples. A2A and MCP still fail on all examples.
+        if "T-UC-004-partition-credentials" in marker_names:
+            _pcred_invalid = any(s in nodeid for s in ("credentials_too_short", "unknown_scheme"))
+            _pcred_valid = any(s in nodeid for s in ("hmac_sha256", "bearer_auth", "credentials_at_minimum"))
+            _pcred_passes = (is_impl and _pcred_invalid) or (is_rest and _pcred_valid)
+            if not _pcred_passes:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="webhook credentials partition: validation gaps on this transport", strict=False
+                    )
+                )
 
         # Graduated: T-UC-004-partition-sampling — "not_provided" passes all transports;
         # valid named methods (random, stratified, recent, failures_only) pass on REST only.
@@ -1763,45 +1790,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # --- UC-011: xfails for spec-production gaps ---
         # FIXME(salesagent-7wan): Production doesn't implement these UC-011 features.
-        _UC011_SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
-            # status filter: only payment_required fails — other statuses work fine
-            (
-                "T-UC-011-list-status-filter",
-                {"payment_required"},
-                "payment_required status not mapped in production — filter returns empty",
-            ),
-            # Graduated sync_accounts variant (rczc): only list_accounts still fails
-            (
-                "T-UC-011-ext-g-echo",
-                {"list_accounts"},
-                "context echo not implemented in list_accounts response",
-            ),
-        ]
-        for tag, substrings, reason in _UC011_SELECTIVE_XFAIL:
-            if tag in marker_names:
-                if any(s in nodeid for s in substrings):
-                    item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-                break
+        # Graduated: T-UC-011-list-status-filter payment_required (all 4 transports pass — status now mapped)
+        # Graduated: T-UC-011-ext-g-echo list_accounts (all 4 transports pass — context echo implemented)
 
         # Graduated: no-token/no-principal scenarios now pass after Gherkin
         # correction to AUTH_REQUIRED (commit 13b4ca8d). Production returns
         # AUTH_REQUIRED on rest/e2e_rest, matching the corrected Gherkin.
         # Graduated: expired-token also passes — AUTH_TOKEN_INVALID matches.
 
-        _UC011_XFAIL_TAGS: dict[str, str] = {
-            # deactivation scoping: production doesn't scope deactivation to authenticated agent
-            "T-UC-011-ext-f-scoped": "deactivation not scoped to authenticated agent — production applies globally",
-            # Graduated: T-UC-011-ext-g-echo sync_accounts variant (rczc: context echo works for sync)
-            # list_accounts variant still fails — moved to _UC011_SELECTIVE_XFAIL
-            "T-UC-011-ext-g-echo-error": "context echo not implemented in sync_accounts error response",
-            # validation: production returns Pydantic ValidationError without error_code field
-            "T-UC-011-sync-missing-brand": "missing brand domain returns raw ValidationError, not structured error_code",
-            "T-UC-011-sync-missing-operator": "missing operator returns raw ValidationError, not structured error_code",
-        }
-        for tag, reason in _UC011_XFAIL_TAGS.items():
-            if tag in marker_names:
-                item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-                break
+        # Graduated: T-UC-011-ext-g-echo-error (all 4 transports pass — context echo now works in error response)
+        # Graduated: T-UC-011-sync-missing-brand (all 4 transports pass — ValidationError now structured)
+        # Graduated: T-UC-011-sync-missing-operator (all 4 transports pass — ValidationError now structured)
+        # Graduated: T-UC-011-ext-f-scoped impl/mcp/rest (only a2a still fails — narrowed below)
+        if "T-UC-011-ext-f-scoped" in marker_names and is_a2a:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="deactivation scoping: a2a transport still applies globally",
+                    strict=False,
+                )
+            )
 
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they
