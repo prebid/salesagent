@@ -80,8 +80,9 @@ class TestMCPErrorShapes:
         assert "Identity is required" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_not_found_principal_returns_error_response(self):
-        """MCP _create_media_buy_impl returns error response for non-existent principal."""
+    async def test_not_found_principal_raises_auth_error(self):
+        """MCP _create_media_buy_impl raises AdCPAuthenticationError for non-existent principal."""
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
@@ -106,15 +107,8 @@ class TestMCPErrorShapes:
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            result = await _create_media_buy_impl(req=req, identity=identity)
-
-        # Should return a CreateMediaBuyResult with error response
-        assert hasattr(result, "response")
-        response = result.response
-        assert hasattr(response, "errors")
-        assert response.errors is not None
-        assert len(response.errors) > 0
-        assert response.errors[0].code == "AUTH_REQUIRED"
+            with pytest.raises(AdCPAuthenticationError, match="nonexistent"):
+                await _create_media_buy_impl(req=req, identity=identity)
 
 
 class TestA2AErrorShapes:
@@ -415,11 +409,13 @@ class TestCrossTransportErrorConsistency:
 
     @pytest.mark.asyncio
     async def test_nonexistent_principal_error_consistent(self):
-        """Both transports handle non-existent principal the same way.
+        """Both transports handle non-existent principal via the same typed AdCPAuthenticationError.
 
-        The _create_media_buy_impl function returns a CreateMediaBuyError when
-        principal is not found. This result flows through both transports.
+        The _create_media_buy_impl function raises AdCPAuthenticationError when
+        principal is not found; the boundary translator on each transport serializes
+        the same two-layer envelope.
         """
+        from src.core.exceptions import AdCPAuthenticationError, build_two_layer_error_envelope
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
@@ -444,25 +440,15 @@ class TestCrossTransportErrorConsistency:
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
             patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
         ):
-            # Shared impl returns the same result regardless of transport
-            result = await _create_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPAuthenticationError, match="ghost_principal") as exc_info:
+                await _create_media_buy_impl(req=req, identity=identity)
 
-        # The result contains an error response with authentication_error code
-        response = result.response
-        assert hasattr(response, "errors")
-        assert response.errors is not None
-        assert len(response.errors) > 0
-        error = response.errors[0]
-
-        assert error.code == "AUTH_REQUIRED"
-        assert "not found" in error.message.lower()
-
-        # When this flows through A2A's _serialize_for_a2a, it becomes:
-        serialized = AdCPRequestHandler._serialize_for_a2a(response)
-        assert serialized["success"] is False, "Serialized response must have success=False"
-        assert "errors" in serialized
-        assert len(serialized["errors"]) > 0
-        assert serialized["errors"][0]["code"] == "AUTH_REQUIRED"
+        # The boundary translator (called by every transport wrapper) produces
+        # the same two-layer envelope for this typed exception.
+        envelope = build_two_layer_error_envelope(exc_info.value)
+        assert envelope["adcp_error"]["code"] == "AUTH_REQUIRED"
+        assert envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+        assert "not found" in envelope["adcp_error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_unknown_skill_only_affects_a2a(self):
@@ -555,11 +541,13 @@ class TestMCPRecoveryInErrorResponses:
     @pytest.mark.parametrize(
         "exc_class,msg,expected_code,expected_recovery",
         [
-            ("AdCPError", "internal error", "INTERNAL_ERROR", "terminal"),
+            # INTERNAL_ERROR and NOT_FOUND are INTERNAL_CODES; the boundary
+            # translator maps them to STANDARD_ERROR_CODES at wire emission.
+            ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
             ("AdCPAuthenticationError", "bad token", "AUTH_REQUIRED", "terminal"),
             ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
-            ("AdCPNotFoundError", "gone", "NOT_FOUND", "terminal"),
+            ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
             ("AdCPGoneError", "expired", "INVALID_STATE", "terminal"),
             ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),
@@ -586,11 +574,20 @@ class TestMCPRecoveryInErrorResponses:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
+        from src.core.tool_error_logging import AdCPToolError
+
         tool_error = exc_info.value
-        assert tool_error.args[0] == expected_code
-        assert tool_error.args[1] == msg
-        assert len(tool_error.args) >= 3, f"ToolError for {exc_class} must have 3 args (code, msg, recovery)"
-        assert tool_error.args[2] == expected_recovery
+        assert isinstance(
+            tool_error, AdCPToolError
+        ), f"MCP boundary must raise AdCPToolError for {exc_class}, got {type(tool_error).__name__}"
+        err = tool_error.envelope["errors"][0]
+        assert err["code"] == expected_code, f"{exc_class}: code={err['code']!r}, expected {expected_code!r}"
+        assert err["message"] == msg, f"{exc_class}: message={err['message']!r}, expected {msg!r}"
+        assert (
+            err["recovery"] == expected_recovery
+        ), f"{exc_class}: recovery={err['recovery']!r}, expected {expected_recovery!r}"
+        # adcp_error envelope-level mirror also present
+        assert tool_error.envelope["adcp_error"]["code"] == expected_code
 
 
 # ---------------------------------------------------------------------------
@@ -740,6 +737,14 @@ class TestErrorCodeVocabularyConsistency:
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
         "CONFIGURATION_ERROR",  # Internal only: server config broken
+        # SDK standard codes added by the error-emission-architecture substrate.
+        "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
+        "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
+        "CREATIVE_REJECTED",  # SDK standard: AdCPCreativeRejectedError
+        "BUDGET_EXCEEDED",  # SDK standard: AdCPBudgetExceededError
+        "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
+        "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
+        "PRODUCT_UNAVAILABLE",  # SDK standard: AdCPProductUnavailableError
     }
 
     def test_all_exception_error_codes_are_canonical(self):

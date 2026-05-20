@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import AdCPConflictError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -77,23 +78,20 @@ class TestDuplicateProductValidation:
             start_time = datetime.now(UTC) + timedelta(hours=1)  # 1 hour in the future
             end_time = start_time + timedelta(days=7)
 
-            # Should return error response about duplicate products
+            # Should raise AdCPConflictError about duplicate products
             req = CreateMediaBuyRequest(
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
             )
-            result, _ = await _create_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPConflictError, match="prod_test_1") as exc_info:
+                await _create_media_buy_impl(req=req, identity=identity)
 
-            # Verify response contains error about duplicate products
-            assert result.errors is not None and len(result.errors) > 0, f"Expected errors in response, got: {result}"
-            error_msg = result.errors[0].message
-            assert "duplicate" in error_msg.lower(), f"Error should mention 'duplicate': {error_msg}"
-            assert "prod_test_1" in error_msg, f"Error should mention 'prod_test_1': {error_msg}"
-            assert "each product can only be used once" in error_msg.lower(), (
-                f"Error should say 'each product can only be used once': {error_msg}"
-            )
+            error_msg = str(exc_info.value).lower()
+            assert "duplicate" in error_msg, f"Error should mention 'duplicate': {error_msg}"
+            phrase = "each product can only be used once"
+            assert phrase in error_msg, f"Error should say '{phrase}': {error_msg}"
 
     @pytest.mark.asyncio
     async def test_multiple_duplicate_products_all_listed(self, integration_db):
@@ -156,18 +154,20 @@ class TestDuplicateProductValidation:
             start_time = datetime.now(UTC) + timedelta(hours=1)  # 1 hour in the future
             end_time = start_time + timedelta(days=7)
 
-            # Should return error response listing both duplicate products
+            # Should raise AdCPConflictError listing both duplicate products
             req = CreateMediaBuyRequest(
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
             )
-            result, _ = await _create_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(
+                AdCPConflictError,
+                match=r"prod_test_1.*prod_test_2|prod_test_2.*prod_test_1",
+            ) as exc_info:
+                await _create_media_buy_impl(req=req, identity=identity)
 
-            # Verify both duplicate products are mentioned
-            assert result.errors is not None and len(result.errors) > 0, f"Expected errors in response, got: {result}"
-            error_msg = result.errors[0].message
+            error_msg = str(exc_info.value)
             assert "prod_test_1" in error_msg
             assert "prod_test_2" in error_msg
 

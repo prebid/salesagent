@@ -7,9 +7,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastmcp.server.context import Context
 
-from src.core.schemas import UpdateMediaBuyError
+from src.core.exceptions import AdCPBudgetExceededError, AdCPBudgetTooLowError
 from src.core.tools.media_buy_update import update_media_buy, update_media_buy_raw
 
 MODULE = "src.core.tools.media_buy_update"
@@ -88,16 +89,13 @@ def test_a2a_wrapper_rejects_oversized_campaign_budget():
     )
 
     with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
-        result = update_media_buy_raw(
-            media_buy_id="mb_transport",
-            budget=888_888_888.0,
-            currency="USD",
-            identity=identity,
-        )
-
-    assert isinstance(result, UpdateMediaBuyError)
-    assert result.errors
-    assert result.errors[0].code == "BUDGET_EXCEEDED"
+        with pytest.raises(AdCPBudgetExceededError):
+            update_media_buy_raw(
+                media_buy_id="mb_transport",
+                budget=888_888_888.0,
+                currency="USD",
+                identity=identity,
+            )
 
 
 def test_a2a_wrapper_rejects_package_budget_below_minimum():
@@ -111,15 +109,12 @@ def test_a2a_wrapper_rejects_package_budget_below_minimum():
     )
 
     with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
-        result = update_media_buy_raw(
-            media_buy_id="mb_transport",
-            packages=[{"package_id": "pkg-1", "budget": 50.0}],
-            identity=identity,
-        )
-
-    assert isinstance(result, UpdateMediaBuyError)
-    assert result.errors
-    assert result.errors[0].code == "BUDGET_TOO_LOW"
+        with pytest.raises(AdCPBudgetTooLowError):
+            update_media_buy_raw(
+                media_buy_id="mb_transport",
+                packages=[{"package_id": "pkg-1", "budget": 50.0}],
+                identity=identity,
+            )
 
 
 def test_mcp_wrapper_preserves_existing_currency_for_float_budget():

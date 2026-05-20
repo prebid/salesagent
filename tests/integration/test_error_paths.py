@@ -32,8 +32,7 @@ from src.core.database.models import CurrencyLimit
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
-from src.core.exceptions import AdCPValidationError
-from src.core.schemas import CreateMediaBuyError, Error
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
 from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request_dict
@@ -144,10 +143,10 @@ class TestCreateMediaBuyErrorPaths:
             session.commit()
 
     async def test_missing_principal_returns_authentication_error(self, test_tenant_minimal):
-        """Test that missing principal returns Error response with authentication_error code.
+        """Test that missing principal raises AdCPAuthenticationError.
 
-        This tests line 3159 in main.py where Error(code="AUTH_REQUIRED") is used.
-        Previously this would cause NameError because Error wasn't imported.
+        After the error-emission architecture migration, _impl functions raise
+        typed AdCPError subclasses; the boundary translator builds the spec-compliant envelope.
         """
         identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
@@ -158,45 +157,26 @@ class TestCreateMediaBuyErrorPaths:
         future_start = datetime.now(UTC) + timedelta(days=1)
         future_end = future_start + timedelta(days=7)
 
-        # This should return error response, not raise NameError
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            context={"trace_id": "auth-missing-principal"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=future_start.isoformat(),
-            end_time=future_end.isoformat(),
-            identity=identity,
-        )
-
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        # Verify error details
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "AUTH_REQUIRED"
-        assert "principal" in error.message.lower() or "not found" in error.message.lower()
-        # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
-        assert response.context.trace_id == "auth-missing-principal"
+        # _impl raises typed exception; boundary translator builds envelope.
+        with pytest.raises(AdCPAuthenticationError, match="Principal.*not found"):
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                context={"trace_id": "auth-missing-principal"},
+                packages=[
+                    create_test_package_request_dict(
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                start_time=future_start.isoformat(),
+                end_time=future_end.isoformat(),
+                identity=identity,
+            )
 
     async def test_start_time_in_past_returns_validation_error(self, test_tenant_with_principal):
-        """Test that start_time in past returns Error response with validation_error code.
-
-        This tests line 3147 in main.py where Error(code="VALIDATION_ERROR") is used
-        in the ValueError exception handler.
-        """
+        """Test that start_time in past raises AdCPValidationError."""
         identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
@@ -206,41 +186,25 @@ class TestCreateMediaBuyErrorPaths:
         past_start = datetime.now(UTC) - timedelta(days=1)  # In the past!
         past_end = past_start + timedelta(days=7)
 
-        # This should return error response for past start time
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            context={"trace_id": "past-start"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=past_start.isoformat(),
-            end_time=past_end.isoformat(),
-            identity=identity,
-        )
-
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        # Verify error details
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "VALIDATION_ERROR"
-        # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
-        assert response.context.trace_id == "past-start"
-        assert "past" in error.message.lower() or "start" in error.message.lower()
+        with pytest.raises(AdCPValidationError, match="(?i)past|Invalid start time"):
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                context={"trace_id": "past-start"},
+                packages=[
+                    create_test_package_request_dict(
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                start_time=past_start.isoformat(),
+                end_time=past_end.isoformat(),
+                identity=identity,
+            )
 
     async def test_end_time_before_start_returns_validation_error(self, test_tenant_with_principal):
-        """Test that end_time before start_time returns Error response."""
+        """Test that end_time before start_time raises AdCPValidationError."""
         identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
@@ -250,33 +214,21 @@ class TestCreateMediaBuyErrorPaths:
         start = datetime.now(UTC) + timedelta(days=7)
         end = start - timedelta(days=1)  # Before start!
 
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=start.isoformat(),
-            end_time=end.isoformat(),
-            identity=identity,
-        )
-
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "VALIDATION_ERROR"
-        assert "end" in error.message.lower() or "after" in error.message.lower()
+        with pytest.raises(AdCPValidationError, match="(?i)end|after"):
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                packages=[
+                    create_test_package_request_dict(
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                start_time=start.isoformat(),
+                end_time=end.isoformat(),
+                identity=identity,
+            )
 
     async def test_negative_budget_raises_tool_error(self, test_tenant_with_principal):
         """Test that negative budget raises a validation error during Pydantic validation.
@@ -316,7 +268,10 @@ class TestCreateMediaBuyErrorPaths:
         assert "greater than or equal to 0" in error_message.lower()
 
     async def test_missing_packages_returns_validation_error(self, test_tenant_with_principal):
-        """Test that missing packages returns Error response."""
+        """Test that empty packages raises AdCPValidationError.
+
+        Empty packages → budget=0 path → validation error.
+        """
         identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
@@ -326,27 +281,15 @@ class TestCreateMediaBuyErrorPaths:
         future_start = datetime.now(UTC) + timedelta(days=1)
         future_end = future_start + timedelta(days=7)
 
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            packages=[],  # Empty packages!
-            start_time=future_start.isoformat(),
-            end_time=future_end.isoformat(),
-            identity=identity,
-        )
-
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        # Should be validation error or similar
-        assert error.code in ["VALIDATION_ERROR", "invalid_request"]
+        with pytest.raises(AdCPValidationError, match="(?i)budget|at least one"):
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                packages=[],  # Empty packages!
+                start_time=future_start.isoformat(),
+                end_time=future_end.isoformat(),
+                identity=identity,
+            )
 
 
 @pytest.mark.integration
@@ -478,12 +421,14 @@ class TestImportValidation:
 class TestRecoveryFieldInErrorResponses:
     """Verify recovery field appears in REST error responses via the exception handler.
 
-    The REST boundary uses AdCPError.to_dict() which includes recovery.
-    These tests confirm the full chain: AdCPError raised -> exception handler -> JSON body.
+    The REST boundary now serializes the AdCP spec 3.0.6 two-layer envelope:
+    recovery lives inside ``adcp_error.recovery`` and ``errors[0].recovery``,
+    not at the top level. These tests confirm the full chain: AdCPError raised
+    -> exception handler -> envelope JSON body.
     """
 
     def test_rest_validation_error_has_correctable_recovery(self):
-        """REST 400 from AdCPValidationError includes recovery='correctable'."""
+        """REST 400 from AdCPValidationError includes recovery='correctable' in both layers."""
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
@@ -499,11 +444,11 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 400
             body = response.json()
-            assert "recovery" in body, "REST error response must include 'recovery' field"
-            assert body["recovery"] == "correctable"
+            assert body["adcp_error"]["recovery"] == "correctable"
+            assert body["errors"][0]["recovery"] == "correctable"
 
     def test_rest_adapter_error_has_transient_recovery(self):
-        """REST 502 from AdCPAdapterError includes recovery='transient'."""
+        """REST 502 from AdCPAdapterError includes recovery='transient' in both layers."""
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
@@ -519,11 +464,11 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
             body = response.json()
-            assert "recovery" in body, "REST error response must include 'recovery' field"
-            assert body["recovery"] == "transient"
+            assert body["adcp_error"]["recovery"] == "transient"
+            assert body["errors"][0]["recovery"] == "transient"
 
     def test_rest_custom_recovery_override_preserved(self):
-        """Custom recovery= override is preserved through REST boundary."""
+        """Custom recovery= override is preserved through REST boundary (both layers)."""
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
@@ -539,9 +484,10 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             body = response.json()
-            assert body["recovery"] == "transient", (
-                "Custom recovery='transient' must be preserved, not default 'terminal'"
-            )
+            assert (
+                body["adcp_error"]["recovery"] == "transient"
+            ), "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
+            assert body["errors"][0]["recovery"] == "transient"
 
     def test_to_dict_serialization_roundtrip(self):
         """AdCPError.to_dict() -> JSON -> verify recovery is present and correct."""
@@ -564,6 +510,6 @@ class TestRecoveryFieldInErrorResponses:
             # Simulate JSON roundtrip (what happens in real HTTP response)
             json_str = json.dumps(d)
             deserialized = json.loads(json_str)
-            assert deserialized["recovery"] == expected_recovery, (
-                f"{type(exc).__name__}: recovery lost in JSON roundtrip"
-            )
+            assert (
+                deserialized["recovery"] == expected_recovery
+            ), f"{type(exc).__name__}: recovery lost in JSON roundtrip"

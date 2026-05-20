@@ -160,6 +160,23 @@ class TestAdCPReferenceImplementation:
             assert "formats" in formats_data, "Response must contain formats"
             print(f"   ✓ Available formats: {len(formats_data['formats'])}")
 
+            # Pick a display format that the creative agent actually knows about
+            # (matches the working pattern in test_creative_assignment_e2e.py).
+            # Hardcoding e.g. {"agent_url": "https://creative.adcontextprotocol.org/",
+            # "id": "display_300x250"} doesn't work in CI: the public creative agent
+            # at that URL may not respond or have changed its registered format set.
+            picked_format_id = None
+            for fmt in formats_data["formats"]:
+                fmt_id = fmt.get("format_id")
+                fmt_id_str = fmt_id.get("id", "") if isinstance(fmt_id, dict) else ""
+                if "display" in fmt_id_str.lower():
+                    picked_format_id = fmt_id  # full FormatId dict with agent_url + id
+                    break
+
+            if not picked_format_id:
+                pytest.skip("Creative agent returned no display formats; sync_creatives flow not exercisable")
+            print(f"   ✓ Using format: {picked_format_id}")
+
             # ================================================================
             # PHASE 2: Create Media Buy with Webhook (Async Notification)
             # ================================================================
@@ -214,30 +231,45 @@ class TestAdCPReferenceImplementation:
             creative_id_1 = f"creative_{uuid.uuid4().hex[:8]}"
             creative_id_2 = f"creative_{uuid.uuid4().hex[:8]}"
 
+            # Use the format the agent actually knows about (picked from
+            # list_creative_formats in PHASE 1) for both creatives. Using two
+            # different hardcoded sizes risks the second one not being registered.
             creative_1 = build_creative(
                 creative_id=creative_id_1,
-                format_id="display_300x250",
-                name="Nike Air Jordan - Display 300x250",
-                asset_url="https://example.com/nike-jordan-300x250.jpg",
+                format_id=picked_format_id,
+                name="Nike Air Jordan - Display Creative 1",
+                asset_url="https://example.com/nike-jordan-1.jpg",
                 click_through_url="https://nike.com/air-jordan-2025",
             )
 
             creative_2 = build_creative(
                 creative_id=creative_id_2,
-                format_id="display_728x90",
-                name="Nike Air Jordan - Display 728x90",
-                asset_url="https://example.com/nike-jordan-728x90.jpg",
+                format_id=picked_format_id,
+                name="Nike Air Jordan - Display Creative 2",
+                asset_url="https://example.com/nike-jordan-2.jpg",
                 click_through_url="https://nike.com/air-jordan-2025",
             )
 
-            # Sync creatives
-            sync_request = build_sync_creatives_request(creatives=[creative_1, creative_2])
+            # Sync creatives. Use lenient validation: the lifecycle is what we're
+            # testing here, not strict creative-asset schema conformance. Strict mode
+            # rejects creatives whose asset structure doesn't match the format's
+            # asset declaration, which fails silently (response carries 2 entries
+            # with action="failed" and PHASE 7's list_creatives would return empty).
+            sync_request = build_sync_creatives_request(
+                creatives=[creative_1, creative_2],
+                validation_mode="lenient",
+            )
 
             sync_result = await client.call_tool("sync_creatives", sync_request)
             sync_data = parse_tool_result(sync_result)
 
             assert "creatives" in sync_data, "Response must contain creatives (AdCP spec field name)"
             assert len(sync_data["creatives"]) == 2, "Should sync 2 creatives"
+            failed = [c for c in sync_data["creatives"] if c.get("action") == "failed"]
+            assert not failed, (
+                f"sync_creatives reported failures (test would silently miss them at PHASE 7): "
+                f"{[(c.get('creative_id'), c.get('errors')) for c in failed]}"
+            )
             print(f"   ✓ Synced {len(sync_data['creatives'])} creatives")
             print(f"   ✓ Creative IDs: {creative_id_1}, {creative_id_2}")
 
@@ -276,6 +308,9 @@ class TestAdCPReferenceImplementation:
             webhook_server["received"].clear()
 
             # Update budget (AdCP spec: budget is a number, not an object)
+            # push_notification_config.authentication requires `schemes` and
+            # `credentials` (minLength 32) per AdCP spec — mirrors the reporting_webhook
+            # shape used by build_adcp_media_buy_request.
             update_result = await client.call_tool(
                 "update_media_buy",
                 {
@@ -284,7 +319,10 @@ class TestAdCPReferenceImplementation:
                     "context": {"e2e": "update_media_buy"},
                     "push_notification_config": {
                         "url": webhook_server["url"],
-                        "authentication": {"type": "none"},
+                        "authentication": {
+                            "credentials": "test-webhook-bearer-token-at-least-32-chars-long",
+                            "schemes": ["Bearer"],
+                        },
                     },
                 },
             )

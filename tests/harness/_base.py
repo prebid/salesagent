@@ -54,10 +54,17 @@ def _adcp_error_from_code(
         AdCPAdapterError,
         AdCPAuthenticationError,
         AdCPAuthorizationError,
+        AdCPBudgetExceededError,
         AdCPBudgetExhaustedError,
+        AdCPBudgetTooLowError,
+        AdCPCapabilityNotSupportedError,
         AdCPConflictError,
+        AdCPCreativeRejectedError,
         AdCPError,
+        AdCPMediaBuyNotFoundError,
         AdCPNotFoundError,
+        AdCPPackageNotFoundError,
+        AdCPProductUnavailableError,
         AdCPRateLimitError,
         AdCPServiceUnavailableError,
         AdCPValidationError,
@@ -84,6 +91,16 @@ def _adcp_error_from_code(
             AdCPRateLimitError,
             AdCPAdapterError,
             AdCPServiceUnavailableError,
+            # PR 1 substrate subclasses — match on their wire-standard codes so
+            # the harness reconstructs the specific subclass after a roundtrip
+            # (preserves type for isinstance() checks in tests).
+            AdCPMediaBuyNotFoundError,
+            AdCPPackageNotFoundError,
+            AdCPCreativeRejectedError,
+            AdCPBudgetExceededError,
+            AdCPBudgetTooLowError,
+            AdCPCapabilityNotSupportedError,
+            AdCPProductUnavailableError,
         )
     }
     exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
@@ -100,49 +117,60 @@ def _adcp_error_from_code(
 def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
     """Translate FastMCP ToolError back to the corresponding AdCPError.
 
-    The MCP tool wrappers (via with_error_logging) convert AdCPError to
-    ToolError(error_code, message, recovery). When the error travels through
-    the MCP Client, the structured args are serialized to a single string:
-    ``"('VALIDATION_ERROR', 'message', 'correctable')"``.
+    The MCP boundary translator raises ``AdCPToolError`` (single-arg JSON
+    envelope) so FastMCP serializes ``str(exc)`` as the JSON-encoded two-layer
+    error envelope. This unwrapper parses that JSON and reconstructs the
+    matching AdCPError subclass.
 
-    This parses the string back to a tuple via ast.literal_eval and
-    reconstructs the AdCPError subclass.
+    Falls back to legacy tuple-string parsing for any plain ``ToolError`` that
+    might be raised by code paths outside the MCP boundary translator (these
+    are rare and shrink over time per the architecture cleanup).
 
     If the exception is not a ToolError or can't be parsed, returns it unchanged.
     """
     import ast
+    import json
 
     from fastmcp.exceptions import ToolError
 
     if not isinstance(exc, ToolError):
         return exc
 
-    # ToolError from Client has a single string arg containing the repr'd tuple.
     error_str = str(exc)
 
-    # Try to parse as a Python tuple: ('CODE', 'message', 'recovery', '{"details": ...}')
+    # New shape: single-arg JSON envelope `{"adcp_error": {...}, "errors": [...]}`.
+    try:
+        envelope = json.loads(error_str)
+        if isinstance(envelope, dict) and isinstance(envelope.get("errors"), list) and envelope["errors"]:
+            err = envelope["errors"][0]
+            return _adcp_error_from_code(
+                str(err.get("code", "INTERNAL_ERROR")),
+                str(err.get("message", "")),
+                err.get("recovery"),
+                err.get("details"),
+            )
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Legacy shape (test fixtures that mock ToolError directly):
+    # tuple-stringified `('CODE', 'message', 'recovery', '{"details": ...}')`.
     try:
         parsed = ast.literal_eval(error_str)
         if isinstance(parsed, tuple) and len(parsed) >= 2:
             error_code = str(parsed[0])
             message = str(parsed[1])
             recovery = str(parsed[2]) if len(parsed) > 2 else None
-
-            # 4th element is JSON-serialized details dict (if present)
             details = None
             if len(parsed) > 3 and parsed[3] is not None:
-                import json
-
                 try:
                     details = json.loads(str(parsed[3]))
                 except (json.JSONDecodeError, TypeError):
                     pass
-
             return _adcp_error_from_code(error_code, message, recovery, details)
     except (ValueError, SyntaxError):
         pass
 
-    # Fallback: try extract_error_info (handles direct ToolError construction)
+    # Fallback: try extract_error_info (handles ToolError("message") single-arg form)
     from src.core.tool_error_logging import extract_error_info
 
     error_code, message, recovery = extract_error_info(exc)
@@ -156,8 +184,9 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     """Translate a2a A2AError back to the corresponding AdCPError.
 
     The A2A handler wraps AdCPError → A2AError (via _adcp_to_a2a_error).
-    This reverses that translation so callers can ``pytest.raises(AdCPAuthenticationError)``
-    instead of catching the transport-level wrapper.
+    The ``data`` field now carries the full two-layer envelope plus
+    backward-compat ``error_code`` / ``recovery`` top-level keys. This
+    unwrapper checks the envelope first, then falls back to legacy keys.
 
     If the exception is not a A2AError or lacks enough info, returns it unchanged.
     """
@@ -171,8 +200,19 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     message = getattr(exc, "message", str(exc))
     data = getattr(exc, "data", None) or {}
 
-    # If _adcp_to_a2a_error stored the error_code, reconstruct the exact subclass.
-    error_code = data.get("error_code")
+    # Prefer the spec two-layer envelope embedded in data.
+    error_code = None
+    if isinstance(data, dict):
+        adcp_err = data.get("adcp_error")
+        if isinstance(adcp_err, dict):
+            error_code = adcp_err.get("code")
+        if not error_code:
+            errors = data.get("errors")
+            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                error_code = errors[0].get("code")
+        # Backward-compat: top-level error_code key for tests that pre-date the envelope.
+        if not error_code:
+            error_code = data.get("error_code")
     if error_code:
         return _adcp_error_from_code(error_code, message, data.get("recovery"))
 
@@ -554,10 +594,11 @@ class BaseTestEnv:
                         # If a third module imports get_http_headers without being
                         # patched, this won't catch it — but at least we verify
                         # the known auth paths were exercised.
-                        assert patched_th.called or patched_mw.called, (
-                            f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
-                        )
+                        assert (
+                            patched_th.called or patched_mw.called
+                        ), f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
                         return response_cls(**result.structured_content)
+
         else:
             # Unit mode: inject identity directly.
             async def _call():
@@ -719,7 +760,27 @@ class BaseTestEnv:
         """
         message = data.get("message", data.get("error", str(data)))
 
-        # Try structured error_code first (same as MCP/A2A unwrappers)
+        # Spec-compliant two-layer envelope first.
+        if isinstance(data, dict):
+            adcp_err = data.get("adcp_error")
+            if isinstance(adcp_err, dict) and adcp_err.get("code"):
+                return _adcp_error_from_code(
+                    str(adcp_err["code"]),
+                    str(adcp_err.get("message", message)),
+                    adcp_err.get("recovery"),
+                    adcp_err.get("details"),
+                )
+            errors = data.get("errors")
+            if isinstance(errors, list) and errors and isinstance(errors[0], dict) and errors[0].get("code"):
+                err = errors[0]
+                return _adcp_error_from_code(
+                    str(err["code"]),
+                    str(err.get("message", message)),
+                    err.get("recovery"),
+                    err.get("details"),
+                )
+
+        # Legacy flat shape: { "error_code": ..., "message": ..., "recovery": ... }
         error_code = data.get("error_code")
         if error_code:
             recovery = data.get("recovery")

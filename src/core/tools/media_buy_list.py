@@ -13,13 +13,13 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, cast
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field, RootModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
@@ -61,7 +61,7 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -253,7 +253,10 @@ async def get_media_buys(
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="get_media_buys request"))
+        # Raise AdCPValidationError so the MCP boundary translator runs the
+        # envelope builder; the prior ToolError raise bypassed it and produced
+        # a tuple-stringified wire response with no adcp_error/errors layers.
+        raise AdCPValidationError(format_validation_error(e, context="get_media_buys request")) from e
 
 
 def get_media_buys_raw(

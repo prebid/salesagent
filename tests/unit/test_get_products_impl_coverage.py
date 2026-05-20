@@ -153,8 +153,10 @@ class TestProductConversionError:
     """
 
     @pytest.mark.asyncio
-    async def test_convert_failure_raises_valueerror_with_product_id(self):
-        """convert_product_model_to_schema raises → ValueError with product_id."""
+    async def test_convert_failure_raises_adapter_error_with_product_id(self):
+        """convert_product_model_to_schema raises → AdCPAdapterError with product_id."""
+        from src.core.exceptions import AdCPAdapterError
+
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
         req = _make_request()
@@ -174,7 +176,7 @@ class TestProductConversionError:
         ):
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(ValueError, match="corrupt-product-42") as exc_info:
+            with pytest.raises(AdCPAdapterError, match="corrupt-product-42") as exc_info:
                 await _get_products_impl(req, identity)
 
             assert "missing required field" in str(exc_info.value)
@@ -182,6 +184,8 @@ class TestProductConversionError:
     @pytest.mark.asyncio
     async def test_convert_failure_is_not_silently_swallowed(self):
         """Unlike get_product_catalog, _get_products_impl must raise on conversion error."""
+        from src.core.exceptions import AdCPAdapterError
+
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
         req = _make_request()
@@ -208,7 +212,7 @@ class TestProductConversionError:
         ):
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(ValueError, match="bad-1"):
+            with pytest.raises(AdCPAdapterError, match="bad-1"):
                 await _get_products_impl(req, identity)
 
 

@@ -155,9 +155,11 @@ class TestSortOrderByName:
         result = _call_impl(formats)
 
         names = [f.name for f in result]
-        assert names == ["Alpha Video", "Display Ad", "Zebra Video"], (
-            f"Results should be sorted alphabetically: {names}"
-        )
+        assert names == [
+            "Alpha Video",
+            "Display Ad",
+            "Zebra Video",
+        ], f"Results should be sorted alphabetically: {names}"
 
 
 # ---------------------------------------------------------------------------
@@ -537,9 +539,9 @@ class TestBroadstreetTemplateAssetParsing:
                 is_standard=False,
             )
             assert fmt.assets, f"Template {tid} must have non-empty assets list"
-            assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(tmpl.get("optional_assets", [])), (
-                f"Template {tid} asset count mismatch"
-            )
+            assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(
+                tmpl.get("optional_assets", [])
+            ), f"Template {tid} asset count mismatch"
 
     def test_asset_type_literals_match_inferred_type(self):
         """Each constructed asset must have asset_type matching the inferred string."""
@@ -556,9 +558,9 @@ class TestBroadstreetTemplateAssetParsing:
             inferred = _infer_asset_type(asset_id)
             assert inferred == expected_type, f"{asset_id}: expected {expected_type}, got {inferred}"
             asset = _make_asset(asset_id, inferred, required=True)
-            assert asset.asset_type == expected_type, (
-                f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
-            )
+            assert (
+                asset.asset_type == expected_type
+            ), f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
 
 
 class TestMCPWrapperStringCoercion:
@@ -736,29 +738,29 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
             assert err.message is not None
 
 
-class TestRegistryCreationFailureReturnsErrors:
-    """UC-005-EXT-C-03: Registry creation failure returns empty formats plus errors.
+class TestRegistryCreationFailureRaisesServiceUnavailable:
+    """UC-005-EXT-C-03: Registry creation failure raises AdCPServiceUnavailableError.
 
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-03)
+    Per AdCP 3.0.6 error-handling: operation-level failures (registry init) raise,
+    so the boundary translator produces a two-layer envelope. Per-item advisory
+    errors (partial-agent failure inside a successful discovery) stay in errors[].
     """
 
-    def test_registry_creation_failure_returns_errors(self):
+    def test_registry_creation_failure_raises(self):
         """Covers: UC-005-EXT-C-03
 
         Given the creative agent registry cannot be initialized,
         when list_creative_formats is called,
-        then the response contains an empty formats array
-        and errors[] describing the infrastructure failure.
+        then AdCPServiceUnavailableError is raised so the boundary translator
+        builds a spec-compliant two-layer envelope.
         """
-        response = _call_impl_raw(
-            formats=[],
-            registry_side_effect=RuntimeError("Cannot connect to agent registry"),
-        )
+        from src.core.exceptions import AdCPServiceUnavailableError
 
-        assert response.formats == []
-        assert response.errors is not None, "Infrastructure failure must be reported in errors[], not swallowed"
-        assert len(response.errors) >= 1
-        assert any("registry" in err.message.lower() for err in response.errors)
+        with pytest.raises(AdCPServiceUnavailableError, match="registry"):
+            _call_impl_raw(
+                formats=[],
+                registry_side_effect=RuntimeError("Cannot connect to agent registry"),
+            )
 
 
 class TestErrorEntriesFollowAdCPSchema:
@@ -770,17 +772,15 @@ class TestErrorEntriesFollowAdCPSchema:
     def test_error_entries_have_code_and_message(self):
         """Covers: UC-005-EXT-C-04
 
-        Given a list_creative_formats response with errors,
+        Given a list_creative_formats response with partial-agent errors,
         when the Buyer inspects the errors[] array,
         then each error has code (string) and message (string) at minimum,
         conforming to error.json schema.
         """
         from adcp.types.generated_poc.core.error import Error
 
-        response = _call_impl_raw(
-            formats=[],
-            registry_side_effect=RuntimeError("Test infrastructure failure"),
-        )
+        agent_errors = [Error(code="AGENT_UNREACHABLE", message="Creative agent at https://x is unreachable")]
+        response = _call_impl_raw(formats=[], errors=agent_errors)
 
         assert response.errors is not None
         for err in response.errors:
@@ -811,9 +811,9 @@ class TestSuccessfulDiscoveryHasNoErrors:
         response = _call_impl_raw(formats)
 
         assert len(response.formats) == 2
-        assert response.errors is None or response.errors == [], (
-            f"Successful discovery must have no errors, got {response.errors}"
-        )
+        assert (
+            response.errors is None or response.errors == []
+        ), f"Successful discovery must have no errors, got {response.errors}"
 
 
 class TestAgentReferralFailureLogsWarning:
@@ -869,6 +869,6 @@ class TestAgentReferralFailureLogsWarning:
 
         # After fix: should log a warning about the referral failure
         warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs), (
-            f"Expected a warning about agent referral failure, got: {warning_msgs}"
-        )
+        assert any(
+            "referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs
+        ), f"Expected a warning about agent referral failure, got: {warning_msgs}"

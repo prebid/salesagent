@@ -111,7 +111,7 @@ class TestPlacementIdsValidation:
         from unittest.mock import MagicMock, Mock, patch
 
         from src.core.resolved_identity import ResolvedIdentity
-        from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
+        from src.core.schemas import UpdateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -207,12 +207,12 @@ class TestPlacementIdsValidation:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
+            import pytest
 
-            assert isinstance(result, UpdateMediaBuyError)
-            assert len(result.errors) == 1
-            assert result.errors[0].code == "VALIDATION_ERROR"
-            assert "invalid_placement" in result.errors[0].message
+            from src.core.exceptions import AdCPValidationError
+
+            with pytest.raises(AdCPValidationError, match="invalid_placement"):
+                _update_media_buy_impl(req=req, identity=identity)
 
     def test_placement_targeting_not_supported_returns_error(self):
         """When product has no placements defined but creative_assignments reference placement_ids,
@@ -220,7 +220,7 @@ class TestPlacementIdsValidation:
         from unittest.mock import MagicMock, Mock, patch
 
         from src.core.resolved_identity import ResolvedIdentity
-        from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
+        from src.core.schemas import UpdateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -307,12 +307,12 @@ class TestPlacementIdsValidation:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
+            import pytest
 
-            assert isinstance(result, UpdateMediaBuyError)
-            assert len(result.errors) == 1
-            assert result.errors[0].code == "UNSUPPORTED_FEATURE"
-            assert "prod_no_placements" in result.errors[0].message
+            from src.core.exceptions import AdCPCapabilityNotSupportedError
+
+            with pytest.raises(AdCPCapabilityNotSupportedError, match="prod_no_placements"):
+                _update_media_buy_impl(req=req, identity=identity)
 
     def test_adcp_package_update_accepts_placement_ids_in_creative_assignments(self):
         """Verify AdCPPackageUpdate accepts placement_ids in creative_assignments."""

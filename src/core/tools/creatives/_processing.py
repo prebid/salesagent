@@ -12,6 +12,7 @@ from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.core.error import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
+from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.validation_helpers import run_async_in_sync_context
@@ -31,7 +32,11 @@ def _failed_sync_result(creative_id: str, error_msg: str) -> SyncCreativeResult:
         action="failed",
         status=None,
         platform_id=None,
-        errors=[AdCPErrorDetail(code="SERVICE_UNAVAILABLE", message=error_msg)],
+        errors=[
+            AdCPErrorDetail(  # noqa: structural-guard — advisory per-creative result in SyncCreativeResult.errors[]
+                code="SERVICE_UNAVAILABLE", message=error_msg
+            )
+        ],
         review_feedback=None,
         assigned_to=None,
         assignment_errors=None,
@@ -196,7 +201,7 @@ def _update_existing_creative(
                             f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
                         )
                         logger.error(f"[sync_creatives] {error_msg}")
-                        raise ValueError(error_msg)
+                        raise AdCPConfigurationError(error_msg)
 
                     # Extract message/brief from assets or inputs
                     message = None
@@ -523,7 +528,7 @@ def _create_new_creative(
                     if not gemini_api_key:
                         error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
                         logger.error(f"[sync_creatives] {error_msg}")
-                        raise ValueError(error_msg)
+                        raise AdCPConfigurationError(error_msg)
 
                     # Extract message/brief from assets or inputs
                     message = None

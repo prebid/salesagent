@@ -6,6 +6,7 @@ to the activity feed and audit logs, giving tenants visibility into failures.
 
 import functools
 import inspect
+import json
 import logging
 from collections.abc import Callable
 from typing import Any, NoReturn
@@ -13,7 +14,32 @@ from typing import Any, NoReturn
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
 
+from src.core.exceptions import (
+    AdCPAuthorizationError,
+    AdCPError,
+    AdCPValidationError,
+    build_two_layer_error_envelope,
+)
+
 logger = logging.getLogger(__name__)
+
+
+class AdCPToolError(ToolError):
+    """MCP boundary ToolError carrying a two-layer AdCP error envelope.
+
+    FastMCP serializes ``raise <ToolError>`` as
+    ``CallToolResult(isError=True, content=[TextContent(text=str(error))])``.
+    With a single ``str`` arg, ``str(self)`` returns the JSON-encoded envelope
+    verbatim, so storyboard runners can ``JSON.parse(content[0].text)`` and
+    read both ``adcp_error.code`` and ``errors[0].code``.
+
+    The envelope is also exposed as ``self.envelope`` so audit logging,
+    activity feed, and REST fallback code can read it without re-parsing.
+    """
+
+    def __init__(self, envelope: dict[str, Any]):
+        self.envelope = envelope
+        super().__init__(json.dumps(envelope))
 
 
 def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]:
@@ -60,9 +86,10 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
 def extract_error_info(error: Exception) -> tuple[str, str, str | None]:
     """Extract error code, message, and recovery hint from an exception.
 
+    For AdCPToolError, reads directly from the carried two-layer envelope.
     For AdCPError, uses the exception's error_code, message, and recovery attributes.
-    For ToolError, attempts to parse structured (code, message, recovery) format.
-    Falls back to using exception type as code and str(error) as message.
+    For plain ToolError, attempts to parse structured (code, message, recovery) format
+    for backward compatibility with code that raises ToolError directly.
 
     Args:
         error: The exception to extract info from
@@ -70,14 +97,15 @@ def extract_error_info(error: Exception) -> tuple[str, str, str | None]:
     Returns:
         Tuple of (error_code, error_message, recovery) where recovery may be None
     """
-    from src.core.exceptions import AdCPError
-
+    if isinstance(error, AdCPToolError):
+        first = error.envelope["errors"][0]
+        return first["code"], first.get("message", ""), first.get("recovery")
     if isinstance(error, AdCPError):
         return error.error_code, error.message, error.recovery
     elif isinstance(error, ToolError):
+        # Plain ToolError raised by other code paths — preserve legacy parsing.
         # ToolError may be constructed as ToolError("CODE", "message", "recovery")
         # or ToolError("CODE", "message") or ToolError("message")
-        # Check if first arg looks like an error code (all caps, no spaces, reasonable length)
         if error.args:
             first_arg = str(error.args[0])
             is_error_code = (
@@ -146,44 +174,29 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
 
 
 def _translate_to_tool_error(error: Exception) -> NoReturn:
-    """Translate typed exceptions to ToolError at the MCP boundary.
+    """Translate typed exceptions to AdCPToolError at the MCP boundary.
 
-    AdCPError, ValueError, and PermissionError are translated to ToolError
-    with appropriate error codes. ToolError and other exceptions are re-raised
-    unchanged.
+    AdCPError → AdCPToolError carrying a two-layer envelope built by
+    ``build_two_layer_error_envelope()``. ValueError and PermissionError are
+    wrapped in synthetic AdCPValidationError / AdCPAuthorizationError so they
+    produce the same envelope shape. Already-translated AdCPToolError and
+    plain ToolError pass through.
 
     This function always raises — it never returns.
     """
-    from src.core.exceptions import AdCPError
-
     if isinstance(error, ToolError):
+        # Includes AdCPToolError — already in wire shape.
         raise
-    elif isinstance(error, AdCPError):
-        # Pack details, field, and suggestion into a single JSON blob so the
-        # MCP round-trip preserves them.  The lowlevel server does
-        # str(exception) which produces a tuple string; the test harness
-        # unwrapper parses this back into a full AdCPError.
-        import json
-
-        extra: dict[str, Any] = {}
-        if error.details:
-            extra["details"] = error.details
-        if error.field:
-            extra["field"] = error.field
-        if error.suggestion:
-            extra["suggestion"] = error.suggestion
-        try:
-            extra_json = json.dumps(extra) if extra else None
-        except (TypeError, ValueError):
-            extra_json = None
-        # Translate non-standard codes to STANDARD_ERROR_CODES at the MCP boundary.
-        raise ToolError(error.wire_error_code, error.message, error.recovery, extra_json) from error
-    elif isinstance(error, ValueError):
-        raise ToolError("VALIDATION_ERROR", str(error)) from error
-    elif isinstance(error, PermissionError):
-        raise ToolError("AUTH_REQUIRED", str(error)) from error
-    else:
-        raise
+    if isinstance(error, AdCPError):
+        envelope = build_two_layer_error_envelope(error)
+        raise AdCPToolError(envelope) from error
+    if isinstance(error, ValueError):
+        synthetic: AdCPError = AdCPValidationError(str(error))
+        raise AdCPToolError(build_two_layer_error_envelope(synthetic)) from error
+    if isinstance(error, PermissionError):
+        synthetic = AdCPAuthorizationError(str(error))
+        raise AdCPToolError(build_two_layer_error_envelope(synthetic)) from error
+    raise
 
 
 def with_error_logging(tool_func: Callable) -> Callable:

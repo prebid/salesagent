@@ -29,7 +29,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPServiceUnavailableError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -131,24 +131,14 @@ def _list_creative_formats_impl(
 
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
 
-    # Decision: docs/design/error-propagation-in-format-discovery.md
-    # Registry creation failure → return empty formats + errors (FD-ERR-03)
     try:
         registry = get_creative_agent_registry()
     except Exception as e:
-        from adcp.types.generated_poc.core.error import Error as AdCPResponseError
-
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
-        return ListCreativeFormatsResponse(
-            formats=[],
-            errors=[
-                AdCPResponseError(
-                    code="SERVICE_UNAVAILABLE",
-                    message=f"Creative agent registry initialization failed: {e}",
-                )
-            ],
+        raise AdCPServiceUnavailableError(
+            f"Creative agent registry initialization failed: {e}",
             context=req.context,
-        )
+        ) from e
 
     # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
     try:

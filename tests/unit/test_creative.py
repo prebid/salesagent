@@ -894,7 +894,7 @@ class TestCreativeValidation:
         creative = _make_creative_asset(name="")
         mock_registry = MagicMock()
 
-        with pytest.raises(ValueError, match="Creative name cannot be empty"):
+        with pytest.raises(AdCPValidationError, match="Creative name cannot be empty"):
             _validate_creative_input(creative, mock_registry, "p1")
 
     def test_whitespace_only_name_rejected(self):
@@ -908,7 +908,7 @@ class TestCreativeValidation:
         creative = _make_creative_asset(name="   ")
         mock_registry = MagicMock()
 
-        with pytest.raises(ValueError, match="Creative name cannot be empty"):
+        with pytest.raises(AdCPValidationError, match="Creative name cannot be empty"):
             _validate_creative_input(creative, mock_registry, "p1")
 
     def test_missing_format_id_rejected_at_schema_level(self):
@@ -961,7 +961,7 @@ class TestCreativeValidation:
             "src.core.tools.creatives._validation.run_async_in_sync_context",
             side_effect=ConnectionError("Agent down"),
         ):
-            with pytest.raises(ValueError, match="unreachable"):
+            with pytest.raises(AdCPAdapterError, match="unreachable"):
                 _validate_creative_input(creative, mock_registry, "p1")
 
     def test_unknown_format_raises_with_discovery_hint(self):
@@ -979,7 +979,7 @@ class TestCreativeValidation:
             "src.core.tools.creatives._validation.run_async_in_sync_context",
             return_value=None,  # Format not found
         ):
-            with pytest.raises(ValueError, match="list_creative_formats"):
+            with pytest.raises(AdCPValidationError, match="list_creative_formats"):
                 _validate_creative_input(creative, mock_registry, "p1")
 
 
@@ -2903,12 +2903,12 @@ class TestCreativeWrongBaseClass:
             Creative as ListingCreative,
         )
 
-        assert issubclass(Creative, ListingCreative), (
-            f"Creative must extend the listing Creative (list_creatives_response.Creative), not {Creative.__bases__}"
-        )
-        assert not issubclass(Creative, DeliveryCreative), (
-            "Creative must NOT extend the delivery Creative (get_creative_delivery_response.Creative)"
-        )
+        assert issubclass(
+            Creative, ListingCreative
+        ), f"Creative must extend the listing Creative (list_creatives_response.Creative), not {Creative.__bases__}"
+        assert not issubclass(
+            Creative, DeliveryCreative
+        ), "Creative must NOT extend the delivery Creative (get_creative_delivery_response.Creative)"
 
     def test_list_creatives_response_includes_name(self):
         """name must appear in model_dump() because the listing Creative schema
@@ -3194,9 +3194,9 @@ class TestValidationModeSemantics:
         req = SyncCreativesRequest(creatives=[creative])
         assert req.validation_mode is not None
         # validation_mode is an enum; compare by value
-        assert req.validation_mode.value == "strict", (
-            f"Default validation_mode should be 'strict', got '{req.validation_mode.value}'"
-        )
+        assert (
+            req.validation_mode.value == "strict"
+        ), f"Default validation_mode should be 'strict', got '{req.validation_mode.value}'"
 
 
 # ============================================================================

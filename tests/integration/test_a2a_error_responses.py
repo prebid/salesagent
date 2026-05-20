@@ -209,7 +209,16 @@ class TestA2AErrorPropagation:
         assert "Missing required AdCP parameters" in error["message"]
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
-        """Test that authentication errors include errors field in A2A response."""
+        """Test that authentication errors are translated to A2A InvalidRequestError.
+
+        After the error-emission architecture migration, AdCPAuthenticationError raised by _impl is caught by the
+        A2A boundary translator (_adcp_to_a2a_error) and re-raised as
+        ``a2a.utils.errors.InvalidRequestError`` with an envelope payload that
+        carries the spec-compliant adcp_error/errors[] layers via the
+        ``data`` attribute.
+        """
+        from a2a.utils.errors import InvalidRequestError
+
         # Mock identity with non-existent principal — simulates resolved but invalid principal
         identity = ResolvedIdentity(
             principal_id="nonexistent_principal",
@@ -244,22 +253,19 @@ class TestA2AErrorPropagation:
         message = self.create_message_with_skill("create_media_buy", skill_params)
         params = SendMessageRequest(message=message)
 
-        # Process the message - should return auth error
-        result = await handler.on_message_send(params, ServerCallContext())
+        # Auth error from _impl is now translated to InvalidRequestError at the A2A boundary.
+        with pytest.raises(InvalidRequestError) as exc_info:
+            await handler.on_message_send(params, ServerCallContext())
 
-        # Extract response data from artifact (handles TextPart + DataPart structure)
-        artifact = result.artifacts[0]
-        artifact_data = self.extract_data_from_artifact(artifact)
+        exc = exc_info.value
+        assert "nonexistent_principal" in str(exc) or "not found" in str(exc).lower()
 
-        # CRITICAL ASSERTIONS: Error propagation for auth failures
-        assert artifact_data["success"] is False, "success must be False for auth errors"
-        assert "errors" in artifact_data, "Response must include 'errors' field for auth errors"
-        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
-
-        # Verify error is about authentication
-        error = artifact_data["errors"][0]
-        assert "code" in error, "Error must include code"
-        assert error["code"] == "AUTH_REQUIRED"
+        # The translated error carries the two-layer envelope in `data` so the
+        # spec-compliant adcp_error/errors[] payload reaches the client.
+        assert getattr(exc, "data", None) is not None, "InvalidRequestError must carry the two-layer envelope on .data"
+        envelope = exc.data
+        assert envelope.get("adcp_error", {}).get("code") == "AUTH_REQUIRED"
+        assert envelope.get("errors") and envelope["errors"][0].get("code") == "AUTH_REQUIRED"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
@@ -305,9 +311,9 @@ class TestA2AErrorPropagation:
 
         # CRITICAL ASSERTIONS: Success response
         assert artifact_data["success"] is True, "success must be True for successful operation"
-        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
-            "errors field must be None or empty array for success"
-        )
+        assert (
+            artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0
+        ), "errors field must be None or empty array for success"
         assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
@@ -488,6 +494,6 @@ class TestA2AErrorResponseStructure:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.data["recovery"] == "transient", (
-                "Custom recovery='transient' override must be preserved, not default 'terminal'"
-            )
+            assert (
+                error.data["recovery"] == "transient"
+            ), "Custom recovery='transient' override must be preserved, not default 'terminal'"

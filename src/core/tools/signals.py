@@ -11,7 +11,12 @@ import uuid
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPServiceUnavailableError,
+    AdCPValidationError,
+)
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -254,55 +259,33 @@ async def _activate_signal_impl(
         activation_success = True
         requires_approval = signal_agent_segment_id.startswith("premium_")
 
-        from src.core.schemas import Error
-
         if requires_approval:
-            # Create a human task for approval - return error response
-            errors = [
-                Error(
-                    code="VALIDATION_ERROR",
-                    message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
-                )
-            ]
-            return ActivateSignalResponse(
-                signal_id=signal_agent_segment_id,
-                activation_details=None,
-                errors=errors,
+            raise AdCPValidationError(
+                f"Signal {signal_agent_segment_id} requires manual approval before activation",
                 context=context,
             )
-        elif activation_success:
-            # Success - return activation details
-            decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
-            return ActivateSignalResponse(
-                signal_id=signal_agent_segment_id,
-                activation_details={
-                    "decisioning_platform_segment_id": decisioning_platform_segment_id,
-                    "estimated_activation_duration_minutes": 15.0,
-                    "status": "processing",
-                },
-                errors=None,
-                context=context,
-            )
-        else:
-            # Failure
-            errors = [Error(code="SERVICE_UNAVAILABLE", message="Signal provider unavailable")]
-            return ActivateSignalResponse(
-                signal_id=signal_agent_segment_id,
-                activation_details=None,
-                errors=errors,
-                context=context,
-            )
+        if not activation_success:
+            raise AdCPServiceUnavailableError("Signal provider unavailable", context=context)
 
-    except Exception as e:
-        logger.error(f"Error activating signal {signal_agent_segment_id}: {e}")
-        from src.core.schemas import Error
-
+        decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
         return ActivateSignalResponse(
             signal_id=signal_agent_segment_id,
-            activation_details=None,
-            errors=[Error(code="SERVICE_UNAVAILABLE", message=str(e))],
+            activation_details={
+                "decisioning_platform_segment_id": decisioning_platform_segment_id,
+                "estimated_activation_duration_minutes": 15.0,
+                "status": "processing",
+            },
+            errors=None,
             context=context,
         )
+
+    except AdCPValidationError:
+        raise
+    except AdCPServiceUnavailableError:
+        raise
+    except Exception as e:
+        logger.error(f"Error activating signal {signal_agent_segment_id}: {e}")
+        raise AdCPAdapterError(str(e), context=context) from e
 
 
 async def activate_signal(
