@@ -169,6 +169,7 @@ def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_s
 
 
 @when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
+@when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}"'))
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
     # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
     _call(ctx)
