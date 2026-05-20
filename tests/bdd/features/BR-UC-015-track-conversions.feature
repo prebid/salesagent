@@ -974,7 +974,7 @@ Feature: BR-UC-015 Track Conversions
 
   @T-UC-015-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid event returns real validation error
-    And the request targets a sandbox account
+    Given the request targets a sandbox account
     When the Buyer Agent logs events with missing required event_type
     Then the response should indicate a validation error
     And the error should be a real validation error, not simulated
