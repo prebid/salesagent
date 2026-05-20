@@ -132,8 +132,6 @@ def _list_accounts_impl(
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        from src.core.exceptions import AdCPAuthenticationError
-
         raise AdCPAuthenticationError("Authentication required for list_accounts")
 
     tenant_id = identity.tenant_id
