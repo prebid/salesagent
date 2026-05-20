@@ -1,7 +1,9 @@
 """Unit tests for get_products MCP transport wrapper.
 
-Covers ValidationError/ValueError handling and ToolResult construction.
+Covers AdCPValidationError propagation and ToolResult construction.
 Version compat lives at the transport handler level (parity with A2A).
+The pre-v3 shim + ValidationError translation live in
+``create_get_products_request`` (parity with A2A/REST).
 
 These test the transport boundary layer, NOT business logic.
 _get_products_impl is always mocked.
@@ -10,7 +12,6 @@ _get_products_impl is always mocked.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError
 
@@ -19,37 +20,15 @@ class TestGetProductsMCPWrapper:
     """Test the MCP get_products() wrapper function."""
 
     @pytest.mark.asyncio
-    async def test_validation_error_raises_adcp_validation_error(self):
-        """ValidationError from create_get_products_request → AdCPValidationError."""
+    async def test_validation_error_propagates_from_helper(self):
+        """AdCPValidationError from create_get_products_request propagates."""
         with patch(
             "src.core.tools.products.create_get_products_request",
-            side_effect=ValidationError.from_exception_data(
-                title="GetProductsRequest",
-                line_errors=[
-                    {
-                        "type": "missing",
-                        "loc": ("brief",),
-                        "msg": "Field required",
-                        "input": {},
-                    }
-                ],
-            ),
+            side_effect=AdCPValidationError("schema invariant failed"),
         ):
             from src.core.tools.products import get_products
 
-            with pytest.raises(AdCPValidationError):
-                await get_products(brief="test", ctx=None)
-
-    @pytest.mark.asyncio
-    async def test_value_error_raises_adcp_validation_error(self):
-        """ValueError from create_get_products_request → AdCPValidationError."""
-        with patch(
-            "src.core.tools.products.create_get_products_request",
-            side_effect=ValueError("invalid filter combination"),
-        ):
-            from src.core.tools.products import get_products
-
-            with pytest.raises(AdCPValidationError, match="Invalid get_products request"):
+            with pytest.raises(AdCPValidationError, match="schema invariant failed"):
                 await get_products(brief="test", ctx=None)
 
     @pytest.mark.asyncio
@@ -62,7 +41,7 @@ class TestGetProductsMCPWrapper:
         mock_req = MagicMock()
 
         with (
-            patch("src.core.tools.products.create_get_products_request", return_value=mock_req),
+            patch("src.core.tools.products.create_get_products_request", return_value=(mock_req, False)),
             patch(
                 "src.core.tools.products._get_products_impl",
                 new_callable=AsyncMock,
@@ -86,7 +65,7 @@ class TestGetProductsMCPWrapper:
         mock_req = MagicMock()
 
         with (
-            patch("src.core.tools.products.create_get_products_request", return_value=mock_req),
+            patch("src.core.tools.products.create_get_products_request", return_value=(mock_req, False)),
             patch(
                 "src.core.tools.products._get_products_impl",
                 new_callable=AsyncMock,

@@ -63,7 +63,8 @@ def _make_request(brief="test brief", filters=None, buying_mode=None):
         buying_mode = "brief" if (brief and brief.strip()) else "wholesale"
     if buying_mode in {"wholesale", "refine"}:
         brief = ""
-    return create_get_products_request(brief=brief, filters=filters, buying_mode=buying_mode)
+    req, _ = create_get_products_request(brief=brief, filters=filters, buying_mode=buying_mode)
+    return req
 
 
 def _mock_uow_with_products(products):

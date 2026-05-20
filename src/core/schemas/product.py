@@ -23,6 +23,7 @@ from src.core.schemas._base import (
     SalesAgentBaseModel,
     _upgrade_legacy_format_ids,
 )
+from src.core.validation_helpers import resolve_enum_value
 
 
 class ProductCard(LibraryProductCard):
@@ -271,8 +272,9 @@ class GetProductsRequest(LibraryGetProductsRequest):
         """
         # The library types buying_mode as the BuyingMode enum; normalize to a plain string
         # so the rule comparisons below stay readable.
-        raw_mode: Any = self.buying_mode
-        mode = raw_mode.value if hasattr(raw_mode, "value") else raw_mode
+        if self.buying_mode is None:
+            raise ValueError("buying_mode must be one of 'brief', 'wholesale', 'refine'; got None")
+        mode = resolve_enum_value(self.buying_mode)
 
         if mode not in {"brief", "wholesale", "refine"}:
             raise ValueError(f"buying_mode must be one of 'brief', 'wholesale', 'refine'; got {mode!r}")

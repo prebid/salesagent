@@ -18,8 +18,12 @@ from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.product_filters import ProductFilters
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
+from pydantic import ValidationError
 
+from src.core.exceptions import AdCPValidationError
+from src.core.product_conversion import resolve_pre_v3_buying_mode
 from src.core.schemas.product import GetProductsRequest
+from src.core.validation_helpers import format_validation_error
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
@@ -106,8 +110,14 @@ def create_get_products_request(
     context: dict[str, Any] | ContextObject | None = None,
     buying_mode: str | None = None,
     refine: list[dict[str, Any]] | None = None,
-) -> GetProductsRequest:
+    adcp_version: str | None = None,
+) -> tuple[GetProductsRequest, bool]:
     """Create GetProductsRequest aligned with the AdCP 3.0 three-mode contract.
+
+    Single source of truth for the pre-v3 buying_mode shim — transport
+    wrappers (MCP, A2A, REST) only forward client params; the shim and the
+    schema-validation translation live here so all three transports observe
+    identical behavior (transport parity).
 
     Args:
         brief: Natural language description of campaign requirements (required when
@@ -117,22 +127,32 @@ def create_get_products_request(
         filters: Structured filters for product discovery (dict or ProductFilters)
         property_list: Property list reference for filtering by buyer's property list
         context: Application-level context (dict or ContextObject)
-        buying_mode: Buyer intent — 'brief' / 'wholesale' / 'refine'. Required for v3
-            clients (the transport wrapper is responsible for defaulting pre-v3 clients
-            to 'brief' before calling this helper).
+        buying_mode: Buyer intent — 'brief' / 'wholesale' / 'refine'. May be None for
+            pre-v3 clients; the helper applies the pre-v3 default shim internally.
         refine: Array of change requests for refining a previous get_products response;
             only valid when buying_mode='refine'.
+        adcp_version: Client-declared AdCP version string. Used to decide whether the
+            pre-v3 default shim should apply (pre-v3 + no buying_mode → defaulted).
 
     Returns:
-        GetProductsRequest
+        Tuple of ``(GetProductsRequest, pre_v3_defaulted)``. The flag is True iff the
+        pre-v3 shim defaulted ``buying_mode``; transport callers thread it into
+        ``_get_products_impl`` for the audit log.
+
+    Raises:
+        AdCPValidationError: when Pydantic schema validation rejects the request, or
+            when a helper-level invariant fails (translated from ValidationError /
+            ValueError so transport wrappers see one exception type).
 
     Examples:
-        >>> req = create_get_products_request(
+        >>> req, defaulted = create_get_products_request(
         ...     buying_mode="brief",
         ...     brand=BrandReference(domain="acme.com"),
-        ...     brief="Display ads"
+        ...     brief="Display ads",
         ... )
     """
+    resolved_mode, pre_v3_defaulted = resolve_pre_v3_buying_mode(buying_mode, adcp_version, brief)
+
     # Handle filters - can be dict, ProductFilters, or None
     filters_obj: ProductFilters | None = None
     if filters is not None:
@@ -141,15 +161,22 @@ def create_get_products_request(
         elif isinstance(filters, dict):
             filters_obj = ProductFilters(**filters)
 
-    return GetProductsRequest(
-        brand=to_brand_reference(brand),
-        brief=brief or None,
-        filters=filters_obj,
-        property_list=to_property_list_reference(property_list),
-        context=to_context_object(context),
-        buying_mode=buying_mode,
-        refine=refine,
-    )
+    try:
+        req = GetProductsRequest(
+            brand=to_brand_reference(brand),
+            brief=brief or None,
+            filters=filters_obj,
+            property_list=to_property_list_reference(property_list),
+            context=to_context_object(context),
+            buying_mode=resolved_mode,
+            refine=refine,
+        )
+    except ValidationError as e:
+        raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
+    except ValueError as e:
+        raise AdCPValidationError(f"Invalid get_products request: {e}") from e
+
+    return req, pre_v3_defaulted
 
 
 # Re-export commonly used generated types for convenience

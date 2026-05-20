@@ -21,7 +21,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.tools import accounts as accounts_module
@@ -164,34 +164,22 @@ class SyncAccountsBody(BaseModel):
 
 @router.post("/products")
 async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
-    """Get available products matching the brief (auth-optional discovery skill)."""
-    from src.core.product_conversion import resolve_pre_v3_buying_mode
+    """Get available products matching the brief (auth-optional discovery skill).
 
-    # Apply pre-v3 default shim (mirrors MCP/A2A wrappers; see helper docstring).
-    buying_mode, pre_v3_defaulted = resolve_pre_v3_buying_mode(body.buying_mode, body.adcp_version, body.brief)
-
-    try:
-        req = products_module.create_get_products_request(
-            brief=body.brief,
-            brand=body.brand,
-            filters=body.filters,
-            property_list=body.property_list,
-            context=body.context,
-            buying_mode=buying_mode,
-            refine=body.refine,
-        )
-    except ValidationError as e:
-        # Schema validator (cross-mode invariants) rejected the request.
-        # Translate to a 400 error response with VALIDATION_ERROR code.
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error_code": "VALIDATION_ERROR",
-                "message": str(e),
-                "recovery": "correctable",
-                "details": None,
-            },
-        )
+    Helper owns the pre-v3 shim + ValidationError → AdCPValidationError translation.
+    AdCPValidationError propagates to the FastAPI exception handler in src/app.py
+    which emits the two-layer envelope at 400 — matching MCP/A2A behavior.
+    """
+    req, pre_v3_defaulted = products_module.create_get_products_request(
+        brief=body.brief,
+        brand=body.brand,
+        filters=body.filters,
+        property_list=body.property_list,
+        context=body.context,
+        buying_mode=body.buying_mode,
+        refine=body.refine,
+        adcp_version=body.adcp_version,
+    )
 
     try:
         response = await products_module._get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)

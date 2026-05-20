@@ -286,7 +286,7 @@ class TestCreateGetProductsRequestWithPropertyList:
             list_id="list_1",
             auth_token="token_123",
         )
-        req = create_get_products_request(
+        req, _ = create_get_products_request(
             buying_mode="brief",
             brief="test",
             property_list=ref,
@@ -297,7 +297,7 @@ class TestCreateGetProductsRequestWithPropertyList:
     def test_property_list_none_by_default(self):
         from src.core.schema_helpers import create_get_products_request
 
-        req = create_get_products_request(buying_mode="brief", brief="test")
+        req, _ = create_get_products_request(buying_mode="brief", brief="test")
         assert req.property_list is None
 
 

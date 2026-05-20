@@ -52,9 +52,9 @@ class TestRawFunctionParameterValidation:
         # Verify all should-be-in-helper params are actually in helper
         missing_in_helper = should_be_in_helper - helper_params
 
-        assert not missing_in_helper, (
-            f"get_products_raw has parameters not in helper and not documented as valid: {missing_in_helper}"
-        )
+        assert (
+            not missing_in_helper
+        ), f"get_products_raw has parameters not in helper and not documented as valid: {missing_in_helper}"
 
     def test_all_raw_functions_have_context_parameter(self):
         """All _raw functions should accept a ctx parameter."""
@@ -123,7 +123,16 @@ class TestRawFunctionParameterValidation:
 
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
         # adcp 3.0 buying_mode/refine: added for the three-mode contract.
-        expected_params = ["brief", "brand", "filters", "property_list", "context", "buying_mode", "refine"]
+        expected_params = [
+            "brief",
+            "brand",
+            "filters",
+            "property_list",
+            "context",
+            "buying_mode",
+            "refine",
+            "adcp_version",
+        ]
 
         assert params == expected_params, (
             f"create_get_products_request signature changed!\n"
@@ -154,7 +163,16 @@ class TestRawFunctionParameterValidation:
 
                             # These are the ONLY valid parameters for create_get_products_request
                             # adcp 3.6.0: brand_manifest removed, only 'brand' (BrandReference)
-                            valid_params = {"brief", "brand", "filters"}
+                            valid_params = {
+                                "brief",
+                                "brand",
+                                "filters",
+                                "property_list",
+                                "context",
+                                "buying_mode",
+                                "refine",
+                                "adcp_version",
+                            }
 
                             invalid = passed_params - valid_params
                             assert not invalid, (
@@ -193,7 +211,16 @@ class TestHelperFunctionDocumentation:
         assert "create_get_products_request" in signatures
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
         # adcp 3.0 buying_mode/refine: added for the three-mode contract.
-        expected = ["brief", "brand", "filters", "property_list", "context", "buying_mode", "refine"]
+        expected = [
+            "brief",
+            "brand",
+            "filters",
+            "property_list",
+            "context",
+            "buying_mode",
+            "refine",
+            "adcp_version",
+        ]
         actual = signatures["create_get_products_request"]
         assert actual == expected, (
             f"create_get_products_request signature changed!\n"

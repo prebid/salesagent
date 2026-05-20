@@ -18,7 +18,7 @@ from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.media_buy.get_products_response import RefinementApplied
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import Field, ValidationError
+from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
@@ -32,7 +32,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
-from src.core.validation_helpers import format_validation_error, safe_parse_json_field
+from src.core.validation_helpers import resolve_enum_value, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -207,15 +207,11 @@ async def _get_products_impl(
     """
     start_time = time.time()
 
-    # Resolve effective buying mode. The library marks buying_mode as required and the
-    # _validate_buying_mode_invariants validator on GetProductsRequest enforces the
-    # cross-mode rules (brief/refine presence, mutual exclusion). Both run before _impl.
-    # If buying_mode is missing here, validation was bypassed — that's a programmer error
-    # the wrapper layer should never produce, so fail loudly rather than guess.
-    raw_mode: Any = req.buying_mode
-    mode = raw_mode.value if hasattr(raw_mode, "value") else raw_mode
-    if mode is None:
-        raise AdCPValidationError("buying_mode is missing on the request — schema validator was bypassed")
+    # buying_mode normalization + presence + cross-mode invariants live in
+    # _validate_buying_mode_invariants on GetProductsRequest — it runs on every model
+    # construction (the create_get_products_request helper feeds this path) and raises
+    # before _impl sees the request. Trust that single layer here.
+    mode = resolve_enum_value(req.buying_mode)
 
     # Wholesale and refine modes legitimately omit brief/brand/filters; only brief mode
     # needs a discovery criterion, and the validator already enforces brief presence there.
@@ -923,32 +919,22 @@ async def get_products(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    from src.core.product_conversion import resolve_pre_v3_buying_mode
-
     # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
     if isinstance(brand, str):
         brand = BrandReference(domain=brand)
 
-    # Apply pre-v3 default shim if the client omitted buying_mode (see helper docstring).
-    buying_mode, pre_v3_defaulted = resolve_pre_v3_buying_mode(buying_mode, adcp_version, brief)
-
-    # Build request object for shared implementation
-    try:
-        req = create_get_products_request(
-            brief=brief,
-            brand=brand,
-            filters=filters,
-            property_list=property_list,
-            context=context,
-            buying_mode=buying_mode,
-            refine=refine,
-        )
-
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
-    except ValueError as e:
-        # Convert ValueError from helper to ToolError with clear message
-        raise AdCPValidationError(f"Invalid get_products request: {e}") from e
+    # Helper owns the pre-v3 shim + ValidationError → AdCPValidationError translation
+    # so all three transports (MCP, A2A, REST) observe identical behavior.
+    req, pre_v3_defaulted = create_get_products_request(
+        brief=brief,
+        brand=brand,
+        filters=filters,
+        property_list=property_list,
+        context=context,
+        buying_mode=buying_mode,
+        refine=refine,
+        adcp_version=adcp_version,
+    )
 
     # Read identity pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -995,19 +981,16 @@ async def get_products_raw(
     Returns:
         GetProductsResponse containing matching products
     """
-    from src.core.product_conversion import resolve_pre_v3_buying_mode
-
     # Resolve identity from transport context if not provided
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
 
-    # Apply pre-v3 default shim (mirrors MCP wrapper).
-    buying_mode, pre_v3_defaulted = resolve_pre_v3_buying_mode(buying_mode, adcp_version, brief)
-
-    # Create request object - adcp library validates schema
-    req = create_get_products_request(
+    # Helper owns the pre-v3 shim + ValidationError → AdCPValidationError translation
+    # so MCP / A2A / REST observe identical behavior. AdCPValidationError propagates
+    # to the A2A boundary handler which converts to the wire envelope.
+    req, pre_v3_defaulted = create_get_products_request(
         brief=brief or "",
         brand=brand,
         filters=filters,
@@ -1015,6 +998,7 @@ async def get_products_raw(
         context=context,
         buying_mode=buying_mode,
         refine=refine,
+        adcp_version=adcp_version,
     )
 
     # Call shared implementation
