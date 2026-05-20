@@ -23,7 +23,7 @@ from sqlalchemy import func, select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.exceptions import AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
@@ -951,5 +951,5 @@ class TestDeliveryIdentityValidation:
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_nonexistent"])
-        with pytest.raises(AdCPValidationError):
+        with pytest.raises(AdCPAuthenticationError):
             _get_media_buy_delivery_impl(req, identity=None)

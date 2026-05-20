@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 27d942a298a6989e42a2e1295b8076620d63f302 on 2026-04-28T13:35:01Z
+# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-006 Sync Creative Assets
