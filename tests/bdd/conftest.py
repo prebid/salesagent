@@ -140,9 +140,8 @@ _XFAIL_TAGS: dict[str, str] = {
     # Partially graduated: dispatch fix landed (salesagent-40kk); error code mismatch remains
     # FIXME(salesagent-40kk): production raises AUTH_TOKEN_INVALID, spec expects TENANT_REQUIRED
     "T-UC-005-ext-a": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
-    # Graduated: creative agent partition tests (salesagent-7fqx)
-    # Steps now call list_creative_formats as a proxy. Boundary-specific
-    # xfails for creative-agent-only restrictions are in _SELECTIVE_XFAIL.
+    # Graduated: creative agent partition/boundary tests (salesagent-7fqx)
+    # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(beads-dul): suggestion field not in production error model
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # FIXME(beads-dul): disclosure validation errors not implemented
@@ -281,26 +280,8 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
-    # FIXME(beads-dul): creative agent format API has tighter restrictions than
-    # list_creative_formats. "native" is valid FormatCategory but not for creative
-    # agents; "vast" is valid AssetContentType but not for creative agents.
-    # adcp 3.12: FormatCategory/type field removed from ListCreativeFormatsRequest.
-    # "unknown_value" can no longer be rejected because the filter no longer exists.
-    (
-        "T-UC-005-partition-agent-type",
-        {"unknown_value"},
-        "adcp 3.12 removed type filter from ListCreativeFormatsRequest — unknown values cannot be rejected",
-    ),
-    (
-        "T-UC-005-boundary-agent-type",
-        {"native"},
-        "creative agent format API restricts type enum — native not valid for creative agents",
-    ),
-    (
-        "T-UC-005-boundary-agent-asset",
-        {"vast"},
-        "creative agent format API restricts asset_types enum — vast not valid for creative agents",
-    ),
+    # Graduated: T-UC-005-partition-agent-type, T-UC-005-boundary-agent-type,
+    # T-UC-005-boundary-agent-asset — all pass now that When steps dispatch through harness.
     # FIXME(salesagent-4ydt): BR-RULE-029 defines 4 notification types but production
     # WebhookDeliveryService only emits {scheduled, final, adjusted}. No is_delayed flag.
     (
@@ -409,23 +390,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
 
-        # --- UC-005: creative agent type/asset_type filter not implemented ---
-        # FIXME: creative agent format type and asset type filters are not
-        # wired through list_creative_formats — production doesn't accept
-        # these filter params. All transports fail on all parametrizations.
-        _UC005_AGENT_FILTER_TAGS: set[str] = {
-            "T-UC-005-partition-agent-type",
-            "T-UC-005-partition-agent-asset",
-            "T-UC-005-boundary-agent-type",
-            "T-UC-005-boundary-agent-asset",
-        }
-        if marker_names & _UC005_AGENT_FILTER_TAGS:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="creative agent type/asset_type filter not implemented in list_creative_formats",
-                    strict=False,
-                )
-            )
+        # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
+        # When steps dispatch through harness (blanket xfail removed).
 
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
         if is_mcp:
