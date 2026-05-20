@@ -83,23 +83,6 @@ dc() { docker-compose -f docker-compose.e2e.yml -p "${COMPOSE_PROJECT_NAME:-adcp
 cmd_up() {
     echo -e "${BLUE}Starting Docker test stack...${NC}"
 
-    # Reuse existing healthy stack if .test-stack.env exists and containers respond.
-    # Avoids full teardown+rebuild cycle on repeated runs.
-    if [ -f "$ENV_FILE" ]; then
-        source "$ENV_FILE"
-        if [ -n "${COMPOSE_PROJECT_NAME:-}" ] && \
-           docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.e2e.yml ps --status running 2>/dev/null | grep -q "adcp-server"; then
-            # Verify postgres is actually reachable
-            local _pg_port="${POSTGRES_PORT:-}"
-            if [ -n "$_pg_port" ] && docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.e2e.yml exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1; then
-                echo -e "${GREEN}Reusing existing stack ${COMPOSE_PROJECT_NAME} (pg:${POSTGRES_PORT} srv:${ADCP_SALES_PORT})${NC}"
-                return 0
-            fi
-        fi
-        # Stack exists but unhealthy — fall through to fresh start
-        unset COMPOSE_PROJECT_NAME POSTGRES_PORT ADCP_SALES_PORT DATABASE_URL
-    fi
-
     export COMPOSE_PROJECT_NAME="adcp-test-$$"
     reap_abandoned_stacks
 
