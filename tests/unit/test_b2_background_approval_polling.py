@@ -217,7 +217,7 @@ class TestMarkApprovalCompleteUpdatesMediaBuyAndAuditLogs:
             )
 
         # AuditLogger constructor called with adapter_name+tenant_id
-        mock_audit_cls.assert_called_once_with(adapter_name="GoogleAdManager", tenant_id="tenant_1")
+        mock_audit_cls.assert_called_once_with(adapter_name="google_ad_manager", tenant_id="tenant_1")
         # log_operation called with success=True and order_id in details
         _, kwargs = mock_audit_instance.log_operation.call_args
         assert kwargs.get("success") is True
@@ -289,7 +289,7 @@ class TestMarkApprovalFailedUpdatesMediaBuyAndAuditLogs:
                 media_buy_id="mb_b2_001",
             )
 
-        mock_audit_cls.assert_called_once_with(adapter_name="GoogleAdManager", tenant_id="tenant_1")
+        mock_audit_cls.assert_called_once_with(adapter_name="google_ad_manager", tenant_id="tenant_1")
         _, kwargs = mock_audit_instance.log_operation.call_args
         assert kwargs.get("success") is False
         assert kwargs.get("operation") == "approve_order"
