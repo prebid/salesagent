@@ -315,8 +315,6 @@ async def get_media_buys(
         # Raise AdCPValidationError so the MCP boundary translator runs the
         # envelope builder; the prior ToolError raise bypassed it and produced
         # a tuple-stringified wire response with no adcp_error/errors layers.
-        from src.core.exceptions import AdCPValidationError
-
         raise AdCPValidationError(format_validation_error(e, context="get_media_buys request")) from e
 
 
