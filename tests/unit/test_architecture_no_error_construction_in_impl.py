@@ -27,8 +27,8 @@ from pathlib import Path
 # Cannot be raised; only lowered. The guard fails if any file exceeds its cap
 # or if a new file shows up with Pattern A sites.
 #
-# Every entry below is a MIGRATION TARGET tracked by issue #1304 — each
-# capped file carries ``# FIXME(#1304): migrate to typed AdCPError raise``
+# Every entry below is a MIGRATION TARGET — each capped file carries
+# ``# FIXME(salesagent-pattern-a): migrate to typed AdCPError raise``
 # comments at the Error(code=...) sites so reviewers can grep their way to
 # the cleanup work. There are no legitimate-floor exceptions in this dict;
 # legitimate per-item advisory Error(code=...) sites in success envelopes

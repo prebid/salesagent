@@ -20,8 +20,8 @@ from pathlib import Path
 # Per-file caps for ``raise ValueError(...)`` sites. Two categories of entries:
 #
 #   1. **Migration targets** — boundary-facing raises that should become typed
-#      ``AdCPError`` subclasses. Tracked by issue #1304; each site carries a
-#      ``# FIXME(#1304): migrate to typed AdCPError raise`` comment so reviewers
+#      ``AdCPError`` subclasses. Each site carries a
+#      ``# FIXME(salesagent-pattern-a): migrate to typed AdCPError raise`` comment so reviewers
 #      can grep to the cleanup work. PR 2 sub-batches drain these.
 #
 #   2. **Internal contracts** — ``ValueError`` raised inside helper functions
