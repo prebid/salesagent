@@ -138,6 +138,10 @@ class ListCreativeFormatsBody(BaseModel):
     min_height: int | None = None
     max_height: int | None = None
     wcag_level: str | None = None
+    disclosure_positions: list[str] | None = None
+    disclosure_persistence: list[str] | None = None
+    output_format_ids: list[dict[str, Any]] | None = None
+    input_format_ids: list[dict[str, Any]] | None = None
     adcp_version: str = "1.0.0"
 
 
