@@ -14,6 +14,13 @@ from typing import Any, NoReturn
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
 
+from src.core.exceptions import (
+    AdCPAuthorizationError,
+    AdCPError,
+    AdCPValidationError,
+    build_two_layer_error_envelope,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,8 +103,6 @@ def extract_error_info(error: Exception) -> tuple[str, str, str | None]:
     Returns:
         Tuple of (error_code, error_message, recovery) where recovery may be None
     """
-    from src.core.exceptions import AdCPError
-
     if isinstance(error, AdCPToolError):
         first = error.envelope["errors"][0]
         return first["code"], first.get("message", ""), first.get("recovery")
@@ -138,7 +143,7 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
     """
     if not tenant_id:
         # Can't log to activity feed without tenant context
-        logger.warning(f"Tool {tool_name} failed without tenant context: {error}")
+        logger.warning("Tool %s failed without tenant context: %s", tool_name, error)
         return
 
     # Extract error code, message, and recovery hint
@@ -155,7 +160,7 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
             error_code=error_code,
         )
     except Exception as e:
-        logger.debug(f"Failed to log error to activity feed: {e}")
+        logger.debug("Failed to log error to activity feed: %s", e)
 
     # Log to audit log for persistent record
     try:
@@ -171,7 +176,7 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
             error=error_message,
         )
     except Exception as e:
-        logger.debug(f"Failed to log error to audit log: {e}")
+        logger.debug("Failed to log error to audit log: %s", e)
 
 
 def _translate_to_tool_error(error: Exception) -> NoReturn:
@@ -185,13 +190,6 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
 
     This function always raises — it never returns.
     """
-    from src.core.exceptions import (
-        AdCPAuthorizationError,
-        AdCPError,
-        AdCPValidationError,
-        build_two_layer_error_envelope,
-    )
-
     if isinstance(error, ToolError):
         # Includes AdCPToolError — already in wire shape.
         raise
