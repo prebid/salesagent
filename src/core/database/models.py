@@ -28,6 +28,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.core.database.json_type import JSONType
+from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
 
 logger = logging.getLogger(__name__)
@@ -175,8 +176,6 @@ class Tenant(Base, JSONValidatorMixin):
         try:
             return decrypt_api_key(self._gemini_api_key)
         except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
             raise AdCPConfigurationError(f"Failed to decrypt Gemini API key for tenant {self.tenant_id}") from exc
 
     @gemini_api_key.setter
@@ -642,8 +641,6 @@ class TenantAuthConfig(Base):
         try:
             return decrypt_api_key(self.oidc_client_secret_encrypted)
         except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
             raise AdCPConfigurationError(f"Failed to decrypt OIDC client secret for tenant {self.tenant_id}") from exc
 
     @oidc_client_secret.setter
@@ -1259,8 +1256,6 @@ class AdapterConfig(Base):
         try:
             return decrypt_api_key(self._gam_service_account_json)
         except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
             raise AdCPConfigurationError(
                 f"Failed to decrypt GAM service account JSON for tenant {self.tenant_id}"
             ) from exc
