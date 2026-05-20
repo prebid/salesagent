@@ -276,6 +276,13 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # FIXME(beads-dul): creative agent format API has tighter restrictions than
     # list_creative_formats. "native" is valid FormatCategory but not for creative
     # agents; "vast" is valid AssetContentType but not for creative agents.
+    # adcp 3.12: FormatCategory/type field removed from ListCreativeFormatsRequest.
+    # "unknown_value" can no longer be rejected because the filter no longer exists.
+    (
+        "T-UC-005-partition-agent-type",
+        {"unknown_value"},
+        "adcp 3.12 removed type filter from ListCreativeFormatsRequest — unknown values cannot be rejected",
+    ),
     (
         "T-UC-005-boundary-agent-type",
         {"native"},
