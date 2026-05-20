@@ -8,7 +8,7 @@ when approval completes or fails.
 import logging
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -24,12 +24,23 @@ from src.core.thread_registry import ThreadRegistry
 # queries filter on this value, so the two must stay in lockstep.
 _ADAPTER_NAME = "google_ad_manager"
 
+# Threshold beyond which a running SyncJob is presumed orphaned (process died
+# mid-approval). The default polling window is 2 minutes (max_attempts * poll_interval),
+# so 10 minutes is ≥5× the maximum legitimate runtime — anything older is a stale row
+# blocking re-approval of its order_id.
+_STALE_APPROVAL_THRESHOLD = timedelta(minutes=10)
+
 logger = logging.getLogger(__name__)
 
 # Global registry of running approval threads. ThreadRegistry reaps dead
 # threads on every read — same defensive cleanup as the sync registry
 # (production memory-leak triage #5).
 _active_approvals = ThreadRegistry()
+
+# Serialize the duplicate-scan + INSERT against concurrent callers for the
+# same order_id. ThreadRegistry's atomic add covers the in-memory registry,
+# but the DB SELECT-then-INSERT window remains racy without this lock.
+_approval_lock = threading.Lock()
 
 
 def start_order_approval_background(
@@ -56,64 +67,87 @@ def start_order_approval_background(
         approval_id: The approval job ID for tracking progress
 
     Raises:
-        ValueError: If an approval is already running for this order
+        ValueError: If a live approval is already running for this order
     """
-    # Check if approval already running
-    with get_db_session() as db:
-        stmt = select(SyncJob).where(
-            SyncJob.sync_type == "order_approval",
-            SyncJob.status == "running",
-        )
-        existing_approvals = db.scalars(stmt).all()
+    # Hold _approval_lock for the duplicate scan + INSERT + thread registration.
+    # Without this, two concurrent calls for the same order_id can both pass the
+    # SELECT, both INSERT a "running" SyncJob, and both start polling threads.
+    # Orphaned SyncJobs older than _STALE_APPROVAL_THRESHOLD (process died mid-
+    # approval) are flipped to "failed" before the duplicate check so they don't
+    # block legitimate re-approval forever.
+    with _approval_lock:
+        with get_db_session() as db:
+            stmt = select(SyncJob).where(
+                SyncJob.sync_type == "order_approval",
+                SyncJob.status == "running",
+            )
+            existing_approvals = db.scalars(stmt).all()
 
-        # Check if any existing approval is for this order
-        for approval in existing_approvals:
-            if approval.progress and approval.progress.get("order_id") == order_id:
+            now = datetime.now(UTC)
+            for approval in existing_approvals:
+                if not (approval.progress and approval.progress.get("order_id") == order_id):
+                    continue
+                started = approval.started_at
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=UTC)
+                if now - started > _STALE_APPROVAL_THRESHOLD:
+                    approval.status = "failed"
+                    approval.completed_at = now
+                    approval.error_message = (
+                        f"Approval thread presumed dead (no progress for {_STALE_APPROVAL_THRESHOLD}); "
+                        "marked as failed to allow fresh approval. MediaBuy state is unchanged — "
+                        "the next live approval will advance it."
+                    )
+                    db.commit()
+                    logger.warning(
+                        "[%s] reaped stale approval for order %s (started %s)",
+                        approval.sync_id,
+                        order_id,
+                        started.isoformat(),
+                    )
+                    continue
                 raise ValueError(f"Approval already running for order {order_id}: {approval.sync_id}")
 
-        # Create new approval job
-        approval_id = f"approval_{order_id}_{int(datetime.now(UTC).timestamp())}"
+            approval_id = f"approval_{order_id}_{int(now.timestamp())}"
 
-        approval_job = SyncJob(
-            sync_id=approval_id,
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
-            sync_type="order_approval",
-            status="running",
-            started_at=datetime.now(UTC),
-            triggered_by="order_creation",
-            triggered_by_id=media_buy_id,
-            progress={
-                "order_id": order_id,
-                "media_buy_id": media_buy_id,
-                "principal_id": principal_id,
-                "webhook_url": webhook_url,
-                "attempts": 0,
-                "max_attempts": max_attempts,
-                "phase": "Starting approval polling",
-            },
+            approval_job = SyncJob(
+                sync_id=approval_id,
+                tenant_id=tenant_id,
+                adapter_type="google_ad_manager",
+                sync_type="order_approval",
+                status="running",
+                started_at=now,
+                triggered_by="order_creation",
+                triggered_by_id=media_buy_id,
+                progress={
+                    "order_id": order_id,
+                    "media_buy_id": media_buy_id,
+                    "principal_id": principal_id,
+                    "webhook_url": webhook_url,
+                    "attempts": 0,
+                    "max_attempts": max_attempts,
+                    "phase": "Starting approval polling",
+                },
+            )
+            db.add(approval_job)
+            db.commit()
+
+        thread = threading.Thread(
+            target=_run_approval_thread,
+            args=(
+                approval_id,
+                order_id,
+                media_buy_id,
+                tenant_id,
+                principal_id,
+                webhook_url,
+                max_attempts,
+                poll_interval_seconds,
+            ),
+            daemon=True,
+            name=f"approval-{approval_id}",
         )
-        db.add(approval_job)
-        db.commit()
-
-    # Start background thread
-    thread = threading.Thread(
-        target=_run_approval_thread,
-        args=(
-            approval_id,
-            order_id,
-            media_buy_id,
-            tenant_id,
-            principal_id,
-            webhook_url,
-            max_attempts,
-            poll_interval_seconds,
-        ),
-        daemon=True,
-        name=f"approval-{approval_id}",
-    )
-
-    _active_approvals.add(approval_id, thread)
+        _active_approvals.add(approval_id, thread)
 
     thread.start()
     logger.info(f"Started background approval polling thread: {approval_id}")
