@@ -47,6 +47,12 @@ collect_reports() {
     for name in unit integration e2e admin bdd ui; do
         [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
     done
+    # Explicit return 0 — without this, the function inherits the exit
+    # code of the last ``[ -f X ] && cp X Y`` test, which is 1 when the
+    # final file (ui.json) is missing in quick mode. Under ``set -e``
+    # that propagates to the caller and the script exits before reaching
+    # the security audit + summary block.
+    return 0
 }
 
 # --- Quick mode (no Docker) ---
@@ -54,13 +60,17 @@ if [ "$MODE" = "quick" ]; then
     validate_imports
     echo -e "${BLUE}Running unit + integration via tox...${NC}"
     set +e
-    # Redirect to file + stdout via process substitution to avoid tox-uv fd leak
-    # that causes pipes (| tee) to hang after tox exits.
-    tox -e unit,integration -p > >(tee "$RESULTS_DIR/tox.log") 2>&1
+    # Write to file then cat — avoids two known issues:
+    # - ``| tee X`` hangs after tox exits because of a tox-uv fd leak
+    # - ``> >(tee X) 2>&1`` returns a stale process-substitution exit code
+    #   that makes the script appear to fail under ``set -eo pipefail``
+    #   even when tox itself returned 0.
+    tox -e unit,integration -p > "$RESULTS_DIR/tox.log" 2>&1
     TOX_RC=$?
     set -e
+    cat "$RESULTS_DIR/tox.log"
     collect_reports
-    [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+    if [ "$TOX_RC" -ne 0 ]; then FAILURES="tox"; fi
 
 # --- CI mode (Docker + all suites) ---
 elif [ "$MODE" = "ci" ]; then
@@ -81,18 +91,20 @@ elif [ "$MODE" = "ci" ]; then
         uv run pytest "$PYTEST_TARGET" \
             -m "not requires_server and not skip_ci" \
             --json-report --json-report-file="$RESULTS_DIR/targeted.json" --json-report-indent=2 \
-            -q --tb=line $PYTEST_ARGS > >(tee "$RESULTS_DIR/targeted.log") 2>&1
+            -q --tb=line $PYTEST_ARGS > "$RESULTS_DIR/targeted.log" 2>&1
         TOX_RC=$?
         set -e
-        [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
+        cat "$RESULTS_DIR/targeted.log"
+        if [ "$TOX_RC" -ne 0 ]; then FAILURES="targeted"; fi
     else
         echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
         set +e
-        tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
+        tox -p -o > "$RESULTS_DIR/tox.log" 2>&1
         TOX_RC=$?
         set -e
+        cat "$RESULTS_DIR/tox.log"
         collect_reports
-        [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+        if [ "$TOX_RC" -ne 0 ]; then FAILURES="tox"; fi
 
         # Coverage combine runs separately — tox -p hangs when the coverage
         # env fails (e.g. missing .coverage.e2e from HTTP-only e2e tests).
