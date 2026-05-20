@@ -444,6 +444,68 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
                     break
 
+        # E2E_REST: Docker always has the creative agent — can't test empty catalog
+        if is_e2e_rest and "T-UC-005-empty-catalog" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E Docker always has creative agents — cannot test empty catalog",
+                    strict=True,
+                )
+            )
+
+        # FIXME(salesagent-nmg9, salesagent-rwly, salesagent-hamk): E2E_REST —
+        # set_registry_formats has no sidecar mock path. Docker's real creative
+        # agent serves its own catalog, so scenarios that inject specific format
+        # fixtures via Given steps and assert on those names can't run against
+        # E2E. Remove when E2E gains catalog-injection.
+        _UC005_E2E_FIXTURE_INJECTION_TAGS: set[str] = {
+            "T-UC-005-inv-031-1-holds",
+            # Graduated e2e_rest: inv-031-1-violated, inv-049-3-violated,
+            # inv-049-4-violated, inv-049-4-nodim (pass with strong assertions)
+            "T-UC-005-inv-031-2-holds",
+            "T-UC-005-inv-049-1-holds",
+            "T-UC-005-inv-049-1-violated",
+            "T-UC-005-inv-049-2-holds",
+            "T-UC-005-inv-049-2-violated",
+            "T-UC-005-inv-049-3-holds",
+            "T-UC-005-inv-049-3-group",
+            "T-UC-005-inv-049-4-holds",
+            "T-UC-005-inv-049-5-holds",
+            "T-UC-005-inv-049-6-holds",
+            "T-UC-005-inv-049-7-holds",
+            "T-UC-005-inv-049-7-violated",
+            # Graduated: inv-049-9 and inv-049-10 (u04y: no e2e_rest variants exist)
+            "T-UC-005-dim-boundary",
+        }
+        if is_e2e_rest and (marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E: set_registry_formats has no sidecar mock — real creative agent catalog used",
+                    strict=False,
+                )
+            )
+
+        # FIXME(salesagent-got8): E2E_REST — webhook/circuit assertions observe
+        # env.mock['post'] or CircuitBreaker state, neither of which is visible
+        # through the Docker HTTP path. Remove when an E2E webhook receiver or
+        # circuit-breaker introspection is available.
+        _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
+            "T-UC-004-webhook-bearer",
+            "T-UC-004-webhook-hmac",
+            "T-UC-004-webhook-notification-type",
+            "T-UC-004-webhook-no-aggregated",
+            "T-UC-004-webhook-circuit-open",
+            "T-UC-004-webhook-circuit-recovery",
+            "T-UC-004-webhook-retry-success",
+        }
+        if is_e2e_rest and (marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E: webhook POST mock + CircuitBreaker state not observable through Docker HTTP",
+                    strict=False,
+                )
+            )
+
         # FIXME(salesagent-9vgz.18): UC-003 empty update — production does not reject
         # requests with no updatable fields. Instead returns completed with empty
         # affected_packages. BR-RULE-022 INV-3 says: "No updatable fields → rejected".
@@ -526,9 +588,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # workflow_step_id is an internal field (exclude=True in schema).
         # impl/a2a return raw Python objects where the attribute is accessible
-        # via hasattr/getattr even with exclude=True. mcp/rest serialize
+        # via hasattr/getattr even with exclude=True. mcp/rest/e2e_rest serialize
         # via model_dump() which drops exclude=True fields — xfail only those.
-        if "T-UC-002-alt-manual" in marker_names and (is_mcp or is_rest):
+        if "T-UC-002-alt-manual" in marker_names and (is_mcp or is_rest or is_e2e_rest):
             item.add_marker(
                 pytest.mark.xfail(
                     reason="workflow_step_id is internal (exclude=True), dropped during serialization",
@@ -550,7 +612,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-005-inv-049-8-violated",
             "T-UC-005-inv-049-8-nofield",
         }
-        if marker_names & _UC005_PARTIAL_TAGS and not is_mcp:
+        if marker_names & _UC005_PARTIAL_TAGS and not is_mcp and not is_e2e_rest:
             item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
             # Skip selective xfails for these — the strict=False above covers them
         else:
@@ -582,6 +644,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # UC-002: e2e_rest auth middleware — unauthenticated_request graduated (pzqp),
         # but identity_missing still fails (error shape differs from spec).
+        if is_e2e_rest and "T-UC-002-nfr-001-enforcement" in marker_names:
+            if "unauthenticated_request" not in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: Docker auth middleware rejects with AUTH_REQUIRED "
+                        "before business logic — error shape differs from spec",
+                        strict=True,
+                    )
+                )
 
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
@@ -975,7 +1046,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Remaining failures: impl-matches, a2a-both, mcp-both, rest-differs
         if "T-UC-004-boundary-ownership" in marker_names:
             _ownership_passes = (not is_a2a and not is_mcp) and (
-                (not is_rest and "differs from owner" in nodeid) or (is_rest and "matches owner" in nodeid)
+                (not is_rest and not is_e2e_rest and "differs from owner" in nodeid)
+                or (is_rest and "matches owner" in nodeid)
+                or (is_e2e_rest and "matches owner" in nodeid)
             )
             if not _ownership_passes:
                 item.add_marker(
@@ -1004,10 +1077,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Graduated: T-UC-004-boundary-sampling — "Not provided" passes everywhere;
         # "random"/"failures_only" pass on rest only; "Unknown string" passes on impl only.
         if "T-UC-004-boundary-sampling" in marker_names:
-            _samp_not_rest_fail = not is_rest and any(
-                s in nodeid for s in ("random (first enum", "failures_only (last enum")
+            _samp_not_rest_fail = (
+                not is_rest
+                and not is_e2e_rest
+                and any(s in nodeid for s in ("random (first enum", "failures_only (last enum"))
             )
-            _samp_not_impl_fail = not is_impl and "Unknown string not in enum" in nodeid
+            _samp_not_impl_fail = not is_impl and not is_e2e_rest and "Unknown string not in enum" in nodeid
             if _samp_not_rest_fail or _samp_not_impl_fail:
                 item.add_marker(
                     pytest.mark.xfail(
@@ -1016,13 +1091,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             # FIXME(#1270): e2e_rest: Docker doesn't validate sampling_method —
             # invalid enum value succeeds instead of failing.
+            if is_e2e_rest and "Unknown string not in enum" in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: Docker does not validate sampling_method — invalid value succeeds",
+                        strict=True,
+                    )
+                )
 
         # Graduated: T-UC-004-boundary-date-range — valid examples (before, omitted)
         # pass on rest; invalid examples (equals, after) pass on impl.
         if "T-UC-004-boundary-date-range" in marker_names:
-            _dr_valid_fail = not is_rest and any(s in nodeid for s in ("start_date before end_date", "dates omitted"))
-            _dr_invalid_fail = not is_impl and any(
-                s in nodeid for s in ("start_date equals end_date", "start_date after end_date")
+            _dr_valid_fail = (
+                not is_rest
+                and not is_e2e_rest
+                and any(s in nodeid for s in ("start_date before end_date", "dates omitted"))
+            )
+            _dr_invalid_fail = (
+                not is_impl
+                and not is_e2e_rest
+                and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date"))
             )
             if _dr_valid_fail or _dr_invalid_fail:
                 item.add_marker(
@@ -1030,6 +1118,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             # FIXME(#1270): e2e_rest: Docker doesn't validate date range params —
             # invalid cases (equals, after) succeed instead of failing.
+            if is_e2e_rest and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date")):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: Docker does not validate date range — invalid cases succeed",
+                        strict=True,
+                    )
+                )
 
         # Graduated: T-UC-004-boundary-attribution — invalid examples pass on impl/mcp/rest,
         # valid examples pass on a2a. Transport-aware narrowing.
@@ -1075,6 +1170,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             # e2e_rest: account fixture created in-process not visible to Docker DB
             # Graduated: "not found", "both account_id", "empty object" pass on e2e_rest
+            if is_e2e_rest and any(s in nodeid for s in ("account exists", "single match")):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: account fixture not in Docker DB — lookup/validation fails",
+                        strict=False,
+                    )
+                )
 
         # --- UC-004 boundary: selective xfail for graduated strong groups ---
         # Only the failing subset gets xfailed; clean-pass examples graduate to PASS.
@@ -1157,8 +1259,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # e2e_rest: principal_ownership "differs from owner" — ownership check not enforced
         # through REST layer; test succeeds when it should fail (strict=True xfail).
+        if "T-UC-004-boundary-ownership" in marker_names and is_e2e_rest and "differs from owner" in nodeid:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: ownership boundary not enforced through REST — test succeeds unexpectedly",
+                    strict=True,
+                )
+            )
 
         # e2e_rest: sort_by_metric_not_available — no by_placement breakdown in e2e_rest response
+        if "T-UC-004-dim-sortby-fallback" in marker_names and is_e2e_rest:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: by_placement breakdown not present in REST response — sort_by fallback untestable",
+                    strict=True,
+                )
+            )
 
         # UC-004 partition scenarios: adcp 3.10 changed schema validation behavior.
         # Partition tests exercise valid/invalid value ranges per field.
@@ -1257,8 +1373,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if "T-UC-004-partition-sampling" in marker_names and "not_provided" not in nodeid:
             _samp_named = {"random", "stratified", "recent", "failures_only"}
             _samp_is_named = any(s in nodeid for s in _samp_named)
-            if _samp_is_named and is_rest:
-                pass  # REST + named method → passes, no xfail
+            if _samp_is_named and (is_rest or is_e2e_rest):
+                pass  # REST/e2e_rest + named method → passes, no xfail
             else:
                 item.add_marker(
                     pytest.mark.xfail(
@@ -1330,7 +1446,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # HTTP: a valid token always resolves to a real principal; an invalid token
         # gets rejected by auth middleware before _impl runs. These scenarios are
         # only testable at the _impl level (impl/a2a/mcp pass the identity directly).
-        if is_rest and "T-UC-019-boundary-principal" in marker_names:
+        if (is_rest or is_e2e_rest) and "T-UC-019-boundary-principal" in marker_names:
             if any(
                 s in nodeid
                 for s in (
@@ -1349,16 +1465,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
 
         # --- UC-019: HTTP transport xfails for auth suggestion mismatch ---
-        # impl/a2a/mcp graduated (kb7y); REST suggestion string differs
+        # impl/a2a/mcp graduated (kb7y); REST/e2e_rest suggestion string differs
         # from spec ("authenticate" vs "authentication").
-        if is_rest and "T-UC-019-ext-a" in marker_names:
+        if (is_rest or is_e2e_rest) and "T-UC-019-ext-a" in marker_names:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
                     strict=False,
                 )
             )
-        if is_rest and "T-UC-019-partition-principal-invalid" in marker_names:
+        if (is_rest or is_e2e_rest) and "T-UC-019-partition-principal-invalid" in marker_names:
             if "identity_missing" in nodeid:
                 item.add_marker(
                     pytest.mark.xfail(
@@ -1417,14 +1533,75 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # These scenarios use `And today is "<date>"` which patches datetime
         # in-process. The patch has no effect on Docker — real datetime.now()
         # is used, so status assertions fail.
-        # Graduated: T-UC-019-inv-152-1/2/5 (salesagent-kgmm: creative approval data seeded)
-        # — only in-process transports graduated; e2e_rest still fails (below).
+        if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
+            _UC019_E2E_DATETIME_TAGS: set[str] = {
+                "T-UC-019-partition-status",
+                "T-UC-019-boundary-status",
+                "T-UC-019-inv-150-2",
+                "T-UC-019-inv-150-4",
+                "T-UC-019-inv-150-5",
+                # Default filter test creates flight dates relative to mock_today
+                # (default 2026-03-15), making both buys "completed" on real date.
+                "T-UC-019-inv-151-1",
+            }
+            _UC019_E2E_MOCK_TAGS: set[str] = {
+                # Adapter mock (get_adapter patch) has no effect in Docker.
+                "T-UC-019-partition-snapshot",
+                "T-UC-019-boundary-snapshot",
+            }
+            # Graduated e2e_rest examples that pass despite datetime/mock concern:
+            # These variants have expected status=completed, which matches the
+            # real date (all flight dates are in the past).
+            _UC019_E2E_DT_GRADUATED = {
+                ("T-UC-019-partition-status", "post_flight"),
+                ("T-UC-019-boundary-status", "day after end_date"),
+                ("T-UC-019-boundary-status", "start_date equals end_date and today is day after"),
+            }
+            _dt_graduated = any(tag in marker_names and substr in nodeid for tag, substr in _UC019_E2E_DT_GRADUATED)
+            _inv150_5_graduated = "T-UC-019-inv-150-5" in marker_names  # all examples pass
+            if marker_names & _UC019_E2E_DATETIME_TAGS and not _dt_graduated and not _inv150_5_graduated:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: datetime.now() mock has no effect in Docker — status computed from real date",
+                        strict=False,
+                    )
+                )
+            _UC019_E2E_MOCK_GRADUATED = {
+                ("T-UC-019-partition-snapshot", "supported_but_unavailable"),
+                # Only "snapshot null" passes on e2e_rest: Docker's mock adapter
+                # has no test media buy data, so get_packages_snapshot returns None,
+                # and production maps that to SNAPSHOT_TEMPORARILY_UNAVAILABLE —
+                # matching the expected outcome. Other variants FAIL because:
+                # - "snapshot returned"/"all packages" expect real snapshot data
+                # - "does not support" expects UNSUPPORTED but mock says supported=True
+                ("T-UC-019-boundary-snapshot", "snapshot null"),
+            }
+            _mock_graduated = any(tag in marker_names and substr in nodeid for tag, substr in _UC019_E2E_MOCK_GRADUATED)
+            if marker_names & _UC019_E2E_MOCK_TAGS and not _mock_graduated:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: adapter mock has no effect in Docker — snapshot data not controllable",
+                        strict=False,
+                    )
+                )
+            # Un-graduated: T-UC-019-inv-154-tenant returns empty response on e2e_rest
+            # because in-process fixture data doesn't populate Docker DB.
+            if "T-UC-019-inv-154-tenant" in marker_names:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: cross-principal isolation test returns empty set — "
+                        "in-process fixtures don't populate Docker DB",
+                        strict=False,
+                    )
+                )
+            # Graduated: T-UC-019-inv-152-1/2/5 (salesagent-kgmm: creative approval data seeded)
+            # — only in-process transports graduated; e2e_rest still fails (below).
 
-        # principal_scoping_boundary error cases are excluded on e2e_rest
-        # (handled by the REST+e2e_rest block below, outside this if-block).
+            # principal_scoping_boundary error cases are excluded on e2e_rest
+            # (handled by the REST+e2e_rest block below, outside this if-block).
 
-        # Graduated: T-UC-019-inv-152-1, T-UC-019-inv-152-2, T-UC-019-inv-152-5
-        # (salesagent-pzqp: creative approval data now visible to e2e_rest Docker)
+            # Graduated: T-UC-019-inv-152-1, T-UC-019-inv-152-2, T-UC-019-inv-152-5
+            # (salesagent-pzqp: creative approval data now visible to e2e_rest Docker)
 
         # --- UC-026: xfails for spec-production gaps ---
         # Transport wiring done (a3xo: MediaBuyDualEnv routes updates correctly).
@@ -1924,7 +2101,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     transports = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
     ids = ["impl", "a2a", "mcp", "rest"]
 
-    if os.environ.get("BDD_E2E_ENABLED") == "true":
+    if os.environ.get("BDD_E2E_ENABLED", "true") != "false":
         transports.append(Transport.E2E_REST)
         ids.append("e2e_rest")
 
