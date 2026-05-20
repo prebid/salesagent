@@ -87,7 +87,10 @@ from src.core.validation_helpers import format_validation_error
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    validate_geo_overlap,
+    validate_overlay_targeting,
     validate_property_targeting_allowed,
+    validate_unknown_targeting_fields,
 )
 
 
@@ -318,6 +321,19 @@ def _update_media_buy_impl(
             # workflow step to status="failed" for the audit trail.
             if req.packages:
                 assert uow.products is not None, "MediaBuyUoW.products required for product targeting validation"
+                # Run the same per-package targeting validators the create path runs, so a buyer
+                # can't bypass unknown-field rejection, managed-only dimension checks, or
+                # same-value geo inclusion/exclusion overlap by sending changes through update.
+                overlay_violations: list[str] = []
+                for pkg_update in req.packages:
+                    if pkg_update.targeting_overlay is None:
+                        continue
+                    overlay_violations.extend(validate_unknown_targeting_fields(pkg_update.targeting_overlay))
+                    overlay_violations.extend(validate_overlay_targeting(pkg_update.targeting_overlay))
+                    overlay_violations.extend(validate_geo_overlap(pkg_update.targeting_overlay))
+                if overlay_violations:
+                    raise AdCPValidationError(f"Targeting validation failed: {'; '.join(overlay_violations)}")
+
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:
                     if (
