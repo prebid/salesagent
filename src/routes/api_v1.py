@@ -55,28 +55,29 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # Mirrors the per-class ``status_code`` declared on the typed exceptions in
 # ``src.core.exceptions``. Unknown codes fall through to 500.
 _ERROR_CODE_TO_STATUS: dict[str, int] = {
+    "INVALID_REQUEST": 400,
     "VALIDATION_ERROR": 400,
     "AUTH_REQUIRED": 401,
+    "ACCOUNT_PAYMENT_REQUIRED": 402,
     "FORBIDDEN": 403,
+    "ACCOUNT_SUSPENDED": 403,
     "NOT_FOUND": 404,
     "ACCOUNT_NOT_FOUND": 404,
     "MEDIA_BUY_NOT_FOUND": 404,
     "PACKAGE_NOT_FOUND": 404,
-    "ACCOUNT_SETUP_REQUIRED": 422,
-    "ACCOUNT_SUSPENDED": 403,
-    "ACCOUNT_PAYMENT_REQUIRED": 402,
     "CONFLICT": 409,
     "ACCOUNT_AMBIGUOUS": 409,
-    "GONE": 410,
+    "INVALID_STATE": 410,
+    "ACCOUNT_SETUP_REQUIRED": 422,
     "BUDGET_EXHAUSTED": 422,
     "BUDGET_EXCEEDED": 422,
     "BUDGET_TOO_LOW": 422,
-    "CAPABILITY_NOT_SUPPORTED": 422,
+    "UNSUPPORTED_FEATURE": 422,
     "PRODUCT_UNAVAILABLE": 422,
     "CREATIVE_REJECTED": 422,
-    "RATE_LIMIT_EXCEEDED": 429,
-    "SERVICE_UNAVAILABLE": 503,
+    "RATE_LIMITED": 429,
     "ADAPTER_ERROR": 502,
+    "SERVICE_UNAVAILABLE": 503,
 }
 
 
@@ -98,8 +99,8 @@ def _handle_tool_error(e: ToolError) -> JSONResponse:
     synthetic = AdCPError(error_message)
     synthetic.error_code = error_code
     synthetic.status_code = _ERROR_CODE_TO_STATUS.get(error_code, 500)
-    if recovery in ("transient", "correctable", "terminal"):
-        synthetic.recovery = recovery  # type: ignore[assignment]
+    if recovery is not None:
+        synthetic.recovery = recovery
     return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))
 
 

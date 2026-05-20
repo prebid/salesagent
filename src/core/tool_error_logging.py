@@ -18,6 +18,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPError,
     AdCPValidationError,
+    RecoveryHint,
     build_two_layer_error_envelope,
 )
 
@@ -89,7 +90,7 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
     return tenant_id, principal_id
 
 
-def extract_error_info(error: Exception) -> tuple[str, str, str | None]:
+def extract_error_info(error: Exception) -> tuple[str, str, RecoveryHint | None]:
     """Extract error code, message, and recovery hint from an exception.
 
     For AdCPToolError, reads directly from the carried two-layer envelope.
@@ -122,7 +123,11 @@ def extract_error_info(error: Exception) -> tuple[str, str, str | None]:
             )
             if is_error_code and len(error.args) > 1:
                 # Structured format: ToolError("CODE", "message") or ("CODE", "message", "recovery")
-                recovery = str(error.args[2]) if len(error.args) > 2 else None
+                recovery: RecoveryHint | None = None
+                if len(error.args) > 2:
+                    raw = str(error.args[2])
+                    if raw in ("transient", "correctable", "terminal"):
+                        recovery = raw  # type: ignore[assignment]
                 return first_arg, str(error.args[1]), recovery
             else:
                 # Single-arg format: ToolError("message")

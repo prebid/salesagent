@@ -143,6 +143,12 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
     """Translate AdCPError to an A2A SDK error type preserving semantics.
 
+    NOTE: currently unused by production code paths. ``_handle_explicit_skill``
+    now re-raises ``AdCPError`` directly so the boundary's exception handler
+    builds the wire envelope. This helper is retained for boundary-translation
+    tests and is the documented API any future direct-translation call site
+    must use to stay byte-identical with the live boundary.
+
     The A2A error ``data`` field carries the full spec-compliant two-layer
     envelope (``adcp_error`` + ``errors[]`` + optional ``context``) so the
     storyboard runner can read either layer. ``error_code`` and ``recovery``
