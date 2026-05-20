@@ -23,7 +23,12 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -913,9 +918,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_gen"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-        ):
+        with (patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -2742,7 +2745,7 @@ class TestUpdateMediaBuyIdentification:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises((ValueError, AdCPAuthorizationError), match="(?i)not found|does not own"):
+            with pytest.raises((AdCPNotFoundError, AdCPAuthorizationError), match="(?i)not found|does not own"):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_buyer_ref_no_longer_accepted_on_update(self):

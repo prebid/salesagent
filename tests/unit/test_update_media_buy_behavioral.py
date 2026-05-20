@@ -1415,7 +1415,9 @@ class TestUC003UploadInlineCreatives:
             MagicMock(creative_id="c2", action="created", errors=None),
         ]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response) as mock_sync:
+        with patch(
+            "src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response
+        ) as mock_sync:
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_inline",
@@ -1463,7 +1465,7 @@ class TestUC003UploadInlineCreatives:
             MagicMock(creative_id="c3", action="created", errors=None),
         ]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
+        with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_additive",
@@ -1509,7 +1511,7 @@ class TestUC003UploadInlineCreatives:
         failed_creative.errors = [mock_error]
         mock_sync_response.creatives = [failed_creative]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
+        with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_sync_fail",
@@ -2471,7 +2473,7 @@ class TestUC003ExtK:
         failed.errors = [mock_err]
         mock_sync_response.creatives = [failed]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
+        with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_sync_err",
@@ -2512,7 +2514,7 @@ class TestUC003ExtK:
         failed.errors = [mock_err]
         mock_sync_response.creatives = [failed]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
+        with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_no_modify",
