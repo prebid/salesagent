@@ -1175,4 +1175,3 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | set_reminder        |
       | subscribe_updates   |
       | none                |
-

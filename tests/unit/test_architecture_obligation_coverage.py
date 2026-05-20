@@ -42,6 +42,8 @@ _UNIT_ENTITY_FILES = [
     "test_property_list_schema.py",
     "test_quiet_failure_propagation.py",
     "test_get_products_impl_coverage.py",
+    "test_get_products_buying_mode.py",
+    "test_get_products_mode_branching.py",
     "test_creative_formats_behavioral.py",
 ]
 

@@ -523,10 +523,10 @@ class TestNoBriefSchemaObligations:
 
         Covers: UC-001-ALT-NO-BRIEF-02
         """
-        # The schema allows brief=None on GetProductsRequest
+        # The schema allows brief=None on GetProductsRequest in wholesale mode
         from src.core.schemas import GetProductsRequest
 
-        req = GetProductsRequest()
+        req = GetProductsRequest(buying_mode="wholesale")
         assert req.brief is None
 
 
@@ -1016,7 +1016,7 @@ class TestPaginatedDiscoverySchema:
         # GetProductsRequest.pagination is optional; default page size is 50
         from src.core.schemas import GetProductsRequest
 
-        req = GetProductsRequest()
+        req = GetProductsRequest(buying_mode="wholesale")
         assert req.pagination is None  # Not specified = use server default (50)
 
     async def test_pagination_min_max_results_bounds(self):
@@ -1466,6 +1466,7 @@ class TestGetProductsRequestSchema:
         from src.core.schemas import GetProductsRequest
 
         req = GetProductsRequest(
+            buying_mode="brief",
             brief="video ads for sports fans",
             brand={"domain": "nike.com"},
             account={"account_id": "acct_001"},
@@ -1480,13 +1481,17 @@ class TestGetProductsRequestSchema:
         assert req.pagination is not None
 
     def test_request_all_fields_optional(self):
-        """All GetProductsRequest fields are optional (empty request valid).
+        """Within a buying_mode, all other GetProductsRequest fields are optional.
+
+        AdCP 3.0 makes buying_mode itself required for v3 clients (see cross-mode
+        invariants in tests/unit/test_get_products_buying_mode.py). Within a mode,
+        the remaining fields keep their per-spec optionality.
 
         Covers: CONSTR-GET-PRODUCTS-REQUEST-01
         """
         from src.core.schemas import GetProductsRequest
 
-        req = GetProductsRequest()
+        req = GetProductsRequest(buying_mode="wholesale")
         assert req.brief is None
         assert req.brand is None
         assert req.filters is None
@@ -1504,7 +1509,7 @@ class TestGetProductsRequestSchema:
         env = os.environ.get("ENVIRONMENT", "")
         if env != "production":
             with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-                GetProductsRequest(**{"brief": "test", "unknown_field_xyz": "bad"})
+                GetProductsRequest(**{"buying_mode": "brief", "brief": "test", "unknown_field_xyz": "bad"})
 
     def test_request_has_channels_filter(self):
         """GetProductsRequest filters support channels field (v3 addition).

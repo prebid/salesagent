@@ -155,9 +155,11 @@ class TestSortOrderByName:
         result = _call_impl(formats)
 
         names = [f.name for f in result]
-        assert names == ["Alpha Video", "Display Ad", "Zebra Video"], (
-            f"Results should be sorted alphabetically: {names}"
-        )
+        assert names == [
+            "Alpha Video",
+            "Display Ad",
+            "Zebra Video",
+        ], f"Results should be sorted alphabetically: {names}"
 
 
 # ---------------------------------------------------------------------------

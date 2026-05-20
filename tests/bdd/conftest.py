@@ -45,6 +45,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
+    "tests.bdd.steps.domain.uc_get_products_buying_mode",
     "tests.bdd.steps.domain.compat_normalization",
 ]
 
@@ -623,6 +624,8 @@ def ctx(request: pytest.FixtureRequest) -> dict:
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags."""
     marker_names = {m.name for m in request.node.iter_markers()}
+    if any(t.startswith("T-UC-001") for t in marker_names):
+        return "UC-001"
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
     if any(t.startswith("T-UC-006") for t in marker_names):
@@ -805,6 +808,16 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
     elif uc == "UC-GET-PRODUCTS":
+        request.getfixturevalue("integration_db")
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv() as env:
+            ctx["env"] = env
+            yield
+    elif uc == "UC-001":
+        # UC-001 buying_mode/refine scenarios use ProductEnv. Step definitions live in
+        # tests/bdd/steps/domain/uc_get_products_buying_mode.py and
+        # uc_get_products_inventory.py.
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 

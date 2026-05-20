@@ -55,6 +55,60 @@ def needs_v2_compat(adcp_version: str | None) -> bool:
         return True
 
 
+def is_pre_v3(adcp_version: str | None) -> bool:
+    """Check if a client is pre-v3 for purposes of buying_mode default-to-brief.
+
+    AdCP 3.0 spec: pre-v3 clients without buying_mode SHOULD be defaulted to 'brief'
+    by the seller. This helper shares parsing logic with needs_v2_compat so version
+    detection has one definition.
+
+    PEP 440 note: Version("3.0.0-rc.3") < Version("3.0.0") is True. A client declaring
+    a 3.0 pre-release version is treated as pre-v3 here. This is the safer behavior
+    (forgive an rc client that omits buying_mode) and matches existing v2-compat semantics.
+
+    Args:
+        adcp_version: Client-declared AdCP version string, or None if unknown.
+
+    Returns:
+        True if the client should be treated as pre-v3 (None, < 3.0, or unparseable).
+    """
+    return needs_v2_compat(adcp_version)
+
+
+def resolve_pre_v3_buying_mode(
+    buying_mode: str | None,
+    adcp_version: str | None,
+    brief: str | None,
+) -> tuple[str | None, bool]:
+    """Resolve buying_mode for pre-v3 clients that omitted the field.
+
+    AdCP 3.0 spec text: "Sellers receiving requests from pre-v3 clients without
+    buying_mode SHOULD default to 'brief'." Our implementation deliberately deviates from
+    that text in one direction: if the pre-v3 client also sent no brief, we default to
+    'wholesale' instead of 'brief'. Reasoning — defaulting to 'brief' on an empty brief
+    would immediately fail the cross-mode validator ("brief is required when buying_mode
+    is 'brief'") and break v2 clients that legitimately discover raw inventory by sending
+    only {brand: ...} or {filters: ...}. The deviation is observable: every defaulted
+    request records `pre_v3_defaulted=True` in the audit log so operations can quantify
+    how many requests took the deviation path.
+
+    Args:
+        buying_mode: Client-supplied mode (None means it was omitted).
+        adcp_version: Client-declared AdCP version string.
+        brief: Client-supplied brief text (may be None or empty).
+
+    Returns:
+        (resolved_buying_mode, pre_v3_defaulted) — the mode to use and a flag indicating
+        whether this wrapper applied the pre-v3 default. The flag is recorded in the
+        audit log so operations can detect silent v2 client defaults to either mode.
+    """
+    if buying_mode is not None or not is_pre_v3(adcp_version):
+        return buying_mode, False
+    if brief and brief.strip():
+        return "brief", True
+    return "wholesale", True
+
+
 def convert_pricing_option_to_adcp(
     pricing_option,
 ) -> (

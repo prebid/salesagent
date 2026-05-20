@@ -1430,6 +1430,9 @@ class AdCPRequestHandler(RequestHandler):
                 filters=filters,
                 property_list=parameters.get("property_list"),
                 context=parameters.get("context"),
+                buying_mode=parameters.get("buying_mode"),
+                refine=parameters.get("refine"),
+                adcp_version=parameters.get("adcp_version"),
                 identity=identity,
             )
 

@@ -1013,12 +1013,7 @@ def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
     _request_single_mb(ctx, mb_id)
 
 
-@when(
-    parsers.re(
-        r'the Buyer Agent requests delivery metrics for "(?P<mb_id>[^"]+)" '
-        r"without (?P<field>\w+)"
-    )
-)
+@when(parsers.re(r'the Buyer Agent requests delivery metrics for "(?P<mb_id>[^"]+)" ' r"without (?P<field>\w+)"))
 def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
     """Request without a specific optional field (attribution_window etc)."""
     ctx.setdefault("omitted_fields", []).append(field)

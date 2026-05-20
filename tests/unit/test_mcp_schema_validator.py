@@ -93,10 +93,9 @@ async def get_products(
         assert "adcp_version" in tool_params
 
         # Validate - should PASS
-        # adcp 3.9: GetProductsRequest is a TypeAlias, use concrete class
-        from adcp.types import GetProductsWholesaleRequest
+        from adcp.types import GetProductsRequest
 
-        validator.validate_tool("get_products", tool_params, GetProductsWholesaleRequest)
+        validator.validate_tool("get_products", tool_params, GetProductsRequest)
 
         # Should have NO errors
         assert len(validator.errors) == 0

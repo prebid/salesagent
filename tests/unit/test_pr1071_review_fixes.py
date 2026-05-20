@@ -99,6 +99,7 @@ class TestBrandExtractionFromPydanticModel:
     def test_brand_reference_is_not_dict_after_pydantic(self):
         """After Pydantic parsing, req.brand is BrandReference, not dict."""
         req = GetProductsRequest(
+            buying_mode="brief",
             brand={"domain": "example.com"},
             brief="test products",
         )
@@ -119,6 +120,7 @@ class TestBrandExtractionFromPydanticModel:
         from src.core.tools.products import _get_products_impl
 
         req = GetProductsRequest(
+            buying_mode="brief",
             brand={"domain": "nike.com"},
             brief="Athletic footwear",
         )
@@ -165,6 +167,7 @@ class TestAuditLogBrandFieldName:
         from src.core.tools.products import _get_products_impl
 
         req = GetProductsRequest(
+            buying_mode="brief",
             brand={"domain": "nike.com"},
             brief="Athletic footwear",
         )

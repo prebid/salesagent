@@ -1988,4 +1988,3 @@ Feature: BR-UC-002 Create Media Buy
     # Regression: existing tenants may still have {buyer_ref} in their template
     # after adcp 3.12 migration. buyer_ref was removed — template must not produce
     # empty-variable artifacts. Either migrate the template or fall back gracefully.
-

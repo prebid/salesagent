@@ -107,6 +107,7 @@ class TestGetProductsRequestBrandMigration:
         from src.core.schemas import GetProductsRequest
 
         request = GetProductsRequest(
+            buying_mode="brief",
             brief="test products",
             brand={"domain": "testbrand.com"},
         )

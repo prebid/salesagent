@@ -571,4 +571,3 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | audience_targeting_absent                           | a tenant is resolvable but adapter unavailable or audience_targeting=false           | audience_targeting section absent                                    |
       | conversion_tracking_absent                          | a tenant is resolvable but adapter unavailable or conversion_tracking=false          | conversion_tracking section absent                                   |
       | creative_absent                                     | a tenant is resolvable but creative not in supported_protocols                      | creative section absent                                              |
-

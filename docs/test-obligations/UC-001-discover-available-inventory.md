@@ -1570,6 +1570,62 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 ---
 
+## Buying Mode Contract (AdCP 3.0 three-mode discovery)
+
+The AdCP 3.0 spec defines three buyer-intent modes — `brief`, `wholesale`, `refine` —
+that gate which response surface a get_products call produces. The seven cross-mode
+invariants are encoded as a Pydantic `model_validator(mode="after")` on the local
+`GetProductsRequest`. Pre-v3 clients without `buying_mode` are defaulted to `brief`
+at the transport boundary per spec ("Sellers receiving requests from pre-v3 clients
+without buying_mode SHOULD default to 'brief'").
+
+#### Scenario: Brief mode runs the AI ranker and surfaces brief_relevance (T-UC-001-main)
+**Obligation ID** UC-001-MODE-BRIEF-01
+**Layer** behavioral
+**Given** a tenant with at least one product and AI ranking configured
+**When** the Buyer Agent sends a get_products request with `buying_mode="brief"` and a non-empty `brief`
+**Then** the response contains a `products` array
+**And** each product surfaces `brief_relevance` populated from the ranker's reasoning
+**And** the response does NOT contain `refinement_applied`
+**Business Rule** AdCP 3.0 brief mode: "publisher curates product recommendations from the provided brief"
+**Priority:** P0 -- core happy path for AdCP 3.0 v3 clients
+
+#### Scenario: Wholesale mode bypasses the ranker and omits brief_relevance (T-UC-001-alt-wholesale)
+**Obligation ID** UC-001-MODE-WHOLESALE-01
+**Layer** behavioral
+**Given** a tenant with at least one product
+**When** the Buyer Agent sends a get_products request with `buying_mode="wholesale"` and no `brief`
+**Then** the response contains a `products` array in catalog order
+**And** no product has `brief_relevance` set (the ranker is bypassed)
+**And** the response does NOT contain `refinement_applied`
+**Business Rule** AdCP 3.0 wholesale mode: "buyer requests raw inventory to apply their own audiences — brief must not be provided, and proposals are omitted"
+**Priority:** P0 -- spec-defined alternative path
+
+#### Scenario: Refine mode returns refinement_applied with status='unable' until #1073 (T-UC-001-alt-refine)
+**Obligation ID** UC-001-MODE-REFINE-01
+**Layer** behavioral
+**Given** a tenant with at least one product
+**When** the Buyer Agent sends a get_products request with `buying_mode="refine"` and a non-empty `refine` array
+**Then** the response contains a `products` array
+**And** the response contains a `refinement_applied` array of the same length and order as the request `refine` array
+**And** every `refinement_applied` entry reports `status="unable"` with notes referencing #1073
+**And** product-scope and proposal-scope entries echo their id (rendered as `product_id` / `proposal_id` per spec 3.0.6 wire format)
+**Business Rule** AdCP 3.0 refine mode: "iterate on products and proposals from a previous get_products response using the refine array of change requests"
+**Note** The `unable` status reflects that proposal-state persistence is tracked separately in #1073; refinement_applied is the protocol-conformant minimum that satisfies storyboard schema validation today
+**Priority:** P0 -- storyboard compliance gate (#1247 item 5)
+
+#### Scenario: Cross-mode invariants are enforced (T-UC-001-ext-d)
+**Obligation ID** UC-001-MODE-VALIDATION-01
+**Layer** schema
+**Given** the seven cross-mode rule rows in BR-UC-001-discover-available-inventory.feature:313-319
+**When** the Buyer Agent sends a get_products request that violates a cross-mode invariant
+**Then** the request is rejected with `error_code="VALIDATION_ERROR"` (UPPER_SNAKE per AdCP spec)
+**And** the error message identifies the offending field and the active mode
+**Business Rule** AdCP 3.0 cross-mode rules: brief required in brief mode; brief and refine forbidden in wholesale; brief forbidden and refine required in refine mode; v3 clients MUST include buying_mode
+**Priority:** P0 -- contract enforcement
+
+---
+
 ## Open Questions (from Gap Register)
 
 These may generate additional test scenarios once resolved:

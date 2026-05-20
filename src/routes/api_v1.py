@@ -69,6 +69,10 @@ class GetProductsBody(BaseModel):
     brief: str = ""
     brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     filters: dict[str, Any] | None = None
+    buying_mode: str | None = None  # 'brief' | 'wholesale' | 'refine' (v3 required, pre-v3 default to 'brief')
+    refine: list[dict[str, Any]] | None = None  # only valid when buying_mode='refine'
+    property_list: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -160,15 +164,25 @@ class SyncAccountsBody(BaseModel):
 
 @router.post("/products")
 async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
-    """Get available products matching the brief (auth-optional discovery skill)."""
-    req = products_module.create_get_products_request(
+    """Get available products matching the brief (auth-optional discovery skill).
+
+    Helper owns the pre-v3 shim + ValidationError → AdCPValidationError translation.
+    AdCPValidationError propagates to the FastAPI exception handler in src/app.py
+    which emits the two-layer envelope at 400 — matching MCP/A2A behavior.
+    """
+    req, pre_v3_defaulted = products_module.create_get_products_request(
         brief=body.brief,
         brand=body.brand,
         filters=body.filters,
+        property_list=body.property_list,
+        context=body.context,
+        buying_mode=body.buying_mode,
+        refine=body.refine,
+        adcp_version=body.adcp_version,
     )
 
     try:
-        response = await products_module._get_products_impl(req, identity)
+        response = await products_module._get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
     except ToolError as e:
         return _handle_tool_error(e)
 

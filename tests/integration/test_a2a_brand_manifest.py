@@ -12,7 +12,6 @@ from unittest.mock import MagicMock
 import pytest
 from a2a.server.routes.common import ServerCallContext
 from a2a.types import SendMessageRequest, Task
-from a2a.utils.errors import A2AError, InvalidParamsError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.resolved_identity import ResolvedIdentity
@@ -146,9 +145,14 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     )
     params = SendMessageRequest(message=message)
 
-    # Empty params → AdCPValidationError → InvalidParamsError
+    # AdCP 3.0 contract: a request with neither brief nor brand and no buying_mode
+    # is defaulted to wholesale mode by the pre-v3 shim ("buyer wants raw inventory,
+    # no curation"). Wholesale mode legitimately accepts this — the handler returns
+    # an empty/full catalog rather than rejecting. This is a deliberate deviation
+    # from the spec's "SHOULD default to brief" language (see resolve_pre_v3_buying_mode
+    # docstring), accepted to preserve v2 client backward compat.
     context = ServerCallContext()
-    with pytest.raises(A2AError) as exc_info:
-        await handler.on_message_send(params, context)
+    result = await handler.on_message_send(params, context)
 
-    assert isinstance(exc_info.value, InvalidParamsError)
+    assert isinstance(result, Task)
+    assert result.artifacts is not None

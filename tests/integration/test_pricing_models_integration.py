@@ -242,7 +242,7 @@ def setup_tenant_with_pricing_products(integration_db):
 @pytest.mark.requires_db
 async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_products):
     """Test that get_products returns pricing_options for products."""
-    request = GetProductsRequest(brief="display ads", brand={"domain": "testbrand.com"})
+    request = GetProductsRequest(buying_mode="brief", brief="display ads", brand={"domain": "testbrand.com"})
 
     # Create identity
     identity = ResolvedIdentity(

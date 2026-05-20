@@ -558,6 +558,7 @@ class BaseTestEnv:
                             f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
                         )
                         return response_cls(**result.structured_content)
+
         else:
             # Unit mode: inject identity directly.
             async def _call():

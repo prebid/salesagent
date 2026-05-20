@@ -358,6 +358,135 @@ jobs:
       if: always()
       run: |
         docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+
+  storyboard-compliance:
+    name: AdCP Storyboard Compliance (${{ matrix.scenario.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    # ADVISORY (non-blocking) until pre-existing salesagent gaps are addressed.
+    # The first real run revealed these scenarios are blocked by:
+    #   - #1247 gap #1: get_products rejects `adcp_major_version` parameter
+    #     (affects all 3 scenarios via the discover phase)
+    #   - Auth token mismatch: scenario passes --auth test123; salesagent's
+    #     default tenant rejects it
+    #   - inventory_list_* scenarios additionally need PR #1276 (persist+echo)
+    # `continue-on-error: true` keeps the runner output visible (artifacts +
+    # GitHub UI advisory warning) without blocking PR merge. Flip back to
+    # false once the underlying gaps land.
+    #
+    # Runs the @adcp/sdk storyboard runner against a docker-compose tenant on every
+    # PR. Each scenario in the matrix runs as a separate parallel job so failures
+    # are isolated and artifacts are uploaded per-scenario. Adding a new scenario:
+    # append an entry to strategy.matrix.scenario.
+    #
+    # Scenarios are activated by salesagent's get_adcp_capabilities specialism
+    # declaration (currently `sales-non-guaranteed`). All three scenarios below
+    # are bundled in that specialism's requires_scenarios.
+    #
+    # See:
+    # - .claude/notes/buying-mode-refine-wireup/PLAN.md §4.4 (refine_products)
+    # - .claude/notes/inventory-targeting/PLAN.md A3+A4 (inventory_list_*)
+    # - Issue #1247 item 5 (storyboard CI), gap #1 (adcp_major_version)
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - id: media_buy_seller/refine_products
+            name: refine_products
+            artifact: refine-products
+          - id: media_buy_seller/inventory_list_targeting
+            name: inventory_list_targeting
+            artifact: inventory-list-targeting
+          - id: media_buy_seller/inventory_list_no_match
+            name: inventory_list_no_match
+            artifact: inventory-list-no-match
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        # Node 22+: @adcp/sdk's auth.js requires the ESM-only `jose` package
+        # which Node 20's CommonJS require() rejects with ERR_REQUIRE_ESM.
+        node-version: '22'
+
+    - name: Start salesagent stack with docker compose
+      run: |
+        docker compose up -d --wait --wait-timeout 180
+
+    - name: Verify health
+      run: |
+        for i in $(seq 1 30); do
+          if curl -fs http://localhost:8000/health > /dev/null; then
+            echo "salesagent healthy"
+            break
+          fi
+          sleep 2
+        done
+        curl -fs http://localhost:8000/health || {
+          echo "salesagent failed to come up"
+          docker compose logs --tail=50
+          exit 1
+        }
+
+    - name: Smoke-test @adcp/sdk storyboard CLI
+      # Fail-fast on CLI-shape breakage (wrong flag, missing arg, ESM error).
+      # Without this, a CLI regression would only surface as a confusing
+      # error inside the live storyboard run — and historically was swallowed
+      # by `|| true`. See PLAN-v2 A3.
+      run: |
+        node --version
+        npx -y @adcp/sdk@6.11.0 storyboard list | head -5
+
+    - name: Run ${{ matrix.scenario.name }} storyboard via @adcp/sdk
+      env:
+        ADCP_AUTH_TOKEN: test123
+        SCENARIO_ID: ${{ matrix.scenario.id }}
+        SCENARIO_NAME: ${{ matrix.scenario.name }}
+      run: |
+        # CLI grammar (verified against @adcp/sdk@6.11.0 bin/adcp.js):
+        #   adcp storyboard run <agent_url> <storyboard_id> [--protocol mcp]
+        # Captures the runner's exit code explicitly via set +e / set -e and
+        # surfaces real failure on any non-zero exit. `--summary-output`
+        # writes a schema-stable summary artifact for debugging.
+        # --allow-http: runner's pre-flight refuses non-HTTPS URLs by default
+        # ("Production agents MUST terminate TLS"). CI runs against the local
+        # docker stack at http://localhost:8000/mcp/, so this is required.
+        set +e
+        npx -y @adcp/sdk@6.11.0 storyboard run \
+          http://localhost:8000/mcp/ \
+          "$SCENARIO_ID" \
+          --protocol mcp \
+          --allow-http \
+          --auth "$ADCP_AUTH_TOKEN" \
+          --json --summary-output storyboard-summary.json \
+          > storyboard-result.json
+        RC=$?
+        set -e
+        cat storyboard-result.json | jq '.' || echo "(storyboard-result.json was empty or non-JSON)"
+        cat storyboard-summary.json | jq '.' || echo "(storyboard-summary.json missing or non-JSON)"
+        if [ "$RC" -ne 0 ]; then
+          echo "::error::Storyboard $SCENARIO_NAME failed (runner exit $RC)"
+          exit "$RC"
+        fi
+        echo "✅ Storyboard $SCENARIO_NAME: runner exit 0"
+
+    - name: Upload storyboard result
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: storyboard-${{ matrix.scenario.artifact }}-${{ github.run_id }}
+        path: |
+          storyboard-result.json
+          storyboard-summary.json
+        retention-days: 7
+
+    - name: Cleanup
+      if: always()
+      run: docker compose down -v
+
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
@@ -396,15 +525,23 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [security-audit, smoke-tests, unit-tests, integration-tests, quickstart-test, e2e-tests, lint]
+    needs: [security-audit, smoke-tests, unit-tests, integration-tests, quickstart-test, e2e-tests, storyboard-compliance, lint]
     if: always()
 
     steps:
     - name: Check test results
       run: |
+        # storyboard-compliance is intentionally excluded from the failure-blocking
+        # check while pre-existing salesagent gaps (#1247 gap #1, auth token,
+        # PR #1276 persist+echo) keep the gates red. See storyboard-compliance
+        # job comment for the flip-back path. The job still runs + uploads
+        # artifacts + shows GitHub UI warnings — just non-blocking for merge.
         if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
           echo "❌ Tests failed"
           exit 1
         else
-          echo "✅ All tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, lint+mypy)"
+          if [ "${{ needs.storyboard-compliance.result }}" = "failure" ]; then
+            echo "⚠️ Storyboard compliance has advisory failures — see job artifacts and #1247 gap #1"
+          fi
+          echo "✅ All required tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, lint+mypy)"
         fi

@@ -1,6 +1,6 @@
 # INTELLECTUAL PROPERTY POLICY
 
-*Version 1.0*  
+*Version 1.0*
 
 The following policy may be changed by the Organization as allowed in its Bylaws.
 

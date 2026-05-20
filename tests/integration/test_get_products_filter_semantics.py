@@ -317,9 +317,10 @@ class TestPerFilterSignalSemantics:
         assert len(both_result.signals) >= len(owned_result.signals)
 
         for s in both_result.signals:
-            assert s.signal_type in ("marketplace", "owned"), (
-                f"Signal {s.name} has type {s.signal_type}, expected marketplace or owned"
-            )
+            assert s.signal_type in (
+                "marketplace",
+                "owned",
+            ), f"Signal {s.name} has type {s.signal_type}, expected marketplace or owned"
 
     @pytest.mark.asyncio
     async def test_data_providers_or_within_filter(self, identity):

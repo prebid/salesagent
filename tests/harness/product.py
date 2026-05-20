@@ -110,9 +110,18 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         """Convert kwargs to GetProductsBody shape for REST POST.
 
         GetProductsBody (src/routes/api_v1.py) accepts:
-            brief, brand, filters, adcp_version
+            brief, brand, filters, adcp_version, buying_mode, refine, property_list, context
         """
-        _BODY_FIELDS = ("brief", "brand", "filters", "adcp_version")
+        _BODY_FIELDS = (
+            "brief",
+            "brand",
+            "filters",
+            "adcp_version",
+            "buying_mode",
+            "refine",
+            "property_list",
+            "context",
+        )
         return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetProductsResponse:

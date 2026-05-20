@@ -401,6 +401,12 @@ class CircuitBreakerMixin:
         return worst.value
 
 
+# Sentinel for distinguishing "caller did not pass brief" from "caller passed empty brief"
+# in ProductMixin.call_impl. Lets the harness apply mode-aware defaults only when the
+# caller is silent, so explicit values flow through to the validator unmodified.
+_UNSET: Any = object()
+
+
 class ProductMixin:
     """Shared fluent API for _get_products_impl testing.
 
@@ -499,21 +505,31 @@ class ProductMixin:
 
     async def call_impl(  # type: ignore[override]
         self,
-        brief: str = "test brief",
+        brief: Any = _UNSET,
         brand: dict[str, Any] | None = None,
         filters: dict[str, Any] | None = None,
         property_list: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
+        buying_mode: str | None = None,
+        refine: list[dict[str, Any]] | None = None,
+        pre_v3_defaulted: bool = False,
         **extra: Any,
     ) -> GetProductsResponse:
         """Call _get_products_impl with the given parameters.
 
         Args:
-            brief: Search brief text.
+            brief: Search brief text. When the caller does not supply a value, the
+                harness uses 'test brief' for brief mode and None for wholesale/refine.
+                If the caller passes brief explicitly, it is forwarded as-is so the
+                cross-mode validator can reject invalid combinations (e.g.,
+                wholesale + brief) — tests probing rejection rely on this.
             brand: Brand reference dict (defaults to {"domain": "test.com"}).
             filters: ProductFilters dict.
             property_list: PropertyListReference dict.
             context: ContextObject dict.
+            buying_mode: Optional explicit buying_mode. When None, the harness picks the
+                appropriate mode from caller intent: refine present -> 'refine',
+                explicit brief -> 'brief', otherwise 'wholesale'.
             **extra: Additional kwargs forwarded to request construction.
 
         Returns:
@@ -525,15 +541,46 @@ class ProductMixin:
         # but not a GetProductsRequest field.
         identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
 
+        # Strip transport-only kwargs that other dispatchers consume but the IMPL path
+        # would forward into the request constructor where they get rejected.
+        extra.pop("adcp_version", None)
+
         if brand is None:
             brand = {"domain": "test.com"}
 
+        caller_supplied_brief = brief is not _UNSET
+        # Resolve brief default if the caller didn't supply one.
+        effective_brief: str | None
+        if caller_supplied_brief:
+            effective_brief = brief if (brief and str(brief).strip()) else None
+        else:
+            effective_brief = None  # set after we know the mode
+
+        # Default buying_mode from caller intent if not explicit.
+        if buying_mode is None:
+            if refine is not None:
+                buying_mode = "refine"
+            elif caller_supplied_brief and effective_brief:
+                buying_mode = "brief"
+            else:
+                buying_mode = "wholesale"
+
+        # Fill in a default brief for brief mode when caller didn't supply one.
+        if not caller_supplied_brief and buying_mode == "brief":
+            effective_brief = "test brief"
+
+        # In wholesale/refine modes, an empty brief is None (validator-compliant).
+        # If the caller explicitly passed a non-empty brief in those modes, leave it
+        # so the validator rejects — that's the test probing the contract.
+
         req = GetProductsRequestGenerated(
-            brief=brief,
+            brief=effective_brief,
             brand=brand,
             filters=filters,
             property_list=property_list,
             context=context,
+            buying_mode=buying_mode,
+            refine=refine,
             **extra,
         )
-        return await _get_products_impl(req, identity)
+        return await _get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)

@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPAuthorizationError, AdCPError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
@@ -190,8 +190,14 @@ class TestRankingThresholdBehavior:
         assert len(response.products) == 0
 
     @pytest.mark.asyncio
-    async def test_brief_relevance_not_set_on_products(self, integration_db):
-        """brief_relevance is NOT_IMPLEMENTED -- field should be absent/None after ranking."""
+    async def test_brief_relevance_set_from_ranker_reason(self, integration_db):
+        """brief_relevance is plumbed from the AI ranker's reason in brief mode (AdCP 3.0).
+
+        Spec: 'Explanation of why this product matches the brief (only included when
+        brief is provided)'.
+
+        Covers: UC-001-MODE-BRIEF-01
+        """
         from src.services.ai.agents.ranking_agent import ProductRanking, ProductRankingResult
 
         with ProductEnv(tenant_id="rank-rel", principal_id="p1") as env:
@@ -228,9 +234,9 @@ class TestRankingThresholdBehavior:
 
                 response = await env.call_impl(brief="campaign")
 
-        for p in response.products:
-            assert getattr(p, "brief_relevance", None) is None, (
-                "brief_relevance should NOT be set by _get_products_impl (NOT_IMPLEMENTED)"
+        for product in response.products:
+            assert product.brief_relevance == "Good", (
+                "brief_relevance should be plumbed from ranker.reason in brief mode"
             )
 
 
@@ -871,35 +877,39 @@ class TestSearchCriteriaValidation:
 
     @pytest.mark.asyncio
     async def test_no_search_criteria_raises_validation_error(self, integration_db):
-        """When brief, brand, and filters are all empty/None, _impl raises AdCPValidationError."""
+        """In brief mode, empty brief/brand/filters raises AdCPValidationError.
+
+        AdCP 3.0: brief mode requires brief; the cross-mode validator rejects requests
+        without one. Wholesale and refine modes legitimately omit search criteria.
+        """
+        from pydantic import ValidationError as PydanticValidationError
+
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-        from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="no-crit", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="no-crit", subdomain="no-crit")
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
-            req = GetProductsRequestGenerated(brief=None, brand=None, filters=None)
-            with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
-                await _get_products_impl(req, env.identity)
+            with pytest.raises(PydanticValidationError, match="brief is required"):
+                GetProductsRequestGenerated(buying_mode="brief", brief=None, brand=None, filters=None)
 
     @pytest.mark.asyncio
     async def test_empty_string_brief_counts_as_no_criteria(self, integration_db):
-        """An empty string brief is equivalent to None for search criteria validation."""
+        """An empty/whitespace brief is equivalent to None per the cross-mode validator."""
+        from pydantic import ValidationError as PydanticValidationError
+
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-        from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="empty-br", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="empty-br", subdomain="empty-br")
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
-            req = GetProductsRequestGenerated(brief="", brand=None, filters=None)
-            with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
-                await _get_products_impl(req, env.identity)
+            with pytest.raises(PydanticValidationError, match="brief is required"):
+                GetProductsRequestGenerated(buying_mode="brief", brief="", brand=None, filters=None)
 
     @pytest.mark.asyncio
     async def test_brief_alone_satisfies_search_criteria(self, integration_db):
-        """A non-empty brief is sufficient search criteria."""
+        """A non-empty brief in brief mode is sufficient search criteria."""
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
         from src.core.tools.products import _get_products_impl
 
@@ -909,7 +919,7 @@ class TestSearchCriteriaValidation:
             p = ProductFactory(tenant=tenant, product_id="p1")
             PricingOptionFactory(product=p)
 
-            req = GetProductsRequestGenerated(brief="Athletic footwear", brand=None, filters=None)
+            req = GetProductsRequestGenerated(buying_mode="brief", brief="Athletic footwear", brand=None, filters=None)
             response = await _get_products_impl(req, env.identity)
 
         assert response.products is not None
@@ -942,16 +952,24 @@ class TestSearchCriteriaValidation:
 
     @pytest.mark.asyncio
     async def test_validation_error_has_correct_error_code(self, integration_db):
-        """AdCPValidationError has error_code='VALIDATION_ERROR'."""
+        """Brief mode without brief is rejected by the cross-mode validator with VALIDATION_ERROR.
+
+        The transport-wrapper layer translates the Pydantic ValidationError into
+        AdCPValidationError(error_code='VALIDATION_ERROR'). Tested at the wrapper
+        boundary in tests/unit/test_get_products_buying_mode.py — here we just
+        verify the schema-level rejection emits a Pydantic ValidationError with
+        the expected message.
+        """
+        from pydantic import ValidationError as PydanticValidationError
+
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-        from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="err-code", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="err-code", subdomain="err-code")
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
-            req = GetProductsRequestGenerated(brief=None, brand=None, filters=None)
-            with pytest.raises(AdCPValidationError) as exc_info:
-                await _get_products_impl(req, env.identity)
+            with pytest.raises(PydanticValidationError) as exc_info:
+                GetProductsRequestGenerated(buying_mode="brief", brief=None, brand=None, filters=None)
 
-        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        # Pydantic ValidationError surfaces a "brief is required" message
+        assert "brief is required" in str(exc_info.value)

@@ -402,9 +402,11 @@ class TestSyncApiAuth:
             )
             # Auth passed — we get past the decorator. Route may fail on DB
             # but must NOT return 401 (missing/invalid key) or 503 (unconfigured).
-            assert resp.status_code not in (401, 403, 503), (
-                f"Auth should have succeeded but got {resp.status_code}: {resp.json}"
-            )
+            assert resp.status_code not in (
+                401,
+                403,
+                503,
+            ), f"Auth should have succeeded but got {resp.status_code}: {resp.json}"
 
     def test_missing_header_returns_401(self, sync_app, monkeypatch):
         """Request without X-API-Key header returns 401."""

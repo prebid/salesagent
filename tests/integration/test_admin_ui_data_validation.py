@@ -344,9 +344,10 @@ class TestInventorySizesEndpoint:
 
         assert response.status_code == 200
         data = response.get_json()
-        assert data["sizes"] == ["300x250", "728x90"], (
-            f"Expected dict-format GAM sizes to be normalized to WxH strings, got: {data}"
-        )
+        assert data["sizes"] == [
+            "300x250",
+            "728x90",
+        ], f"Expected dict-format GAM sizes to be normalized to WxH strings, got: {data}"
         assert data["count"] == 2
 
     def test_endpoint_handles_legacy_string_format_sizes(

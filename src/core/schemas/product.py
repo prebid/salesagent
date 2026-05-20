@@ -7,8 +7,8 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 from typing import Any
 
 from adcp.types import Catalog as LibraryCatalog
+from adcp.types import GetProductsRequest as LibraryGetProductsRequest
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
-from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 from adcp.types import Placement as LibraryPlacement
 from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
@@ -23,6 +23,7 @@ from src.core.schemas._base import (
     SalesAgentBaseModel,
     _upgrade_legacy_format_ids,
 )
+from src.core.validation_helpers import resolve_enum_value
 
 
 class ProductCard(LibraryProductCard):
@@ -230,24 +231,27 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
+    """Extends library GetProductsRequest with cross-mode invariants and internal fields.
 
-    Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
-    We widen buying_mode to str|None so callers aren't forced into a single mode.
-
-    Library provides: account, brand, brief, buyer_campaign_ref, catalog,
-    context, ext, fields, filters, pagination, property_list, refine.
+    Library provides: account, adcp_major_version, brand, brief, buying_mode, catalog,
+    context, ext, fields, filters, pagination, preferred_delivery_types, property_list,
+    refine, required_policies, time_budget. The library declares buying_mode as required
+    and validates the wire shape of refine entries (Refine1=request, Refine2=product with
+    product_id, Refine3=proposal with proposal_id) — both align with the released spec.
 
     Internal-only: product_selectors (excluded from external serialization).
+
+    The `_validate_buying_mode_invariants` validator (mode='after') enforces the AdCP
+    cross-mode rules the library does not enforce itself (brief required for brief mode,
+    refine forbidden in brief/wholesale, etc.). Mirrors the seven rule rows at
+    tests/bdd/features/BR-UC-001-discover-available-inventory.feature:313-319.
+
+    Wire-format compatibility note: the rc.3 <-> 3.0.6 refine-entry id rename shim that
+    previously lived in this class is gone — adcp library 4.3 already speaks the released
+    spec wire format natively, so the shim is dead code (see PR conversation).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    # Widen buying_mode from Literal['wholesale'] to str|None (we accept any mode or none)
-    buying_mode: str | None = Field(  # type: ignore[assignment]
-        None,
-        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
-    )
 
     # Internal-only fields (not in AdCP spec)
     product_selectors: LibraryCatalog | None = Field(
@@ -255,6 +259,46 @@ class GetProductsRequest(LibraryGetProductsRequest):
         description="Selectors to filter the brand manifest product catalog for product discovery",
         exclude=True,
     )
+
+    @model_validator(mode="after")
+    def _validate_buying_mode_invariants(self) -> "GetProductsRequest":
+        """Enforce AdCP cross-mode rules the library does not check itself.
+
+        Rule sources: AdCP 3.0 spec (description on each variant's buying_mode Literal) and
+        tests/bdd/features/BR-UC-001-discover-available-inventory.feature:313-319.
+
+        The transport wrapper is responsible for defaulting pre-v3 clients to 'brief' (or
+        'wholesale' when no brief is provided) before the request reaches this validator.
+        """
+        # The library types buying_mode as the BuyingMode enum; normalize to a plain string
+        # so the rule comparisons below stay readable.
+        if self.buying_mode is None:
+            raise ValueError("buying_mode must be one of 'brief', 'wholesale', 'refine'; got None")
+        mode = resolve_enum_value(self.buying_mode)
+
+        if mode not in {"brief", "wholesale", "refine"}:
+            raise ValueError(f"buying_mode must be one of 'brief', 'wholesale', 'refine'; got {mode!r}")
+
+        has_brief = bool(self.brief and self.brief.strip())
+        refine_present = self.refine is not None
+
+        if mode == "brief":
+            if not has_brief:
+                raise ValueError("brief is required when buying_mode is 'brief'")
+            if refine_present:
+                raise ValueError("refine must not be provided when buying_mode is 'brief'")
+        elif mode == "wholesale":
+            if has_brief:
+                raise ValueError("brief must not be provided when buying_mode is 'wholesale'")
+            if refine_present:
+                raise ValueError("refine must not be provided when buying_mode is 'wholesale'")
+        else:  # mode == "refine"
+            if has_brief:
+                raise ValueError("brief must not be provided when buying_mode is 'refine'")
+            if not refine_present:
+                raise ValueError("refine array is required when buying_mode is 'refine'")
+
+        return self
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):

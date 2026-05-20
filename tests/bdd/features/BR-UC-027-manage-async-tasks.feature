@@ -765,4 +765,3 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the query_summary shows returned as 25 and total_matching as 60
     And returned is less than or equal to total_matching
     # INV-4: returned <= total_matching
-

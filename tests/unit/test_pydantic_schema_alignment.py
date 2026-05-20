@@ -79,6 +79,7 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     },
     "/schemas/latest/media-buy/sync-creatives-request.json": {
         "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "account_id",  # Mirror of above — generator produces 'account_id' from updated schema cache
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
     "/schemas/latest/media-buy/list-creatives-request.json": {
@@ -562,11 +563,14 @@ class TestPydanticSchemaAlignment:
             instance = model_class(**minimal_request)
             assert instance is not None
         except ValidationError as e:
-            # Check if this is a value_error (custom validator) - models can be stricter
-            value_errors = [err for err in e.errors() if err["type"] == "value_error"]
-            if value_errors:
+            # Check if this is a value_error (custom validator) or enum constraint - models can be stricter
+            # than spec. value_error covers @model_validator-raised ValueError; enum covers Literal/Enum
+            # field types where the spec leaves the type as string but the library narrowed it.
+            stricter_types = {"value_error", "enum"}
+            stricter_errors = [err for err in e.errors() if err["type"] in stricter_types]
+            if stricter_errors:
                 pytest.skip(
-                    f"{model_class.__name__} has stricter validation than spec (custom validators). "
+                    f"{model_class.__name__} has stricter validation than spec (custom validators/enums). "
                     f"This is acceptable for business logic. Error: {e}"
                 )
 
@@ -611,6 +615,7 @@ class TestSpecificFieldValidation:
     def test_get_products_accepts_filters(self):
         """REGRESSION TEST: filters must be accepted (PR #195 issue)."""
         request = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "testproduct.com"},
             filters={
                 "delivery_type": "guaranteed",
@@ -621,20 +626,21 @@ class TestSpecificFieldValidation:
         assert request.filters.delivery_type.value == "guaranteed"
 
     def test_get_products_all_fields_optional(self):
-        """Test that GetProductsRequest accepts all optional fields per spec.
+        """Test that within a buying_mode, GetProductsRequest fields are optional per spec.
 
-        Note: adcp_version is NOT a field on GetProductsRequest per AdCP spec.
-        All fields are optional, including brand.
+        AdCP 3.0 makes buying_mode required for v3 clients (cross-mode contract).
+        Within a mode, the remaining fields keep their per-spec optionality.
         adcp 3.6.0: brand replaced brand_manifest.
         """
-        # Empty request is valid
-        empty_request = GetProductsRequest()
-        assert empty_request.brand is None
-        assert empty_request.brief is None
-        assert empty_request.filters is None
+        # Wholesale mode minimal
+        wholesale_minimal = GetProductsRequest(buying_mode="wholesale")
+        assert wholesale_minimal.brand is None
+        assert wholesale_minimal.brief is None
+        assert wholesale_minimal.filters is None
 
-        # With brand only
+        # With brand only (wholesale mode)
         request = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "testproduct.com"},
         )
         assert request.brand is not None

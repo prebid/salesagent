@@ -40,7 +40,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the response status should be "completed"
     And the response should contain "products" array
     And each product should have product_id, name, format_ids, publisher_properties, pricing_options, and delivery_measurement
-    And the products should be ordered by relevance_score descending
+    And the products should be ordered when buying_mode is brief
     And each product should include brief_relevance explanation
     # POST-S1: Buyer knows what inventory matches their brief
     # POST-S2: Buyer can evaluate each product's pricing, formats, delivery measurement
@@ -1260,4 +1260,3 @@ Feature: BR-UC-001 Discover Available Inventory
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
-

@@ -114,9 +114,10 @@ def _create_property_selection(base_url: str, tenant_id: str) -> dict[str, str]:
         allow_redirects=False,
         timeout=20,
     )
-    assert property_response.status_code in {302, 303}, (
-        f"Authorized property setup failed: {property_response.status_code}"
-    )
+    assert property_response.status_code in {
+        302,
+        303,
+    }, f"Authorized property setup failed: {property_response.status_code}"
 
     return {
         "publisher_domain": publisher_domain,

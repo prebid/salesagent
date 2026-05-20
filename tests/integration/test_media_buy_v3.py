@@ -385,9 +385,11 @@ class TestCreateMediaBuyAdapterAtomicity:
             # The important assertion is that a record EXISTS (atomicity: success -> persisted).
             # AdCP MediaBuyStatus distinguishes pending_creatives (missing/unapproved creatives)
             # from pending_start (manual approval / scheduled future start).
-            assert mb.status in ("active", "pending_creatives", "pending_start"), (
-                f"Expected active/pending_creatives/pending_start, got {mb.status}"
-            )
+            assert mb.status in (
+                "active",
+                "pending_creatives",
+                "pending_start",
+            ), f"Expected active/pending_creatives/pending_start, got {mb.status}"
 
             packages = session.scalars(
                 select(DBMediaPackage).where(DBMediaPackage.media_buy_id == mb.media_buy_id)

@@ -84,7 +84,8 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         assert call_kwargs["filters"] == {"delivery_type": "guaranteed"}
         assert "min_exposures" not in call_kwargs, "min_exposures is not in AdCP spec — must not be forwarded"
         assert "strategy_id" not in call_kwargs, "strategy_id is not in AdCP spec — must not be forwarded"
-        assert "adcp_version" not in call_kwargs, "adcp_version is a transport concern — must not be forwarded"
+        # adcp_version IS forwarded so the raw function can apply the pre-v3 default-to-brief shim.
+        assert call_kwargs["adcp_version"] == "3.6.0"
         assert "brand_manifest" not in call_kwargs
 
 

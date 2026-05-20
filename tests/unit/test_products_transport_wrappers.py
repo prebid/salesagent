@@ -40,7 +40,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.server.context import Context
-from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import GetProductsResponse
@@ -78,43 +77,24 @@ class TestMcpGetProductsWrapper:
         assert "products" in result.structured_content
         assert result.content is not None  # Human-readable text
 
-    def test_mcp_wrapper_validation_error_raises_adcp_validation(self):
-        """MCP wrapper translates ValidationError to AdCPValidationError."""
+    def test_mcp_wrapper_propagates_adcp_validation_error_from_helper(self):
+        """AdCPValidationError raised by the helper propagates through the MCP wrapper.
+
+        The pre-v3 shim + ValidationError → AdCPValidationError translation live in
+        ``create_get_products_request`` so all three transports observe identical
+        behavior. The MCP wrapper does not catch.
+        """
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=None)
 
         with patch(
             "src.core.tools.products.create_get_products_request",
-            side_effect=ValidationError.from_exception_data(
-                title="GetProductsRequest",
-                line_errors=[
-                    {
-                        "type": "missing",
-                        "loc": ("brief",),
-                        "msg": "Field required",
-                        "input": {},
-                    }
-                ],
-            ),
+            side_effect=AdCPValidationError("schema invariant failed"),
         ):
             from src.core.tools.products import get_products
 
-            with pytest.raises(AdCPValidationError):
+            with pytest.raises(AdCPValidationError, match="schema invariant failed"):
                 asyncio.run(get_products(brief="", ctx=mock_ctx))
-
-    def test_mcp_wrapper_value_error_raises_adcp_validation(self):
-        """MCP wrapper translates ValueError to AdCPValidationError."""
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=None)
-
-        with patch(
-            "src.core.tools.products.create_get_products_request",
-            side_effect=ValueError("Invalid brand format"),
-        ):
-            from src.core.tools.products import get_products
-
-            with pytest.raises(AdCPValidationError, match="Invalid get_products request"):
-                asyncio.run(get_products(brief="ads", ctx=mock_ctx))
 
     def test_mcp_wrapper_no_version_compat(self):
         """MCP wrapper does NOT apply version compat — that's the handler's job (parity with A2A)."""
@@ -239,7 +219,11 @@ class TestA2AGetProductsRawWrapper:
         mock_compat.assert_not_called()
 
     def test_a2a_wrapper_empty_brief_uses_empty_string(self):
-        """A2A wrapper passes empty string when brief is empty."""
+        """A2A wrapper passes empty string when brief is empty.
+
+        With no brief provided, the request must be in wholesale mode (brief mode
+        requires a non-empty brief; refine forbids brief).
+        """
         identity = PrincipalFactory.make_identity(protocol="a2a")
 
         with patch(
@@ -249,7 +233,7 @@ class TestA2AGetProductsRawWrapper:
         ) as mock_impl:
             from src.core.tools.products import get_products_raw
 
-            asyncio.run(get_products_raw(brief="", identity=identity))
+            asyncio.run(get_products_raw(brief="", buying_mode="wholesale", identity=identity))
 
         req = mock_impl.call_args.args[0]
         # brief="" → create_get_products_request normalizes to None

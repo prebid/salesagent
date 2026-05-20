@@ -99,10 +99,7 @@ class Feature:
 # ---------------------------------------------------------------------------
 
 _CONTEXTGIT_RE = re.compile(
-    r"#\s*@contextgit\s+"
-    r"id=(?P<id>\S+)"
-    r"(?:\s+type=(?P<type>\S+))?"
-    r"(?:\s+upstream=\[(?P<upstream>[^\]]*)\])?"
+    r"#\s*@contextgit\s+" r"id=(?P<id>\S+)" r"(?:\s+type=(?P<type>\S+))?" r"(?:\s+upstream=\[(?P<upstream>[^\]]*)\])?"
 )
 
 

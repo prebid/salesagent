@@ -15,9 +15,10 @@ from adcp import Product as LibraryProduct
 from adcp.types import PropertyListReference
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.media_buy.get_products_response import RefinementApplied
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import Field, ValidationError
+from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
@@ -31,7 +32,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
-from src.core.validation_helpers import format_validation_error, safe_parse_json_field
+from src.core.validation_helpers import resolve_enum_value, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -142,8 +143,50 @@ def filter_products_by_property_list(
     return [p for p in products if should_include_product_for_property_list(p, allowed_properties)]
 
 
+_REFINE_NOT_PERSISTED_NOTES = (
+    "Proposal-state persistence is not yet implemented; refinement cannot be applied. Tracked in #1073."
+)
+
+
+def _build_refinement_applied_unable(
+    refine_entries: list[Any] | None,
+) -> list[RefinementApplied]:
+    """Build a refinement_applied response for buying_mode='refine'.
+
+    Until #1073 implements proposal persistence and intelligent refinement, every entry
+    reports status='unable' with a notes field that names the umbrella issue. The response
+    matches the request's refine array by position per AdCP spec.
+
+    Each item echoes the corresponding request entry's scope and id field (product_id /
+    proposal_id) so orchestrators can cross-validate alignment.
+    """
+    if not refine_entries:
+        return []
+
+    items: list[RefinementApplied] = []
+    for entry in refine_entries:
+        # Entry is a discriminated-union root over Refine1 (request), Refine2 (product),
+        # Refine3 (proposal). Pull the inner variant via .root, then read scope and the
+        # scope-specific id field. RefinementApplied mirrors the same scope-keyed shape.
+        inner = getattr(entry, "root", entry)
+        scope = getattr(inner, "scope", None)
+        payload: dict[str, Any] = {
+            "scope": scope,
+            "status": "unable",
+            "notes": _REFINE_NOT_PERSISTED_NOTES,
+        }
+        if scope == "product":
+            payload["product_id"] = getattr(inner, "product_id", None)
+        elif scope == "proposal":
+            payload["proposal_id"] = getattr(inner, "proposal_id", None)
+        items.append(RefinementApplied.model_validate(payload))
+    return items
+
+
 async def _get_products_impl(
-    req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
+    req: GetProductsRequestGenerated,
+    identity: ResolvedIdentity | None,
+    pre_v3_defaulted: bool = False,
 ) -> GetProductsResponse:
     """Shared implementation for get_products.
 
@@ -153,14 +196,26 @@ async def _get_products_impl(
     Args:
         req: GetProductsRequest from generated schemas
         identity: Resolved identity from transport boundary
+        pre_v3_defaulted: True if the wrapper layer applied the pre-v3 default shim
+            because the client omitted buying_mode and declared a pre-v3 adcp_version.
+            The flag is True for both the brief and wholesale default paths so audit
+            consumers can distinguish a defaulted v2 client from an explicit v3 request
+            in either mode. Recorded in the audit log.
 
     Returns:
         GetProductsResponse containing matching products
     """
     start_time = time.time()
 
-    # Require at least one search criterion (brief, brand, or filters)
-    if not req.brief and not req.brand and not req.filters:
+    # buying_mode normalization + presence + cross-mode invariants live in
+    # _validate_buying_mode_invariants on GetProductsRequest — it runs on every model
+    # construction (the create_get_products_request helper feeds this path) and raises
+    # before _impl sees the request. Trust that single layer here.
+    mode = resolve_enum_value(req.buying_mode)
+
+    # Wholesale and refine modes legitimately omit brief/brand/filters; only brief mode
+    # needs a discovery criterion, and the validator already enforces brief presence there.
+    if mode == "brief" and not req.brief and not req.brand and not req.filters:
         raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
 
     # Extract identity fields
@@ -663,9 +718,10 @@ async def _get_products_impl(
                     filtered_products.append(product)
         eligible_products = filtered_products
 
-    # AI-powered product ranking (when tenant has product_ranking_prompt configured)
+    # AI-powered product ranking (brief mode only; wholesale and refine bypass the ranker
+    # per AdCP spec — wholesale returns raw inventory, refine iterates on prior state).
     product_ranking_prompt = tenant.get("product_ranking_prompt")
-    if product_ranking_prompt and brief_text and eligible_products:
+    if mode == "brief" and product_ranking_prompt and brief_text and eligible_products:
         try:
             from src.services.ai.agents.ranking_agent import (
                 create_ranking_agent,
@@ -699,6 +755,15 @@ async def _get_products_impl(
 
                 # Filter out products with very low relevance (score < 0.1)
                 eligible_products = [p for p in eligible_products if ranking_map.get(p.product_id, (0.0, ""))[0] >= 0.1]
+
+                # Surface the ranker's reason on each surviving product as brief_relevance
+                # per AdCP 3.0 Product schema ("Explanation of why this product matches the
+                # brief (only included when brief is provided)"). Spec-compliant since brief
+                # mode requires a brief.
+                for product in eligible_products:
+                    reason = ranking_map.get(product.product_id, (0.0, ""))[1]
+                    if reason:
+                        product.brief_relevance = reason
 
                 # Log the ranking results
                 for r in ranking_result.rankings:
@@ -751,6 +816,12 @@ async def _get_products_impl(
         for product in eligible_products:
             product.pricing_options = []
 
+    # Build refinement_applied for buying_mode='refine'. Until #1073 implements proposal
+    # persistence and intelligent refinement, every entry reports status='unable' with a
+    # notes field that names the umbrella issue. The response still carries products so
+    # the storyboard's `field_present: products` validation passes.
+    refinement_applied = _build_refinement_applied_unable(req.refine) if mode == "refine" else None
+
     # Our Product extends LibraryProduct - cast for type safety since list is invariant
     # When serialized, Pydantic automatically uses library Product fields
     # Internal-only fields (implementation_config) excluded by model_dump()
@@ -763,6 +834,7 @@ async def _get_products_impl(
         products=cast(list[LibraryProduct], eligible_products),
         errors=None,
         context=req.context,
+        refinement_applied=refinement_applied,
     )
 
     # Log successful get_products call
@@ -779,6 +851,9 @@ async def _get_products_impl(
             "brief_length": len(brief_text),
             "has_filters": req.filters is not None,
             "has_brand": req.brand is not None,
+            "buying_mode": mode,
+            "refine_count": len(req.refine) if req.refine else 0,
+            "pre_v3_defaulted": pre_v3_defaulted,
             "elapsed_ms": elapsed_ms,
         },
     )
@@ -795,18 +870,50 @@ async def get_products(
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # payload-level context
+    buying_mode: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Buyer intent: 'brief' (publisher curates from the brief), 'wholesale' "
+                "(buyer requests raw inventory; brief and refine forbidden), or 'refine' "
+                "(iterate on a previous response via the refine array). v3 clients MUST "
+                "include this; pre-v3 clients are defaulted at the wrapper boundary."
+            ),
+        ),
+    ] = None,
+    refine: list[dict[str, Any]] | None = None,
+    adcp_version: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Client's AdCP version (e.g. '1.0.0', '3.0.0'). Used solely to drive the "
+                "inbound pre-v3 default-to-brief shim — the wrapper does not apply outbound "
+                "version_compat (handler responsibility, parity with A2A)."
+            ),
+        ),
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Get available products matching the brief.
 
-    MCP tool wrapper aligned with adcp v3.6.0 spec.
+    MCP tool wrapper aligned with the AdCP 3.0 three-mode contract.
 
     Args:
         brand: Brand reference per adcp 3.6.0. Example: BrandReference(domain="acme.com")
-        brief: Brief description of the advertising campaign or requirements (optional)
+        brief: Brief description of the campaign (required when buying_mode='brief';
+            forbidden when buying_mode='wholesale' or 'refine')
         filters: Structured filters for product discovery (optional)
         property_list: Property list reference for filtering by buyer's property list (optional)
         context: Application level context per adcp spec
+        buying_mode: Buyer intent — 'brief' (publisher curates), 'wholesale' (raw inventory),
+            or 'refine' (iterate on a previous response). v3 clients MUST include buying_mode;
+            pre-v3 clients are defaulted to 'brief'.
+        refine: Array of change requests for iterating on a previous get_products response;
+            only valid when buying_mode='refine'. List-of-dicts at the MCP boundary; the
+            request schema validates each entry's typed shape.
+        adcp_version: Client's AdCP version (e.g. '1.0.0', '3.0.0'). Used solely to drive
+            the inbound pre-v3 default-to-brief shim — the wrapper does not apply outbound
+            version_compat (handler's responsibility, parity with A2A).
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -816,28 +923,25 @@ async def get_products(
     if isinstance(brand, str):
         brand = BrandReference(domain=brand)
 
-    # Build request object for shared implementation
-    try:
-        req = create_get_products_request(
-            brief=brief,
-            brand=brand,
-            filters=filters,
-            property_list=property_list,
-            context=context,
-        )
-
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
-    except ValueError as e:
-        # Convert ValueError from helper to ToolError with clear message
-        raise AdCPValidationError(f"Invalid get_products request: {e}") from e
+    # Helper owns the pre-v3 shim + ValidationError → AdCPValidationError translation
+    # so all three transports (MCP, A2A, REST) observe identical behavior.
+    req, pre_v3_defaulted = create_get_products_request(
+        brief=brief,
+        brand=brand,
+        filters=filters,
+        property_list=property_list,
+        context=context,
+        buying_mode=buying_mode,
+        refine=refine,
+        adcp_version=adcp_version,
+    )
 
     # Read identity pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Call shared implementation
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly
-    response = await _get_products_impl(req, identity)
+    response = await _get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
 
     # Return ToolResult with human-readable text and structured data
     return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
@@ -849,6 +953,9 @@ async def get_products_raw(
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
+    buying_mode: str | None = None,
+    refine: list[dict[str, Any]] | None = None,
+    adcp_version: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetProductsResponse:
@@ -864,6 +971,10 @@ async def get_products_raw(
         filters: Structured filters for product discovery (optional)
         property_list: Property list reference for filtering by buyer's property list (optional)
         context: Application level context per adcp spec
+        buying_mode: Buyer intent — 'brief' / 'wholesale' / 'refine'. v3 clients MUST
+            include this; pre-v3 clients are defaulted to 'brief' here.
+        refine: Array of change requests for buying_mode='refine'.
+        adcp_version: Client's AdCP version (used to decide pre-v3 default-to-brief).
         ctx: FastMCP context (automatically provided)
         identity: Resolved identity from transport boundary (preferred over ctx)
 
@@ -876,17 +987,22 @@ async def get_products_raw(
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
 
-    # Create request object - adcp library validates schema
-    req = create_get_products_request(
+    # Helper owns the pre-v3 shim + ValidationError → AdCPValidationError translation
+    # so MCP / A2A / REST observe identical behavior. AdCPValidationError propagates
+    # to the A2A boundary handler which converts to the wire envelope.
+    req, pre_v3_defaulted = create_get_products_request(
         brief=brief or "",
         brand=brand,
         filters=filters,
         property_list=property_list,
         context=context,
+        buying_mode=buying_mode,
+        refine=refine,
+        adcp_version=adcp_version,
     )
 
     # Call shared implementation
-    return await _get_products_impl(req, identity)
+    return await _get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
 
 
 def get_product_catalog(tenant_id: str | None = None) -> list[Product]:

@@ -1599,9 +1599,11 @@ def then_account_processed_normally(ctx: dict, domain: str) -> None:
     resp = ctx["response"]
     acct = _find_account_by_brand(resp, domain)
     actual = _action_str(acct.action)
-    assert actual in ("created", "updated", "unchanged"), (
-        f"Expected normal processing for {domain}, got action '{actual}'"
-    )
+    assert actual in (
+        "created",
+        "updated",
+        "unchanged",
+    ), f"Expected normal processing for {domain}, got action '{actual}'"
     ctx["last_account"] = acct
 
 
@@ -2330,9 +2332,10 @@ def then_db_field_unchanged(ctx: dict, field: str) -> None:
         db_val = getattr(db_acct, field, None)
         # The field should have its original value (set at creation), not be None
         # unless it was always None. The key assertion: sync didn't overwrite it.
-        assert db_val is not None or field in ("advertiser", "rate_card"), (
-            f"Expected {field} to be preserved but got None"
-        )
+        assert db_val is not None or field in (
+            "advertiser",
+            "rate_card",
+        ), f"Expected {field} to be preserved but got None"
 
 
 @then(parsers.parse('the agent has exactly one access grant for brand domain "{domain}"'))

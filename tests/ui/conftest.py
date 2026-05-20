@@ -66,7 +66,8 @@ def authenticated_page(page, base_url):
     page.wait_for_load_state("domcontentloaded")
 
     # Inject tenant_id into the last form (needed for multi-tenant e2e stacks)
-    page.evaluate("""() => {
+    page.evaluate(
+        """() => {
         const forms = document.querySelectorAll('form[action="/test/auth"]');
         const form = forms[forms.length - 1];
         if (form && !form.querySelector('input[name="tenant_id"]')) {
@@ -76,7 +77,8 @@ def authenticated_page(page, base_url):
             input.value = 'default';
             form.appendChild(input);
         }
-    }""")
+    }"""
+    )
 
     buttons = page.locator('form[action="/test/auth"] button[type="submit"]')
     buttons.last.click()

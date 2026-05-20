@@ -305,7 +305,9 @@ class TestSchemaConstructionValidation:
 
         # Test schemas that should work with minimal params
         test_cases = [
-            (schemas.GetProductsRequest, {"brand": {"domain": "testbrand.com"}}),
+            # GetProductsRequest requires buying_mode per AdCP 3.0 spec; "wholesale" is
+            # the minimal mode that doesn't require a brief.
+            (schemas.GetProductsRequest, {"buying_mode": "wholesale", "brand": {"domain": "testbrand.com"}}),
             (schemas.UpdateMediaBuyRequest, {"media_buy_id": "test"}),
             (schemas.GetMediaBuyDeliveryRequest, {}),
             (schemas.ListCreativesRequest, {}),

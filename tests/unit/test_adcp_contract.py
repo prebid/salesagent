@@ -92,7 +92,7 @@ class TestSchemaMatchesLibrary:
             SyncCreativesRequest as LibSyncCreativesRequest,
         )
         from adcp.types import (
-            GetProductsWholesaleRequest as LibGetProductsRequest,
+            GetProductsRequest as LibGetProductsRequest,
         )
 
         from src.core.schemas import (
@@ -120,8 +120,6 @@ class TestSchemaMatchesLibrary:
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
         # product_selectors — internal-only field (not in AdCP spec)
-        # buying_mode and account are now in the library (adcp 3.9) but overridden locally
-        # (buying_mode widened to str|None, account made optional)
         local_extensions = {"product_selectors"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
@@ -169,37 +167,45 @@ class TestSchemaMatchesLibrary:
         assert lib_fields == local_fields, f"SyncCreativesRequest drift: lib={lib_fields}, local={local_fields}"
 
     def test_get_products_request_field_optionality(self):
-        """Verify GetProductsRequest fields match library optionality.
+        """Verify GetProductsRequest cross-mode invariants per AdCP 3.0.
 
-        Per AdCP spec, all fields in GetProductsRequest are optional.
-        This test catches accidental regressions where we make fields required.
-        In adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with domain).
+        AdCP 3.0 makes buying_mode required for v3 clients. Pre-v3 clients are
+        defaulted to 'brief' at the transport boundary (wrapper layer), so the
+        request schema itself enforces the v3-spec contract.
+
+        Within each mode, optional fields remain optional per spec.
         """
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import GetProductsRequest as LibraryGetProductsRequest
+        from pydantic import ValidationError
 
-        # Verify library allows empty request (buying_mode is required for wholesale variant)
+        # Library accepts an empty request when buying_mode is set
         lib_req = LibraryGetProductsRequest(buying_mode="wholesale")
         assert lib_req.brief is None
-        assert lib_req.brand is None  # adcp 3.6.0: brand replaces brand_manifest
+        assert lib_req.brand is None
         assert lib_req.context is None
         assert lib_req.filters is None
 
-        # Our schema widens buying_mode to optional, so empty request works
-        our_req = GetProductsRequest()
+        # Our schema rejects requests without buying_mode (library marks it required);
+        # the wrapper layer is responsible for defaulting pre-v3 clients to 'brief'.
+        with pytest.raises(ValidationError, match="buying_mode"):
+            GetProductsRequest()
+
+        # Within wholesale mode, all other fields are optional
+        our_req = GetProductsRequest(buying_mode="wholesale")
         assert our_req.brief is None
-        assert our_req.brand is None  # adcp 3.6.0: brand replaces brand_manifest
+        assert our_req.brand is None
 
     def test_get_products_request_brand_accepts_domain(self):
         """Verify brand (BrandReference) accepts domain field per adcp 3.6.0."""
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import GetProductsRequest as LibraryGetProductsRequest
 
-        # Library accepts brand with domain (buying_mode required for wholesale variant)
+        # Library accepts brand with domain (buying_mode is library-required)
         lib_req = LibraryGetProductsRequest(brand={"domain": "acme.com"}, buying_mode="wholesale")
         assert lib_req.brand is not None
         assert lib_req.brand.domain == "acme.com"
 
-        # Our schema should also accept brand with domain
-        our_req = GetProductsRequest(brand={"domain": "acme.com"})
+        # Our schema should also accept brand with domain (in wholesale mode)
+        our_req = GetProductsRequest(buying_mode="wholesale", brand={"domain": "acme.com"})
         assert our_req.brand is not None
 
     def test_create_media_buy_request_brand_required(self):
@@ -215,16 +221,21 @@ class TestSchemaMatchesLibrary:
             LibraryCreateMediaBuyRequest(buyer_ref="test")
 
     def test_schema_validation_matches_library(self):
-        """Compare our schema validation against library for common cases."""
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        """Compare our schema validation against library for spec-valid cross-mode combinations.
 
-        # Test cases that should work in both (adcp 3.6.0: brand replaces brand_manifest)
-        # buying_mode is required for the wholesale variant in adcp 3.9
+        Our schema is intentionally STRICTER than the library on cross-mode rules
+        (e.g., we reject buying_mode='wholesale' with a brief). The library is permissive
+        because each variant's buying_mode annotation is the BuyingMode enum, not a Literal.
+        Cases that violate cross-mode invariants are tested separately in test_get_products_buying_mode.py.
+        """
+        from adcp.types import GetProductsRequest as LibraryGetProductsRequest
+
+        # Cross-mode-valid cases (accepted by both library AND our stricter schema)
         test_cases = [
-            {"buying_mode": "wholesale"},  # Minimal valid
-            {"buying_mode": "wholesale", "brief": "test"},  # Brief only
-            {"buying_mode": "wholesale", "brand": {"domain": "acme.com"}},  # BrandReference
-            {"buying_mode": "wholesale", "brief": "test", "brand": {"domain": "acme.com"}},  # Both
+            {"buying_mode": "wholesale"},  # Minimal wholesale
+            {"buying_mode": "brief", "brief": "test"},  # Brief mode happy path
+            {"buying_mode": "wholesale", "brand": {"domain": "acme.com"}},  # Wholesale + brand
+            {"buying_mode": "brief", "brief": "test", "brand": {"domain": "acme.com"}},  # Brief + brand
         ]
 
         for case in test_cases:
@@ -404,30 +415,37 @@ class TestAdCPContract:
         assert schema.get_adapter_id("mock") == "test"
 
     def test_adcp_get_products_request(self):
-        """Test AdCP get_products request per spec - all fields optional.
+        """Test AdCP get_products request per spec — buying_mode is required (v3 contract).
 
-        In adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with domain field).
+        AdCP 3.0 makes buying_mode required for v3 clients, with cross-mode rules:
+          - brief mode: brief required, refine forbidden
+          - wholesale mode: brief forbidden, refine forbidden
+          - refine mode: brief forbidden, refine required (non-empty)
+        Pre-v3 clients are defaulted to 'brief' at the transport boundary.
+
+        adcp 3.6.0 also replaced brand_manifest with brand (BrandReference with domain).
         """
-        # Per AdCP spec, all fields are optional
-        # Empty request is valid
-        empty_request = GetProductsRequest()
-        assert empty_request.brief is None
-        assert empty_request.brand is None  # adcp 3.6.0: brand replaces brand_manifest
+        # Wholesale mode minimal (no brief, no refine)
+        wholesale_minimal = GetProductsRequest(buying_mode="wholesale")
+        assert wholesale_minimal.brief is None
+        assert wholesale_minimal.brand is None
 
-        # Request with brief only
-        brief_only = GetProductsRequest(brief="Looking for display ads on news sites")
+        # Brief mode with brief only
+        brief_only = GetProductsRequest(buying_mode="brief", brief="Looking for display ads on news sites")
         assert brief_only.brief == "Looking for display ads on news sites"
         assert brief_only.brand is None
 
-        # Request with brand only (adcp 3.6.0: uses BrandReference with domain)
-        brand_only = GetProductsRequest(
+        # Wholesale with brand
+        wholesale_with_brand = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "saas.example.com"},
         )
-        assert brand_only.brief is None
-        assert brand_only.brand is not None
+        assert wholesale_with_brand.brief is None
+        assert wholesale_with_brand.brand is not None
 
-        # Request with both (common case)
+        # Brief mode with brief + brand (common case)
         full_request = GetProductsRequest(
+            buying_mode="brief",
             brief="Looking for display ads",
             brand={"domain": "acme.com"},
         )
@@ -505,10 +523,11 @@ class TestAdCPContract:
         assert adcp_response["pricing_options"][0]["price_guidance"]["p75"] == 8.5  # p75 used as recommended
         assert adcp_response["pricing_options"][0]["price_guidance"]["p90"] == 10.0
 
-        # Verify GetProductsRequest accepts brand (BrandReference) when provided
-        # Note: Per AdCP spec, brand is OPTIONAL (not required)
+        # Verify GetProductsRequest accepts brand (BrandReference) when provided in brief mode
+        # Note: Per AdCP spec, brand is OPTIONAL within a mode (not required)
         # adcp 3.6.0: brand_manifest replaced by brand (BrandReference with required domain)
         request = GetProductsRequest(
+            buying_mode="brief",
             brief="Looking for high-volume campaigns",
             brand={"domain": "nike.com"},
         )
@@ -519,8 +538,8 @@ class TestAdCPContract:
         else:
             assert request.brand.domain == "nike.com"
 
-        # Should succeed without brand (per AdCP spec, it's optional)
-        brief_only_request = GetProductsRequest(brief="Just a brief")
+        # Should succeed without brand in brief mode (brand is optional within a mode)
+        brief_only_request = GetProductsRequest(buying_mode="brief", brief="Just a brief")
         assert brief_only_request.brief == "Just a brief"
         assert brief_only_request.brand is None
 

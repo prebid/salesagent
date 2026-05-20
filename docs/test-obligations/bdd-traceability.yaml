@@ -24,22 +24,22 @@ mappings:
   UC-001:
     - adcp_scenario_id: "T-UC-001-main"
       adcp_feature: "BR-UC-001-discover-available-inventory.feature"
-      obligation_id: null
+      obligation_id: "UC-001-MODE-BRIEF-01"
       upstream_refs: ["BR-UC-001-main-mcp"]
       business_rules: []
-      status: new
+      status: mapped
     - adcp_scenario_id: "T-UC-001-alt-wholesale"
       adcp_feature: "BR-UC-001-discover-available-inventory.feature"
-      obligation_id: null
+      obligation_id: "UC-001-MODE-WHOLESALE-01"
       upstream_refs: ["BR-UC-001-alt-wholesale"]
       business_rules: []
-      status: new
+      status: mapped
     - adcp_scenario_id: "T-UC-001-alt-refine"
       adcp_feature: "BR-UC-001-discover-available-inventory.feature"
-      obligation_id: null
+      obligation_id: "UC-001-MODE-REFINE-01"
       upstream_refs: ["BR-UC-001-alt-refine"]
       business_rules: []
-      status: new
+      status: mapped
     - adcp_scenario_id: "T-UC-001-alt-anonymous"
       adcp_feature: "BR-UC-001-discover-available-inventory.feature"
       obligation_id: null

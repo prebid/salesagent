@@ -51,11 +51,20 @@ def _make_tenant(tenant_id="test-tenant"):
     }
 
 
-def _make_request(brief="test brief", filters=None):
-    """Create a GetProductsRequest using the factory."""
+def _make_request(brief="test brief", filters=None, buying_mode=None):
+    """Create a GetProductsRequest using the factory.
+
+    Defaults buying_mode based on brief presence (brief mode if brief is non-empty,
+    wholesale mode otherwise) to satisfy AdCP 3.0 cross-mode invariants.
+    """
     from src.core.schema_helpers import create_get_products_request
 
-    return create_get_products_request(brief=brief, filters=filters)
+    if buying_mode is None:
+        buying_mode = "brief" if (brief and brief.strip()) else "wholesale"
+    if buying_mode in {"wholesale", "refine"}:
+        brief = ""
+    req, _ = create_get_products_request(brief=brief, filters=filters, buying_mode=buying_mode)
+    return req
 
 
 def _mock_uow_with_products(products):

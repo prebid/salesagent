@@ -38,13 +38,15 @@ class TestBddStepExtraction:
 
     def test_extracts_plain_string_then_step(self, tmp_path: Path) -> None:
         """Plain @then("text") decorator should be extracted."""
-        source = textwrap.dedent("""
+        source = textwrap.dedent(
+            """
             from pytest_bdd import then
 
             @then("the operation should fail")
             def then_operation_fails(ctx: dict) -> None:
                 assert "error" in ctx
-        """)
+        """
+        )
         (tmp_path / "steps.py").write_text(source)
 
         from inspect_bdd_steps import extract_bdd_steps
@@ -57,13 +59,15 @@ class TestBddStepExtraction:
 
     def test_extracts_parsers_parse_then_step(self, tmp_path: Path) -> None:
         """@then(parsers.parse('text with {param}')) should be extracted."""
-        source = textwrap.dedent("""
+        source = textwrap.dedent(
+            """
             from pytest_bdd import parsers, then
 
             @then(parsers.parse('the error code should be "{code}"'))
             def then_error_code(ctx: dict, code: str) -> None:
                 assert ctx.get("error_code") == code
-        """)
+        """
+        )
         (tmp_path / "steps.py").write_text(source)
 
         from inspect_bdd_steps import extract_bdd_steps
@@ -74,7 +78,8 @@ class TestBddStepExtraction:
 
     def test_extracts_given_and_when_steps(self, tmp_path: Path) -> None:
         """@given and @when decorators should also be extracted."""
-        source = textwrap.dedent("""
+        source = textwrap.dedent(
+            """
             from pytest_bdd import given, when
 
             @given("a Seller Agent is operational")
@@ -84,7 +89,8 @@ class TestBddStepExtraction:
             @when("the Buyer Agent requests formats")
             def when_request(ctx: dict) -> None:
                 pass
-        """)
+        """
+        )
         (tmp_path / "steps.py").write_text(source)
 
         from inspect_bdd_steps import extract_bdd_steps
@@ -95,14 +101,16 @@ class TestBddStepExtraction:
 
     def test_extracts_source_text_with_body(self, tmp_path: Path) -> None:
         """Extracted source should include the full function body."""
-        source = textwrap.dedent('''
+        source = textwrap.dedent(
+            '''
             from pytest_bdd import then
 
             @then("no error should be raised")
             def then_no_error(ctx: dict) -> None:
                 """Assert no error."""
                 assert "error" not in ctx
-        ''')
+        '''
+        )
         (tmp_path / "steps.py").write_text(source)
 
         from inspect_bdd_steps import extract_bdd_steps
@@ -129,18 +137,22 @@ class TestBddStepExtraction:
         """Should find steps across multiple .py files in subdirectories."""
         (tmp_path / "sub").mkdir()
         (tmp_path / "a.py").write_text(
-            textwrap.dedent("""
+            textwrap.dedent(
+                """
             from pytest_bdd import then
             @then("step A")
             def step_a(ctx): pass
-        """)
+        """
+            )
         )
         (tmp_path / "sub" / "b.py").write_text(
-            textwrap.dedent("""
+            textwrap.dedent(
+                """
             from pytest_bdd import given
             @given("step B")
             def step_b(ctx): pass
-        """)
+        """
+            )
         )
 
         from inspect_bdd_steps import extract_bdd_steps
@@ -151,7 +163,8 @@ class TestBddStepExtraction:
 
     def test_ignores_non_step_functions(self, tmp_path: Path) -> None:
         """Helper functions without step decorators should be skipped."""
-        source = textwrap.dedent("""
+        source = textwrap.dedent(
+            """
             from pytest_bdd import then
 
             def _helper(ctx):
@@ -160,7 +173,8 @@ class TestBddStepExtraction:
             @then("check data")
             def then_check(ctx):
                 assert _helper(ctx) is not None
-        """)
+        """
+        )
         (tmp_path / "steps.py").write_text(source)
 
         from inspect_bdd_steps import extract_bdd_steps
@@ -171,7 +185,8 @@ class TestBddStepExtraction:
 
     def test_records_file_path_and_line_number(self, tmp_path: Path) -> None:
         """Each step should have accurate file path and line number."""
-        source = textwrap.dedent("""
+        source = textwrap.dedent(
+            """
             from pytest_bdd import then
 
             @then("first step")
@@ -179,7 +194,8 @@ class TestBddStepExtraction:
 
             @then("second step")
             def second(ctx): pass
-        """)
+        """
+        )
         (tmp_path / "steps.py").write_text(source)
 
         from inspect_bdd_steps import extract_bdd_steps
