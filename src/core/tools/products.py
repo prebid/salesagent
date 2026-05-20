@@ -22,7 +22,12 @@ from pydantic import Field, ValidationError
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
@@ -421,11 +426,11 @@ async def _get_products_impl(
                 f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
                 f"(allowed {len(allowed_set)} properties; dropped {len(result.dropped_products)})"
             )
+        except AdCPAdapterError:
+            # Typed adapter errors propagate as-is — they already carry the
+            # spec envelope contract via the AdCPError class.
+            raise
         except Exception as e:
-            from src.core.exceptions import AdCPAdapterError
-
-            if isinstance(e, AdCPAdapterError):
-                raise
             logger.error(f"Property list resolution failed: {e}")
             raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
 
