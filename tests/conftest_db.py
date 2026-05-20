@@ -1,6 +1,8 @@
 """Database setup for tests - ensures proper initialization."""
 
+import logging
 import os
+import time
 from datetime import UTC
 from pathlib import Path
 
@@ -9,6 +11,49 @@ from sqlalchemy import text
 
 # Set test mode before any imports
 os.environ["PYTEST_CURRENT_TEST"] = "true"
+
+_LOG = logging.getLogger(__name__)
+
+
+def _connect_with_retry(conn_params, *, attempts: int = 12, base_delay: float = 0.25, max_delay: float = 4.0):
+    """Acquire a psycopg2 connection, tolerating the parallel-tox port-collision race.
+
+    Under ``tox -p`` on a box running many agent-postgres containers, the test-stack
+    port can momentarily be answered by a non-Postgres service (``invalid response to
+    SSL negotiation``) or the DB may not be ready yet. Both surface as a
+    ``psycopg2.OperationalError`` during fixture *setup* and flip the suite red
+    non-deterministically. Retry with bounded exponential backoff; on persistent
+    failure raise a clear, actionable error instead of a raw psycopg2 traceback on a
+    random test. See salesagent-qpst.
+    """
+    import psycopg2  # local import matches the existing pattern in this module
+
+    last_exc: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return psycopg2.connect(**conn_params)
+        except psycopg2.OperationalError as exc:
+            last_exc = exc
+            if attempt == attempts:
+                break
+            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+            _LOG.warning(
+                "DB connect attempt %d/%d to %s:%s failed (%s); retrying in %.2fs "
+                "(salesagent-qpst port-collision tolerance)",
+                attempt,
+                attempts,
+                conn_params.get("host"),
+                conn_params.get("port"),
+                (str(exc).splitlines()[0] if str(exc) else type(exc).__name__),
+                delay,
+            )
+            time.sleep(delay)
+    raise RuntimeError(
+        f"Could not establish a PostgreSQL connection to "
+        f"{conn_params.get('host')}:{conn_params.get('port')} after {attempts} attempts. "
+        f"Under parallel tox this usually means the test-stack port was transiently "
+        f"answered by another service (see salesagent-qpst). Last error: {last_exc}"
+    ) from last_exc
 
 
 @pytest.fixture(scope="session")
@@ -351,7 +396,6 @@ def integration_db():
     # Parse port from postgres_url (set by run_all_tests.sh or environment)
     import re
 
-    import psycopg2
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
     pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
@@ -374,7 +418,7 @@ def integration_db():
         "database": "postgres",  # Connect to default db first
     }
 
-    conn = psycopg2.connect(**conn_params)
+    conn = _connect_with_retry(conn_params)
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()
 
@@ -509,7 +553,7 @@ def integration_db():
 
     # Drop PostgreSQL test database
     try:
-        conn = psycopg2.connect(**conn_params)
+        conn = _connect_with_retry(conn_params)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cur = conn.cursor()
         # Terminate connections to the test database

@@ -301,7 +301,10 @@ def init_db_ci():
 
             print("All prerequisites validated successfully")
 
-            # Create default products for testing
+            # Create default products for testing.
+            # KEEP IN SYNC: tests/e2e/test_tenant_isolation.py CI_TEST_PRODUCT_IDS
+            # asserts the ci-test tenant sees EXACTLY this product-id set. If you
+            # add/remove/rename a ci-test product here, update that set too.
             print(f"Creating default products for CI on tenant: {tenant_id}...")
             products_data = [
                 {
@@ -592,7 +595,10 @@ def init_db_ci():
                 iso_session.rollback()
                 print(f"  ⚠️  Isolation prerequisites race condition: {e}")
 
-            # Create products for isolation tenant (iso_ prefix for clear identification)
+            # Create products for isolation tenant (iso_ prefix for clear identification).
+            # KEEP IN SYNC: tests/e2e/test_tenant_isolation.py ISO_TEST_PRODUCT_IDS
+            # asserts the iso-test tenant sees EXACTLY this product-id set. If you
+            # add/remove/rename an iso-test product here, update that set too.
             iso_products_data = [
                 {
                     "product_id": "iso_display_standard",
