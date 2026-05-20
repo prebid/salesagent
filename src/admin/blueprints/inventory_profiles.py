@@ -131,12 +131,16 @@ def _get_property_summary(publisher_properties: list[dict]) -> str:
 @inventory_profiles_bp.route("/")
 @require_tenant_access()
 def list_inventory_profiles(tenant_id: str):
-    """List all inventory profiles for this tenant."""
+    """List all inventory profiles for this tenant.
+
+    Surfaces the design handoff's coverage strip + enriched bundle cards +
+    "What's not bundled" rail. The render data is shaped to make the
+    template purely presentational — no business logic in Jinja.
+    """
     with get_db_session() as session:
-        # Get tenant
         tenant = session.get(Tenant, tenant_id)
 
-        # Get all profiles with product counts in a single query (prevents N+1)
+        # Bundles + product-usage counts in one query (prevents N+1).
         stmt = (
             select(InventoryProfile, func.count(Product.product_id).label("product_count"))
             .outerjoin(Product, InventoryProfile.id == Product.inventory_profile_id)
@@ -144,33 +148,184 @@ def list_inventory_profiles(tenant_id: str):
             .group_by(InventoryProfile.id)
             .order_by(InventoryProfile.name)
         )
-
         results = session.execute(stmt).all()
 
-        # Build profile data with summaries
-        profiles_data = []
-        for profile, product_count in results:
-            profiles_data.append(
-                {
-                    "id": profile.id,
-                    "profile_id": profile.profile_id,
-                    "name": profile.name,
-                    "description": profile.description,
-                    "inventory_summary": _get_inventory_summary(profile.inventory_config),
-                    "format_summary": _get_format_summary(profile.format_ids, tenant_id),
-                    "property_summary": _get_property_summary(profile.publisher_properties),
-                    "product_count": product_count,
-                    "created_at": profile.created_at,
-                    "updated_at": profile.updated_at,
-                }
+        bundles_data = [_build_bundle_card(profile, product_count) for profile, product_count in results]
+
+        # Coverage + unbundled rail are GAM-only today. Other adapters
+        # land when their inventory sync surfaces participate.
+        if tenant and tenant.ad_server in {"google_ad_manager", "gam"}:
+            coverage = _build_coverage_summary(session, tenant_id, bundles_data)
+            unbundled_items = _list_unbundled_inventory(session, tenant_id, limit=50)
+            adapter_label = "Google Ad Manager"
+            adapter_vocab = {"ad_units": "ad units", "placements": "placements"}
+            has_synced_inventory = (coverage["adUnitsTotal"] + coverage["placementsTotal"]) > 0
+        else:
+            coverage = None
+            unbundled_items = []
+            adapter_label = (
+                (tenant.ad_server if tenant and tenant.ad_server else "your ad server").replace("_", " ").title()
             )
+            adapter_vocab = {"ad_units": "ad units", "placements": "placements"}
+            has_synced_inventory = False
 
     return render_template(
         "inventory_profiles_list.html",
         tenant_id=tenant_id,
         tenant=tenant,
-        profiles=profiles_data,
+        bundles=bundles_data,
+        coverage=coverage,
+        unbundled_items=unbundled_items,
+        adapter_label=adapter_label,
+        adapter_vocab=adapter_vocab,
+        has_synced_inventory=has_synced_inventory,
     )
+
+
+def _build_bundle_card(profile: InventoryProfile, product_count: int) -> dict:
+    """Card-shape payload for one bundle on the redesigned list page.
+
+    The template reads these keys directly — keep the contract stable.
+    """
+    config = profile.inventory_config or {}
+    ad_units = config.get("ad_units") or []
+    placements = config.get("placements") or []
+    formats = profile.format_ids or []
+    publisher_properties = profile.publisher_properties or []
+
+    # Property tags vs property_ids — both shapes are valid; the design
+    # surfaces tags by default and falls back to a count of specific
+    # properties when the operator picked them explicitly.
+    property_tags: list[str] = []
+    property_id_count = 0
+    for prop in publisher_properties:
+        property_tags.extend(prop.get("property_tags") or [])
+        property_id_count += len(prop.get("property_ids") or [])
+    property_mode = "tag" if property_tags or not property_id_count else "ids"
+
+    return {
+        "id": profile.id,
+        "profile_id": profile.profile_id,
+        "name": profile.name,
+        "description": profile.description or "",
+        "ad_unit_count": len(ad_units),
+        "placement_count": len(placements),
+        "format_count": len(formats),
+        "format_ids": [f.get("id", "") for f in formats][:4],
+        "property_mode": property_mode,
+        "property_tags": sorted(set(property_tags)),
+        "property_id_count": property_id_count,
+        "products_using": product_count,
+        "updated_at": profile.updated_at,
+    }
+
+
+def _build_coverage_summary(session, tenant_id: str, bundles_data: list[dict]) -> dict:
+    """Coverage strip payload — four numbers across the top of the list page.
+
+    "Bundled" counts come from the denormalized ``InventoryBundleReference``
+    table that's kept fresh by ``recompute_bundle_references`` at bundle
+    save-time. "Total" comes from ``GAMInventory``. Adapter is hard-coded to
+    GAM today; the FW/SS branches land when their syncs land.
+    """
+    from src.core.database.models import GAMInventory, InventoryBundleReference
+
+    ad_units_total = (
+        session.scalar(
+            select(func.count())
+            .select_from(GAMInventory)
+            .where(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == "ad_unit")
+        )
+        or 0
+    )
+    placements_total = (
+        session.scalar(
+            select(func.count())
+            .select_from(GAMInventory)
+            .where(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == "placement")
+        )
+        or 0
+    )
+    ad_units_bundled = (
+        session.scalar(
+            select(func.count())
+            .select_from(InventoryBundleReference)
+            .where(
+                InventoryBundleReference.tenant_id == tenant_id,
+                InventoryBundleReference.adapter == "gam",
+                InventoryBundleReference.entity_type == "ad_unit",
+            )
+        )
+        or 0
+    )
+    placements_bundled = (
+        session.scalar(
+            select(func.count())
+            .select_from(InventoryBundleReference)
+            .where(
+                InventoryBundleReference.tenant_id == tenant_id,
+                InventoryBundleReference.adapter == "gam",
+                InventoryBundleReference.entity_type == "placement",
+            )
+        )
+        or 0
+    )
+    products_composed = sum(b["products_using"] for b in bundles_data)
+
+    return {
+        "bundles": len(bundles_data),
+        "adUnitsBundled": ad_units_bundled,
+        "adUnitsTotal": ad_units_total,
+        "placementsBundled": placements_bundled,
+        "placementsTotal": placements_total,
+        "productsComposed": products_composed,
+    }
+
+
+def _list_unbundled_inventory(session, tenant_id: str, limit: int) -> list[dict]:
+    """Rows for the "What's not bundled" rail.
+
+    Synced ``GAMInventory`` entities that don't appear in any
+    ``InventoryBundleReference``. Limit caps the list — operators with
+    thousands of unbundled units don't need to scroll through all of them
+    on the dashboard; the rail is a peek, not the canonical browser.
+    """
+    from src.core.database.repositories.gam_sync import GAMSyncRepository
+    from src.core.database.repositories.inventory_bundle_reference import (
+        InventoryBundleReferenceRepository,
+    )
+
+    bundle_repo = InventoryBundleReferenceRepository(session, tenant_id)
+    bundled_by_type = {
+        "ad_unit": bundle_repo.bundled_external_ids(adapter="gam", entity_type="ad_unit"),
+        "placement": bundle_repo.bundled_external_ids(adapter="gam", entity_type="placement"),
+    }
+    rows = GAMSyncRepository(session, tenant_id).list_inventory_not_in_set(
+        inventory_types=("ad_unit", "placement"),
+        bundled_ids_by_type=bundled_by_type,
+        limit=limit,
+    )
+
+    return [
+        {
+            "id": str(row.id),
+            "adapter_id": row.inventory_id,
+            "kind": row.inventory_type,
+            "name": row.name,
+            "meta": _format_inventory_meta(row),
+        }
+        for row in rows
+    ]
+
+
+def _format_inventory_meta(row) -> str:
+    """One-line metadata for an unbundled inventory row."""
+    parts = []
+    if row.path:
+        parts.append(" › ".join(row.path[-3:]))
+    if row.status and row.status.lower() != "active":
+        parts.append(row.status.lower())
+    return " · ".join(parts) if parts else "—"
 
 
 @inventory_profiles_bp.route("/add", methods=["GET", "POST"])

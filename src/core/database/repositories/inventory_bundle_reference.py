@@ -56,6 +56,23 @@ class InventoryBundleReferenceRepository:
             or 0
         )
 
+    def bundled_external_ids(self, adapter: str, entity_type: str) -> set[str]:
+        """Return the set of ``external_id`` values currently in any bundle
+        for ``(tenant, adapter, entity_type)``.
+
+        Used by the inventory-bundles list page's "What's not bundled"
+        rail to compute the inverse — synced GAMInventory rows whose ids
+        are *not* in this set.
+        """
+        rows = self._session.scalars(
+            select(InventoryBundleReference.external_id).where(
+                InventoryBundleReference.tenant_id == self._tenant_id,
+                InventoryBundleReference.adapter == adapter,
+                InventoryBundleReference.entity_type == entity_type,
+            )
+        ).all()
+        return set(rows)
+
     def is_bundled(self, adapter: str, entity_type: str, external_id: str) -> bool:
         """Whether a specific entity is referenced by any bundle. Single-row
         check used by per-row UI affordances (e.g. inventory browser badges)."""

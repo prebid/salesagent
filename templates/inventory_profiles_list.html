@@ -1,198 +1,443 @@
 {% extends "base.html" %}
 
-{% block title %}Inventory Profiles - Sales Agent Admin{% endblock %}
+{% block title %}Inventory bundles - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="container-fluid">
-    <div class="row">
-        <div class="col-md-12">
-            <header class="sa-page-header">
-                <div>
-                    <h2 class="sa-page-header__title">Inventory Profiles</h2>
-                    <p class="sa-page-header__subtitle">Reusable inventory configurations for products</p>
-                </div>
-                <div class="sa-page-header__actions">
-                    <a href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id) }}"
-                       class="btn btn-primary">
-                        <i class="fas fa-plus"></i> Create Profile
-                    </a>
-                    <a href="{{ url_for('inventory.inventory_browse', tenant_id=tenant_id) }}"
-                       class="btn btn-ghost">
-                        <i class="fas fa-th"></i> Browse Inventory
-                    </a>
-                </div>
-            </header>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_signals.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_inventory_profiles.css') }}">
 
-            <!-- Profile Statistics -->
-            <div class="row mb-4">
-                <div class="col-md-4">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <h3 class="text-primary">{{ profiles|length }}</h3>
-                            <p class="card-text">Total Profiles</p>
-                        </div>
+{#
+    Inventory bundles list — redesign port from
+    .context/inventory-bundle-redesign/InventoryBundlesList.html.
+
+    Coverage strip + filterable bundle cards + "What's not bundled" rail.
+    GAM-only for the coverage + unbundled data; other adapters fall back
+    to a simpler render. Multi-use is the norm — the same placement can
+    live in many bundles; the rail and counts reflect that explicitly.
+#}
+
+{%- macro icon_plus() -%}
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+{%- endmacro -%}
+
+{%- macro icon_cube() -%}
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+{%- endmacro -%}
+
+{%- macro icon_pencil() -%}
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+{%- endmacro -%}
+
+{%- macro icon_dots() -%}
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg>
+{%- endmacro -%}
+
+{%- macro icon_chev_right() -%}
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+{%- endmacro -%}
+
+{%- macro icon_search() -%}
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+{%- endmacro -%}
+
+{%- macro pct(num, den) -%}
+{%- if den and den > 0 -%}{{ (num * 100 / den) | round | int }}{%- else -%}0{%- endif -%}
+{%- endmacro -%}
+
+<div class="bundles-page" data-tenant-id="{{ tenant_id }}" data-script-root="{{ request.script_root }}">
+    <div class="bundles-container">
+
+        {# ===== Page header ===== #}
+        <header class="bundles-page-header">
+            <h1>Inventory bundles</h1>
+            <p class="lead">
+                A bundle is a salable inventory shape — a named bag of {{ adapter_vocab.ad_units }},
+                {{ adapter_vocab.placements }}, creative formats and publisher properties. Buyers discover
+                bundles via AdCP <code>list_products</code>; the same placement can live in many bundles.
+                <em>Authored against</em> <span class="pill-link">{{ adapter_label }}</span>.
+            </p>
+        </header>
+
+        {% if bundles | length == 0 and not has_synced_inventory %}
+            {# ===== Onboarding empty state — no bundles, nothing synced ===== #}
+            <div class="onboard-card">
+                <div>
+                    <h2 class="onboard-card__title">No bundles yet — that's expected.</h2>
+                    <p class="onboard-card__text">
+                        Bundles are the salable shapes buyers ask for. Start by promoting a few of your
+                        top-level placements into bundles, then peel off themed bundles from there
+                        ("premium news," "sports homepage," etc.).
+                    </p>
+                    <p class="onboard-card__text">
+                        Bundles are <strong>reusable</strong> — the same placement can live in many bundles,
+                        so you don't need to get the first one right.
+                    </p>
+                    <div class="onboard-actions">
+                        <a class="btn btn--primary"
+                           href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id) }}">
+                            {{ icon_plus() }} Create a bundle
+                        </a>
+                        <a class="btn btn--outline"
+                           href="{{ url_for('inventory.inventory_browse', tenant_id=tenant_id) }}">
+                            {{ icon_cube() }} Browse synced inventory
+                        </a>
                     </div>
                 </div>
-                <div class="col-md-4">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <h3 class="text-success">{{ profiles|selectattr('product_count', 'gt', 0)|list|length }}</h3>
-                            <p class="card-text">In Use</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <h3 class="text-muted">{{ profiles|selectattr('product_count', 'eq', 0)|list|length }}</h3>
-                            <p class="card-text">Unused</p>
-                        </div>
-                    </div>
+                <div class="onboard-suggestions">
+                    <h4>How to start</h4>
+                    <p class="onboard-card__text" style="margin: 0; font-size: 12.5px;">
+                        Sync your ad server first (Configure → Integrations), then come back here.
+                        Once synced inventory exists, this panel surfaces top-level placements as suggested
+                        starting bundles you can seed in one click.
+                    </p>
                 </div>
             </div>
 
-            <!-- Profiles List -->
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="mb-0">Profiles</h5>
+        {% else %}
+            {# ===== Coverage strip ===== #}
+            {% if coverage %}
+                {% set au_pct = pct(coverage.adUnitsBundled, coverage.adUnitsTotal) | int %}
+                {% set pl_pct = pct(coverage.placementsBundled, coverage.placementsTotal) | int %}
+                <div class="coverage">
+                    <div class="coverage__intro">
+                        <h2 class="coverage__title">Bundle coverage <span class="sub">at-a-glance</span></h2>
+                        <p class="coverage__hint">
+                            Do your bundles cover the shapes buyers ask for? Each number below counts a synced
+                            ad-server entity that lives inside at least one bundle.
+                            {% if unbundled_items %}
+                                <a href="#not-bundled">{{ unbundled_items | length }} unbundled item{{ 's' if unbundled_items | length != 1 else '' }} ↓</a>
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div class="cov-cell">
+                        <div class="cov-cell__label">Bundles</div>
+                        <div class="cov-cell__num">{{ coverage.bundles }}</div>
+                        <div class="cov-cell__bar"><span style="width: 100%;"></span></div>
+                    </div>
+                    <div class="cov-cell">
+                        <div class="cov-cell__label">Ad units bundled</div>
+                        <div class="cov-cell__num">
+                            {{ coverage.adUnitsBundled }}<span class="of">of {{ coverage.adUnitsTotal }}</span>
+                            <span class="pct{% if au_pct < 80 %} warn{% endif %}">{{ au_pct }}%</span>
+                        </div>
+                        <div class="cov-cell__bar {% if au_pct >= 80 %}green{% else %}amber{% endif %}">
+                            <span style="width: {{ au_pct }}%;"></span>
+                        </div>
+                    </div>
+                    <div class="cov-cell">
+                        <div class="cov-cell__label">Placements bundled</div>
+                        <div class="cov-cell__num">
+                            {{ coverage.placementsBundled }}<span class="of">of {{ coverage.placementsTotal }}</span>
+                            <span class="pct{% if pl_pct < 80 %} warn{% endif %}">{{ pl_pct }}%</span>
+                        </div>
+                        <div class="cov-cell__bar {% if pl_pct >= 80 %}green{% else %}amber{% endif %}">
+                            <span style="width: {{ pl_pct }}%;"></span>
+                        </div>
+                    </div>
+                    <div class="cov-cell">
+                        <div class="cov-cell__label">Products composed</div>
+                        <div class="cov-cell__num">{{ coverage.productsComposed }}</div>
+                        <div class="cov-cell__bar green"><span style="width: 100%;"></span></div>
+                    </div>
                 </div>
-                <div class="card-body">
-                    {% if profiles %}
-                        <div class="row">
-                            {% for profile in profiles %}
-                            <div class="col-md-6 mb-4">
-                                <div class="card h-100">
-                                    <div class="card-header bg-light">
-                                        <div class="d-flex justify-content-between align-items-center">
-                                            <h5 class="mb-0">
-                                                <i class="fas fa-layer-group text-primary"></i>
-                                                {{ profile.name }}
-                                            </h5>
-                                            <span class="badge badge-info">
-                                                {{ profile.product_count }} product{{ 's' if profile.product_count != 1 else '' }}
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <div class="card-body">
-                                        {% if profile.description %}
-                                        <p class="text-muted mb-3">{{ profile.description }}</p>
+            {% endif %}
+
+            {# ===== Toolbar ===== #}
+            {% set in_use_count = (bundles | selectattr('products_using', 'greaterthan', 0) | list | length) %}
+            {% set unused_count = bundles | length - in_use_count %}
+            <div class="bundle-toolbar">
+                <div class="seg" role="tablist" aria-label="Filter bundles by usage">
+                    <button type="button" data-filter="all" class="active" role="tab" aria-selected="true">
+                        All <span class="count">{{ bundles | length }}</span>
+                    </button>
+                    <button type="button" data-filter="in-use" role="tab" aria-selected="false">
+                        In use <span class="count">{{ in_use_count }}</span>
+                    </button>
+                    <button type="button" data-filter="unused" role="tab" aria-selected="false">
+                        Unused <span class="count">{{ unused_count }}</span>
+                    </button>
+                </div>
+                <label class="bundle-toolbar__search">
+                    <span class="ic">{{ icon_search() }}</span>
+                    <input type="search" id="bundle-search"
+                           placeholder="Filter by bundle name, tag, or property…"
+                           aria-label="Search bundles">
+                </label>
+                <div class="bundle-toolbar__spacer"></div>
+                <label class="toggle">
+                    <input type="checkbox" id="show-ids">
+                    <span class="toggle__track"></span>
+                    Show IDs
+                </label>
+                <a class="btn btn--outline btn--sm"
+                   href="{{ url_for('inventory.inventory_browse', tenant_id=tenant_id) }}">
+                    {{ icon_cube() }} Browse synced inventory
+                </a>
+                <a class="btn btn--primary btn--sm"
+                   href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id) }}">
+                    {{ icon_plus() }} Create bundle
+                </a>
+            </div>
+
+            {# ===== Bundle cards ===== #}
+            <div class="bundle-list" id="bundle-list">
+                {% for b in bundles %}
+                    {% set in_use = b.products_using > 0 %}
+                    <article class="bundle-card"
+                             data-bundle-id="{{ b.id }}"
+                             data-filter-key="{{ (b.name + ' ' + b.profile_id + ' ' + b.description) | lower }} {{ b.property_tags | join(' ') | lower }}"
+                             data-usage="{{ 'in-use' if in_use else 'unused' }}">
+                        <div class="bundle-card__head">
+                            <h3 class="bundle-card__title">
+                                <span class="name">{{ b.name }}</span>
+                                <span class="id" data-id-cell hidden>{{ b.profile_id }}</span>
+                                <span class="bundle-card__usage {{ 'in-use' if in_use else 'unused' }}">
+                                    <span class="dot"></span>
+                                    {% if in_use %}
+                                        used in <strong>{{ b.products_using }}</strong>
+                                        {{ 'product' if b.products_using == 1 else 'products' }}
+                                    {% else %}
+                                        not used yet
+                                    {% endif %}
+                                </span>
+                            </h3>
+                            {% if b.description %}
+                                <p class="bundle-card__desc">{{ b.description }}</p>
+                            {% endif %}
+                        </div>
+                        <div class="bundle-card__shape">
+                            <div class="line">
+                                <span class="k">Inventory</span>
+                                <span class="v">
+                                    {{ b.ad_unit_count }} {{ 'ad unit' if b.ad_unit_count == 1 else 'ad units' }}
+                                    {% if b.placement_count %}
+                                        · {{ b.placement_count }} {{ 'placement' if b.placement_count == 1 else 'placements' }}
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="line">
+                                <span class="k">Formats</span>
+                                <span class="v">
+                                    {{ b.format_count }}
+                                    {% if b.format_ids %}
+                                        <span class="muted">{{ b.format_ids[:2] | join(', ') }}{% if b.format_count > 2 %}, +{{ b.format_count - 2 }}{% endif %}</span>
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="line">
+                                <span class="k">Properties</span>
+                                <span class="v">
+                                    {% if b.property_mode == 'tag' %}
+                                        {{ b.property_tags | length }} {{ 'tag' if b.property_tags | length == 1 else 'tags' }}
+                                        {% if b.property_tags %}
+                                            <span class="muted">— {{ b.property_tags | join(', ') }}</span>
                                         {% endif %}
-
-                                        <div class="mb-2">
-                                            <strong><i class="fas fa-server"></i> Inventory:</strong>
-                                            <span class="text-muted">{{ profile.inventory_summary }}</span>
-                                        </div>
-
-                                        <div class="mb-2">
-                                            <strong><i class="fas fa-palette"></i> Formats:</strong>
-                                            <span class="text-muted">{{ profile.format_summary }}</span>
-                                        </div>
-
-                                        <div class="mb-2">
-                                            <strong><i class="fas fa-globe"></i> Properties:</strong>
-                                            <span class="text-muted">{{ profile.property_summary }}</span>
-                                        </div>
-
-                                        <div class="text-muted small mt-3">
-                                            <i class="fas fa-clock"></i>
-                                            Created: {{ profile.created_at.strftime('%Y-%m-%d %H:%M') }}
-                                            {% if profile.updated_at != profile.created_at %}
-                                            <br>
-                                            <i class="fas fa-edit"></i>
-                                            Updated: {{ profile.updated_at.strftime('%Y-%m-%d %H:%M') }}
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                    <div class="card-footer bg-white">
-                                        <div class="d-flex justify-content-between align-items-center">
-                                            <div>
-                                                <a href="{{ url_for('inventory_profiles.edit_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}"
-                                                   class="btn btn-sm btn-primary">
-                                                    <i class="fas fa-edit"></i> Edit
-                                                </a>
-                                            </div>
-                                            <div>
-                                                {% if profile.product_count == 0 %}
-                                                <button class="btn btn-sm btn-danger"
-                                                        onclick="deleteProfile({{ profile.id }}, '{{ profile.name }}')">
-                                                    <i class="fas fa-trash"></i> Delete
-                                                </button>
-                                                {% else %}
-                                                <button class="btn btn-sm btn-secondary" disabled
-                                                        title="Cannot delete - used by {{ profile.product_count }} product(s)">
-                                                    <i class="fas fa-lock"></i> In Use
-                                                </button>
-                                                {% endif %}
-                                            </div>
-                                        </div>
-                                    </div>
+                                    {% else %}
+                                        {{ b.property_id_count }} specific
+                                        {{ 'property' if b.property_id_count == 1 else 'properties' }}
+                                    {% endif %}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="bundle-card__actions">
+                            <a class="btn btn--outline btn--sm"
+                               href="{{ url_for('inventory_profiles.edit_inventory_profile', tenant_id=tenant_id, profile_id=b.id) }}">
+                                {{ icon_pencil() }} Edit
+                            </a>
+                            <div class="bundle-card__overflow">
+                                <button type="button" class="bundle-card__overflow-trigger"
+                                        aria-haspopup="true" aria-expanded="false"
+                                        aria-label="More actions for {{ b.name }}">
+                                    {{ icon_dots() }}
+                                </button>
+                                <div class="bundle-card__overflow-menu" role="menu">
+                                    <a class="item" role="menuitem"
+                                       href="{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=b.id) }}">
+                                        Preview resolved shape
+                                    </a>
+                                    <button class="item" role="menuitem" data-action="clone" data-id="{{ b.id }}">
+                                        Clone bundle
+                                    </button>
+                                    <div class="sep"></div>
+                                    <button class="item danger" role="menuitem"
+                                            data-action="delete" data-id="{{ b.id }}" data-name="{{ b.name }}">
+                                        Delete bundle
+                                    </button>
                                 </div>
                             </div>
-                            {% endfor %}
                         </div>
-                    {% else %}
-                        <div class="sa-empty">
-                            <div class="sa-empty__icon"><i class="fas fa-layer-group"></i></div>
-                            <div class="sa-empty__title">No Inventory Profiles Yet</div>
-                            <p class="sa-empty__hint">
-                                Create an inventory profile to group ad units, creative formats, and properties
-                                together. This makes it easy to reuse the same configuration across multiple
-                                products.
-                            </p>
-                            <a href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id) }}"
-                               class="btn btn-primary">
-                                <i class="fas fa-plus"></i> Create Your First Profile
-                            </a>
-                        </div>
-                    {% endif %}
+                    </article>
+                {% endfor %}
+                <div class="bundles-empty-filter" id="bundles-empty-filter" hidden>
+                    No bundles match.
+                    <button type="button" class="btn btn--outline btn--xs" id="clear-filters" style="margin-left: 8px;">
+                        Clear filters
+                    </button>
                 </div>
             </div>
-        </div>
+
+            {# ===== What's not bundled rail ===== #}
+            {% if unbundled_items %}
+                <div class="not-bundled" id="not-bundled">
+                    <div class="not-bundled__head" id="not-bundled-toggle"
+                         role="button" tabindex="0" aria-expanded="false"
+                         aria-controls="not-bundled-body">
+                        <div class="title">
+                            What's not bundled
+                            <span class="count">{{ unbundled_items | length }}</span>
+                        </div>
+                        <span class="hint">Informational — an unbundled ad unit isn't a TODO. Just so you can see what's loose.</span>
+                        <span class="chev">{{ icon_chev_right() }}</span>
+                    </div>
+                    <div class="not-bundled__body" id="not-bundled-body">
+                        {% for it in unbundled_items %}
+                            <div class="nb-row">
+                                <span class="kindchip kindchip--{{ 'site' if it.kind == 'placement' else 'unit' }}">
+                                    {{ 'PLACEMENT' if it.kind == 'placement' else 'AD UNIT' }}
+                                </span>
+                                <div class="nb-row__main">
+                                    <div class="nb-row__name">
+                                        {{ it.name }}
+                                        <span class="id">#{{ it.adapter_id }}</span>
+                                    </div>
+                                    <div class="nb-row__meta">{{ it.meta }}</div>
+                                </div>
+                                <div>
+                                    <a class="btn btn--outline btn--sm"
+                                       href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id) }}?seed_kind={{ it.kind }}&seed_id={{ it.adapter_id }}">
+                                        {{ icon_plus() }} Add to bundles…
+                                    </a>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endif %}
+        {% endif %}
     </div>
 </div>
 
 <script>
-function deleteProfile(profileId, profileName) {
-    if (!confirm(`Are you sure you want to delete inventory profile "${profileName}"?\n\nThis action cannot be undone.`)) {
-        return;
+(function () {
+    // Filter + search wiring — all client-side, no server round-trip.
+    const search = document.getElementById('bundle-search');
+    const segButtons = document.querySelectorAll('.seg[role="tablist"] button');
+    const showIds = document.getElementById('show-ids');
+    const list = document.getElementById('bundle-list');
+    const empty = document.getElementById('bundles-empty-filter');
+    const clear = document.getElementById('clear-filters');
+    if (!list) return;
+
+    let currentFilter = 'all';
+
+    function applyFilter() {
+        const query = (search && search.value || '').trim().toLowerCase();
+        const cards = list.querySelectorAll('.bundle-card');
+        let visible = 0;
+        cards.forEach(card => {
+            const usage = card.dataset.usage;
+            const key = card.dataset.filterKey || '';
+            let show = true;
+            if (currentFilter === 'in-use' && usage !== 'in-use') show = false;
+            if (currentFilter === 'unused' && usage !== 'unused') show = false;
+            if (query && !key.includes(query)) show = false;
+            card.hidden = !show;
+            if (show) visible += 1;
+        });
+        if (empty) empty.hidden = visible !== 0;
     }
 
-    const scriptRoot = '{{ request.script_root }}';
-    fetch(`${scriptRoot}/tenant/{{ tenant_id }}/inventory-profiles/${profileId}/delete`, {
-        method: 'DELETE',
-        headers: {
-            'Content-Type': 'application/json',
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            location.reload();
-        } else {
-            alert('Error: ' + (data.error || 'Failed to delete profile'));
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert('Error deleting profile: ' + error.message);
+    segButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            segButtons.forEach(b => {
+                b.classList.remove('active');
+                b.setAttribute('aria-selected', 'false');
+            });
+            btn.classList.add('active');
+            btn.setAttribute('aria-selected', 'true');
+            currentFilter = btn.dataset.filter || 'all';
+            applyFilter();
+        });
     });
-}
+
+    if (search) search.addEventListener('input', applyFilter);
+    if (clear) {
+        clear.addEventListener('click', () => {
+            if (search) search.value = '';
+            segButtons[0].click();
+        });
+    }
+
+    // Show IDs toggle — flips a hidden ID span on every card.
+    if (showIds) {
+        const update = () => {
+            list.querySelectorAll('[data-id-cell]').forEach(el => {
+                el.hidden = !showIds.checked;
+            });
+        };
+        showIds.addEventListener('change', update);
+        update();
+    }
+
+    // Overflow menu — open/close on click; close on outside click.
+    document.addEventListener('click', (e) => {
+        const trigger = e.target.closest('.bundle-card__overflow-trigger');
+        if (trigger) {
+            const wrap = trigger.closest('.bundle-card__overflow');
+            const isOpen = wrap.classList.contains('open');
+            document.querySelectorAll('.bundle-card__overflow.open').forEach(w => w.classList.remove('open'));
+            if (!isOpen) {
+                wrap.classList.add('open');
+                trigger.setAttribute('aria-expanded', 'true');
+            } else {
+                trigger.setAttribute('aria-expanded', 'false');
+            }
+            return;
+        }
+        if (!e.target.closest('.bundle-card__overflow')) {
+            document.querySelectorAll('.bundle-card__overflow.open').forEach(w => {
+                w.classList.remove('open');
+                const t = w.querySelector('.bundle-card__overflow-trigger');
+                if (t) t.setAttribute('aria-expanded', 'false');
+            });
+        }
+    });
+
+    // Clone is a placeholder — wire to a real endpoint in a follow-up.
+    // Delete posts to the existing /<id>/delete route.
+    list.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        if (btn.dataset.action === 'clone') {
+            alert('Clone bundle — wiring lands in a follow-up.');
+        } else if (btn.dataset.action === 'delete') {
+            if (!confirm(`Delete bundle "${btn.dataset.name}"?`)) return;
+            const root = document.querySelector('.bundles-page');
+            const scriptRoot = root.dataset.scriptRoot || '';
+            const tenantId = root.dataset.tenantId;
+            fetch(`${scriptRoot}/admin/tenant/${tenantId}/inventory-profiles/${btn.dataset.id}/delete`, {
+                method: 'DELETE',
+                credentials: 'same-origin',
+            }).then(r => r.ok ? location.reload() : alert('Delete failed'));
+        }
+    });
+
+    // "What's not bundled" — collapsible rail.
+    const nbToggle = document.getElementById('not-bundled-toggle');
+    const nbRail = document.getElementById('not-bundled');
+    if (nbToggle && nbRail) {
+        const toggle = () => {
+            const open = nbRail.classList.toggle('open');
+            nbToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
+        nbToggle.addEventListener('click', toggle);
+        nbToggle.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            }
+        });
+    }
+})();
 </script>
-
-<style>
-.card {
-    transition: box-shadow var(--sa-duration-base) var(--sa-easing),
-                border-color var(--sa-duration-base) var(--sa-easing);
-    border-color: var(--sa-border);
-}
-
-.card:hover {
-    box-shadow: var(--sa-shadow-md);
-    border-color: var(--sa-border-strong);
-}
-
-.badge-info {
-    background-color: var(--sa-info);
-}
-</style>
 {% endblock %}
