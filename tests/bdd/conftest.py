@@ -817,13 +817,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "BR-RULE-029 INV-1: sequence_number reused across retry POSTs — strictly ascending not preserved",
                 True,
             ),
-            # FIXME(salesagent-4ydt): BR-UC-004-ext-g requires OPEN->HALF_OPEN->probe
-            # before the breaker closes. Probe success races the HALF_OPEN assertion,
-            # leaving the breaker in CLOSED state by the time the Then step reads it.
-            "T-UC-004-webhook-circuit-halfopen": (
-                "BR-UC-004-ext-g: circuit breaker races past HALF_OPEN to CLOSED during probe",
-                True,
-            ),
+            # Graduated: T-UC-004-webhook-circuit-halfopen (merge from main fixed circuit breaker probe timing)
             # Webhook retry off-by-one: range(max_retries) yields 3 total calls,
             # should be range(max_retries + 1) for 4 calls (1 initial + 3 retries per BR-RULE-029 / UC-004-EXT-G-01)
             "T-UC-004-webhook-retry-5xx": (
@@ -875,15 +869,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
             "T-UC-004-ext-c": ("partial-success Error model needs suggestion field — production enhancement", True),
             "T-UC-004-ext-d": ("partial-success Error model needs suggestion field — production enhancement", True),
-            # FIXME(salesagent-ttw): _impl reports media_buy_not_found instead of silently omitting
-            "T-UC-004-identify-partial": (
-                "_impl reports media_buy_not_found errors instead of silently omitting missing IDs (BR-RULE-030 INV-5)",
-                True,
-            ),
-            "T-UC-004-identify-batch-ownership": (
-                "_impl reports media_buy_not_found for non-owned IDs instead of silently omitting (BR-RULE-030 INV-5)",
-                True,
-            ),
+            # Graduated: T-UC-004-identify-partial, T-UC-004-identify-batch-ownership
+            # (merge from main fixed _impl to silently omit missing/non-owned IDs per BR-RULE-030 INV-5)
             # Adapter error: message text + suggestion not wired in partial-success response
             "T-UC-004-ext-f": ("adapter error response needs suggestion field and message refinement", True),
             # Adapter partial failure: _impl silently swallows data construction exceptions
