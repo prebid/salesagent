@@ -329,13 +329,19 @@ def _build_sync_result(
     errors: list[Any] | None = None,
     setup: Any | None = None,
 ) -> SyncResponseAccount:
-    """Build an AdCP sync response Account object."""
+    """Build an AdCP sync response Account object.
+
+    The seller-assigned ``account_id`` MUST be echoed back for any non-failure
+    action (created/updated/unchanged) so the buyer can reference the account
+    in subsequent calls (BR-UC-011 POST-S5). Only ``failed`` results legitimately
+    omit it because no account was provisioned.
+    """
     return SyncResponseAccount(
-        account_id=account_id,
         brand=brand,
         operator=operator,
         action=action,
         status=status,
+        account_id=account_id,
         name=name,
         billing=billing,
         sandbox=sandbox,
@@ -533,11 +539,11 @@ async def _sync_accounts_impl(
                     action = "updated" if changes else "unchanged"
                     results.append(
                         _build_sync_result(
-                            account_id=existing.account_id,
                             brand=entry.brand,
                             operator=operator,
                             action=action,
                             status=existing.status,
+                            account_id=existing.account_id,
                             name=existing.name,
                             billing=existing.billing,
                             sandbox=existing.sandbox,
@@ -555,11 +561,11 @@ async def _sync_accounts_impl(
 
                 results.append(
                     _build_sync_result(
-                        account_id=existing.account_id,
                         brand=entry.brand,
                         operator=operator,
                         action=action,
                         status=existing.status,
+                        account_id=existing.account_id,
                         name=existing.name,
                         billing=existing.billing,
                         sandbox=existing.sandbox,
@@ -585,13 +591,16 @@ async def _sync_accounts_impl(
                 initial_status = "pending_approval" if setup else "active"
 
                 if dry_run:
+                    # account_id was generated above (BR-RULE-062 — preview reflects
+                    # what a real create would return). It is a preview value, not a
+                    # commitment to that specific id.
                     results.append(
                         _build_sync_result(
-                            account_id=account_id,
                             brand=entry.brand,
                             operator=operator,
                             action="created",
                             status=initial_status,
+                            account_id=account_id,
                             name=account_name,
                             billing=billing_val,
                             sandbox=sandbox,
@@ -621,11 +630,11 @@ async def _sync_accounts_impl(
 
                 results.append(
                     _build_sync_result(
-                        account_id=account_id,
                         brand=entry.brand,
                         operator=operator,
                         action="created",
                         status=initial_status,
+                        account_id=account_id,
                         name=account_name,
                         billing=billing_val,
                         sandbox=sandbox,
@@ -641,11 +650,11 @@ async def _sync_accounts_impl(
                     repo.update_status(db_acct.account_id, "closed")
                     results.append(
                         _build_sync_result(
-                            account_id=db_acct.account_id,
                             brand=db_acct.brand,
                             operator=db_acct.operator or "",
                             action="updated",
                             status="closed",
+                            account_id=db_acct.account_id,
                             name=db_acct.name,
                             billing=db_acct.billing,
                             sandbox=db_acct.sandbox,
