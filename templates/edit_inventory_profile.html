@@ -240,7 +240,7 @@ let allFormats = [];
 // Pre-populate existing data
 const existingProfile = {
     inventory_config: {{ profile.inventory_config | tojson | safe }},
-    formats: {{ profile.formats | tojson | safe }},
+    formats: {{ profile.format_ids | tojson | safe }},
     publisher_properties: {{ profile.publisher_properties | tojson | safe }},
     targeting_template: {{ profile.targeting_template | tojson | safe if profile.targeting_template else 'null' }}
 };

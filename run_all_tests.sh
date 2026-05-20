@@ -114,7 +114,9 @@ fi
 
 # --- Security audit ---
 echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
-IGNORED_VULNS="GHSA-5239-wwwm-4pmq"
+# PYSEC-2026-89 is a Markdown vuln, PYSEC-2025-183 is a PyJWT vuln — both
+# have no fix released yet. Remove when upstream ships fixes.
+IGNORED_VULNS="GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183"
 if uvx uv-secure --no-check-uv-tool --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
     echo -e "${GREEN}Security audit passed${NC}"
 else

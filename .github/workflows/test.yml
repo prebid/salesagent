@@ -64,7 +64,10 @@ jobs:
         with open("/tmp/uvscan/uv.lock", "w") as f:
             f.write(out)
         PY
-        uvx uv-secure --ignore-vulns GHSA-5239-wwwm-4pmq /tmp/uvscan/uv.lock
+        # PYSEC-2026-89: Markdown vuln with no fix released (3.10.2 is latest).
+        # PYSEC-2025-183: PyJWT vuln, 2.12.1 is latest published; CI's uv-secure
+        # DB flags it while local doesn't. Remove when upstream ships a fix.
+        uvx uv-secure --ignore-vulns GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183 /tmp/uvscan/uv.lock
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)

@@ -736,15 +736,20 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
-    return render_template(
-        "edit_inventory_profile.html",
-        tenant_id=tenant_id,
-        tenant=tenant,
-        profile=profile,
-        authorized_properties=authorized_properties,
-        property_tags=property_tags_list,
-        active_tab="inventory_profiles",
-    )
+        # Render inside the session so JSON columns (``profile.format_ids``,
+        # ``profile.inventory_config``, etc.) are accessible from the template.
+        # Outside the ``with`` the instance is detached and SQLAlchemy raises
+        # on lazy-loaded attribute access — Jinja swallows that to Undefined,
+        # which then ``tojson`` chokes on. (Verified locally with profile_id=7.)
+        return render_template(
+            "edit_inventory_profile.html",
+            tenant_id=tenant_id,
+            tenant=tenant,
+            profile=profile,
+            authorized_properties=authorized_properties,
+            property_tags=property_tags_list,
+            active_tab="inventory_profiles",
+        )
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/delete", methods=["DELETE", "POST"])
