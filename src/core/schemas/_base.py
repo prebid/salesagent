@@ -48,6 +48,7 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.exceptions import AdCPNotFoundError
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
@@ -740,7 +741,6 @@ def get_format_by_id(format_id: str, tenant_id: str | None = None) -> Format | N
     Returns:
         Format object or None if not found
     """
-    from src.core.exceptions import AdCPNotFoundError
     from src.core.format_resolver import get_format
 
     try:
