@@ -15,6 +15,7 @@ from typing import Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "097b909c7b5f"
@@ -39,7 +40,7 @@ def upgrade() -> None:
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),
         sa.Column(
             "response_envelope",
-            sa.JSON(),
+            postgresql.JSONB(),
             nullable=False,
             comment="Cached rejection envelope (Pydantic .model_dump()); returned verbatim on replay",
         ),
