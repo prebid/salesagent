@@ -39,4 +39,6 @@ set -euo pipefail
 
 IGNORED_VULNS="PYSEC-2026-89,PYSEC-2025-183"
 
-exec uvx uv-secure --ignore-vulns "$IGNORED_VULNS" --allow-unused-ignores "$@"
+# Explicit uv.lock path — prevents uv-secure from walking into
+# .claude/worktrees/ which contain their own uv.lock files.
+exec uvx uv-secure --ignore-vulns "$IGNORED_VULNS" --allow-unused-ignores "$@" uv.lock
