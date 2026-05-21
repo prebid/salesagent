@@ -43,9 +43,17 @@ updates:
         patterns: ["*"]
 
     ignore:
-      # Pinned: library default sets GAM API version (pyproject.toml).
+      # googleads is intentionally pinned to a specific version in pyproject.toml.
+      # The Google Ads Python client library selects the GAM (Google Ad Manager)
+      # API version based on the library version — bumping it automatically could
+      # silently change which GAM API version we call and break adapter behavior.
+      # Any upgrade must be tested manually against the GAM adapter.
+      # See src/adapters/gam/ for the adapter implementation.
       - dependency-name: "googleads"
-      # TODO(#1234): remove once #1217 merges — adcp is being manually migrated.
+      # adcp is excluded from auto-updates because it is being migrated manually.
+      # PR #1217 (adcp 3.10 → 3.12) is open and in review. Once it merges,
+      # this ignore entry should be removed so Dependabot resumes tracking adcp.
+      # TODO(#1234): remove this ignore after PR #1217 merges.
       - dependency-name: "adcp"
 
   # ──────────────────────────────────────────────────────────────────

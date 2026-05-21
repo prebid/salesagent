@@ -29,9 +29,21 @@ jobs:
 
       - uses: github/codeql-action/autobuild@ff0a06e83cb2de871e5a09832bc6a81e7276941f  # v3.28.18
 
-      # Advisory mode for 2-week ramp-up (Decision-10 / D10).
-      # After ~2 weeks, flip to gating by setting continue-on-error: false.
+      # Advisory mode for 2-week ramp-up (Decision-10 / D10 from issue #1234).
+      #
+      # CodeQL is intentionally non-blocking for the first ~2 weeks after this
+      # workflow is introduced. This gives the team time to review and triage
+      # any findings without blocking PRs on day 1.
+      #
+      # TO FLIP TO GATING (do this ~2 weeks after PR 1 merges):
+      #   1. Change `continue-on-error: true` to `continue-on-error: false` below.
+      #   2. Add "CodeQL analyze (Python)" to the required status checks list in
+      #      branch protection settings (Settings → Branches → main → Edit).
+      #   3. Update ADR-002 to note the date CodeQL became a required check.
+      #
+      # Target: OpenSSF Scorecard ≥ 7.5 after PR 6 (requires CodeQL gating +
+      # cosign image signing). See issue #1234 success criteria.
       - uses: github/codeql-action/analyze@ff0a06e83cb2de871e5a09832bc6a81e7276941f  # v3.28.18
-        continue-on-error: true
+        continue-on-error: true  # TODO: flip to false after ~2-week ramp (see note above)
         with:
           category: "/language:python"
