@@ -1590,7 +1590,7 @@ class TestUpdateMediaBuySchemaCompliance:
         """
         # buyer_campaign_ref is a create-time field, not an update field.
         # GetMediaBuysMediaBuy (list response) should preserve it.
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         mb = GetMediaBuysMediaBuy(
             media_buy_id="mb_1",
@@ -3928,7 +3928,7 @@ class TestGetMediaBuysStatusComputation:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Ported from test_get_media_buys.py::test_pending_start_when_before_start
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
 
@@ -3955,7 +3955,7 @@ class TestGetMediaBuysStatusComputation:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Ported from test_get_media_buys.py::test_active_when_in_flight
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
 
@@ -3982,7 +3982,7 @@ class TestGetMediaBuysStatusComputation:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Ported from test_get_media_buys.py::test_completed_when_past_end
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
 
@@ -4008,7 +4008,7 @@ class TestGetMediaBuysStatusComputation:
         Spec: UNSPECIFIED (implementation-defined start_time vs start_date precedence)
         Ported from test_get_media_buys.py::test_prefers_start_time_over_start_date
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
 
@@ -4039,7 +4039,7 @@ class TestGetMediaBuysStatusFilter:
         Spec: UNSPECIFIED (implementation-defined default status filter)
         Ported from test_get_media_buys.py::test_none_returns_active_only
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _resolve_status_filter
 
@@ -4052,7 +4052,7 @@ class TestGetMediaBuysStatusFilter:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Ported from test_get_media_buys.py::test_single_status
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _resolve_status_filter
 
@@ -4065,7 +4065,7 @@ class TestGetMediaBuysStatusFilter:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Ported from test_get_media_buys.py::test_list_of_statuses
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _resolve_status_filter
 
@@ -4083,7 +4083,7 @@ class TestGetMediaBuysResponseShape:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/media-buy.json
         Ported from test_get_media_buys.py::test_response_is_serializable
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         resp = GetMediaBuysResponse(
             media_buys=[
@@ -4109,7 +4109,7 @@ class TestGetMediaBuysResponseShape:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/media-buy.json
         Ported from test_get_media_buys.py::test_nested_serialization_roundtrip
         """
-        from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+        from adcp.types import MediaBuyStatus
 
         resp = GetMediaBuysResponse(
             media_buys=[

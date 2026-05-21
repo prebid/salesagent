@@ -17,7 +17,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types import MediaBuyStatus
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session

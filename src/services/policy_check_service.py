@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from enum import Enum
 
-from adcp.types.generated_poc.brand import Brand
+from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 from pydantic import BaseModel, Field
 
 from src.core.schemas import Product

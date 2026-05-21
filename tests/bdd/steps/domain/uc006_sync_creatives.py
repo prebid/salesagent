@@ -124,8 +124,8 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     Parses account_setup as JSON to build an AccountReference, or handles
     sentinel values like "not provided".
     """
-    from adcp.types.generated_poc.core.account_ref import AccountReference, AccountReference1, AccountReference2
-    from adcp.types.generated_poc.core.brand_ref import BrandReference
+    from adcp.types import AccountReference, AccountReferenceById as AccountReference1, AccountReference2
+    from adcp.types import BrandReference
 
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
@@ -1971,7 +1971,7 @@ def given_creative_agent_no_preview_urls(ctx: dict) -> None:
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+    from adcp.types import FormatId as LibraryFormatId
 
     env = ctx["env"]
     creative_format_id = ctx.get("creative_format_id", "display_300x250")

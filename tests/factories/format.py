@@ -26,17 +26,16 @@ Usage::
 from __future__ import annotations
 
 import factory
-from adcp.types.generated_poc.core.format import (
-    Assets,
-    Assets81,
-    Assets82,
-    Assets83,
-    Assets84,
-    Assets85,
-    Dimensions,
-    Renders,
-    Responsive,
+from adcp.types import (
+    AudioFormatAsset,
+    HtmlFormatAsset,
+    ImageFormatAsset,
+    MarkdownFormatAsset,
+    TextFormatAsset,
+    VideoFormatAsset,
 )
+from adcp.types import Responsive
+from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 from src.core.schemas import Format, FormatId
 
@@ -45,43 +44,31 @@ AGENT_URL = "https://creative.adcontextprotocol.org"
 # ── Asset class mapping ──────────────────────────────────────────────
 
 _ASSET_CLASS_MAP = {
-    "image": Assets,
-    "video": Assets81,
-    "audio": Assets82,
-    "text": Assets83,
-    "markdown": Assets84,
-    "html": Assets85,
+    "image": ImageFormatAsset,
+    "video": VideoFormatAsset,
+    "audio": AudioFormatAsset,
+    "text": TextFormatAsset,
+    "markdown": MarkdownFormatAsset,
+    "html": HtmlFormatAsset,
 }
 
 
-def make_asset(asset_type: str, asset_id: str | None = None) -> Assets:
+def make_asset(asset_type: str, asset_id: str | None = None) -> ImageFormatAsset:
     """Create a typed asset object from an asset type string.
 
     >>> a = make_asset("video")
     >>> a.asset_type
     'video'
     """
-    cls = _ASSET_CLASS_MAP.get(asset_type, Assets)
+    cls = _ASSET_CLASS_MAP.get(asset_type, ImageFormatAsset)
     return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
 
 
 def _find_repeatable_group_class():
-    """Find the repeatable_group Assets class dynamically.
+    """Return the RepeatableAssetGroup class (stable alias)."""
+    from adcp.types import RepeatableAssetGroup
 
-    The SDK auto-generates numbered classes (Assets18, Assets94, ...) that
-    change on every spec regeneration. We find it by checking item_type default.
-    """
-    import adcp.types.generated_poc.core.format as fmt_mod
-
-    for name in dir(fmt_mod):
-        if not name.startswith("Assets"):
-            continue
-        cls = getattr(fmt_mod, name)
-        if hasattr(cls, "model_fields") and "item_type" in cls.model_fields:
-            default = cls.model_fields["item_type"].default
-            if default == "repeatable_group":
-                return cls
-    raise ImportError("Cannot find repeatable_group Assets class in adcp SDK")
+    return RepeatableAssetGroup
 
 
 def _find_inner_asset_class(asset_type: str):

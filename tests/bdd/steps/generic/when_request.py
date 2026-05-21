@@ -381,7 +381,7 @@ def _partition_name_search(ctx: dict, partition: str) -> None:
 
 def _partition_wcag(ctx: dict, partition: str) -> None:
     """Map wcag_level partition label to filter and call harness."""
-    from adcp.types.generated_poc.enums.wcag_level import WcagLevel
+    from adcp.types import WcagLevel
 
     wcag_map = {"level_a": WcagLevel.A, "level_aa": WcagLevel.AA, "level_aaa": WcagLevel.AAA}
     if partition == "not_provided":

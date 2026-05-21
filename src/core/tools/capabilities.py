@@ -10,8 +10,8 @@ import logging
 from datetime import UTC, datetime
 
 from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
-from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
-from adcp.types.generated_poc.enums.channels import MediaChannel
+from adcp.types import MediaChannel
+from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures  # TODO: no stable alias in adcp.types
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,

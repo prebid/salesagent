@@ -57,8 +57,7 @@ class _PackageData:
 
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy

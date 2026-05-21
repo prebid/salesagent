@@ -13,8 +13,7 @@ from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import PropertyListReference
-from adcp.types.generated_poc.core.brand_ref import BrandReference
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import BrandReference, ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field, ValidationError

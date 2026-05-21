@@ -25,10 +25,7 @@ from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from adcp.types.aliases import Package as ResponsePackage
-from adcp.types.generated_poc.core.brand_ref import BrandReference
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
-from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
+from adcp.types import BrandReference, ContextObject, PackageRequest as AdcpPackageRequest, ReportingWebhook
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError

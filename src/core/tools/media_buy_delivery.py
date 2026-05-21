@@ -26,10 +26,9 @@ console = Console()
 
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import Error, MediaBuyStatus
-from adcp.types.generated_poc.core.attribution_window import AttributionWindow as ResponseAttributionWindow
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.duration import Duration, Unit
-from adcp.types.generated_poc.enums.attribution_model import AttributionModel
+from adcp.types import ContextObject, Duration, Unit
+from adcp.types.generated_poc.core.attribution_window import AttributionWindow as ResponseAttributionWindow  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.enums.attribution_model import AttributionModel  # TODO: no stable alias in adcp.types
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,

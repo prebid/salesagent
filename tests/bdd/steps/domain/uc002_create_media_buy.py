@@ -22,7 +22,7 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 @given(parsers.parse('a valid create_media_buy request with account_id "{account_id}"'))
 def given_request_with_account_id(ctx: dict, account_id: str) -> None:
     """Set up a create_media_buy request referencing an explicit account_id."""
-    from adcp.types.generated_poc.core.account_ref import AccountReference, AccountReference1
+    from adcp.types import AccountReference, AccountReferenceById as AccountReference1
 
     ctx["account_ref"] = AccountReference(root=AccountReference1(account_id=account_id))
     ctx["request_account_id"] = account_id
@@ -31,8 +31,8 @@ def given_request_with_account_id(ctx: dict, account_id: str) -> None:
 @given(parsers.parse('a valid create_media_buy request with account natural key brand "{brand}" operator "{operator}"'))
 def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None:
     """Set up a create_media_buy request referencing a natural key (brand + operator)."""
-    from adcp.types.generated_poc.core.account_ref import AccountReference, AccountReference2
-    from adcp.types.generated_poc.core.brand_ref import BrandReference
+    from adcp.types import AccountReference, AccountReferenceByNaturalKey as AccountReference2
+    from adcp.types import BrandReference
 
     ctx["account_ref"] = AccountReference(
         root=AccountReference2(brand=BrandReference(domain=brand), operator=operator),
@@ -63,7 +63,7 @@ def given_valid_request(ctx: dict) -> None:
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
 def given_request_with_account(ctx: dict, account_id: str) -> None:
     """Set up a create_media_buy request with account (short form)."""
-    from adcp.types.generated_poc.core.account_ref import AccountReference, AccountReference1
+    from adcp.types import AccountReference, AccountReferenceById as AccountReference1
 
     ctx["account_ref"] = AccountReference(root=AccountReference1(account_id=account_id))
     ctx["request_account_id"] = account_id
@@ -189,8 +189,8 @@ def given_account_active(ctx: dict) -> None:
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))
 def given_request_with_partition(ctx: dict, partition: str) -> None:
     """Set up request based on partition name (for Scenario Outline tables)."""
-    from adcp.types.generated_poc.core.account_ref import AccountReference, AccountReference1, AccountReference2
-    from adcp.types.generated_poc.core.brand_ref import BrandReference
+    from adcp.types import AccountReference, AccountReferenceById as AccountReference1, AccountReference2
+    from adcp.types import BrandReference
 
     env = ctx["env"]
     if "tenant" not in ctx:
@@ -294,8 +294,8 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 @given(parsers.parse("a create_media_buy request with account: {config}"))
 def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     """Set up request based on boundary config string."""
-    from adcp.types.generated_poc.core.account_ref import AccountReference, AccountReference1, AccountReference2
-    from adcp.types.generated_poc.core.brand_ref import BrandReference
+    from adcp.types import AccountReference, AccountReferenceById as AccountReference1, AccountReference2
+    from adcp.types import BrandReference
 
     env = ctx["env"]
     if "tenant" not in ctx:

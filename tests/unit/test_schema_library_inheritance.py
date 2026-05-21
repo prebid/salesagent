@@ -52,9 +52,7 @@ class TestSchemaLibraryInheritance:
         from adcp.types import Measurement as LibraryMeasurement
 
         # adcp 3.6.0: Pagination moved to core.pagination_response as PaginationResponse
-        from adcp.types.generated_poc.core.pagination_response import (
-            PaginationResponse as LibraryResponsePagination,
-        )
+        from adcp.types import PaginationResponse as LibraryResponsePagination
 
         from src.core.schemas import AggregatedTotals, DeliveryMeasurement, Measurement, Pagination
 
@@ -81,7 +79,7 @@ class TestSchemaLibraryInheritance:
         V3 Migration: Property class requires property-specific Identifier from
         adcp.types.generated_poc.core.property.Identifier, not generic Identifier.
         """
-        from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
+        from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier  # TODO: no stable alias (property-specific, different from adcp.types.Identifier)
 
         from src.core.schemas import PropertyIdentifier
 

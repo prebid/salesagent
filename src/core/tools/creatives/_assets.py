@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types import CreativeAsset
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)

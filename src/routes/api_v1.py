@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
-from adcp.types.generated_poc.core.brand_ref import BrandReference
+from adcp.types import BrandReference
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,

@@ -363,9 +363,9 @@ def given_valid_create_request_with_table(ctx: dict, datatable: list[list[str]])
             # Parse: account_id "acc-001"
             if "account_id" in value:
                 account_id = value.split('"')[1]
-                from adcp.types.generated_poc.core.account_ref import (
+                from adcp.types import (
                     AccountReference,
-                    AccountReference1,
+                    AccountReferenceById as AccountReference1,
                 )
 
                 kwargs["account"] = AccountReference(root=AccountReference1(account_id=account_id))

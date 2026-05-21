@@ -29,32 +29,32 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 23 violations (workflow step response_data)
     # Line numbers updated after ebb527c6 merge.
-    ("media_buy_update.py", 275),
-    ("media_buy_update.py", 335),
-    ("media_buy_update.py", 336),
-    ("media_buy_update.py", 390),
-    ("media_buy_update.py", 447),
-    ("media_buy_update.py", 470),
-    ("media_buy_update.py", 512),
-    ("media_buy_update.py", 539),
-    ("media_buy_update.py", 556),
-    ("media_buy_update.py", 610),
-    ("media_buy_update.py", 640),
-    ("media_buy_update.py", 660),
-    ("media_buy_update.py", 686),
-    ("media_buy_update.py", 865),
-    ("media_buy_update.py", 896),
-    ("media_buy_update.py", 924),
-    ("media_buy_update.py", 1095),
-    ("media_buy_update.py", 1113),
-    ("media_buy_update.py", 1163),
-    ("media_buy_update.py", 1256),
-    ("media_buy_update.py", 1288),
-    ("media_buy_update.py", 1351),
+    ("media_buy_update.py", 271),
+    ("media_buy_update.py", 331),
+    ("media_buy_update.py", 332),
+    ("media_buy_update.py", 386),
+    ("media_buy_update.py", 443),
+    ("media_buy_update.py", 466),
+    ("media_buy_update.py", 508),
+    ("media_buy_update.py", 535),
+    ("media_buy_update.py", 552),
+    ("media_buy_update.py", 606),
+    ("media_buy_update.py", 636),
+    ("media_buy_update.py", 656),
+    ("media_buy_update.py", 682),
+    ("media_buy_update.py", 861),
+    ("media_buy_update.py", 892),
+    ("media_buy_update.py", 920),
+    ("media_buy_update.py", 1091),
+    ("media_buy_update.py", 1109),
+    ("media_buy_update.py", 1159),
+    ("media_buy_update.py", 1252),
+    ("media_buy_update.py", 1284),
+    ("media_buy_update.py", 1347),
     # _get_products_impl: 1 violation (logging)
-    ("products.py", 624),
+    ("products.py", 623),
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 144),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 143),  # filters.model_dump(exclude_none=True)
 }
 
 

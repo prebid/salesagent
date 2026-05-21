@@ -15,7 +15,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types import MediaBuyStatus
 from pydantic import RootModel, ValidationError
 
 from src.core.resolved_identity import ResolvedIdentity

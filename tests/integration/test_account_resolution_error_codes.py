@@ -7,12 +7,12 @@ beads: salesagent-2rq
 """
 
 import pytest
-from adcp.types.generated_poc.core.account_ref import (
+from adcp.types import (
     AccountReference,
-    AccountReference1,
-    AccountReference2,
+    AccountReferenceById as AccountReference1,
+    AccountReferenceByNaturalKey as AccountReference2,
 )
-from adcp.types.generated_poc.core.brand_ref import BrandReference
+from adcp.types import BrandReference
 
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPAccountNotFoundError, AdCPNotFoundError
