@@ -193,6 +193,216 @@ class TestCreativeApproval:
         assert response.status_code == 404
 
 
+def _create_active_media_buy(tenant_id: str, status: str = "active") -> tuple[str, str]:
+    """Create a media buy + package with a platform_order_id. Returns (media_buy_id, package_id)."""
+    from sqlalchemy import select as sa_select
+
+    from src.core.database.models import Principal as PrincipalModel
+    from src.core.database.models import Tenant as TenantModel
+    from tests.factories import MediaBuyFactory, MediaPackageFactory
+
+    with get_db_session() as session:
+        MediaBuyFactory._meta.sqlalchemy_session = session
+        MediaPackageFactory._meta.sqlalchemy_session = session
+
+        tenant = session.scalars(sa_select(TenantModel).filter_by(tenant_id=tenant_id)).first()
+        principal = session.scalars(
+            sa_select(PrincipalModel).filter_by(tenant_id=tenant_id, principal_id=_PRINCIPAL_ID)
+        ).first()
+
+        mb = MediaBuyFactory(tenant=tenant, principal=principal, status=status)
+        pkg = MediaPackageFactory(
+            media_buy=mb,
+            package_config={"platform_order_id": "gam_order_test", "platform_line_item_id": "gam_li_test"},
+        )
+        return mb.media_buy_id, pkg.package_id
+
+
+def _create_assignment(tenant_id: str, creative_id: str, media_buy_id: str, package_id: str) -> str:
+    """Create a CreativeAssignment linking creative to media buy. Returns assignment_id."""
+    from sqlalchemy import select as sa_select
+
+    from src.core.database.models import Creative as CreativeModel
+    from src.core.database.models import MediaBuy as MediaBuyModel
+    from tests.factories import CreativeAssignmentFactory
+
+    with get_db_session() as session:
+        CreativeAssignmentFactory._meta.sqlalchemy_session = session
+
+        creative = session.scalars(
+            sa_select(CreativeModel).filter_by(tenant_id=tenant_id, creative_id=creative_id)
+        ).first()
+        media_buy = session.scalars(
+            sa_select(MediaBuyModel).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
+        ).first()
+
+        asgn = CreativeAssignmentFactory(
+            creative=creative,
+            media_buy=media_buy,
+            package_id=package_id,
+        )
+        return asgn.assignment_id
+
+
+_PUSH_PATCH = "src.core.tools.media_buy_create.push_creative_to_existing_buy"
+
+
+class TestCreativeApprovalRetroactivePush:
+    """approve_creative triggers retroactive push for already-active media buys (#1038)."""
+
+    def test_active_buy_triggers_retroactive_push(self, client, test_tenant):
+        """Approving a creative assigned to an active buy calls push_creative_to_existing_buy."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(test_tenant, status="active")
+        _create_assignment(test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={"approved_by": "test@example.com"},
+            )
+
+        assert response.status_code == 200
+        mock_push.assert_called_once_with(
+            creative_id=creative_id,
+            media_buy_id=media_buy_id,
+            tenant_id=test_tenant,
+        )
+
+    def test_pending_creatives_buy_not_retroactively_pushed(self, client, test_tenant):
+        """Buys in pending_creatives status are handled by the existing loop, not the retroactive one."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(test_tenant, status="pending_creatives")
+        _create_assignment(test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        mock_push.assert_not_called()
+
+    def test_push_failure_returns_200_with_warnings(self, client, test_tenant):
+        """Push failure is non-fatal: response is 200 with a warnings field."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(test_tenant, status="active")
+        _create_assignment(test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(False, "GAM rejected the creative")),
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["success"] is True
+        assert any("GAM rejected" in w for w in data.get("warnings", []))
+
+    def test_no_active_buy_no_push_called(self, client, test_tenant):
+        """Approving a creative with no buy assignments does not call push."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending_review")
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        mock_push.assert_not_called()
+
+    def test_scheduled_buy_triggers_retroactive_push(self, client, test_tenant):
+        """Buys in 'scheduled' status (approved, not yet started) also get the push."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(test_tenant, status="scheduled")
+        _create_assignment(test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        mock_push.assert_called_once_with(
+            creative_id=creative_id,
+            media_buy_id=media_buy_id,
+            tenant_id=test_tenant,
+        )
+
+    def test_paused_buy_triggers_retroactive_push(self, client, test_tenant):
+        """Buys in 'paused' status are live in the ad server and also get the push."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(test_tenant, status="paused")
+        _create_assignment(test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        mock_push.assert_called_once_with(
+            creative_id=creative_id,
+            media_buy_id=media_buy_id,
+            tenant_id=test_tenant,
+        )
+
+    def test_pending_approval_buy_not_pushed(self, client, test_tenant):
+        """Buys in pending_approval (not yet sent to GAM) must not trigger push."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(test_tenant, status="pending_approval")
+        _create_assignment(test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        mock_push.assert_not_called()
+
+
 class TestCreativeRejection:
     """Test creative rejection endpoint."""
 

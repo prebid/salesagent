@@ -510,6 +510,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         slack_data: dict[str, Any] = {}
         audit_data: dict[str, Any] = {}
         media_buy_actions: list[dict[str, Any]] = []
+        push_warnings: list[str] = []
 
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.creatives is not None
@@ -568,11 +569,15 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
             # Check if this creative approval unblocks any media buys
             assignments = uow.assignments.get_by_creative(creative_id)
+            # Snapshot IDs as plain strings — ORM objects expire on session close (#1038)
+            assignment_buy_ids = [a.media_buy_id for a in assignments]
 
             logger.info(
                 f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments"
             )
 
+            # Snapshot buy statuses here to avoid a second UoW after commit
+            assignment_buy_statuses: dict[str, str] = {}
             for assignment in assignments:
                 media_buy_id = assignment.media_buy_id
                 media_buy = uow.media_buys.get_by_id(media_buy_id)
@@ -580,6 +585,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 if not media_buy:
                     continue
 
+                assignment_buy_statuses[media_buy_id] = media_buy.status
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
 
                 if media_buy.status in {"pending_creatives", "draft"}:
@@ -642,7 +648,38 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             else:
                 logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {error_msg}")
 
-        return jsonify({"success": True, "status": "approved"})
+        # Retroactive push for already-live buys (#1038):
+        # Buys in pending_creatives/draft were handled above. For buys that are
+        # live in the ad server, push this newly-approved creative to the line item.
+        # Allowlist of statuses where the buy is actually live in the ad server.
+        _LIVE_BUY_STATUSES = frozenset({"active", "scheduled", "paused"})
+        from src.core.tools.media_buy_create import push_creative_to_existing_buy
+
+        already_handled_buy_ids = {a["media_buy_id"] for a in media_buy_actions}
+        # Use the status snapshot from the first loop — no need for a second UoW
+        buys_to_push = [
+            buy_id
+            for buy_id in assignment_buy_ids
+            if buy_id not in already_handled_buy_ids and assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
+        ]
+
+        for buy_id in buys_to_push:
+            logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {creative_id} → live buy {buy_id}")
+            push_success, push_err = push_creative_to_existing_buy(
+                creative_id=creative_id,
+                media_buy_id=buy_id,
+                tenant_id=tenant_id,
+            )
+            if not push_success:
+                logger.error(
+                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: {push_err}"
+                )
+                push_warnings.append(f"Creative push to buy {buy_id} failed: {push_err}")
+
+        response_body: dict[str, Any] = {"success": True, "status": "approved"}
+        if push_warnings:
+            response_body["warnings"] = push_warnings
+        return jsonify(response_body)
 
     except Exception as e:
         logger.error(f"Error approving creative: {e}", exc_info=True)
