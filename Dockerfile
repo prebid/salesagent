@@ -83,11 +83,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq5 \
     curl
 
-# Install supercronic for cron jobs (container-friendly cron)
+# Install supercronic for cron jobs (container-friendly cron).
+# Pinned to v0.2.45 — rebuilt with newer Go stdlib to clear CVEs flagged
+# by downstream Trivy gates (Go crypto/tls + net/url advisories). SHAs
+# verified per-arch so a re-tag upstream can't silently swap the binary.
 ARG TARGETARCH
-RUN SUPERCRONIC_ARCH=$(case "${TARGETARCH}" in "arm64") echo "linux-arm64" ;; *) echo "linux-amd64" ;; esac) && \
-    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.41/supercronic-${SUPERCRONIC_ARCH}" \
-    -o /usr/local/bin/supercronic && \
+ARG SUPERCRONIC_VERSION=v0.2.45
+ARG SUPERCRONIC_SHA256_AMD64=bb6da5af8d5547c9a5cbb4cf58d9f5541f0433df2188bfe4f1a54b04ad253db6
+ARG SUPERCRONIC_SHA256_ARM64=c0f21174f7bb3c80a9b33567ba0cfbeb3e51e765fe9808267ba72a1ac88c3dba
+RUN case "${TARGETARCH}" in \
+        "arm64") SUPERCRONIC_ARCH="linux-arm64"; SUPERCRONIC_SHA256="${SUPERCRONIC_SHA256_ARM64}" ;; \
+        *)       SUPERCRONIC_ARCH="linux-amd64"; SUPERCRONIC_SHA256="${SUPERCRONIC_SHA256_AMD64}" ;; \
+    esac && \
+    curl -fsSL "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-${SUPERCRONIC_ARCH}" \
+        -o /usr/local/bin/supercronic && \
+    echo "${SUPERCRONIC_SHA256}  /usr/local/bin/supercronic" | sha256sum -c - && \
     chmod +x /usr/local/bin/supercronic
 
 WORKDIR /app
