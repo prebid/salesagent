@@ -13,25 +13,14 @@ from datetime import UTC, datetime
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories import MediaBuyUoW, WorkflowUoW
+from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
 
-# Global registry of running approval polling threads
-_active_approval_tasks: dict[str, threading.Thread] = {}
-_approval_lock = threading.Lock()
-
-
-def _reap_dead_approval_tasks() -> None:
-    """Drop ``_active_approval_tasks`` entries whose threads are no longer alive.
-
-    Same defensive cleanup pattern as
-    ``background_sync_service._reap_dead_syncs`` — see that docstring
-    for the rationale (production memory-leak triage #5). Caller MUST
-    hold ``_approval_lock``.
-    """
-    dead = [tid for tid, t in _active_approval_tasks.items() if not t.is_alive()]
-    for tid in dead:
-        _active_approval_tasks.pop(tid, None)
+# Global registry of running approval polling threads. ThreadRegistry reaps
+# dead threads on every read — same defensive cleanup as the sync registry
+# (production memory-leak triage #5).
+_active_approval_tasks = ThreadRegistry()
 
 
 def start_order_approval_polling(
@@ -54,10 +43,9 @@ def start_order_approval_polling(
     thread_id = f"approval_{order_id}_{workflow_step_id}"
 
     # Check if already running
-    with _approval_lock:
-        if thread_id in _active_approval_tasks:
-            logger.warning(f"Approval polling already running for order {order_id}")
-            return
+    if _active_approval_tasks.contains(thread_id):
+        logger.warning(f"Approval polling already running for order {order_id}")
+        return
 
     # Start background thread
     thread = threading.Thread(
@@ -67,8 +55,7 @@ def start_order_approval_polling(
         name=f"approval-{workflow_step_id}",
     )
 
-    with _approval_lock:
-        _active_approval_tasks[thread_id] = thread
+    _active_approval_tasks.add(thread_id, thread)
 
     thread.start()
     logger.info(f"Started background approval polling thread: {thread_id}")
@@ -187,8 +174,7 @@ def _run_approval_polling_thread(
 
     finally:
         # Remove from active tasks
-        with _approval_lock:
-            _active_approval_tasks.pop(thread_id, None)
+        _active_approval_tasks.remove(thread_id)
 
 
 def _update_approval_progress(tenant_id: str, workflow_step_id: str, progress_data: dict) -> None:
@@ -278,16 +264,13 @@ def get_active_approval_tasks() -> list[str]:
 
     Reaps dead threads on read so the returned list reflects live state.
     """
-    with _approval_lock:
-        _reap_dead_approval_tasks()
-        return list(_active_approval_tasks.keys())
+    return _active_approval_tasks.list_active()
 
 
 def is_approval_task_running(order_id: str) -> bool:
     """Check if approval polling is running for a specific order.
 
+    Matches by substring (thread_id is ``approval_{order_id}_{step_id}``).
     Reaps dead threads on read.
     """
-    with _approval_lock:
-        _reap_dead_approval_tasks()
-        return any(order_id in task_id for task_id in _active_approval_tasks)
+    return _active_approval_tasks.contains_substring(order_id)

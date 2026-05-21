@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import ContextObject
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import WorkflowUoW

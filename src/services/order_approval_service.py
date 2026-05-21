@@ -15,25 +15,14 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
 
-# Global registry of running approval threads
-_active_approvals: dict[str, threading.Thread] = {}
-_approval_lock = threading.Lock()
-
-
-def _reap_dead_approvals() -> None:
-    """Drop ``_active_approvals`` entries whose threads are no longer alive.
-
-    Same defensive cleanup pattern as
-    ``background_sync_service._reap_dead_syncs`` — see that docstring
-    for the rationale (production memory-leak triage #5). Caller MUST
-    hold ``_approval_lock``.
-    """
-    dead = [aid for aid, t in _active_approvals.items() if not t.is_alive()]
-    for aid in dead:
-        _active_approvals.pop(aid, None)
+# Global registry of running approval threads. ThreadRegistry reaps dead
+# threads on every read — same defensive cleanup as the sync registry
+# (production memory-leak triage #5).
+_active_approvals = ThreadRegistry()
 
 
 def start_order_approval_background(
@@ -117,8 +106,7 @@ def start_order_approval_background(
         name=f"approval-{approval_id}",
     )
 
-    with _approval_lock:
-        _active_approvals[approval_id] = thread
+    _active_approvals.add(approval_id, thread)
 
     thread.start()
     logger.info(f"Started background approval polling thread: {approval_id}")
@@ -249,8 +237,7 @@ def _run_approval_thread(
 
     finally:
         # Remove from active approvals
-        with _approval_lock:
-            _active_approvals.pop(approval_id, None)
+        _active_approvals.remove(approval_id)
 
 
 def _update_approval_progress(approval_id: str, progress_data: dict[str, Any]):
@@ -446,20 +433,16 @@ def get_active_approvals() -> list[str]:
     Reaps dead threads on read so the returned list reflects live state
     even if the worker's ``finally`` cleanup didn't fire.
     """
-    with _approval_lock:
-        _reap_dead_approvals()
-        return list(_active_approvals.keys())
+    return _active_approvals.list_active()
 
 
 def is_approval_running(approval_id: str) -> bool:
     """Check if an approval is currently running in a background thread.
 
-    Reaps dead threads on read — a sync_id with a dead thread is no
+    Reaps dead threads on read — an approval_id with a dead thread is no
     longer running, so this returns False (and the entry is pruned).
     """
-    with _approval_lock:
-        _reap_dead_approvals()
-        return approval_id in _active_approvals
+    return _active_approvals.contains(approval_id)
 
 
 def get_approval_status(approval_id: str) -> dict[str, Any] | None:

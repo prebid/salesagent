@@ -1,3 +1,13 @@
+# Claude Code / Beads / Logs (10GB+ combined)
+.claude/
+.beads/
+logs/
+.mypy_cache/
+.ruff_cache/
+coverage.json
+product_coverage.json
+.duplication-baseline
+
 # Python
 __pycache__/
 *.py[cod]

@@ -646,6 +646,9 @@ class TestNoIdentifiersReturnAll:
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
+                    # Serving buy: persisted status is authoritative (salesagent-18h.1).
+                    # The flight window alone no longer implies "active".
+                    status="active",
                     start_date=today - timedelta(days=30),
                     end_date=today + timedelta(days=30),
                     budget=10000.0 + i * 1000,
@@ -689,6 +692,8 @@ class TestNoIdentifiersReturnAll:
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
+                    # Serving buy: persisted status is authoritative (salesagent-18h.1).
+                    status="active",
                     start_date=today - timedelta(days=30),
                     end_date=today + timedelta(days=30),
                 )
@@ -958,6 +963,10 @@ class TestPackageDeliveryStatus:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_past",
+                # Buy that WAS serving (active) and whose flight has ended →
+                # persisted "active" is date-refined to "completed"
+                # (salesagent-18h.1). A pending_approval buy never served.
+                status="active",
                 start_date=date(2024, 1, 1),
                 end_date=date(2024, 12, 31),
             )

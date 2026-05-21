@@ -15,7 +15,7 @@ This test suite covers:
 
 from datetime import UTC, datetime
 
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import CreativeAction
 
 from src.core.schemas import (
     CreateCreativeResponse,

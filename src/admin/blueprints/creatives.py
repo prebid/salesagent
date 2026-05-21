@@ -12,7 +12,7 @@ from typing import Any
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import CreativeAction, McpWebhookPayload, SyncCreativeResult, SyncCreativesSuccessResponse
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import ContextObject
 from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.models import (
@@ -985,7 +985,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
     from src.core.metrics import (
         active_ai_reviews,
         ai_review_duration,
-        ai_review_errors,
+        record_ai_review_error,
     )
 
     start_time = time.time()
@@ -1000,13 +1000,13 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
         )
     except Exception as e:
         logger.error(f"Error running AI review: {e}", exc_info=True)
-        # Record error metrics
-        ai_review_errors.labels(tenant_id=tenant_id, error_type=type(e).__name__).inc()
+        # Record error metrics (error_type bounded to a fixed enum)
+        record_ai_review_error(tenant_id=tenant_id, error=e)
         return {"status": "pending_review", "error": str(e), "reason": "AI review failed - requires manual approval"}
     finally:
         # Record duration and decrement active reviews
         duration = time.time() - start_time
-        ai_review_duration.labels(tenant_id=tenant_id).observe(duration)
+        ai_review_duration.observe(duration)
         active_ai_reviews.labels(tenant_id=tenant_id).dec()
 
 
@@ -1025,7 +1025,7 @@ def _ai_review_creative_impl_inner(
     from src.core.database.repositories.media_buy import MediaBuyRepository
     from src.core.database.repositories.product import ProductRepository
     from src.core.database.repositories.tenant_config import TenantConfigRepository
-    from src.core.metrics import ai_review_confidence, ai_review_total
+    from src.core.metrics import ai_review_confidence, record_ai_review
     from src.services.ai import AIServiceFactory
     from src.services.ai.agents.review_agent import (
         create_review_agent,
@@ -1167,10 +1167,8 @@ def _ai_review_creative_impl_inner(
                 principal_id=creative.principal_id,
             )
             # Record metrics
-            ai_review_total.labels(
-                tenant_id=tenant_id, decision="pending_review", policy_triggered="sensitive_category"
-            ).inc()
-            ai_review_confidence.labels(tenant_id=tenant_id, decision="pending_review").observe(confidence_score)
+            record_ai_review(tenant_id=tenant_id, decision="pending_review", policy_triggered="sensitive_category")
+            ai_review_confidence.labels(decision="pending_review").observe(confidence_score)
             return result_dict
 
         # Apply confidence-based thresholds
@@ -1194,8 +1192,8 @@ def _ai_review_creative_impl_inner(
                     principal_id=creative.principal_id,
                 )
                 # Record metrics
-                ai_review_total.labels(tenant_id=tenant_id, decision="approved", policy_triggered="auto_approve").inc()
-                ai_review_confidence.labels(tenant_id=tenant_id, decision="approved").observe(confidence_score)
+                record_ai_review(tenant_id=tenant_id, decision="approved", policy_triggered="auto_approve")
+                ai_review_confidence.labels(decision="approved").observe(confidence_score)
                 return result_dict
             else:
                 result_dict = {
@@ -1215,10 +1213,10 @@ def _ai_review_creative_impl_inner(
                     principal_id=creative.principal_id,
                 )
                 # Record metrics
-                ai_review_total.labels(
+                record_ai_review(
                     tenant_id=tenant_id, decision="pending_review", policy_triggered="low_confidence_approval"
-                ).inc()
-                ai_review_confidence.labels(tenant_id=tenant_id, decision="pending_review").observe(confidence_score)
+                )
+                ai_review_confidence.labels(decision="pending_review").observe(confidence_score)
                 return result_dict
 
         elif "REJECT" in decision:
@@ -1239,8 +1237,8 @@ def _ai_review_creative_impl_inner(
                     principal_id=creative.principal_id,
                 )
                 # Record metrics
-                ai_review_total.labels(tenant_id=tenant_id, decision="rejected", policy_triggered="auto_reject").inc()
-                ai_review_confidence.labels(tenant_id=tenant_id, decision="rejected").observe(confidence_score)
+                record_ai_review(tenant_id=tenant_id, decision="rejected", policy_triggered="auto_reject")
+                ai_review_confidence.labels(decision="rejected").observe(confidence_score)
                 return result_dict
             else:
                 result_dict = {
@@ -1260,10 +1258,8 @@ def _ai_review_creative_impl_inner(
                     principal_id=creative.principal_id,
                 )
                 # Record metrics
-                ai_review_total.labels(
-                    tenant_id=tenant_id, decision="pending_review", policy_triggered="uncertain_rejection"
-                ).inc()
-                ai_review_confidence.labels(tenant_id=tenant_id, decision="pending_review").observe(confidence_score)
+                record_ai_review(tenant_id=tenant_id, decision="pending_review", policy_triggered="uncertain_rejection")
+                ai_review_confidence.labels(decision="pending_review").observe(confidence_score)
                 return result_dict
 
         # Default: uncertain or "REQUIRE HUMAN APPROVAL"
@@ -1283,8 +1279,8 @@ def _ai_review_creative_impl_inner(
             principal_id=creative.principal_id,
         )
         # Record metrics
-        ai_review_total.labels(tenant_id=tenant_id, decision="pending_review", policy_triggered="uncertain").inc()
-        ai_review_confidence.labels(tenant_id=tenant_id, decision="pending_review").observe(confidence_score)
+        record_ai_review(tenant_id=tenant_id, decision="pending_review", policy_triggered="uncertain")
+        ai_review_confidence.labels(decision="pending_review").observe(confidence_score)
         return result_dict
 
 

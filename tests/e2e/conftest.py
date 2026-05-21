@@ -20,12 +20,59 @@ import requests
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 
 
+def port_scan_start(start_port: int, end_port: int, pid: int | None = None) -> int:
+    """Deterministic per-process scan origin inside [start_port, end_port).
+
+    Root cause of the mass e2e 502 failures (salesagent-18h.12): every port
+    allocator on the host scanned the same range from the same low bound and
+    returned the first free port. Two sibling worktree agents racing between
+    probe-close and ``docker run -p`` deterministically picked the *identical*
+    lowest free port and collided -- one stack half-started and nginx served
+    502 on the contended port.
+
+    Scattering the scan origin by PID makes independent processes diverge:
+    they no longer all converge on the low bound, so the collision window
+    effectively disappears even though the probe itself is still TOCTOU.
+
+    The shell allocators (``scripts/test-stack.sh``, ``agent-db.sh``) mirror
+    this exact algorithm in their Python heredocs -- keep them in sync.
+    """
+    if pid is None:
+        pid = os.getpid()
+    span = end_port - start_port
+    if span <= 1:
+        return start_port
+    # Spread the origin across the whole span. PID modulo span gives a
+    # stable, well-distributed offset; distinct PIDs land on distinct
+    # origins so parallel agents start scanning different sub-ranges.
+    return start_port + (pid % span)
+
+
 def find_free_port(start_port: int = 10000, end_port: int = 60000) -> int:
-    """Find an available port in the given range."""
-    for port in range(start_port, end_port):
+    """Find an available port in [start_port, end_port).
+
+    Hardened for parallel worktree execution (salesagent-18h.12):
+
+    * Scan starts at a per-process scattered origin (see ``port_scan_start``)
+      and wraps around, so concurrent agents do not converge on the same
+      lowest free port. The full range is still searched.
+    * The probe binds the *all-interfaces* address ("") -- the same way
+      Docker publishes ``-p host:container`` -- so a port already taken by
+      another stack on 0.0.0.0 is correctly detected. A 127.0.0.1-only
+      probe used to miss those and hand out an already-bound port.
+    * ``SO_REUSEADDR`` is left at 0 on the probe so the check is
+      conservative (it never reports a contended port as free).
+    """
+    span = end_port - start_port
+    if span <= 0:
+        raise RuntimeError(f"No free ports found in range {start_port}-{end_port}")
+    origin = port_scan_start(start_port, end_port)
+    for i in range(span):
+        port = start_port + ((origin - start_port + i) % span)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
             try:
-                s.bind(("127.0.0.1", port))
+                s.bind(("", port))
                 return port
             except OSError:
                 continue

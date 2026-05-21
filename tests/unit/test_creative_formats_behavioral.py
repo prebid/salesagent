@@ -11,17 +11,13 @@ Each test references its upstream BDD scenario ID for traceability.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.core.format import (
-    Assets,
-    Assets81,
-    Dimensions,
-    Renders,
-)
+from adcp.types import ImageFormatAsset, VideoFormatAsset
+from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 # adcp 4.3: Assets classes are type-discriminated by asset_type + item_type.
-# Assets = individual image, Assets81 = individual video
-# Assets94 = repeatable_group (has nested assets, no asset_type)
-# Nested group assets: Assets95 (image), Assets96 (video), Assets98 (text), etc.
+# ImageFormatAsset = individual image, VideoFormatAsset = individual video
+# RepeatableAssetGroup = repeatable_group (has nested assets, no asset_type)
+# Nested group assets: ImageFormatGroupAsset, VideoFormatGroupAsset, TextFormatGroupAsset, etc.
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import PrincipalFactory
 
@@ -195,21 +191,21 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_finds_type_in_group_assets(self):
         """Format with group assets containing requested type should be included."""
-        # adcp 3.9: repeatable_group uses Assets94, nested items use Assets95+ variants
-        from adcp.types.generated_poc.core.format import Assets94, Assets95, Assets98
+        # adcp 3.9: repeatable_group uses RepeatableAssetGroup, nested items use *FormatGroupAsset
+        from adcp.types import ImageFormatGroupAsset, RepeatableAssetGroup, TextFormatGroupAsset
 
-        group_asset = Assets94(
+        group_asset = RepeatableAssetGroup(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=True,
             min_count=1,
             max_count=5,
             assets=[
-                Assets95(
+                ImageFormatGroupAsset(
                     asset_id="product_image",
                     required=True,
                 ),
-                Assets98(
+                TextFormatGroupAsset(
                     asset_id="product_title",
                     required=True,
                 ),
@@ -232,17 +228,17 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_excludes_group_without_match(self):
         """Format with group assets NOT containing requested type should be excluded."""
-        # adcp 3.9: repeatable_group uses Assets94, nested text items use Assets98
-        from adcp.types.generated_poc.core.format import Assets94, Assets98
+        # adcp 3.9: repeatable_group uses RepeatableAssetGroup, nested text items use TextFormatGroupAsset
+        from adcp.types import RepeatableAssetGroup, TextFormatGroupAsset
 
-        group_asset = Assets94(
+        group_asset = RepeatableAssetGroup(
             item_type="repeatable_group",
             asset_group_id="text_group",
             required=True,
             min_count=1,
             max_count=3,
             assets=[
-                Assets98(
+                TextFormatGroupAsset(
                     asset_id="headline",
                     required=True,
                 ),
@@ -264,22 +260,22 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_mixed_individual_and_group(self):
         """Format with both individual and group assets: filter checks both."""
-        # adcp 3.9: Assets81 = individual video, Assets94 = repeatable_group
-        # Assets94 nested assets use Assets95+ classes (image=Assets95)
-        from adcp.types.generated_poc.core.format import Assets94, Assets95
+        # adcp 3.9: VideoFormatAsset = individual video, RepeatableAssetGroup = repeatable_group
+        # Nested assets use *FormatGroupAsset classes (image=ImageFormatGroupAsset)
+        from adcp.types import ImageFormatGroupAsset, RepeatableAssetGroup
 
-        individual_asset = Assets81(
+        individual_asset = VideoFormatAsset(
             asset_id="hero_video",
             required=True,
         )
-        group_asset = Assets94(
+        group_asset = RepeatableAssetGroup(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=False,
             min_count=0,
             max_count=5,
             assets=[
-                Assets95(
+                ImageFormatGroupAsset(
                     asset_id="product_image",
                     required=True,
                 ),
@@ -442,15 +438,15 @@ class TestAssetTypesFilterExclusion:
 
     def test_format_with_non_matching_assets_excluded(self):
         """Format with assets that do not match any requested type is excluded."""
-        # adcp 3.6.0: use typed asset classes - Assets (image), Assets85 (html)
-        from adcp.types.generated_poc.core.format import Assets85
+        # adcp 3.6.0: use typed asset classes - ImageFormatAsset (image), HtmlFormatAsset (html)
+        from adcp.types import HtmlFormatAsset
 
         formats = [
             _make_format(
                 "image_banner",
                 "Image Banner",
                 assets=[
-                    Assets(
+                    ImageFormatAsset(
                         asset_id="main",
                         required=True,
                     ),
@@ -460,7 +456,7 @@ class TestAssetTypesFilterExclusion:
                 "html_widget",
                 "HTML Widget",
                 assets=[
-                    Assets85(
+                    HtmlFormatAsset(
                         asset_id="code",
                         required=True,
                     ),
@@ -476,13 +472,13 @@ class TestAssetTypesFilterExclusion:
 
     def test_format_with_assets_of_wrong_type_excluded_while_match_kept(self):
         """Only formats with at least one matching asset type are kept."""
-        # adcp 3.6.0: Assets (image), Assets81 (video)
+        # adcp 3.6.0: ImageFormatAsset (image), VideoFormatAsset (video)
         formats = [
             _make_format(
                 "image_only",
                 "Image Only",
                 assets=[
-                    Assets(
+                    ImageFormatAsset(
                         asset_id="photo",
                         required=True,
                     ),
@@ -492,7 +488,7 @@ class TestAssetTypesFilterExclusion:
                 "video_format",
                 "Video Format",
                 assets=[
-                    Assets81(
+                    VideoFormatAsset(
                         asset_id="clip",
                         required=True,
                     ),
@@ -510,10 +506,10 @@ class TestAssetTypesFilterExclusion:
 class TestBroadstreetTemplateAssetParsing:
     """Regression: Broadstreet templates must parse with real assets.
 
-    The production code uses _make_asset() to construct the correct Assets
-    variant class (Assets for image, Assets81 for video, etc.) for each
-    template asset. Previously, the code used Assets(asset_type=AssetContentType(...))
-    which failed because Assets.asset_type is Literal['image'], not an enum.
+    The production code uses _make_asset() to construct the correct format asset
+    variant class (ImageFormatAsset for image, VideoFormatAsset for video, etc.) for each
+    template asset. Previously, the code used ImageFormatAsset(asset_type=AssetContentType(...))
+    which failed because ImageFormatAsset.asset_type is Literal['image'], not an enum.
     """
 
     def test_all_broadstreet_templates_produce_formats_with_assets(self):
@@ -670,7 +666,7 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
         then the response contains formats from the healthy agent
         and an errors[] entry for the failed agent.
         """
-        from adcp.types.generated_poc.core.error import Error as AdCPResponseError
+        from adcp.types import Error as AdCPResponseError
 
         healthy_formats = [
             _make_format("display_300x250", "Display 300x250"),
@@ -709,7 +705,7 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
         then the response contains an empty formats array
         and errors[] with one entry per failed agent.
         """
-        from adcp.types.generated_poc.core.error import Error as AdCPResponseError
+        from adcp.types import Error as AdCPResponseError
 
         # Simulate all agents failing — registry returns no formats but reports errors
         agent_errors = [
@@ -775,7 +771,7 @@ class TestErrorEntriesFollowAdCPSchema:
         then each error has code (string) and message (string) at minimum,
         conforming to error.json schema.
         """
-        from adcp.types.generated_poc.core.error import Error
+        from adcp.types import Error
 
         response = _call_impl_raw(
             formats=[],

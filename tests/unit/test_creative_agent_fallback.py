@@ -253,3 +253,136 @@ class TestParseMcpToolResult:
         result = {"content": []}
         with pytest.raises(AdCPAdapterError, match="No text content"):
             registry._parse_mcp_tool_result(result, logging.getLogger())
+
+
+def _mcp_text_result(payload: dict) -> dict:
+    """Wrap a list_creative_formats payload as an MCP tools/call TextContent result."""
+    import json
+
+    return {"content": [{"type": "text", "text": json.dumps(payload)}]}
+
+
+# Two fully-known formats the pinned adcp library understands completely.
+_KNOWN_FORMAT_A = {
+    "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+    "name": "Medium Rectangle",
+    "assets": [{"item_type": "individual", "asset_id": "primary", "asset_type": "image", "required": True}],
+}
+_KNOWN_FORMAT_B = {
+    "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"},
+    "name": "Leaderboard",
+    "assets": [{"item_type": "individual", "asset_id": "primary", "asset_type": "image", "required": True}],
+}
+# AdCP-additive asset_type the canonical reference agent serves but the pinned
+# (and latest) adcp closed Literal union does NOT model. This is the exact
+# production defect class from salesagent-w8yn.
+_ADDITIVE_FORMAT = {
+    "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "tracking_pixel"},
+    "name": "Tracking Pixel",
+    "assets": [{"item_type": "individual", "asset_id": "pixel", "asset_type": "pixel_tracker", "required": True}],
+}
+
+
+class TestTolerantPerFormatIngestion:
+    """Hermetic regression for salesagent-w8yn (Postel / asymmetric strictness).
+
+    One unknown AdCP-additive asset_type must NOT nuke the whole
+    list_creative_formats response. Fully-understood formats are returned;
+    formats whose ONLY problem is an unrecognized additive asset_type are
+    dropped (never mis-represented) with ONE aggregated WARNING; genuinely
+    malformed formats still fail LOUD.
+    """
+
+    def test_unknown_additive_asset_type_does_not_discard_known_formats(self, registry, caplog):
+        """Mixed batch: 2 known + 1 additive(pixel_tracker) → 2 returned, no exception, one warning."""
+        import logging
+
+        result = _mcp_text_result({"formats": [_KNOWN_FORMAT_A, _ADDITIVE_FORMAT, _KNOWN_FORMAT_B]})
+
+        with caplog.at_level(logging.WARNING):
+            formats = registry._parse_mcp_tool_result(result, logging.getLogger())
+
+        ids = sorted(f.format_id.id for f in formats)
+        assert ids == ["display_300x250_image", "display_728x90_image"], (
+            "Known formats must survive; only the additive-asset_type format is dropped"
+        )
+        # Exactly one structured aggregating WARNING naming the unsupported value + skipped count.
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, f"Expected ONE aggregated warning, got {len(warnings)}: {warnings}"
+        msg = warnings[0].getMessage()
+        assert "pixel_tracker" in msg, f"Warning must name the unsupported asset_type: {msg}"
+        assert "1" in msg, f"Warning must report the skipped count: {msg}"
+
+    def test_all_known_formats_pass_through_unchanged(self, registry):
+        """No additive types → all formats returned, zero warnings (no behavior change)."""
+        import logging
+
+        result = _mcp_text_result({"formats": [_KNOWN_FORMAT_A, _KNOWN_FORMAT_B]})
+        formats = registry._parse_mcp_tool_result(result, logging.getLogger())
+        assert sorted(f.format_id.id for f in formats) == ["display_300x250_image", "display_728x90_image"]
+
+    def test_genuinely_malformed_format_still_fails_loud(self, registry):
+        """A real schema bug (not an additive enum) must NOT be masked — fail loud."""
+        import logging
+
+        malformed = {
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "broken"},
+            "name": 12345,  # wrong type — a genuine contract violation, not additive growth
+            "assets": [{"item_type": "individual", "asset_id": "primary", "asset_type": "image", "required": True}],
+        }
+        result = _mcp_text_result({"formats": [_KNOWN_FORMAT_A, malformed]})
+        with pytest.raises(Exception, match="(?i)valid"):
+            registry._parse_mcp_tool_result(result, logging.getLogger())
+
+    def test_additive_type_with_structurally_broken_asset_fails_loud(self, registry):
+        """Unknown asset_type AND a structurally broken asset → not purely additive → fail loud."""
+        import logging
+
+        broken_additive = {
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "broken_pixel"},
+            "name": "Broken Pixel",
+            # asset_type unknown AND asset_id/required missing — substituting a known
+            # asset_type would STILL fail, so this is not benign additive growth.
+            "assets": [{"item_type": "individual", "asset_type": "pixel_tracker"}],
+        }
+        result = _mcp_text_result({"formats": [_KNOWN_FORMAT_A, broken_additive]})
+        with pytest.raises(Exception, match="(?i)valid"):
+            registry._parse_mcp_tool_result(result, logging.getLogger())
+
+    def test_all_formats_additive_returns_empty_with_warning(self, registry, caplog):
+        """Every format additive → empty list (NOT crash), one aggregated warning."""
+        import logging
+
+        result = _mcp_text_result({"formats": [_ADDITIVE_FORMAT]})
+        with caplog.at_level(logging.WARNING):
+            formats = registry._parse_mcp_tool_result(result, logging.getLogger())
+        assert formats == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1 and "pixel_tracker" in warnings[0].getMessage()
+
+
+class TestSchemaValidationFailureTriggersFallback:
+    """salesagent-w8yn: a wholesale schema-parse FAILED from the adcp client must
+    fall back to the raw-MCP path (where per-format tolerance applies), not only
+    transport-class errors."""
+
+    @pytest.mark.asyncio
+    async def test_schema_mismatch_failed_status_triggers_raw_fallback(self, registry, agent):
+        """SDK returns status='failed' with a schema-validation error → raw-MCP fallback."""
+        mock_result = MagicMock()
+        mock_result.status = "failed"
+        # The exact wholesale-validation signature observed live (2700 errors).
+        mock_result.error = "Response doesn't match expected schema ListCreativeFormatsResponse"
+        mock_result.message = None
+
+        mock_agent_proxy = MagicMock()
+        mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
+        mock_client = MagicMock()
+        mock_client.agent.return_value = mock_agent_proxy
+
+        with (
+            patch.object(registry, "_build_adcp_client", return_value=mock_client),
+            patch.object(registry, "_fetch_formats_raw_mcp", new_callable=AsyncMock, return_value=[]) as mock_fallback,
+        ):
+            await registry._fetch_formats_from_agent(mock_client, agent)
+            mock_fallback.assert_called_once_with(agent)

@@ -16,8 +16,8 @@ Filtering rules:
 
 from unittest.mock import MagicMock, Mock, patch
 
-from adcp.types.generated_poc.core.property_id import PropertyId
-from adcp.types.generated_poc.core.publisher_property_selector import (
+from adcp.types import PropertyId
+from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO: no stable alias in adcp.types
     PublisherPropertySelector,
     PublisherPropertySelector1,
     PublisherPropertySelector2,

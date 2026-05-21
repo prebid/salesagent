@@ -9,7 +9,7 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.core.pagination_request import PaginationRequest
+from adcp.types import PaginationRequest
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory

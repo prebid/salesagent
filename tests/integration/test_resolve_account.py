@@ -7,10 +7,10 @@ beads: salesagent-8n4
 """
 
 import pytest
-from adcp.types.generated_poc.core.account_ref import (
+from adcp.types import (
     AccountReference,
-    AccountReference1,
-    AccountReference2,
+    AccountReferenceById as AccountReference1,
+    AccountReferenceByNaturalKey as AccountReference2,
 )
 
 from src.core.exceptions import AdCPAccountNotFoundError, AdCPAuthorizationError

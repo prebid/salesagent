@@ -8,11 +8,7 @@ beads: salesagent-8n4
 
 from __future__ import annotations
 
-from adcp.types.generated_poc.core.account_ref import (
-    AccountReference,
-    AccountReference1,
-    AccountReference2,
-)
+from adcp.types import AccountReference, AccountReferenceById as AccountReference1, AccountReferenceByNaturalKey as AccountReference2
 
 from src.core.database.repositories.account import AccountRepository
 from src.core.exceptions import (

@@ -15,7 +15,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types import MediaBuyStatus
 from pydantic import RootModel, ValidationError
 
 from src.core.resolved_identity import ResolvedIdentity
@@ -72,6 +72,8 @@ def make_media_buy(
     budget=Decimal("10000"),
     currency="USD",
     raw_request=None,
+    status="active",
+    is_paused=False,
 ):
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
@@ -85,6 +87,8 @@ def make_media_buy(
     buy.budget = budget
     buy.currency = currency
     buy.raw_request = raw_request or {}
+    buy.status = status
+    buy.is_paused = is_paused
     buy.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     buy.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
     return buy
@@ -133,6 +137,79 @@ class TestComputeStatus:
             end_time=datetime(2099, 12, 31, tzinfo=UTC),
         )
         assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_start
+
+    @pytest.mark.parametrize(
+        ("persisted", "expected"),
+        [
+            ("completed", MediaBuyStatus.completed),
+            ("paused", MediaBuyStatus.paused),
+            ("rejected", MediaBuyStatus.rejected),
+            ("canceled", MediaBuyStatus.canceled),
+        ],
+    )
+    def test_persisted_terminal_status_authoritative_over_flight_window(self, persisted, expected):
+        """Regression (salesagent-36d): a buy persisted as a terminal/explicit
+        lifecycle status must be reported with that status even when its flight
+        window covers today. The persisted MediaBuy.status column is the source
+        of truth — terminal states cannot be re-derived from flight dates.
+        """
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status=persisted,
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == expected
+
+    def test_paused_flag_overrides_active_window(self):
+        """Regression (salesagent-36d): is_paused True reports paused even when
+        the flight window covers today, mirroring _internal_status_for_buy."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="active",
+            is_paused=True,
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.paused
+
+    def test_approved_buy_in_flight_is_active(self):
+        """A buy persisted as the generic 'approved' serving state with a flight
+        window covering today is date-refined to active."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="approved",
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.active
+
+    def test_active_buy_before_flight_is_pending_start(self):
+        """The generic serving state is date-refined: an 'active' buy whose
+        flight has not started yet reports pending_start."""
+        buy = make_media_buy(
+            start_date=date(2099, 1, 1),
+            end_date=date(2099, 12, 31),
+            status="active",
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_start
+
+    def test_active_buy_past_flight_is_completed(self):
+        """The generic serving state is date-refined: an 'active' buy past its
+        end date reports completed."""
+        buy = make_media_buy(
+            start_date=date(2020, 1, 1),
+            end_date=date(2020, 12, 31),
+            status="active",
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.completed
+
+    def test_pre_serving_persisted_status_maps_to_pending(self):
+        """Transitional pre-serving states (draft/pending_approval/...) report
+        a pending status, not a date-derived one."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="pending_creatives",
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_creatives
 
 
 class TestResolveStatusFilter:

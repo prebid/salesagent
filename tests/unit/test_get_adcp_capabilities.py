@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import GetAdcpCapabilitiesResponse
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (  # TODO: no stable alias in adcp.types
     SupportedProtocol,
 )
 
@@ -30,7 +30,7 @@ class TestGetAdcpCapabilitiesSchema:
 
     def test_response_requires_supported_protocols(self):
         """Test that response requires supported_protocols field."""
-        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (  # TODO: no stable alias in adcp.types
             Adcp,
             Idempotency,
             MajorVersion,
@@ -48,7 +48,7 @@ class TestGetAdcpCapabilitiesSchema:
 
     def test_valid_minimal_response(self):
         """Test creating a valid minimal response."""
-        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (  # TODO: no stable alias in adcp.types
             Adcp,
             Idempotency,
             MajorVersion,
@@ -69,8 +69,8 @@ class TestGetAdcpCapabilitiesSchema:
 
     def test_response_with_media_buy_capabilities(self):
         """Test creating response with media_buy capabilities."""
-        from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
-        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+        from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures  # TODO: no stable alias in adcp.types
+        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (  # TODO: no stable alias in adcp.types
             Adcp,
             Execution,
             Idempotency,
@@ -401,7 +401,7 @@ class TestChannelMapping:
 
     def test_channel_aliases_video_maps_to_olv(self):
         """Video channel alias maps to MediaChannel.olv in response."""
-        from adcp.types.generated_poc.enums.channels import MediaChannel
+        from adcp.types import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -421,7 +421,7 @@ class TestChannelMapping:
 
     def test_channel_aliases_audio_maps_to_streaming_audio(self):
         """Audio channel alias maps to MediaChannel.streaming_audio in response."""
-        from adcp.types.generated_poc.enums.channels import MediaChannel
+        from adcp.types import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -440,7 +440,7 @@ class TestChannelMapping:
 
     def test_unknown_channel_names_gracefully_ignored(self):
         """Unknown channel names are silently ignored (not in CHANNEL_MAPPING)."""
-        from adcp.types.generated_poc.enums.channels import MediaChannel
+        from adcp.types import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -461,7 +461,7 @@ class TestChannelMapping:
 
     def test_no_adapter_channels_defaults_to_display(self):
         """When adapter has no default_channels, defaults to display."""
-        from adcp.types.generated_poc.enums.channels import MediaChannel
+        from adcp.types import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -482,7 +482,7 @@ class TestGracefulDegradation:
 
     def test_adapter_exception_falls_back_to_display(self):
         """Adapter exception during channel detection falls back to display channel."""
-        from adcp.types.generated_poc.enums.channels import MediaChannel
+        from adcp.types import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 

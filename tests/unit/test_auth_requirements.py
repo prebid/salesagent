@@ -176,6 +176,7 @@ class TestAuthenticationRequirements:
         error_msg = str(exc_info.value)
         assert (
             "authentication required" in error_msg.lower()
+            or "identity" in error_msg.lower()
             or "principal" in error_msg.lower()
             or "context" in error_msg.lower()
         )
