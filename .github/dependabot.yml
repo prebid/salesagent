@@ -1,0 +1,110 @@
+# Issue #1234 rollout. Decisions: weekly grouped, no auto-merge, ignore adcp until #1217.
+# All schedules in America/Los_Angeles per maintainer TZ.
+version: 2
+
+updates:
+  # ──────────────────────────────────────────────────────────────────
+  # Python runtime + dev deps (pyproject.toml, uv.lock)
+  # ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "supply-chain"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    pull-request-branch-name:
+      separator: "/"
+
+    groups:
+      python-runtime:
+        applies-to: version-updates
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
+      python-dev:
+        applies-to: version-updates
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+      types:
+        applies-to: version-updates
+        patterns: ["types-*"]
+      gcp-stack:
+        applies-to: version-updates
+        patterns: ["google-*", "grpcio*", "protobuf"]
+      security-patches:
+        applies-to: security-updates
+        patterns: ["*"]
+
+    ignore:
+      # Pinned: library default sets GAM API version (pyproject.toml).
+      - dependency-name: "googleads"
+      # TODO(#1234): remove once #1217 merges — adcp is being manually migrated.
+      - dependency-name: "adcp"
+
+  # ──────────────────────────────────────────────────────────────────
+  # GitHub Actions (workflow `uses:` SHAs) — supply chain
+  # ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+      - "supply-chain"
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Pre-commit hooks (rev: pins in .pre-commit-config.yaml)
+  # ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "pre-commit"
+    commit-message:
+      prefix: "chore(pre-commit)"
+    groups:
+      hooks:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Docker base images — monthly is enough; base churn is low.
+  # ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "docker"
+      - "supply-chain"
+    commit-message:
+      prefix: "chore(docker)"
