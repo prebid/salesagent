@@ -931,9 +931,9 @@ class TestToDictRecoveryField:
         for exc, expected_recovery in cases:
             d = exc.to_dict()
             assert "recovery" in d, f"{type(exc).__name__}.to_dict() missing 'recovery' key"
-            assert (
-                d["recovery"] == expected_recovery
-            ), f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
+            assert d["recovery"] == expected_recovery, (
+                f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
+            )
 
     def test_to_dict_custom_recovery_override(self):
         """Custom recovery= kwarg overrides class default in to_dict() output."""
@@ -1183,9 +1183,9 @@ class TestRecoveryRoundtrip:
 
             # 2. Standalone translator still produces the right A2A type + envelope.
             translated = _adcp_to_a2a_error(exc_class(msg))
-            assert isinstance(
-                translated, expected_a2a_type
-            ), f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(translated).__name__}"
+            assert isinstance(translated, expected_a2a_type), (
+                f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(translated).__name__}"
+            )
             exc_instance = exc_class(msg)
             _assert_a2a_envelope(translated.data, exc_instance.wire_error_code, expected_recovery)
 
@@ -1232,7 +1232,7 @@ class TestRecoveryRoundtrip:
             ):
                 client = TestClient(app, raise_server_exceptions=False)
                 response = client.get("/api/v1/capabilities")
-                assert (
-                    response.status_code == expected_status
-                ), f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
+                assert response.status_code == expected_status, (
+                    f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
+                )
                 _assert_rest_envelope(response.json(), expected_code, recovery=expected_recovery)

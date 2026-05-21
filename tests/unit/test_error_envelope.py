@@ -333,7 +333,7 @@ class TestTypedSubclasses:
         for class_name, expected_code in substrate.items():
             cls = getattr(exc_mod, class_name, None)
             assert cls is not None, f"{class_name} missing from src.core.exceptions"
-            assert (
-                cls.error_code == expected_code
-            ), f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
+            assert cls.error_code == expected_code, (
+                f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
+            )
             assert expected_code in STANDARD_ERROR_CODES, f"{expected_code!r} missing from STANDARD_ERROR_CODES"
