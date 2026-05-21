@@ -65,6 +65,74 @@ def make_asset(asset_type: str, asset_id: str | None = None) -> Assets:
     return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
 
 
+def _find_repeatable_group_class():
+    """Find the repeatable_group Assets class dynamically.
+
+    The SDK auto-generates numbered classes (Assets18, Assets94, ...) that
+    change on every spec regeneration. We find it by checking item_type default.
+    """
+    import adcp.types.generated_poc.core.format as fmt_mod
+
+    for name in dir(fmt_mod):
+        if not name.startswith("Assets"):
+            continue
+        cls = getattr(fmt_mod, name)
+        if hasattr(cls, "model_fields") and "item_type" in cls.model_fields:
+            default = cls.model_fields["item_type"].default
+            if default == "repeatable_group":
+                return cls
+    raise ImportError("Cannot find repeatable_group Assets class in adcp SDK")
+
+
+def _find_inner_asset_class(asset_type: str):
+    """Find the inner asset class for a repeatable group by asset_type.
+
+    Inner assets within a repeatable_group use different classes than
+    top-level assets. We find them dynamically to survive SDK regeneration.
+    """
+    import adcp.types.generated_poc.core.format as fmt_mod
+
+    _RepeatableGroupCls = _find_repeatable_group_class()
+    # Get the union type from the 'assets' field annotation
+    import typing
+
+    assets_field = _RepeatableGroupCls.model_fields["assets"]
+    union_args = typing.get_args(typing.get_args(assets_field.annotation)[0])
+    for cls in union_args:
+        if hasattr(cls, "model_fields") and "asset_type" in cls.model_fields:
+            if cls.model_fields["asset_type"].default == asset_type:
+                return cls
+    # Fallback: use first class
+    return union_args[0] if union_args else None
+
+
+def make_asset_group(
+    *asset_types: str,
+    group_id: str = "asset_group",
+    min_count: int = 1,
+    max_count: int = 10,
+):
+    """Create a repeatable asset group containing typed inner assets.
+
+    All class lookups are dynamic to survive SDK regeneration where
+    numbered class names (Assets18→Assets94, etc.) shift.
+    """
+    _RepeatableGroupCls = _find_repeatable_group_class()
+    inner_assets = []
+    for at in asset_types:
+        inner_cls = _find_inner_asset_class(at)
+        if inner_cls:
+            inner_assets.append(inner_cls(asset_id=f"{at}_asset", required=True))
+    return _RepeatableGroupCls(
+        item_type="repeatable_group",
+        asset_group_id=group_id,
+        required=True,
+        min_count=min_count,
+        max_count=max_count,
+        assets=inner_assets,
+    )
+
+
 def make_renders(
     *,
     width: int | None = None,

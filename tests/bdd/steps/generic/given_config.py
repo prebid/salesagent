@@ -21,6 +21,7 @@ from tests.factories.format import (
     FormatFactory,
     FormatIdFactory,
     make_asset,
+    make_asset_group,
     make_fixed_renders,
     make_renders,
     make_responsive_renders,
@@ -98,9 +99,10 @@ def given_registry_format_with_two_assets(ctx: dict, name: str, type_a: str, typ
 def given_registry_format_with_asset_group(ctx: dict, name: str, type_a: str, type_b: str) -> None:
     """Register a format with a repeatable asset group.
 
-    Asset groups are flattened to individual assets for filtering purposes.
+    Uses the AdCP Assets18 repeatable_group structure which groups assets
+    that repeat together as a unit, distinct from individual assets.
     """
-    fmt = FormatFactory.build(name=name, assets=[make_asset(type_a), make_asset(type_b)])
+    fmt = FormatFactory.build(name=name, assets=[make_asset_group(type_a, type_b)])
     _add_format(ctx, fmt)
     _sync_registry(ctx)
 
@@ -179,7 +181,7 @@ def given_registry_format_disclosure(ctx: dict, name: str, positions: str) -> No
 @given(parsers.parse('the registry has format "{name}" with no supported_disclosure_positions field'))
 def given_registry_format_no_disclosure(ctx: dict, name: str) -> None:
     """Register a format without a supported_disclosure_positions field."""
-    fmt = FormatFactory.build(name=name)
+    fmt = FormatFactory.build(name=name, supported_disclosure_positions=None)
     _add_format(ctx, fmt)
     _sync_registry(ctx)
 
@@ -200,7 +202,7 @@ def given_registry_format_output_ids(ctx: dict, name: str, datatable: Sequence[S
 @given(parsers.parse('the registry has format "{name}" with no output_format_ids field'))
 def given_registry_format_no_output_ids(ctx: dict, name: str) -> None:
     """Register a format without output_format_ids."""
-    fmt = FormatFactory.build(name=name)
+    fmt = FormatFactory.build(name=name, output_format_ids=None)
     _add_format(ctx, fmt)
     _sync_registry(ctx)
 
@@ -218,7 +220,7 @@ def given_registry_format_input_ids(ctx: dict, name: str, datatable: Sequence[Se
 @given(parsers.parse('the registry has format "{name}" with no input_format_ids field'))
 def given_registry_format_no_input_ids(ctx: dict, name: str) -> None:
     """Register a format without input_format_ids."""
-    fmt = FormatFactory.build(name=name)
+    fmt = FormatFactory.build(name=name, input_format_ids=None)
     _add_format(ctx, fmt)
     _sync_registry(ctx)
 
@@ -231,7 +233,7 @@ def given_registry_formats_table(ctx: dict, datatable: Sequence[Sequence[object]
     """Register multiple formats from a data table with name and type columns."""
     rows = _datatable_to_dicts(datatable)
     formats = [FormatFactory.build(name=row["name"], type=CATEGORY_MAP.get(row["type"])) for row in rows]
-    ctx.setdefault("registry_formats", []).extend(formats)
+    ctx["registry_formats"] = formats
     _sync_registry(ctx)
 
 
@@ -243,23 +245,14 @@ def given_registry_three_formats_inline(
     ctx: dict, name_a: str, type_a: str, name_b: str, type_b: str, name_c: str, type_c: str
 ) -> None:
     """Register three formats from inline notation."""
-    ctx.setdefault("registry_formats", []).extend(
-        [
-            FormatFactory.build(name=name_a, type=CATEGORY_MAP.get(type_a)),
-            FormatFactory.build(name=name_b, type=CATEGORY_MAP.get(type_b)),
-            FormatFactory.build(name=name_c, type=CATEGORY_MAP.get(type_c)),
-        ]
-    )
+    for name, fmt_type in [(name_a, type_a), (name_b, type_b), (name_c, type_c)]:
+        _add_format(ctx, FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type)))
     _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has formats: "{name_a}" ({type_a}), "{name_b}" ({type_b})'))
 def given_registry_two_formats_inline(ctx: dict, name_a: str, type_a: str, name_b: str, type_b: str) -> None:
     """Register two formats from inline notation."""
-    ctx.setdefault("registry_formats", []).extend(
-        [
-            FormatFactory.build(name=name_a, type=CATEGORY_MAP.get(type_a)),
-            FormatFactory.build(name=name_b, type=CATEGORY_MAP.get(type_b)),
-        ]
-    )
+    for name, fmt_type in [(name_a, type_a), (name_b, type_b)]:
+        _add_format(ctx, FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type)))
     _sync_registry(ctx)
