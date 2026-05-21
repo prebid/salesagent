@@ -113,9 +113,9 @@ class TestExecuteApprovedHandsOffToBackgroundOnApprovalFailure:
         _, mock_orders, _, _ = self._run(approval_return_value=True)
         # The kwargs must include max_retries=1
         _, kwargs = mock_orders.approve_order.call_args
-        assert (
-            kwargs.get("max_retries") == 1
-        ), f"Expected max_retries=1, got kwargs={kwargs}. The 40-default would block the admin request for 10 minutes."
+        assert kwargs.get("max_retries") == 1, (
+            f"Expected max_retries=1, got kwargs={kwargs}. The 40-default would block the admin request for 10 minutes."
+        )
 
     def test_kicks_off_background_polling_when_approve_returns_false(self):
         """On approve_order failure, start_order_approval_background must be invoked."""
