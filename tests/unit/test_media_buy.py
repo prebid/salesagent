@@ -1290,6 +1290,66 @@ class TestCreateMediaBuyIdempotency:
         mock_uow.media_buys.find_by_idempotency_key.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_idempotency_cached_rejection_replayed(self):
+        """Retry with same idempotency_key after a rejection returns the cached envelope.
+
+        Covers: UC-002-MAIN-IDEMPOTENCY (rejection replay branch)
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        idem_key = "cafebabe-dead-beef-1234-feedface0001"
+        req = _make_request(idempotency_key=idem_key)
+        identity = _make_identity()
+
+        cached_envelope = {
+            "errors": [
+                {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Currency JPY not enabled for this principal",
+                    "details": None,
+                }
+            ],
+            "context": None,
+        }
+
+        mock_idem_repo = MagicMock()
+        mock_idem_repo.find_by_idempotency_key.return_value = None
+
+        mock_idem_attempts_repo = MagicMock()
+        cached_attempt = MagicMock()
+        cached_attempt.response_envelope = cached_envelope
+        mock_idem_attempts_repo.find_by_key.return_value = cached_attempt
+
+        mock_idem_uow = MagicMock()
+        mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
+        mock_idem_uow.__exit__ = MagicMock(return_value=None)
+        mock_idem_uow.media_buys = mock_idem_repo
+        mock_idem_uow.idempotency_attempts = mock_idem_attempts_repo
+
+        with (
+            patch("src.core.tools.media_buy_create.validate_setup_complete"),
+            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_idem_uow),
+        ):
+            mock_princ = MagicMock()
+            mock_princ.principal_id = "test_principal"
+            mock_princ.name = "Test Buyer"
+            mock_principal.return_value = mock_princ
+
+            result = await _create_media_buy_impl(req, identity=identity)
+
+        assert isinstance(result, CreateMediaBuyResult)
+        assert result.status == "failed"
+        assert isinstance(result.response, CreateMediaBuyError)
+        assert result.response.errors[0].code == "VALIDATION_ERROR"
+        assert "Currency JPY" in result.response.errors[0].message
+        mock_idem_attempts_repo.find_by_key.assert_called_once_with(
+            principal_id="test_principal",
+            tool_name="create_media_buy",
+            idempotency_key=idem_key,
+        )
+
+    @pytest.mark.asyncio
     async def test_idempotency_new_key_proceeds(self):
         """Different idempotency_key creates a new media buy (no match found).
 
@@ -1304,10 +1364,15 @@ class TestCreateMediaBuyIdempotency:
         mock_idem_repo = MagicMock()
         mock_idem_repo.find_by_idempotency_key.return_value = None
 
+        # Mock idempotency_attempts repo also returns None (no cached rejection)
+        mock_idem_attempts_repo = MagicMock()
+        mock_idem_attempts_repo.find_by_key.return_value = None
+
         mock_idem_uow = MagicMock()
         mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
         mock_idem_uow.__exit__ = MagicMock(return_value=None)
         mock_idem_uow.media_buys = mock_idem_repo
+        mock_idem_uow.idempotency_attempts = mock_idem_attempts_repo
 
         # Validation UoW (for product lookup — will fail with no products)
         session = MagicMock()

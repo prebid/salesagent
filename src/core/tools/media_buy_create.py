@@ -1292,6 +1292,87 @@ from src.services.setup_checklist_service import SetupIncompleteError, validate_
 from src.services.slack_notifier import get_slack_notifier
 
 
+def _build_idempotency_rejection_replay(
+    cached_envelope: dict[str, Any],
+    context: ContextObject | None,
+) -> CreateMediaBuyResult:
+    """Re-hydrate a CreateMediaBuyResult from a cached rejection envelope.
+
+    The cached envelope is the ``CreateMediaBuyError.model_dump()`` of the
+    original rejection. We re-instantiate the error model and wrap it in a
+    failed-status ``CreateMediaBuyResult`` so the boundary returns the same
+    shape it would have returned the first time. The current request's
+    ``context`` is echoed back (correlates the replay with the buyer's
+    new invocation).
+    """
+    cached = dict(cached_envelope)
+    cached["context"] = context.model_dump(mode="json") if context else None
+    error = CreateMediaBuyError.model_validate(cached)
+    return CreateMediaBuyResult(response=error, status=AdcpTaskStatus.failed.value)
+
+
+def _cache_rejection_envelope(
+    tenant_id: str,
+    principal_id: str,
+    idempotency_key: str | None,
+    response: CreateMediaBuyError,
+) -> None:
+    """Cache a rejection envelope so future retries with the same key replay it.
+
+    No-op when ``idempotency_key`` is missing — buyers who don't supply a key
+    are opting out of replay semantics. Race-safe: an ``IntegrityError`` on
+    the unique-index collision is swallowed (someone else already cached the
+    same rejection, which is functionally equivalent).
+    """
+    if not idempotency_key:
+        return
+
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.database.repositories import MediaBuyUoW as _CacheUoW
+
+    try:
+        with _CacheUoW(tenant_id) as cache_uow:
+            assert cache_uow.idempotency_attempts is not None
+            cache_uow.idempotency_attempts.record_rejection(
+                principal_id=principal_id,
+                tool_name="create_media_buy",
+                idempotency_key=idempotency_key,
+                response_envelope=response.model_dump(mode="json"),
+            )
+    except IntegrityError:
+        logger.info(
+            "Idempotency rejection cache race for key %s — another writer won; replay will work either way",
+            idempotency_key,
+        )
+    except Exception:
+        # Caching is best-effort; a failure here must never block returning the
+        # rejection to the buyer. Log and continue.
+        logger.exception("Failed to cache rejection envelope for idempotency_key %s", idempotency_key)
+
+
+def _cache_and_return_rejection(
+    *,
+    error_messages: list[str],
+    tenant_id: str,
+    principal_id: str,
+    idempotency_key: str | None,
+    context: ContextObject | None,
+) -> "CreateMediaBuyResult":
+    """Build a VALIDATION_ERROR rejection envelope, cache it for replay, and return the failed Result."""
+    rejection = CreateMediaBuyError(
+        errors=[Error(code="VALIDATION_ERROR", message=msg, details=None) for msg in error_messages],
+        context=context,
+    )
+    _cache_rejection_envelope(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        idempotency_key=idempotency_key,
+        response=rejection,
+    )
+    return CreateMediaBuyResult(response=rejection, status=AdcpTaskStatus.failed.value)
+
+
 def _build_idempotency_hit_result(
     tenant_id: str,
     idempotency_key: str | None,
@@ -1426,15 +1507,21 @@ async def _create_media_buy_impl(
     # media buy for the same (tenant, principal, key) triple.  Per adcp 3.12 spec,
     # retrying with the same key must return the original media_buy_id without
     # creating a duplicate ad-server booking.
+    #
+    # Two lookups in priority order:
+    #   1) MediaBuy table — original request succeeded; replay returns the buy.
+    #   2) IdempotencyAttempt table — original request was rejected; replay
+    #      returns the cached rejection envelope.
     if req.idempotency_key:
         from src.core.database.repositories import MediaBuyUoW as _IdempotencyUoW
 
         with _IdempotencyUoW(tenant["tenant_id"]) as idem_uow:
             assert idem_uow.media_buys is not None
+            assert idem_uow.idempotency_attempts is not None
             existing = idem_uow.media_buys.find_by_idempotency_key(req.idempotency_key, principal_id)
             if existing is not None:
                 logger.info(
-                    "Idempotency hit: returning existing media buy %s for key %s",
+                    "Idempotency hit (success): returning existing media buy %s for key %s",
                     existing.media_buy_id,
                     req.idempotency_key,
                 )
@@ -1453,6 +1540,18 @@ async def _create_media_buy_impl(
                     # idempotency probe moves after adapter init.
                     adapter=None,
                 )
+
+            cached_rejection = idem_uow.idempotency_attempts.find_by_key(
+                principal_id=principal_id,
+                tool_name="create_media_buy",
+                idempotency_key=req.idempotency_key,
+            )
+            if cached_rejection is not None:
+                logger.info(
+                    "Idempotency hit (rejection): replaying cached envelope for key %s",
+                    req.idempotency_key,
+                )
+                return _build_idempotency_rejection_replay(cached_rejection.response_envelope, req.context)
 
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
@@ -1982,13 +2081,12 @@ async def _create_media_buy_impl(
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
 
-        # Return error response with failed status
-        return CreateMediaBuyResult(
-            response=CreateMediaBuyError(
-                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
-                context=req.context,
-            ),
-            status=AdcpTaskStatus.failed.value,
+        return _cache_and_return_rejection(
+            error_messages=[str(e)],
+            tenant_id=tenant["tenant_id"],
+            principal_id=principal_id,
+            idempotency_key=req.idempotency_key,
+            context=req.context,
         )
 
     # Type narrowing: in non-dry_run mode, step and persistent_ctx are guaranteed to exist
@@ -2546,12 +2644,12 @@ async def _create_media_buy_impl(
                 )
                 if step:
                     ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
-                return CreateMediaBuyResult(
-                    response=CreateMediaBuyError(
-                        errors=[Error(code="VALIDATION_ERROR", message=err, details=None) for err in config_errors],
-                        context=req.context,
-                    ),
-                    status=AdcpTaskStatus.failed.value,
+                return _cache_and_return_rejection(
+                    error_messages=config_errors,
+                    tenant_id=tenant["tenant_id"],
+                    principal_id=principal_id,
+                    idempotency_key=req.idempotency_key,
+                    context=req.context,
                 )
 
         product_auto_create = all(
@@ -2925,12 +3023,12 @@ async def _create_media_buy_impl(
             error_msg = "start_time and end_time are required but were not properly set"
             if step:
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-            return CreateMediaBuyResult(
-                response=CreateMediaBuyError(
-                    errors=[Error(code="VALIDATION_ERROR", message=error_msg, details=None)],
-                    context=req.context,
-                ),
-                status=AdcpTaskStatus.failed.value,
+            return _cache_and_return_rejection(
+                error_messages=[error_msg],
+                tenant_id=tenant["tenant_id"],
+                principal_id=principal_id,
+                idempotency_key=req.idempotency_key,
+                context=req.context,
             )
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
@@ -3002,6 +3100,17 @@ async def _create_media_buy_impl(
             error_msg = response.errors[0].message if response.errors else "Unknown error"
             error_code = response.errors[0].code if response.errors else "UNKNOWN"
             logger.error(f"[ADAPTER] Adapter returned error response: {error_code} - {error_msg}")
+            # Cache adapter rejections so replay returns the same answer — except for
+            # transient errors (rate limit, service unavailable, timeout), where the
+            # buyer's retry is meant to succeed and a cached failure would defeat that.
+            recovery = response.errors[0].recovery if response.errors else None
+            if recovery != "transient":
+                _cache_rejection_envelope(
+                    tenant_id=tenant["tenant_id"],
+                    principal_id=principal_id,
+                    idempotency_key=req.idempotency_key,
+                    response=response,
+                )
             return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.failed.value)
 
         # At this point, response is CreateMediaBuySuccess - safe to access success-specific fields
