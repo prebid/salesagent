@@ -87,14 +87,6 @@ async def test_get_products_request_validation():
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "get-products schema drift: pinned adcp library does not model "
-        "adcp_major_version / if_catalog_version / if_pricing_version, so "
-        "response validation against /schemas/latest/ fails — tracked in #1308"
-    ),
-)
 async def test_offline_mode():
     """Test that offline mode works with cached schemas."""
     # cache_scope is required on the standard (else) branch of get-products-response

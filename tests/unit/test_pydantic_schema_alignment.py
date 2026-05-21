@@ -52,28 +52,14 @@ SCHEMA_TO_MODEL_MAP = {
     # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
-# get-products schema drift — tracked in #1308.
-# The live AdCP `/schemas/latest/media-buy/get-products-request.json` carries
-# fields the pinned adcp library does not yet model on `GetProductsRequest`:
-# the `adcp_major_version` envelope plus `if_catalog_version` and `if_pricing_version`.
-# Only the parametrizations below that genuinely fail today are xfailed (strict=True);
-# the same parametrize set is used by other tests in this file that still pass on
-# get-products and therefore is NOT swapped in for them.
-_GET_PRODUCTS_SCHEMA_DRIFT_REASON = (
-    "get-products schema drift: pinned adcp library does not model "
-    "adcp_major_version / if_catalog_version / if_pricing_version — tracked in #1308"
-)
+# get-products schema drift — tracked in #1308. The live AdCP schema carries
+# the `adcp_major_version` envelope plus `if_catalog_version`/`if_pricing_version`;
+# the pinned adcp library does not model them yet. Coverage:
+#   - adcp_major_version → excluded via _VERSION_FIELDS
+#   - if_catalog_version, if_pricing_version → excluded via KNOWN_SCHEMA_LIBRARY_MISMATCHES
+# Tests now pass; remove the prior strict-xfail wrapper.
 SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
-    pytest.param(
-        schema_ref,
-        model_class,
-        marks=(
-            pytest.mark.xfail(strict=True, reason=_GET_PRODUCTS_SCHEMA_DRIFT_REASON)
-            if "get-products-request" in schema_ref
-            else ()
-        ),
-    )
-    for schema_ref, model_class in SCHEMA_TO_MODEL_MAP.items()
+    pytest.param(schema_ref, model_class) for schema_ref, model_class in SCHEMA_TO_MODEL_MAP.items()
 ]
 
 # Version metadata fields present in AdCP JSON schemas that models don't declare explicitly.
