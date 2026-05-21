@@ -231,9 +231,9 @@ def test_profile_formats_validation_rejects_invalid_structure():
         # Pydantic surfaces the offending field; assert the error names the
         # field rather than just confirming the exception was raised.
         error_text = str(exc_info.value)
-        assert (
-            "agent_url" in error_text or "id" in error_text
-        ), f"ValidationError should reference the malformed field, got: {error_text}"
+        assert "agent_url" in error_text or "id" in error_text, (
+            f"ValidationError should reference the malformed field, got: {error_text}"
+        )
 
 
 def test_profile_properties_validation_rejects_invalid_structure():

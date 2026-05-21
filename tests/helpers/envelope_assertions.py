@@ -61,12 +61,12 @@ def assert_envelope_shape(
     assert body["errors"][0]["code"] == code, f"errors[0].code={body['errors'][0]['code']!r}, expected {code!r}"
 
     if recovery is not None:
-        assert (
-            body["adcp_error"].get("recovery") == recovery
-        ), f"adcp_error.recovery={body['adcp_error'].get('recovery')!r}, expected {recovery!r}"
-        assert (
-            body["errors"][0].get("recovery") == recovery
-        ), f"errors[0].recovery={body['errors'][0].get('recovery')!r}, expected {recovery!r}"
+        assert body["adcp_error"].get("recovery") == recovery, (
+            f"adcp_error.recovery={body['adcp_error'].get('recovery')!r}, expected {recovery!r}"
+        )
+        assert body["errors"][0].get("recovery") == recovery, (
+            f"errors[0].recovery={body['errors'][0].get('recovery')!r}, expected {recovery!r}"
+        )
 
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")
@@ -75,6 +75,6 @@ def assert_envelope_shape(
     if check_backward_compat:
         assert body.get("error_code") == code, f"top-level error_code={body.get('error_code')!r}, expected {code!r}"
         if recovery is not None:
-            assert (
-                body.get("recovery") == recovery
-            ), f"top-level recovery={body.get('recovery')!r}, expected {recovery!r}"
+            assert body.get("recovery") == recovery, (
+                f"top-level recovery={body.get('recovery')!r}, expected {recovery!r}"
+            )

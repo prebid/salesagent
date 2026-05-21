@@ -75,9 +75,9 @@ class TestMCPErrorShapes:
         # missing brand.domain field. We don't pin on a specific code because
         # Pydantic v2's error codes vary by union/discriminator path.
         error_msg = str(exc_info.value)
-        assert (
-            "packages" in error_msg or "domain" in error_msg
-        ), f"Pydantic error should reference the malformed field, got: {error_msg}"
+        assert "packages" in error_msg or "domain" in error_msg, (
+            f"Pydantic error should reference the malformed field, got: {error_msg}"
+        )
 
     @pytest.mark.asyncio
     async def test_auth_error_raises_validation_error(self):
@@ -611,15 +611,15 @@ class TestMCPRecoveryInErrorResponses:
         from src.core.tool_error_logging import AdCPToolError
 
         tool_error = exc_info.value
-        assert isinstance(
-            tool_error, AdCPToolError
-        ), f"MCP boundary must raise AdCPToolError for {exc_class}, got {type(tool_error).__name__}"
+        assert isinstance(tool_error, AdCPToolError), (
+            f"MCP boundary must raise AdCPToolError for {exc_class}, got {type(tool_error).__name__}"
+        )
         err = tool_error.envelope["errors"][0]
         assert err["code"] == expected_code, f"{exc_class}: code={err['code']!r}, expected {expected_code!r}"
         assert err["message"] == msg, f"{exc_class}: message={err['message']!r}, expected {msg!r}"
-        assert (
-            err["recovery"] == expected_recovery
-        ), f"{exc_class}: recovery={err['recovery']!r}, expected {expected_recovery!r}"
+        assert err["recovery"] == expected_recovery, (
+            f"{exc_class}: recovery={err['recovery']!r}, expected {expected_recovery!r}"
+        )
         # adcp_error envelope-level mirror also present
         assert tool_error.envelope["adcp_error"]["code"] == expected_code
 
