@@ -51,7 +51,9 @@ jobs:
         with:
           persist-credentials: false
       - run: |
-          curl -sSfL https://raw.githubusercontent.com/suzuki-shunsuke/pinact/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+          PINACT_VERSION=v3.10.1
+          curl -sSfL "https://github.com/suzuki-shunsuke/pinact/releases/download/${PINACT_VERSION}/pinact_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin/ pinact
           pinact run --check
 
   actionlint:
