@@ -301,7 +301,14 @@ class TestCreateGetProductsRequestWithPropertyList:
 
 
 class TestCapabilitiesPropertyListFiltering:
-    """Test that capabilities reports property_list_filtering=True."""
+    """Test that capabilities reports property_list_filtering honestly.
+
+    Currently declared False because zero adapters compile
+    `targeting_overlay.property_list` into native targeting (verified by
+    `grep -rn 'property_list' src/adapters/` returning zero hits). The previous
+    True value was false advertising. Restore per-adapter-aware True when a
+    real compilation path lands (B3 in inventory-targeting PLAN).
+    """
 
     def test_capabilities_reports_property_list_filtering(self):
         from src.core.resolved_identity import ResolvedIdentity
@@ -331,4 +338,4 @@ class TestCapabilitiesPropertyListFiltering:
             response = _get_adcp_capabilities_impl(None, identity)
 
         features = response.media_buy.features
-        assert features.property_list_filtering is True
+        assert features.property_list_filtering is False

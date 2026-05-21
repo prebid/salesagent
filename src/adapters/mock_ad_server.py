@@ -440,6 +440,12 @@ class MockAdServer(AdServerAdapter):
         Returns:
             CreateMediaBuyResponse with simulated media buy
         """
+        # Honest capability declaration (AdCP honest-declaration contract): Mock has no native
+        # property_list compilation path, so reject property_list targeting up-front
+        # rather than silently dropping it.
+        if err := self._reject_property_list_if_unsupported(packages):
+            return err
+
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
         # Log pricing model info if provided (AdCP PR #88)

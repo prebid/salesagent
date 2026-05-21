@@ -48,6 +48,7 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.exceptions import AdCPNotFoundError
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
@@ -79,6 +80,17 @@ from adcp.types import PlatformDeployment as LibraryPlatformDeployment
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
+
+# adcp 4.3 generates CollectionListReference and uses it on TargetingOverlay.collection_list /
+# collection_list_exclude, but does not re-export the type from the public adcp.types namespace
+# (PropertyListReference is exported, CollectionListReference is not — likely a codegen oversight).
+# We import from the internal generated path so our isinstance checks and type annotations match
+# the library's TargetingOverlay field types exactly. Track upstream:
+# https://github.com/adcontextprotocol/adcp-client-python — when CollectionListReference is added
+# to adcp.types, switch this import to the public path.
+from adcp.types.generated_poc.core.collection_list_ref import (
+    CollectionListReference,  # noqa: F401 — re-exported via src.core.schemas; used by callers and TargetingOverlay.collection_list type
+)
 from pydantic import (
     AnyUrl,
     BaseModel,
@@ -729,7 +741,6 @@ def get_format_by_id(format_id: str, tenant_id: str | None = None) -> Format | N
     Returns:
         Format object or None if not found
     """
-    from src.core.exceptions import AdCPNotFoundError
     from src.core.format_resolver import get_format
 
     try:
@@ -857,6 +868,10 @@ class Targeting(TargetingOverlay):
     geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
     geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
     geo_postal_areas_exclude: list[GeoPostalArea] | None = None  # type: ignore[assignment]
+
+    # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
+    # TargetingOverlay (added natively in adcp 4.3). CollectionListReference is re-exported
+    # from src.core.schemas (see import above) so callers can use a single import path.
 
     # --- Internal dimensions (unchanged) ---
 
@@ -1551,11 +1566,19 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
 
     Adds creative_ids — spec-mandated field missing from library codegen.
     TODO(adcp-library): Remove creative_ids once upstream codegen adds it.
+
+    Overrides targeting_overlay to use the local Targeting subclass so
+    extensions (collection_list / collection_list_exclude) are typed at the
+    request boundary instead of dropping through library extra="allow" as
+    raw dicts. Mirrors the PackageRequest.targeting_overlay override pattern.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
     # Spec field missing from library codegen (adcp#208)
     creative_ids: list[str] | None = None
+    # Override library targeting_overlay so local extensions (collection_list)
+    # are coerced to typed CollectionListReference at the boundary, not dicts.
+    targeting_overlay: Targeting | None = None
 
 
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
@@ -2252,6 +2275,10 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
     start_time: str | None = Field(default=None, description="Package start time (ISO 8601)")
     end_time: str | None = Field(default=None, description="Package end time (ISO 8601)")
     paused: bool | None = Field(default=None, description="Whether this package is paused")
+    targeting_overlay: Targeting | None = Field(
+        default=None,
+        description="Targeting overlay echoed from the most recent create_media_buy or update_media_buy. Includes any property_list / collection_list references the buyer attached, so callers can verify what was persisted without replaying the request.",
+    )
     creative_approvals: list["CreativeApproval"] | None = Field(
         default=None, description="Creative approval state for creatives assigned to this package"
     )
@@ -2261,6 +2288,12 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
     snapshot_unavailable_reason: SnapshotUnavailableReason | None = Field(
         default=None, description="Reason snapshot is unavailable (present when include_snapshot=true but no snapshot)"
     )
+
+    def model_dump(self, **kwargs):
+        result = super().model_dump(**kwargs)
+        if "targeting_overlay" in result and self.targeting_overlay is not None:
+            result["targeting_overlay"] = self.targeting_overlay.model_dump(**kwargs)
+        return result
 
 
 class GetMediaBuysMediaBuy(SalesAgentBaseModel):

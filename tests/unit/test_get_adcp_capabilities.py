@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import GetAdcpCapabilitiesResponse
+from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedProtocol,
 )
@@ -169,6 +170,10 @@ class TestGetAdcpCapabilitiesImpl:
         # actually dedupes against idx_media_buys_idempotency_key.
         assert response.adcp.idempotency.supported is True
         assert response.adcp.idempotency.replay_ttl_seconds == 86400
+        # Specialism declaration activates storyboard scenarios bundled under
+        # sales-non-guaranteed (inventory_list_*, delivery_reporting, etc.).
+        assert response.specialisms is not None
+        assert AdcpSpecialism.sales_non_guaranteed in response.specialisms
 
     def test_impl_returns_valid_adcp_response(self):
         """Test that impl response can be serialized to valid JSON."""
@@ -186,6 +191,8 @@ class TestGetAdcpCapabilitiesImpl:
         assert "adcp" in data
         assert "supported_protocols" in data
         assert data["supported_protocols"] == ["media_buy"]
+        assert "specialisms" in data
+        assert data["specialisms"] == ["sales-non-guaranteed"]
 
 
 class TestGetAdcpCapabilitiesWithTenant:
@@ -233,6 +240,9 @@ class TestGetAdcpCapabilitiesWithTenant:
                 # Full response must also declare idempotency support consistently.
                 assert response.adcp.idempotency.supported is True
                 assert response.adcp.idempotency.replay_ttl_seconds == 86400
+                # Specialism declaration must be consistent across minimal and full paths.
+                assert response.specialisms is not None
+                assert AdcpSpecialism.sales_non_guaranteed in response.specialisms
 
                 # Should have media_buy capabilities with portfolio
                 assert response.media_buy is not None
@@ -632,7 +642,11 @@ class TestResponseShapeCapabilities:
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
-        """Features defaults: inline_creative_management=True, property_list_filtering=True."""
+        """Features defaults: inline_creative_management=True, property_list_filtering=False.
+
+        property_list_filtering is False until an adapter actually compiles
+        `targeting_overlay.property_list` into native ad-server targeting.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(principal_id=None)
@@ -643,7 +657,7 @@ class TestResponseShapeCapabilities:
 
         features = response.media_buy.features
         assert features.inline_creative_management is True
-        assert features.property_list_filtering is True
+        assert features.property_list_filtering is False
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""
