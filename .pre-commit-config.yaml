@@ -260,7 +260,7 @@ repos:
         pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -273,13 +273,13 @@ repos:
       - id: debug-statements
 
   - repo: https://github.com/psf/black
-    rev: 25.1.0
+    rev: 87928e6d6761a4a6d22250e1fee5601b3998086e  # frozen: 26.5.1
     hooks:
       - id: black
         language_version: python3
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.10
+    rev: 0c7b6c989466a93942def1f84baf36ddfcd60c83  # frozen: v0.15.14
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
@@ -287,7 +287,7 @@ repos:
   # Type checking with mypy - ENFORCED (0 errors in src/)
   # After achieving 100% compliance, mypy is now mandatory for all commits
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
+    rev: d2823d321df3af8f878f7ee3414dc94d037145b9  # frozen: v2.1.0
     hooks:
       - id: mypy
         args: [--config-file=mypy.ini]
@@ -303,3 +303,11 @@ repos:
           - alembic
         files: '^src/'
         exclude: '^src/adapters/google_ad_manager_original\.py$'
+
+  # Per D35 — secret detection. Top-OSS norm (24,400+ stars; CNCF, sigstore, Apache).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 2ca41cc1372d1e939a6a879f18cdc19fc1cac1ce  # frozen: v8.30.0
+    hooks:
+      - id: gitleaks
+        # Scans staged files at commit time. .gitleaks.toml at repo root can
+        # add allowlist entries for test fixtures or custom patterns.
