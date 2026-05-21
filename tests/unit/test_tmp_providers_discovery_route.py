@@ -13,6 +13,9 @@ Covers:
 - Response shape matches TMP Router contract
 - Providers ordered by priority ASC, name ASC
 - Handles legacy rows with null countries/uid_types
+- Fail-closed auth: unset/empty TMP_DISCOVERY_API_KEYS → 503
+- Explicit opt-out: TMP_DISCOVERY_API_KEYS=OPEN disables auth
+- uow.tenant_config is None → 500 (not an assert)
 """
 
 from unittest.mock import MagicMock, patch
@@ -128,7 +131,8 @@ class TestDiscoveryReturnsActiveProviders:
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
             with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
-                response = client.get("/tenant/si-host/tmp-providers/discovery")
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.json()
@@ -153,7 +157,8 @@ class TestDiscoveryReturnsActiveProviders:
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
             with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
-                response = client.get("/tenant/si-host/tmp-providers/discovery")
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.json()
@@ -170,7 +175,8 @@ class TestDiscoveryTenantNotFound:
         mock_tenant_uow_cls = _make_tenant_uow(None)
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
-            response = client.get("/tenant/nonexistent/tmp-providers/discovery")
+            with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
+                response = client.get("/tenant/nonexistent/tmp-providers/discovery")
 
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
@@ -188,7 +194,8 @@ class TestDiscoveryEmptyProviders:
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
             with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
-                response = client.get("/tenant/si-host/tmp-providers/discovery")
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.json()
@@ -214,7 +221,8 @@ class TestDiscoveryResponseShape:
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
             with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
-                response = client.get("/tenant/si-host/tmp-providers/discovery")
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         entry = response.json()["providers"][0]
@@ -245,7 +253,8 @@ class TestDiscoveryResponseShape:
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
             with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
-                response = client.get("/tenant/si-host/tmp-providers/discovery")
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         entry = response.json()["providers"][0]
@@ -271,7 +280,8 @@ class TestDiscoveryOrdering:
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
             with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
-                response = client.get("/tenant/si-host/tmp-providers/discovery")
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
+                    response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
         names = [p["name"] for p in response.json()["providers"]]
@@ -286,31 +296,49 @@ class TestDiscoveryOrdering:
 class TestDiscoveryApiKeyAuth:
     """GET /tenant/{tenant_id}/tmp-providers/discovery enforces TMP_DISCOVERY_API_KEYS."""
 
-    def test_open_when_tmp_discovery_api_keys_not_set(self, client):
-        """When TMP_DISCOVERY_API_KEYS is unset the endpoint is open (dev mode)."""
+    def test_returns_503_when_tmp_discovery_api_keys_not_set(self, client):
+        """When TMP_DISCOVERY_API_KEYS is unset the endpoint returns 503 (fail-closed)."""
+        import os
+
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("TMP_DISCOVERY_API_KEYS", None)
+            response = client.get("/tenant/si-host/tmp-providers/discovery")
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["code"] == "ENDPOINT_NOT_CONFIGURED"
+
+    def test_returns_503_when_tmp_discovery_api_keys_is_empty_string(self, client):
+        """When TMP_DISCOVERY_API_KEYS is set to empty string the endpoint returns 503 (fail-closed)."""
+        with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": ""}):
+            response = client.get("/tenant/si-host/tmp-providers/discovery")
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["code"] == "ENDPOINT_NOT_CONFIGURED"
+
+    def test_open_when_tmp_discovery_api_keys_is_open(self, client):
+        """When TMP_DISCOVERY_API_KEYS=OPEN the endpoint is accessible without a key."""
         tenant = _make_tenant()
         mock_tenant_uow_cls = _make_tenant_uow(tenant)
         mock_tmp_uow_cls = _make_tmp_uow([])
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
             with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
-                with patch.dict("os.environ", {}, clear=False):
-                    import os
-
-                    os.environ.pop("TMP_DISCOVERY_API_KEYS", None)
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
                     response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
 
-    def test_open_when_tmp_discovery_api_keys_is_empty_string(self, client):
-        """When TMP_DISCOVERY_API_KEYS is set to empty string the endpoint is open."""
+    def test_open_mode_is_case_insensitive(self, client):
+        """TMP_DISCOVERY_API_KEYS=open (lowercase) also disables auth."""
         tenant = _make_tenant()
         mock_tenant_uow_cls = _make_tenant_uow(tenant)
         mock_tmp_uow_cls = _make_tmp_uow([])
 
         with patch("src.routes.tmp_providers.TenantConfigUoW", mock_tenant_uow_cls):
             with patch("src.routes.tmp_providers.TMPProviderUoW", mock_tmp_uow_cls):
-                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": ""}):
+                with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "open"}):
                     response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 200
@@ -395,3 +423,28 @@ class TestDiscoveryApiKeyAuth:
                     )
 
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# uow.tenant_config is None guard (replaces the old assert)
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoveryTenantConfigUnavailable:
+    """GET /tenant/{tenant_id}/tmp-providers/discovery returns 500 when tenant_config repo is None."""
+
+    def test_returns_500_when_tenant_config_is_none(self, client):
+        """If TenantConfigUoW yields uow.tenant_config=None the endpoint returns 500, not AssertionError."""
+        mock_uow = MagicMock()
+        mock_uow.tenant_config = None  # simulate broken UoW
+        mock_uow_cls = MagicMock()
+        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch("src.routes.tmp_providers.TenantConfigUoW", mock_uow_cls):
+            with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "OPEN"}):
+                response = client.get("/tenant/si-host/tmp-providers/discovery")
+
+        assert response.status_code == 500
+        detail = response.json()["detail"]
+        assert detail["code"] == "INTERNAL_ERROR"

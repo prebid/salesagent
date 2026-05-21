@@ -6,11 +6,13 @@ Exposes:
 This endpoint is polled by the TMP Router every 30 s to discover which
 provider endpoints to fan out context and identity match requests to.
 
-The endpoint requires API key authentication via the ``TMP_DISCOVERY_API_KEYS``
-environment variable (comma-separated list of accepted keys).  When the
-variable is not set the endpoint is open (suitable for internal-network-only
-deployments).  In production, set ``TMP_DISCOVERY_API_KEYS`` to restrict
-access to the TMP Router.
+Authentication is **fail-closed**: the endpoint is locked by default.
+
+Set ``TMP_DISCOVERY_API_KEYS`` to a comma-separated list of accepted keys to
+grant access.  To explicitly disable authentication for internal-network-only
+deployments, set ``TMP_DISCOVERY_API_KEYS=OPEN``.  Leaving the variable unset
+or empty returns HTTP 503 so that misconfigured deployments fail loudly rather
+than silently exposing tenant topology.
 
 Accepted auth headers (any one is sufficient):
   - ``x-adcp-auth: <key>``
@@ -58,18 +60,40 @@ router = APIRouter(tags=["tmp-providers"])
 async def require_api_key(request: Request) -> None:
     """Require API key for the TMP discovery endpoint.
 
-    Reads allowed keys from the ``TMP_DISCOVERY_API_KEYS`` environment variable
-    (comma-separated).  When the variable is not set or empty the check is
-    skipped (open / dev mode — suitable for internal-network-only deployments).
+    Fail-closed: the endpoint is locked unless ``TMP_DISCOVERY_API_KEYS`` is
+    explicitly configured.
+
+    - ``TMP_DISCOVERY_API_KEYS=key1,key2`` — accept those keys only.
+    - ``TMP_DISCOVERY_API_KEYS=OPEN`` — disable auth (internal-network-only
+      deployments where the operator has made a deliberate choice).
+    - Unset or empty — return HTTP 503 so misconfigured deployments fail loudly
+      instead of silently exposing tenant topology.
 
     Accepted headers (first non-empty value wins):
       - ``x-adcp-auth``
       - ``X-API-Key``
       - ``Authorization: Bearer <key>``
     """
-    allowed = {k.strip() for k in os.environ.get("TMP_DISCOVERY_API_KEYS", "").split(",") if k.strip()}
+    raw = os.environ.get("TMP_DISCOVERY_API_KEYS", "").strip()
+
+    if raw.upper() == "OPEN":
+        logger.warning("[TMP discovery] API key auth disabled — TMP_DISCOVERY_API_KEYS=OPEN")
+        return
+
+    allowed = {k.strip() for k in raw.split(",") if k.strip()}
     if not allowed:
-        return  # Open if not configured (dev mode)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "ENDPOINT_NOT_CONFIGURED",
+                "message": (
+                    "TMP_DISCOVERY_API_KEYS is not configured. "
+                    "Set it to a comma-separated list of API keys, "
+                    "or to 'OPEN' to disable authentication."
+                ),
+            },
+        )
+
     api_key = (
         request.headers.get("x-adcp-auth", "")
         or request.headers.get("X-API-Key", "")
@@ -95,7 +119,11 @@ async def tmp_providers_discovery(tenant_id: str, _: None = Depends(require_api_
       inactive → excluded
     """
     with TenantConfigUoW(tenant_id) as uow:
-        assert uow.tenant_config is not None
+        if uow.tenant_config is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "INTERNAL_ERROR", "message": "Tenant config repository unavailable"},
+            )
         if uow.tenant_config.get_tenant() is None:
             raise HTTPException(
                 status_code=404,
