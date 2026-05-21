@@ -1,0 +1,42 @@
+# zizmor allowlist for security.yml / ADR-003.
+#
+# POLICY: every allowlist entry MUST have:
+#   1. A finding ID or rule name
+#   2. The specific file + (optionally) line it applies to
+#   3. A justification and owner
+#
+# To re-audit: uvx zizmor --min-severity medium .github/workflows/
+# and compare against this list. Entries here that no longer appear
+# in zizmor output should be removed.
+
+rules:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # pull-request-target — permitted only for metadata-only workflows (ADR-003).
+  # Neither workflow checks out PR source code. Risk: minimal.
+  # ─────────────────────────────────────────────────────────────────────────────
+  pull-request-target:
+    ignore:
+      - .github/workflows/ipr-agreement.yml
+      - .github/workflows/pr-title-check.yml
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # unpinned-uses — ipr-agreement.yml uses contributor-assistant/github-action@v2.6.1
+  # (tag, not SHA). The upstream repo is third-party; SHA-pinning tracked in
+  # TODO(#1234-pr1-sha-freeze): commit 8 (pinact autoupdate-freeze).
+  # Until that commit lands, allow the tag to avoid blocking merges.
+  # ─────────────────────────────────────────────────────────────────────────────
+  unpinned-uses:
+    ignore:
+      - .github/workflows/ipr-agreement.yml
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # excessive-permissions — ipr-agreement.yml requires write permissions to:
+  #   - contents: write (signature branch commits)
+  #   - pull-requests: write (PR comments)
+  #   - statuses: write (CLA status check)
+  # These are the minimum permissions for the CLA-assistant action to function.
+  # Owner: @chrishuie
+  # ─────────────────────────────────────────────────────────────────────────────
+  excessive-permissions:
+    ignore:
+      - .github/workflows/ipr-agreement.yml
