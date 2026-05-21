@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
@@ -129,15 +130,18 @@ class MediaBuyUoW(BaseUoW):
 
     media_buys: MediaBuyRepository | None
     currency_limits: CurrencyLimitRepository | None
+    authorized_properties: AuthorizedPropertyRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
+        self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
         self.currency_limits = None
+        self.authorized_properties = None
 
 
 class ProductUoW(BaseUoW):
@@ -151,13 +155,16 @@ class ProductUoW(BaseUoW):
     """
 
     products: ProductRepository | None
+    authorized_properties: AuthorizedPropertyRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.products = ProductRepository(self._session, self._tenant_id)
+        self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.products = None
+        self.authorized_properties = None
 
 
 class WorkflowUoW(BaseUoW):

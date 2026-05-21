@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.enums.channels import MediaChannel
+from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,
@@ -90,6 +91,7 @@ def _get_adcp_capabilities_impl(
                 idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
             ),
             supported_protocols=[SupportedProtocol.media_buy],
+            specialisms=[AdcpSpecialism.sales_non_guaranteed],
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -154,13 +156,17 @@ def _get_adcp_capabilities_impl(
         advertising_policies=advertising_policies,
     )
 
-    # Build features - be honest about what we actually support
-    # These should be adapter-dependent in the future
+    # Build features - be honest about what we actually support.
+    # property_list_filtering is adapter-aware: True only when the tenant's
+    # configured adapter has a working `targeting_overlay.property_list`
+    # compilation path (Kevel via siteId resolver as of B3; other adapters
+    # remain False and raise UNSUPPORTED_FEATURE per B4). Adapters opt in via
+    # the class attribute ``supports_property_list_filtering``.
+    property_list_supported = bool(adapter and getattr(adapter.__class__, "supports_property_list_filtering", False))
     features = MediaBuyFeatures(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
-        # property_list_filtering: Implemented — filters products by buyer property lists
-        property_list_filtering=True,
+        property_list_filtering=property_list_supported,
         # catalog_management: We have product catalog management
         catalog_management=True,
     )
@@ -234,12 +240,23 @@ def _get_adcp_capabilities_impl(
     )
 
     # Build response
+    # specialisms declaration activates the storyboard scenarios bundled under
+    # `sales-non-guaranteed` (`inventory_list_targeting`, `inventory_list_no_match`,
+    # `delivery_reporting`, `pending_creatives_to_start`, `invalid_transitions`).
+    # The runner gates scenarios by specialism, not by `supported_protocols` alone.
+    #
+    # We declare the specialism even though `pending_creatives_to_start` and
+    # `invalid_transitions` are not yet fully green; the CI storyboard job is
+    # advisory while related gaps are tracked separately, so
+    # those scenario failures don't block merge — and the public declaration
+    # forces prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
             major_versions=[MajorVersion(root=3)],
             idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
         ),
         supported_protocols=[SupportedProtocol.media_buy],
+        specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
     )

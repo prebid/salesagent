@@ -554,9 +554,7 @@ def test_package_not_found_returns_error(standard_mocks):
     identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_pkg_nf",
-        packages=[
-            {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "seg_1"}]}}
-        ],
+        packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
     )
     result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1700,7 +1698,7 @@ class TestUC003UpdateTargetingOverlay:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_targeting",
-            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1709,30 +1707,29 @@ class TestUC003UpdateTargetingOverlay:
         stored = mock_pkg.package_config["targeting_overlay"]
         assert stored is not None
 
-    def test_targeting_overlay_not_validated(self, standard_mocks):
-        """Targeting overlay persisted without validation (gap G36).
+    def test_targeting_overlay_validated_at_boundary(self, standard_mocks):
+        """Targeting overlay rejects unknown fields at the request boundary now that
+        AdCPPackageUpdate.targeting_overlay uses local Targeting (extra="forbid")
+        instead of library TargetingOverlay (extra="allow"). Closes gap G36.
 
         Covers: UC-003-ALT-UPDATE-TARGETING-OVERLAY-02
         """
+        from pydantic import ValidationError
+
         _setup_db_session(standard_mocks)
 
-        mock_pkg = MagicMock()
-        mock_pkg.package_config = {}
-        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
-
-        identity = _make_identity()
-        # Invalid targeting data - should still be persisted
-        req = UpdateMediaBuyRequest(
-            media_buy_id="mb_no_validate",
-            packages=[
-                {"package_id": "pkg_1", "targeting_overlay": {"unknown_field": "value", "conflicting_geo": True}}
-            ],
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuySuccess)
-        # Even invalid targeting is persisted directly
-        assert mock_pkg.package_config["targeting_overlay"] is not None
+        # Bogus field names should now be caught at the boundary in dev/CI.
+        with pytest.raises(ValidationError) as exc:
+            UpdateMediaBuyRequest(
+                media_buy_id="mb_validate",
+                packages=[
+                    {
+                        "package_id": "pkg_1",
+                        "targeting_overlay": {"unknown_field": "value"},
+                    }
+                ],
+            )
+        assert "unknown_field" in str(exc.value)
 
     def test_targeting_update_no_adapter_call(self, standard_mocks):
         """Targeting changes are database-only; no adapter call.
@@ -1748,12 +1745,92 @@ class TestUC003UpdateTargetingOverlay:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_target_no_adapter",
-            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
         standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
+
+    def test_property_list_update_rejected_when_product_disallows(self, standard_mocks):
+        """Update with property_list against a product where property_targeting_allowed=False
+        is rejected with VALIDATION_ERROR before persistence — mirrors create-time rule.
+
+        Covers: UC-003-MAIN-14
+        """
+        from src.core.schemas import UpdateMediaBuyError
+
+        mock_session = _setup_db_session(standard_mocks)
+
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {"product_id": "prod_strict"}
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        # Product load returns a product that disallows property targeting.
+        # Set product_id explicitly so the violation message contains the literal
+        # ID rather than a MagicMock repr (the shared helper formats it into the message).
+        mock_product = MagicMock()
+        mock_product.product_id = "prod_strict"
+        mock_product.property_targeting_allowed = False
+        mock_session.scalars.return_value.first.return_value = mock_product
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_pta_reject",
+            packages=[
+                {
+                    "package_id": "pkg_1",
+                    "targeting_overlay": {
+                        "property_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "v1",
+                        },
+                    },
+                }
+            ],
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuyError)
+        # Persistence must NOT have happened — package_config still untouched
+        assert "targeting_overlay" not in mock_pkg.package_config
+        # Error message identifies the constraint
+        error_msg = result.errors[0].message
+        assert "prod_strict" in error_msg
+        assert "property_targeting_allowed" in error_msg
+
+    def test_collection_list_update_skips_property_targeting_check(self, standard_mocks):
+        """Update with only collection_list does not trigger the property_list-specific
+        property_targeting_allowed check — that gate is property_list-only.
+
+        Covers: UC-003-MAIN-13
+        """
+        _setup_db_session(standard_mocks)
+
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {"product_id": "prod_strict"}
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_coll_only",
+            packages=[
+                {
+                    "package_id": "pkg_1",
+                    "targeting_overlay": {
+                        "collection_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "c_v1",
+                        },
+                    },
+                }
+            ],
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        # Targeting persisted; no property_list rejection
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert mock_pkg.package_config["targeting_overlay"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -2374,7 +2451,7 @@ class TestUC003ExtL:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_wrong_pkg",
-            packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2393,9 +2470,7 @@ class TestUC003ExtL:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_no_pkg_exist",
-            packages=[
-                {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "s1"}]}}
-            ],
+            packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 

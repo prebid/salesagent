@@ -449,6 +449,271 @@ class TestGetMediaBuysImpl:
             _get_media_buys_impl(req, None)
 
 
+class TestTargetingOverlayRoundTrip:
+    """get_media_buys must echo persisted targeting_overlay so callers can
+    verify what was stored (storyboard inventory_list_targeting parity).
+
+    Covers: UC-002-MAIN-14a
+    """
+
+    def _make_request(self, **kwargs):
+        return GetMediaBuysRequest(**kwargs)
+
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list.get_principal_object")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_property_list_returned_at_storyboard_path(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_principal_obj,
+        mock_uow_cls,
+    ):
+        """media_buys[0].packages[0].targeting_overlay.property_list.list_id matches input."""
+        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
+        pkg = make_package(
+            package_config={
+                "product_id": "prod_1",
+                "targeting_overlay": {
+                    "property_list": {
+                        "agent_url": "https://gov.example",
+                        "list_id": "acme_outdoor_allowlist_v1",
+                    },
+                },
+            }
+        )
+        mock_fetch_buys.return_value = [buy]
+        mock_fetch_packages.return_value = {"buy_1": [pkg]}
+        mock_fetch_approvals.return_value = {}
+
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=make_identity())
+
+        # Storyboard validation: literal field path must match
+        targeting = response.media_buys[0].packages[0].targeting_overlay
+        assert targeting is not None
+        assert targeting.property_list is not None
+        assert targeting.property_list.list_id == "acme_outdoor_allowlist_v1"
+
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list.get_principal_object")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_collection_list_returned_at_storyboard_path(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_principal_obj,
+        mock_uow_cls,
+    ):
+        """media_buys[0].packages[0].targeting_overlay.collection_list.list_id matches input."""
+        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
+        pkg = make_package(
+            package_config={
+                "product_id": "prod_1",
+                "targeting_overlay": {
+                    "collection_list": {
+                        "agent_url": "https://gov.example",
+                        "list_id": "acme_outdoor_collections_v1",
+                    },
+                },
+            }
+        )
+        mock_fetch_buys.return_value = [buy]
+        mock_fetch_packages.return_value = {"buy_1": [pkg]}
+        mock_fetch_approvals.return_value = {}
+
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=make_identity())
+
+        targeting = response.media_buys[0].packages[0].targeting_overlay
+        assert targeting is not None
+        assert targeting.collection_list is not None
+        assert targeting.collection_list.list_id == "acme_outdoor_collections_v1"
+
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list.get_principal_object")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_both_list_types_returned_together(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_principal_obj,
+        mock_uow_cls,
+    ):
+        """Storyboard's create-with-both-lists step expects both fields back at once."""
+        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
+        pkg = make_package(
+            package_config={
+                "product_id": "prod_1",
+                "targeting_overlay": {
+                    "property_list": {
+                        "agent_url": "https://gov.example",
+                        "list_id": "acme_outdoor_allowlist_v1",
+                    },
+                    "collection_list": {
+                        "agent_url": "https://gov.example",
+                        "list_id": "acme_outdoor_collections_v1",
+                    },
+                },
+            }
+        )
+        mock_fetch_buys.return_value = [buy]
+        mock_fetch_packages.return_value = {"buy_1": [pkg]}
+        mock_fetch_approvals.return_value = {}
+
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=make_identity())
+
+        # Round-trip via model_dump (the wire-format path)
+        dumped = response.model_dump(exclude_none=True)
+        pkg_data = dumped["media_buys"][0]["packages"][0]
+        assert pkg_data["targeting_overlay"]["property_list"]["list_id"] == "acme_outdoor_allowlist_v1"
+        assert pkg_data["targeting_overlay"]["collection_list"]["list_id"] == "acme_outdoor_collections_v1"
+
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list.get_principal_object")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_legacy_targeting_key_fallback(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_principal_obj,
+        mock_uow_cls,
+    ):
+        """Pre-rename data stored under 'targeting' key still rehydrates."""
+        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
+        pkg = make_package(
+            package_config={
+                "product_id": "prod_1",
+                "targeting": {  # legacy key
+                    "property_list": {
+                        "agent_url": "https://gov.example",
+                        "list_id": "legacy_v1",
+                    },
+                },
+            }
+        )
+        mock_fetch_buys.return_value = [buy]
+        mock_fetch_packages.return_value = {"buy_1": [pkg]}
+        mock_fetch_approvals.return_value = {}
+
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=make_identity())
+
+        targeting = response.media_buys[0].packages[0].targeting_overlay
+        assert targeting is not None
+        assert targeting.property_list.list_id == "legacy_v1"
+
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list.get_principal_object")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_no_targeting_overlay_returns_none(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_principal_obj,
+        mock_uow_cls,
+    ):
+        """Packages without persisted targeting return targeting_overlay=None, not an empty Targeting."""
+        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
+        pkg = make_package(package_config={"product_id": "prod_1"})  # no targeting at all
+        mock_fetch_buys.return_value = [buy]
+        mock_fetch_packages.return_value = {"buy_1": [pkg]}
+        mock_fetch_approvals.return_value = {}
+
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=make_identity())
+
+        assert response.media_buys[0].packages[0].targeting_overlay is None
+
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list.get_principal_object")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_internal_targeting_fields_not_leaked(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_principal_obj,
+        mock_uow_cls,
+    ):
+        """Targeting carries internal fields (had_city_targeting, tenant_id, etc.) — none
+        of them may leak into the response. Targeting.model_dump excludes the full set:
+        key_value_pairs, tenant_id, created_at, updated_at, metadata, had_city_targeting.
+        """
+        mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
+        pkg = make_package(
+            package_config={
+                "product_id": "prod_1",
+                "targeting_overlay": {
+                    "property_list": {
+                        "agent_url": "https://gov.example",
+                        "list_id": "v1",
+                    },
+                    # Legacy city targeting triggers had_city_targeting=True via normalizer
+                    "geo_city_any_of": ["NYC"],
+                    # Each of these must be excluded by Targeting.model_dump
+                    "tenant_id": "leaky_tenant_id",
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "updated_at": "2025-01-02T00:00:00Z",
+                    "metadata": {"private": "do_not_leak"},
+                    "key_value_pairs": {"aee_segment": "secret"},
+                },
+            }
+        )
+        mock_fetch_buys.return_value = [buy]
+        mock_fetch_packages.return_value = {"buy_1": [pkg]}
+        mock_fetch_approvals.return_value = {}
+
+        req = self._make_request()
+        response = _get_media_buys_impl(req, identity=make_identity())
+
+        dumped = response.model_dump(exclude_none=True)
+        targeting = dumped["media_buys"][0]["packages"][0]["targeting_overlay"]
+        # Full excluded set per Targeting.model_dump + Field(exclude=True)
+        excluded_internal_fields = {
+            "key_value_pairs",
+            "tenant_id",
+            "created_at",
+            "updated_at",
+            "metadata",
+            "had_city_targeting",
+        }
+        leaked = excluded_internal_fields & set(targeting.keys())
+        assert not leaked, f"Internal Targeting fields leaked into response: {sorted(leaked)}"
+        # property_list still surfaces
+        assert targeting["property_list"]["list_id"] == "v1"
+
+
 class TestGetMediaBuysResponseStructure:
     """Tests for response schema compliance."""
 

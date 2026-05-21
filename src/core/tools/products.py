@@ -22,7 +22,12 @@ from pydantic import Field, ValidationError
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
@@ -406,20 +411,26 @@ async def _get_products_impl(
     _property_list_ref = getattr(req, "property_list", None)
     if isinstance(_property_list_ref, PropertyListReference):
         try:
+            from src.core.database.repositories.uow import ProductUoW as _IntersectionUoW
             from src.core.property_list_resolver import resolve_property_list
+            from src.services.property_intersection import PropertyIntersection
 
             allowed_property_ids = await resolve_property_list(_property_list_ref)
             allowed_set = set(allowed_property_ids)
-            products = filter_products_by_property_list(products, allowed_set)
+            with _IntersectionUoW(tenant["tenant_id"]) as intersection_uow:
+                assert intersection_uow.authorized_properties is not None
+                intersection = PropertyIntersection(intersection_uow.authorized_properties)
+                result = intersection.filter_products(products, allowed_set)
+            products = result.kept_products
             logger.info(
                 f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
-                f"(allowed {len(allowed_set)} properties)"
+                f"(allowed {len(allowed_set)} properties; dropped {len(result.dropped_products)})"
             )
+        except AdCPAdapterError:
+            # Typed adapter errors propagate as-is — they already carry the
+            # spec envelope contract via the AdCPError class.
+            raise
         except Exception as e:
-            from src.core.exceptions import AdCPAdapterError
-
-            if isinstance(e, AdCPAdapterError):
-                raise
             logger.error(f"Property list resolution failed: {e}")
             raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
 
