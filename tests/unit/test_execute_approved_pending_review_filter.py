@@ -113,3 +113,63 @@ class TestExecuteApprovedPendingReviewFilter:
 
         # The pending_review creative must NOT have been uploaded
         mock_adapter.creatives_manager.add_creative_assets.assert_not_called()
+
+
+class TestPersistAdapterPackageIds:
+    """_persist_adapter_package_ids must not overwrite mismatched platform_order_id."""
+
+    def test_refuses_to_overwrite_mismatched_platform_order_id(self):
+        from src.core.tools.media_buy_create import _persist_adapter_package_ids
+
+        pkg = MagicMock()
+        pkg.package_id = "pkg_1"
+        pkg.package_config = {"platform_order_id": "existing_gam_order"}
+
+        repo = MagicMock()
+        repo.get_packages.return_value = [pkg]
+
+        _persist_adapter_package_ids(
+            repo,
+            media_buy_id="mb_1",
+            platform_order_id="new_gam_order",
+            log_label="TEST",
+        )
+
+        assert pkg.package_config["platform_order_id"] == "existing_gam_order"
+
+    def test_writes_platform_order_id_when_unset(self):
+        from src.core.tools.media_buy_create import _persist_adapter_package_ids
+
+        pkg = MagicMock()
+        pkg.package_id = "pkg_1"
+        pkg.package_config = {}
+
+        repo = MagicMock()
+        repo.get_packages.return_value = [pkg]
+
+        _persist_adapter_package_ids(
+            repo,
+            media_buy_id="mb_1",
+            platform_order_id="gam_order_1",
+        )
+
+        assert pkg.package_config["platform_order_id"] == "gam_order_1"
+
+    def test_refuses_to_overwrite_mismatched_platform_line_item_id(self):
+        from src.core.tools.media_buy_create import _persist_adapter_package_ids
+
+        pkg = MagicMock()
+        pkg.package_id = "pkg_1"
+        pkg.package_config = {"platform_line_item_id": "existing_li"}
+
+        repo = MagicMock()
+        repo.get_packages.return_value = [pkg]
+
+        _persist_adapter_package_ids(
+            repo,
+            media_buy_id="mb_1",
+            platform_order_id="gam_order_1",
+            platform_line_item_ids={"pkg_1": "new_li"},
+        )
+
+        assert pkg.package_config["platform_line_item_id"] == "existing_li"

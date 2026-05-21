@@ -41,11 +41,15 @@ from flask import Blueprint, jsonify, redirect, render_template, request, url_fo
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
+from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
 
 logger = logging.getLogger(__name__)
+
+# Buy statuses where the order is live in the ad server (retroactive creative push, #1038)
+_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "scheduled", "paused"})
 
 # Create Blueprint
 creatives_bp = Blueprint("creatives", __name__)
@@ -604,7 +608,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     )
 
                     if not unapproved_creatives:
-                        media_buy_actions.append({"media_buy_id": media_buy_id, "media_buy": media_buy})
+                        media_buy_actions.append({"media_buy_id": media_buy_id})
                     else:
                         logger.info(
                             f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for {len(unapproved_creatives)} creatives: {unapproved_creatives}"
@@ -628,8 +632,6 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
             )
 
-            from src.core.tools.media_buy_create import execute_approved_media_buy
-
             success, error_msg = execute_approved_media_buy(action["media_buy_id"], tenant_id)
 
             if success:
@@ -651,16 +653,12 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are
         # live in the ad server, push this newly-approved creative to the line item.
-        # Allowlist of statuses where the buy is actually live in the ad server.
-        _LIVE_BUY_STATUSES = frozenset({"active", "scheduled", "paused"})
-        from src.core.tools.media_buy_create import push_creative_to_existing_buy
 
-        already_handled_buy_ids = {a["media_buy_id"] for a in media_buy_actions}
         # Use the status snapshot from the first loop — no need for a second UoW
         buys_to_push = [
             buy_id
             for buy_id in assignment_buy_ids
-            if buy_id not in already_handled_buy_ids and assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
+            if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
         ]
 
         for buy_id in buys_to_push:
@@ -674,7 +672,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 logger.error(
                     f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: {push_err}"
                 )
-                push_warnings.append(f"Creative push to buy {buy_id} failed: {push_err}")
+                push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
 
         response_body: dict[str, Any] = {"success": True, "status": "approved"}
         if push_warnings:

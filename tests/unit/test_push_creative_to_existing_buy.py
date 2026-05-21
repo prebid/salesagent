@@ -41,6 +41,7 @@ def _make_creative(
     c = MagicMock()
     c.creative_id = creative_id
     c.principal_id = principal_id
+    c.status = "approved"
     c.format = "display_300x250_image"
     c.agent_url = None
     c.data = {}
@@ -139,8 +140,8 @@ class TestPushCreativeToExistingBuy:
             {"platform_creative_id": "cre_1"},
         )
 
-    def test_happy_path_skips_platform_creative_id_when_already_set(self):
-        """Does not overwrite an existing platform_creative_id on the creative."""
+    def test_happy_path_skips_adapter_when_platform_creative_id_already_set(self):
+        """Does not call the adapter when platform_creative_id is already persisted."""
         creative = _make_creative()
         creative.data = {"platform_creative_id": "existing_gam_id"}
         uow = _make_uow(
@@ -155,18 +156,16 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
-            patch(f"{_MODULE}.get_adapter", return_value=mock_adapter),
-            patch(
-                f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)
-            ),
-            patch(f"{_MODULE}.extract_click_url", return_value=None),
-            patch(f"{_MODULE}.extract_impression_tracker_url", return_value=None),
+            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()) as mock_principal,
+            patch(f"{_MODULE}.get_adapter", return_value=mock_adapter) as mock_get_adapter,
         ):
             success, err = _call()
 
         assert success is True
         assert err is None
+        mock_principal.assert_not_called()
+        mock_get_adapter.assert_not_called()
+        mock_adapter.creatives_manager.add_creative_assets.assert_not_called()
         uow.creatives.update_data.assert_not_called()
 
     def test_tenant_not_found_returns_failure(self):
@@ -190,6 +189,26 @@ class TestPushCreativeToExistingBuy:
 
         assert success is False
         assert "Creative" in err
+
+    def test_pending_review_creative_returns_failure(self):
+        """Returns (False, ...) when creative is not yet approved."""
+        creative = _make_creative()
+        creative.status = "pending_review"
+        uow = _make_uow(
+            tenant=_make_tenant(),
+            creative=creative,
+            assignments=[_make_assignment()],
+            package=_make_package(),
+        )
+        with (
+            patch(_UOW_PATCH, return_value=uow),
+            patch("src.core.config_loader.get_tenant_by_id", return_value=None),
+            patch("src.core.config_loader.set_current_tenant"),
+        ):
+            success, err = _call()
+
+        assert success is False
+        assert "not approved" in err.lower()
 
     def test_assignment_not_found_returns_failure(self):
         """Returns (False, ...) when no assignment links creative to the buy."""

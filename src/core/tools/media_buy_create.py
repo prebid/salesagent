@@ -475,7 +475,17 @@ def _persist_adapter_package_ids(
     prefix = f"[{log_label}] " if log_label else ""
     all_pkgs = {p.package_id: p for p in media_buy_repo.get_packages(media_buy_id)}
     for pkg_record in all_pkgs.values():
-        pkg_record.package_config["platform_order_id"] = str(platform_order_id)
+        if pkg_record.package_config is None:
+            pkg_record.package_config = {}
+        existing = pkg_record.package_config.get("platform_order_id")
+        new_id = str(platform_order_id)
+        if existing and existing != new_id:
+            logger.warning(
+                f"{prefix}platform_order_id mismatch on {pkg_record.package_id}: "
+                f"existing={existing} new={new_id} — refusing to overwrite"
+            )
+            continue
+        pkg_record.package_config["platform_order_id"] = new_id
         attributes.flag_modified(pkg_record, "package_config")
     logger.info(f"{prefix}Persisted platform_order_id to {len(all_pkgs)} package(s) for {media_buy_id}")
 
@@ -487,7 +497,17 @@ def _persist_adapter_package_ids(
     for pkg_id, line_item_id in platform_line_item_ids.items():
         li_pkg = all_pkgs.get(pkg_id)
         if li_pkg:
-            li_pkg.package_config["platform_line_item_id"] = str(line_item_id)
+            if li_pkg.package_config is None:
+                li_pkg.package_config = {}
+            existing_li = li_pkg.package_config.get("platform_line_item_id")
+            new_li = str(line_item_id)
+            if existing_li and existing_li != new_li:
+                logger.warning(
+                    f"{prefix}platform_line_item_id mismatch on {pkg_id}: "
+                    f"existing={existing_li} new={new_li} — refusing to overwrite"
+                )
+                continue
+            li_pkg.package_config["platform_line_item_id"] = new_li
             attributes.flag_modified(li_pkg, "package_config")
             logger.info(f"{prefix}Updated package {pkg_id} with platform_line_item_id: {line_item_id}")
         else:
@@ -508,6 +528,7 @@ def _build_adapter_asset_from_creative(
     """
     creative_data = creative.data or {}
     format_spec = None
+    # Prefer cached spec (same as auto-approval path); fall back to live get_format on miss.
     if creative.format:
         format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
     if format_spec is None and creative.format:
@@ -1059,7 +1080,7 @@ def push_creative_to_existing_buy(
     Called from approve_creative when the buy is already live but this creative
     was in pending_review at buy-approval time and was held back (#1038).
     Local approval has already committed — failures here are non-fatal and logged.
-    The operator can re-approve to retry; the adapter layer is idempotent.
+    Re-approval is safe: skips the adapter when platform_creative_id is already set.
 
     Returns (success, error_message). error_message is non-None only on failure.
     """
@@ -1084,6 +1105,15 @@ def push_creative_to_existing_buy(
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
+            if creative.status not in {"approved", "active"}:
+                return False, f"Creative {creative_id} is not approved (status={creative.status})"
+
+            if (creative.data or {}).get("platform_creative_id"):
+                logger.info(
+                    f"[GATE-PUSH] Creative {creative_id} already has platform_creative_id — "
+                    f"skipping adapter call (already uploaded)"
+                )
+                return True, None
 
             all_assignments = uow.assignments.get_by_creative(creative_id)
             matching = [a for a in all_assignments if a.media_buy_id == media_buy_id]
@@ -1098,13 +1128,13 @@ def push_creative_to_existing_buy(
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
 
-            # GAM order ID is per-buy — any package on this buy has the same platform_order_id
+            # platform_order_id is per-buy — any package on this buy has the same value
             media_package = uow.media_buys.get_package(media_buy_id, matching[0].package_id)
             if not media_package:
                 return False, f"No package found for media buy {media_buy_id}"
 
-            gam_order_id = (media_package.package_config or {}).get("platform_order_id")
-            if not gam_order_id:
+            platform_order_id = (media_package.package_config or {}).get("platform_order_id")
+            if not platform_order_id:
                 return False, f"Media buy {media_buy_id} has no platform_order_id — buy may not be live yet"
 
             package_assignments: list[PackageAssignmentDict] = [
@@ -1117,7 +1147,7 @@ def push_creative_to_existing_buy(
 
             try:
                 asset_statuses = adapter.creatives_manager.add_creative_assets(
-                    gam_order_id,
+                    platform_order_id,
                     [asset],
                     datetime.now(UTC),
                 )
@@ -1141,7 +1171,7 @@ def push_creative_to_existing_buy(
                         )
                     logger.info(
                         f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
-                        f"{media_buy_id} (GAM order {gam_order_id})"
+                        f"{media_buy_id} (platform order {platform_order_id})"
                     )
                     return True, None
             return False, f"Adapter did not report status for creative {creative_id}"
