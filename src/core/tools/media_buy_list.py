@@ -352,12 +352,12 @@ def _resolve_status_filter(
 
 # Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
 # transitions) maps onto the AdCP MediaBuyStatus wire vocabulary below.
-# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL (the
-# salesagent-18h.1 fix) but targets the AdCP enum used by list_media_buys
-# instead of the internal delivery filter vocabulary — the two output
-# vocabularies are genuinely different (AdCP has no "failed"/"ready"/"draft"),
-# so per the CLAUDE.md DRY guidance ("not about collapsing two genuinely
-# different operations") the mapping is mirrored, not shared.
+# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL but targets
+# the AdCP enum used by list_media_buys instead of the internal delivery
+# filter vocabulary — the two output vocabularies are genuinely different
+# (AdCP has no "failed"/"ready"/"draft"), so per the CLAUDE.md DRY guidance
+# ("not about collapsing two genuinely different operations") the mapping
+# is mirrored, not shared.
 #
 # The persisted status is authoritative: terminal/explicit states
 # (paused, completed, rejected, canceled) are lifecycle decisions that
@@ -391,7 +391,7 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     yet is "pending_start", one past its end date is "completed", and one
     flagged ``is_paused`` is "paused". Terminal/explicit lifecycle states
     (paused, completed, rejected, canceled) come straight from the column
-    and cannot be re-derived from flight dates (salesagent-36d).
+    and cannot be re-derived from flight dates.
     """
     persisted = (buy.status or "").lower()
     mapped = _PERSISTED_STATUS_TO_ADCP.get(persisted, MediaBuyStatus.active)

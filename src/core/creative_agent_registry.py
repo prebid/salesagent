@@ -449,7 +449,7 @@ class CreativeAgentRegistry:
                 # expected schema ListCreativeFormatsResponse" with thousands of
                 # errors). Route to the raw-MCP path where per-format tolerant
                 # ingestion can salvage the compatible formats instead of
-                # discarding the entire catalog. (salesagent-w8yn)
+                # discarding the entire catalog.
                 schema_validation_failure = any(
                     marker in error_text.lower() for marker in _SCHEMA_VALIDATION_FAILURE_MARKERS
                 )

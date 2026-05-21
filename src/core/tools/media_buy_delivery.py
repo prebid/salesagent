@@ -11,7 +11,7 @@ Handles delivery metrics reporting including:
 import logging
 from datetime import UTC, date, datetime, timedelta
 from math import floor
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -230,10 +230,8 @@ def _get_media_buy_delivery_impl(
                 elif testing_ctx.jump_to_event:
                     # Calculate time based on event
                     # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                    from typing import cast as type_cast
-
-                    buy_start_date = type_cast(date, buy.start_date)
-                    buy_end_date = type_cast(date, buy.end_date)
+                    buy_start_date = cast(date, buy.start_date)
+                    buy_end_date = cast(date, buy.end_date)
                     simulation_datetime = TimeSimulator.jump_to_event_time(
                         testing_ctx.jump_to_event,
                         datetime.combine(buy_start_date, datetime.min.time()),
@@ -242,10 +240,8 @@ def _get_media_buy_delivery_impl(
 
                 # Determine status
                 # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                from typing import cast as type_cast
-
-                buy_start_date_status = type_cast(date, buy.start_date)
-                buy_end_date_status = type_cast(date, buy.end_date)
+                buy_start_date_status = cast(date, buy.start_date)
+                buy_end_date_status = cast(date, buy.end_date)
                 if getattr(buy, "is_paused", False):
                     status = "paused"
                 elif simulation_datetime.date() < buy_start_date_status:
@@ -336,10 +332,8 @@ def _get_media_buy_delivery_impl(
                 else:
                     # Use simulation for testing
                     # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                    from typing import cast as type_cast
-
-                    buy_start_date_sim = type_cast(date, buy.start_date)
-                    buy_end_date_sim = type_cast(date, buy.end_date)
+                    buy_start_date_sim = cast(date, buy.start_date)
+                    buy_end_date_sim = cast(date, buy.end_date)
                     start_dt = datetime.combine(buy_start_date_sim, datetime.min.time(), tzinfo=UTC)
                     end_dt_campaign = datetime.combine(buy_end_date_sim, datetime.min.time(), tzinfo=UTC)
                     progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
@@ -452,11 +446,8 @@ def _get_media_buy_delivery_impl(
                 ctr = (clicks / impressions) if clicks is not None and impressions > 0 else None
 
                 # Cast status to match Literal type requirement
-                from typing import Literal as LiteralType
-                from typing import cast
-
                 status_typed = cast(
-                    LiteralType["ready", "active", "paused", "completed", "failed", "reporting_delayed"], status
+                    Literal["ready", "active", "paused", "completed", "failed", "reporting_delayed"], status
                 )
                 delivery_data = MediaBuyDeliveryData(
                     media_buy_id=media_buy_id,
@@ -534,11 +525,9 @@ def _get_media_buy_delivery_impl(
         # day-count spanning the full flight (BR-RULE-092 INV-5).
         campaign_length_days: int | None = None
         if target_media_buys:
-            from typing import cast as type_cast
-
             first_buy = target_media_buys[0][1]
-            cl_start = type_cast(date, first_buy.start_date)
-            cl_end = type_cast(date, first_buy.end_date)
+            cl_start = cast(date, first_buy.start_date)
+            cl_end = cast(date, first_buy.end_date)
             campaign_length_days = (cl_end - cl_start).days
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
@@ -571,10 +560,8 @@ def _get_media_buy_delivery_impl(
             if target_media_buys:
                 first_buy = target_media_buys[0][1]
                 # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                from typing import cast as type_cast
-
-                first_buy_start = type_cast(date, first_buy.start_date)
-                first_buy_end = type_cast(date, first_buy.end_date)
+                first_buy_start = cast(date, first_buy.start_date)
+                first_buy_end = cast(date, first_buy.end_date)
                 campaign_info = {
                     "start_date": datetime.combine(first_buy_start, datetime.min.time()),
                     "end_date": datetime.combine(first_buy_end, datetime.min.time()),
@@ -794,10 +781,8 @@ def _internal_status_for_buy(buy: MediaBuy, reference_date: date) -> str:
 
     # Generic serving state — refine against the flight window.
     # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime).
-    from typing import cast as type_cast
-
-    start_compare = buy.start_time.date() if buy.start_time else type_cast(date, buy.start_date)
-    end_compare = buy.end_time.date() if buy.end_time else type_cast(date, buy.end_date)
+    start_compare = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
+    end_compare = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
 
     if getattr(buy, "is_paused", False):
         return "paused"
