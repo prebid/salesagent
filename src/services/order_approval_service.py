@@ -8,14 +8,27 @@ when approval completes or fails.
 import logging
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
+from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.database.repositories import MediaBuyUoW
 from src.core.thread_registry import ThreadRegistry
+
+# Canonical adapter name shared with src/adapters/google_ad_manager.py — audit-log
+# queries filter on this value, so the two must stay in lockstep.
+_ADAPTER_NAME = "google_ad_manager"
+
+# Threshold beyond which a running SyncJob is presumed orphaned (process died
+# mid-approval). The default polling window is 2 minutes (max_attempts * poll_interval),
+# so 10 minutes is ≥5× the maximum legitimate runtime — anything older is a stale row
+# blocking re-approval of its order_id.
+_STALE_APPROVAL_THRESHOLD = timedelta(minutes=10)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +36,11 @@ logger = logging.getLogger(__name__)
 # threads on every read — same defensive cleanup as the sync registry
 # (production memory-leak triage #5).
 _active_approvals = ThreadRegistry()
+
+# Serialize the duplicate-scan + INSERT against concurrent callers for the
+# same order_id. ThreadRegistry's atomic add covers the in-memory registry,
+# but the DB SELECT-then-INSERT window remains racy without this lock.
+_approval_lock = threading.Lock()
 
 
 def start_order_approval_background(
@@ -49,64 +67,87 @@ def start_order_approval_background(
         approval_id: The approval job ID for tracking progress
 
     Raises:
-        ValueError: If an approval is already running for this order
+        ValueError: If a live approval is already running for this order
     """
-    # Check if approval already running
-    with get_db_session() as db:
-        stmt = select(SyncJob).where(
-            SyncJob.sync_type == "order_approval",
-            SyncJob.status == "running",
-        )
-        existing_approvals = db.scalars(stmt).all()
+    # Hold _approval_lock for the duplicate scan + INSERT + thread registration.
+    # Without this, two concurrent calls for the same order_id can both pass the
+    # SELECT, both INSERT a "running" SyncJob, and both start polling threads.
+    # Orphaned SyncJobs older than _STALE_APPROVAL_THRESHOLD (process died mid-
+    # approval) are flipped to "failed" before the duplicate check so they don't
+    # block legitimate re-approval forever.
+    with _approval_lock:
+        with get_db_session() as db:
+            stmt = select(SyncJob).where(
+                SyncJob.sync_type == "order_approval",
+                SyncJob.status == "running",
+            )
+            existing_approvals = db.scalars(stmt).all()
 
-        # Check if any existing approval is for this order
-        for approval in existing_approvals:
-            if approval.progress and approval.progress.get("order_id") == order_id:
+            now = datetime.now(UTC)
+            for approval in existing_approvals:
+                if not (approval.progress and approval.progress.get("order_id") == order_id):
+                    continue
+                started = approval.started_at
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=UTC)
+                if now - started > _STALE_APPROVAL_THRESHOLD:
+                    approval.status = "failed"
+                    approval.completed_at = now
+                    approval.error_message = (
+                        f"Approval thread presumed dead (no progress for {_STALE_APPROVAL_THRESHOLD}); "
+                        "marked as failed to allow fresh approval. MediaBuy state is unchanged — "
+                        "the next live approval will advance it."
+                    )
+                    db.commit()
+                    logger.warning(
+                        "[%s] reaped stale approval for order %s (started %s)",
+                        approval.sync_id,
+                        order_id,
+                        started.isoformat(),
+                    )
+                    continue
                 raise ValueError(f"Approval already running for order {order_id}: {approval.sync_id}")
 
-        # Create new approval job
-        approval_id = f"approval_{order_id}_{int(datetime.now(UTC).timestamp())}"
+            approval_id = f"approval_{order_id}_{int(now.timestamp())}"
 
-        approval_job = SyncJob(
-            sync_id=approval_id,
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
-            sync_type="order_approval",
-            status="running",
-            started_at=datetime.now(UTC),
-            triggered_by="order_creation",
-            triggered_by_id=media_buy_id,
-            progress={
-                "order_id": order_id,
-                "media_buy_id": media_buy_id,
-                "principal_id": principal_id,
-                "webhook_url": webhook_url,
-                "attempts": 0,
-                "max_attempts": max_attempts,
-                "phase": "Starting approval polling",
-            },
+            approval_job = SyncJob(
+                sync_id=approval_id,
+                tenant_id=tenant_id,
+                adapter_type="google_ad_manager",
+                sync_type="order_approval",
+                status="running",
+                started_at=now,
+                triggered_by="order_creation",
+                triggered_by_id=media_buy_id,
+                progress={
+                    "order_id": order_id,
+                    "media_buy_id": media_buy_id,
+                    "principal_id": principal_id,
+                    "webhook_url": webhook_url,
+                    "attempts": 0,
+                    "max_attempts": max_attempts,
+                    "phase": "Starting approval polling",
+                },
+            )
+            db.add(approval_job)
+            db.commit()
+
+        thread = threading.Thread(
+            target=_run_approval_thread,
+            args=(
+                approval_id,
+                order_id,
+                media_buy_id,
+                tenant_id,
+                principal_id,
+                webhook_url,
+                max_attempts,
+                poll_interval_seconds,
+            ),
+            daemon=True,
+            name=f"approval-{approval_id}",
         )
-        db.add(approval_job)
-        db.commit()
-
-    # Start background thread
-    thread = threading.Thread(
-        target=_run_approval_thread,
-        args=(
-            approval_id,
-            order_id,
-            media_buy_id,
-            tenant_id,
-            principal_id,
-            webhook_url,
-            max_attempts,
-            poll_interval_seconds,
-        ),
-        daemon=True,
-        name=f"approval-{approval_id}",
-    )
-
-    _active_approvals.add(approval_id, thread)
+        _active_approvals.add(approval_id, thread)
 
     thread.start()
     logger.info(f"Started background approval polling thread: {approval_id}")
@@ -247,14 +288,71 @@ def _update_approval_progress(approval_id: str, progress_data: dict[str, Any]):
             stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
             approval_job = db.scalars(stmt).first()
             if approval_job:
-                # Merge with existing progress
+                # Merge with existing progress. In-place dict.update on a JSONB column
+                # is invisible to SQLAlchemy's dirty tracker without flag_modified, so
+                # the row would commit unchanged and the buyer's progress poll would
+                # see stale attempts.
                 if approval_job.progress:
                     approval_job.progress.update(progress_data)
+                    flag_modified(approval_job, "progress")
                 else:
                     approval_job.progress = progress_data
                 db.commit()
     except Exception as e:
         logger.warning(f"Failed to update approval progress: {e}")
+
+
+def _finalize_approval(
+    *,
+    media_buy_id: str,
+    tenant_id: str,
+    principal_id: str,
+    media_buy_status: str,
+    audit_success: bool,
+    audit_details: dict[str, Any],
+    audit_error: str | None,
+    webhook_url: str | None,
+    webhook_status: str,
+    webhook_message: str,
+    webhook_order_id: str | None,
+    webhook_attempts: int | None,
+) -> None:
+    """Advance MediaBuy.status, write audit log, and fire webhook.
+
+    The MediaBuy update is fatal — if it fails the audit log and webhook
+    do NOT fire, because otherwise the buyer would receive an "approved"
+    notification for a media buy still pinned at pending_approval. The
+    audit log and webhook are best-effort (wrapped in try/except).
+    """
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        uow.media_buys.update_status(media_buy_id, media_buy_status)
+
+    try:
+        audit = AuditLogger(adapter_name=_ADAPTER_NAME, tenant_id=tenant_id)
+        audit.log_operation(
+            operation="approve_order",
+            principal_name=principal_id,
+            principal_id=principal_id,
+            adapter_id=str(audit_details.get("order_id") or ""),
+            success=audit_success,
+            error=audit_error,
+            details=audit_details,
+        )
+    except Exception as e:
+        logger.error(f"Failed to write approval audit log: {e}")
+
+    if webhook_url:
+        _send_approval_webhook(
+            webhook_url=webhook_url,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=media_buy_id,
+            status=webhook_status,
+            message=webhook_message,
+            order_id=webhook_order_id,
+            attempts=webhook_attempts,
+        )
 
 
 def _mark_approval_complete(
@@ -265,7 +363,7 @@ def _mark_approval_complete(
     principal_id: str,
     media_buy_id: str,
 ):
-    """Mark approval as completed and send webhook notification."""
+    """Mark approval as completed, advance MediaBuy.status, audit, and webhook."""
     try:
         with get_db_session() as db:
             import json
@@ -278,18 +376,25 @@ def _mark_approval_complete(
                 approval_job.summary = json.dumps(summary) if summary else None
                 db.commit()
 
-        # Send webhook notification
-        if webhook_url:
-            _send_approval_webhook(
-                webhook_url=webhook_url,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=media_buy_id,
-                status="approved",
-                message="Order approved successfully",
-                order_id=summary.get("order_id"),
-                attempts=summary.get("attempts"),
-            )
+        _finalize_approval(
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_status="active",
+            audit_success=True,
+            audit_details={
+                "order_id": summary.get("order_id"),
+                "media_buy_id": media_buy_id,
+                "attempts": summary.get("attempts"),
+                "duration_seconds": summary.get("duration_seconds"),
+            },
+            audit_error=None,
+            webhook_url=webhook_url,
+            webhook_status="approved",
+            webhook_message="Order approved successfully",
+            webhook_order_id=summary.get("order_id"),
+            webhook_attempts=summary.get("attempts"),
+        )
 
     except Exception as e:
         logger.error(f"Failed to mark approval complete: {e}")
@@ -303,7 +408,9 @@ def _mark_approval_failed(
     principal_id: str,
     media_buy_id: str,
 ):
-    """Mark approval as failed and send webhook notification."""
+    """Mark approval as failed, terminalize MediaBuy.status, audit, and webhook."""
+    order_id: str | None = None
+    attempts: int | None = None
     try:
         with get_db_session() as db:
             stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
@@ -313,19 +420,28 @@ def _mark_approval_failed(
                 approval_job.completed_at = datetime.now(UTC)
                 approval_job.error_message = error_message
                 db.commit()
+                if approval_job.progress:
+                    order_id = approval_job.progress.get("order_id")
+                    attempts = approval_job.progress.get("attempts")
 
-        # Send webhook notification
-        if webhook_url:
-            _send_approval_webhook(
-                webhook_url=webhook_url,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=media_buy_id,
-                status="failed",
-                message=error_message,
-                order_id=approval_job.progress.get("order_id") if approval_job and approval_job.progress else None,
-                attempts=approval_job.progress.get("attempts") if approval_job and approval_job.progress else None,
-            )
+        _finalize_approval(
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_status="failed",
+            audit_success=False,
+            audit_details={
+                "order_id": order_id,
+                "media_buy_id": media_buy_id,
+                "attempts": attempts,
+            },
+            audit_error=error_message,
+            webhook_url=webhook_url,
+            webhook_status="failed",
+            webhook_message=error_message,
+            webhook_order_id=order_id,
+            webhook_attempts=attempts,
+        )
 
     except Exception as e:
         logger.error(f"Failed to mark approval failed: {e}")

@@ -195,20 +195,22 @@ class GAMOrdersManager:
             logger.error(f"Failed to archive GAM Order {order_id}: {str(e)}")
             return False
 
-    @timeout(seconds=620)  # 10+ minutes timeout for approving order (with retries)
-    def approve_order(self, order_id: str, max_retries: int = 40, poll_interval: int = 15) -> bool:
+    @timeout(seconds=130)  # 2+ minutes — matches background-service default budget
+    def approve_order(self, order_id: str, max_retries: int = 12, poll_interval: int = 10) -> bool:
         """Approve a GAM order after line items have been created.
 
         GAM requires time to run inventory forecasting on line items before an order
         can be approved. This method will retry if it receives a NO_FORECAST_YET error.
 
-        Per GAM documentation, forecasting can take up to 60 minutes after creating
-        new line items. We poll every 15 seconds for up to 10 minutes (40 attempts).
+        Callers that need longer waits should run async via
+        ``src.services.order_approval_service.start_order_approval_background``
+        rather than raising these defaults — a long-running sync call blocks the
+        admin request thread.
 
         Args:
             order_id: The GAM order ID to approve
-            max_retries: Maximum number of retry attempts for NO_FORECAST_YET errors (default 40)
-            poll_interval: Time in seconds between polling attempts (default 15s)
+            max_retries: Maximum number of retry attempts for NO_FORECAST_YET errors (default 12 = 2 min budget)
+            poll_interval: Time in seconds between polling attempts (default 10s)
 
         Returns:
             True if approval succeeded, False otherwise

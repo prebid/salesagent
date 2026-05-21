@@ -209,9 +209,9 @@ def test_collection_list_roundtrips_through_postgres(roundtrip_tenant):
     assert len(response.media_buys) == 1
     pkg = response.media_buys[0].packages[0]
     assert pkg.targeting_overlay is not None
-    assert (
-        pkg.targeting_overlay.collection_list is not None
-    ), "collection_list nested reference must survive JSON SerDes"
+    assert pkg.targeting_overlay.collection_list is not None, (
+        "collection_list nested reference must survive JSON SerDes"
+    )
     assert pkg.targeting_overlay.collection_list.list_id == "C_collection_v1"
 
 
