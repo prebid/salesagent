@@ -1,9 +1,16 @@
 [project]
 name = "adcp-sales-agent"
 version = "1.7.0"
-description = "Add your description here"
+description = "Prebid Sales Agent — AdCP-compliant MCP/A2A/REST server for ad inventory orchestration."
 readme = "README.md"
 requires-python = ">=3.12"
+
+[project.urls]
+Homepage = "https://github.com/prebid/salesagent"
+Repository = "https://github.com/prebid/salesagent"
+Issues = "https://github.com/prebid/salesagent/issues"
+Documentation = "https://github.com/prebid/salesagent/tree/main/docs"
+Changelog = "https://github.com/prebid/salesagent/blob/main/CHANGELOG.md"
 
 dependencies = [
     "a2wsgi>=1.10.0",
