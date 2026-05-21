@@ -1,13 +1,15 @@
 import json
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import ClassVar
 
 import requests
+from adcp.types import Error
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.core.schemas import *
+from src.services.kevel_site_resolver import KevelSiteResolver
 
 
 class Kevel(AdServerAdapter):
@@ -16,6 +18,10 @@ class Kevel(AdServerAdapter):
     """
 
     adapter_name = "kevel"
+
+    # Kevel has a native property_list compilation path via Site.Id → siteIds
+    # targeting. See src/services/kevel_site_resolver.py.
+    supports_property_list_filtering: ClassVar[bool] = True
 
     # Kevel specializes in social and retail_media
     # V3 channel names: native → social, retail → retail_media
@@ -47,16 +53,62 @@ class Kevel(AdServerAdapter):
 
         if self.dry_run:
             self.log("Running in dry-run mode - Kevel API calls will be simulated", dry_run_prefix=False)
+            self._site_resolver: KevelSiteResolver | None = None
         elif not self.network_id or not self.api_key:
             raise ValueError("Kevel config is missing 'network_id' or 'api_key'")
         else:
             self.headers = {"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"}
+            self._site_resolver = KevelSiteResolver(
+                network_id=self.network_id, api_key=self.api_key, base_url=self.base_url
+            )
 
     # Supported device types (Kevel doesn't support CTV)
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet"}
 
     # Supported media types
     SUPPORTED_MEDIA_TYPES = {"display", "native"}
+
+    def _check_property_list_supported(self, packages: list[MediaPackage]) -> CreateMediaBuyError | None:
+        """Validate that every package's property_list contains identifier types Kevel can compile.
+
+        Kevel compiles ``domain``/``subdomain`` identifiers to ``siteId`` via
+        the resolver. Other types (``ios_bundle``, ``rss_url``, etc.) don't map
+        to Kevel's Site primitive and must be rejected so the buyer gets a
+        clean ``UNSUPPORTED_FEATURE`` envelope instead of silently-truncated
+        targeting.
+
+        Zero-match (every supported-type identifier exists in the list but
+        none correspond to a Kevel ``Site``) is **accepted** here — per the
+        inventory-targeting plan SD2, the buy is created with empty
+        ``siteIds`` and the downstream ``inventory_list_no_match`` storyboard
+        contract handles surfacing that to the buyer. Compilation in
+        ``_build_targeting`` will write ``siteIds=[]`` in that case.
+        """
+        if self._site_resolver is None:
+            # Dry-run mode or misconfigured adapter — fall back to the base
+            # (reject if property_list present at all). In dry-run we never
+            # hit the live Kevel API, so we can't validate resolvability.
+            return super()._check_property_list_supported(packages)
+
+        for package in packages:
+            targeting = getattr(package, "targeting_overlay", None)
+            if targeting is None:
+                continue
+            ref = getattr(targeting, "property_list", None)
+            if ref is None:
+                continue
+            resolved = self._site_resolver.resolve(ref)
+            if resolved.unsupported_types:
+                message = (
+                    "Kevel compiles property_list domain/subdomain identifiers to siteIds "
+                    f"but the referenced list contains identifier types it cannot translate: "
+                    f"{sorted(resolved.unsupported_types)}. Remove these identifier types "
+                    "from the list, or use a different property list scoped to domain/subdomain."
+                )
+                return CreateMediaBuyError(
+                    errors=[Error(code="UNSUPPORTED_FEATURE", message=message, details=None)],
+                )
+        return None
 
     def _validate_targeting(self, targeting_overlay):
         """Validate targeting and return unsupported features."""
@@ -165,6 +217,23 @@ class Kevel(AdServerAdapter):
             # Allow direct CustomTargeting override
             if "custom_targeting" in kevel_custom:
                 kevel_targeting["CustomTargeting"] = kevel_custom["custom_targeting"]
+
+        # AdCP property_list → Kevel siteIds. Identifier-type validation already
+        # ran in _check_property_list_supported (rejected unsupported types
+        # with UNSUPPORTED_FEATURE), so by the time we get here the list
+        # contains only domain/subdomain identifiers. Unresolvable values
+        # (publisher not onboarded to Kevel) silently fall out of the
+        # resulting set — per plan SD2, zero-match is accept-with-context,
+        # not reject.
+        if targeting_overlay.property_list is not None and self._site_resolver is not None:
+            resolved = self._site_resolver.resolve(targeting_overlay.property_list)
+            existing = set(kevel_targeting.get("siteIds") or [])
+            combined = existing | resolved.site_ids
+            kevel_targeting["siteIds"] = sorted(combined)
+            self.log(
+                f"property_list resolved to {len(resolved.site_ids)} Kevel siteIds "
+                f"({len(resolved.unresolvable_values)} identifiers had no matching Site)"
+            )
 
         # AEE signal integration via CustomTargeting (managed-only)
         if targeting_overlay.key_value_pairs:

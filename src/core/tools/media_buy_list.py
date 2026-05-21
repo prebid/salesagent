@@ -74,6 +74,7 @@ from src.core.schemas import (
     GetMediaBuysResponse,
     Snapshot,
     SnapshotUnavailableReason,
+    Targeting,
 )
 from src.core.validation_helpers import format_validation_error
 
@@ -180,6 +181,12 @@ def _get_media_buys_impl(
             if include_snapshot and snapshot is None:
                 snapshot_unavailable = unavailable_reason or SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
 
+            # Materialize targeting_overlay from package_config so callers can verify
+            # what was persisted. Tolerates the legacy "targeting" key for data written
+            # before the targeting_overlay rename (see media_buy_create.py:638-642).
+            targeting_raw = pkg_config.get("targeting_overlay") or pkg_config.get("targeting")
+            targeting_overlay = Targeting(**targeting_raw) if targeting_raw else None
+
             response_packages.append(
                 GetMediaBuysPackage(
                     package_id=pkg_id,
@@ -189,6 +196,7 @@ def _get_media_buys_impl(
                     start_time=pkg_config.get("start_time"),
                     end_time=pkg_config.get("end_time"),
                     paused=pkg_config.get("paused"),
+                    targeting_overlay=targeting_overlay,
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
                     snapshot_unavailable_reason=snapshot_unavailable if include_snapshot else None,

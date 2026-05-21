@@ -87,6 +87,8 @@ _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "/schemas/latest/media-buy/get-products-request.json": {
         "fields",  # Schema defines field selection, library doesn't have it yet
+        "if_catalog_version",  # Schema defines catalog-version pre-flight, library doesn't have it yet
+        "if_pricing_version",  # Schema defines pricing-version pre-flight, library doesn't have it yet
         "preferred_delivery_types",  # Schema defines delivery type preferences, library doesn't have it yet
         "refine",  # Schema defines refinement array, library doesn't have it yet
         "required_policies",  # Schema defines policy IDs, library doesn't have it yet
@@ -100,9 +102,11 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "/schemas/latest/media-buy/get-media-buy-delivery-request.json": {
         "account",  # Schema says 'account' (object), library uses 'account_id' (string)
         "reporting_dimensions",  # Schema defines it, library doesn't have it yet
+        "time_granularity",  # Schema defines per-window slice granularity, library doesn't have it yet
+        "include_window_breakdown",  # Schema defines windowed pull breakdown, library doesn't have it yet
     },
     "/schemas/latest/media-buy/sync-creatives-request.json": {
-        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "account_id",  # Schema defines 'account_id' (string); library/local model uses 'account' (AccountReference object).
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
     "/schemas/latest/media-buy/list-creatives-request.json": {

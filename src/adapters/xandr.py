@@ -479,6 +479,12 @@ class XandrAdapter(AdServerAdapter):
         package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
         """Create insertion order and line items in Xandr."""
+        # Honest capability declaration (AdCP honest-declaration contract): the Xandr
+        # adapter is stubbed with no native property_list compilation path; reject
+        # property_list targeting up-front rather than silently dropping it.
+        if err := self._reject_property_list_if_unsupported(packages):
+            return err
+
         if self._requires_manual_approval("create_media_buy"):
             task_id = self._create_human_task(
                 "create_media_buy",
