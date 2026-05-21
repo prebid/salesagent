@@ -149,11 +149,7 @@ class AIServiceFactory:
 
             if api_key:
                 return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-            # pydantic-ai 1.99 renamed the "google-gla" provider literal to "google"
-            # (Google AI Studio / Generative Language API). Internal callers still
-            # use the legacy "google-gla" name at lines 122-146; the rename only
-            # applies at the SDK boundary.
-            return GoogleModel(model_name, provider="google")
+            return GoogleModel(model_name, provider="google-gla")
 
         elif provider == "anthropic":
             from pydantic_ai.models.anthropic import AnthropicModel

@@ -25,6 +25,16 @@
 #     unflagged across runs as the upstream record gets re-curated, hence
 #     ``--allow-unused-ignores`` below.
 #
+# - GHSA-cqp8-fcvh-x7r3 (pydantic-ai SSRF cloud-metadata blocklist bypass):
+#     Inapplicable here. The advisory only fires when an application opts a
+#     URL into ``force_download='allow-local'`` (which disables the default
+#     block on private/internal IPs). This codebase has zero occurrences of
+#     ``force_download`` or ``allow-local`` in src/ or tests/, so the
+#     vulnerable code path is unreachable. Fix would require bumping
+#     pydantic-ai>=1.99.0, which transitively requires fastmcp>=3.3.0 — a
+#     major API restructure (``fastmcp.server.context`` removed) that warrants
+#     its own dedicated migration PR. Track at: full fastmcp 3.3 migration.
+#
 # Previously ignored, now resolved by real dep bumps (kept here as a record):
 # - GHSA-7gcm-g887-7qv7 (protobuf DoS) — resolved by bumping protobuf to 6.33.6.
 # - GHSA-5239-wwwm-4pmq (Pygments AdlLexer ReDoS) — resolved by bumping
@@ -37,6 +47,6 @@
 # Extra arguments are forwarded to uv-secure (e.g. ``--no-check-uv-tool``).
 set -euo pipefail
 
-IGNORED_VULNS="PYSEC-2026-89,PYSEC-2025-183"
+IGNORED_VULNS="PYSEC-2026-89,PYSEC-2025-183,GHSA-cqp8-fcvh-x7r3"
 
 exec uvx uv-secure --ignore-vulns "$IGNORED_VULNS" --allow-unused-ignores "$@"
