@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0](https://github.com/prebid/salesagent/compare/v1.7.0...v1.8.0) (2026-05-21)
+
+
+### Features
+
+* migrate to adcp 3.12.0 (rc.3 spec alignment) ([#1217](https://github.com/prebid/salesagent/issues/1217)) ([0cf4de7](https://github.com/prebid/salesagent/commit/0cf4de78ae98aee8bc2b9d168be1abb8ada3a23c))
+* round-trip property_list and add collection_list on media-buy ([#1275](https://github.com/prebid/salesagent/issues/1275)) ([#1276](https://github.com/prebid/salesagent/issues/1276)) ([cfb7597](https://github.com/prebid/salesagent/commit/cfb7597da250caa65ab383ecea61f16a24b01f62))
+* upgrade adcp SDK 3.12→4.3 and import protocol metadata ([#1266](https://github.com/prebid/salesagent/issues/1266)) ([5011855](https://github.com/prebid/salesagent/commit/5011855d7610b424b0064ac6c5e678dd0655e70f))
+
+
+### Bug Fixes
+
+* apply selection_type inference to inventory profile publisher_properties ([#1174](https://github.com/prebid/salesagent/issues/1174)) ([a50ff50](https://github.com/prebid/salesagent/commit/a50ff500788a060a44e6a2274fb7070a51f887cc))
+* bust browser cache on favicon re-upload ([#1255](https://github.com/prebid/salesagent/issues/1255)) ([a50e9b9](https://github.com/prebid/salesagent/commit/a50e9b9a781a1ea69c8dfb851cd62f89528f6c29)), closes [#1254](https://github.com/prebid/salesagent/issues/1254)
+* correct GAM service account authorization instructions ([#1218](https://github.com/prebid/salesagent/issues/1218)) ([c2ce35e](https://github.com/prebid/salesagent/commit/c2ce35ee21ec2b47d39a484d431a82d64eadad47))
+* **deps:** bump mako, python-multipart, urllib3 for security audit ([#1298](https://github.com/prebid/salesagent/issues/1298)) ([a8e6bad](https://github.com/prebid/salesagent/commit/a8e6bad49d3f374f7b03e878316a5bf550f5b948))
+* error-handling cleanup — data loss bugs, silent catches, structural guard ([#1078](https://github.com/prebid/salesagent/issues/1078)) ([#1212](https://github.com/prebid/salesagent/issues/1212)) ([e5886aa](https://github.com/prebid/salesagent/commit/e5886aa7f75ebb2e407c3707b6936893c63b56a5))
+* GAM test-connection must not report success with no accessible network ([#1219](https://github.com/prebid/salesagent/issues/1219)) ([6bf9d6a](https://github.com/prebid/salesagent/commit/6bf9d6a4c844335fd72a62b322f2325f7f3fb11b))
+* gh-[#1264](https://github.com/prebid/salesagent/issues/1264) memory-leak follow-ups and test-suite integrity ([#1334](https://github.com/prebid/salesagent/issues/1334)) ([b47f1b0](https://github.com/prebid/salesagent/commit/b47f1b004d45a401d3c13138b8f89102d0cc4c6a))
+* implement empty BDD Given step bodies ([#1181](https://github.com/prebid/salesagent/issues/1181)) ([#1185](https://github.com/prebid/salesagent/issues/1185)) ([d0b472c](https://github.com/prebid/salesagent/commit/d0b472cb0dd89f1c6e59912aa14b380f5ac32963))
+* lazy-loading inventory tree to prevent OOM on large GAM networks ([#1176](https://github.com/prebid/salesagent/issues/1176)) ([5c0e2c0](https://github.com/prebid/salesagent/commit/5c0e2c04521d835e3638349385a4c057bee5a545))
+* **memory:** leak triage [#3](https://github.com/prebid/salesagent/issues/3) + [#5](https://github.com/prebid/salesagent/issues/5) + [#6](https://github.com/prebid/salesagent/issues/6) + sibling reapers (4 fixes) ([#1264](https://github.com/prebid/salesagent/issues/1264)) ([b57e27d](https://github.com/prebid/salesagent/commit/b57e27dc84113142577e35d3e7c8555bdb6ef84f))
+* normalize domains in property filtering to handle www/m subdomains ([#1207](https://github.com/prebid/salesagent/issues/1207)) ([76701c1](https://github.com/prebid/salesagent/commit/76701c181e3645064d8de775d9511ba93c560ae2))
+* remove invoice_recipient from UpdateMediaBuyRequest ([717f5a7](https://github.com/prebid/salesagent/commit/717f5a767073f2b7cc69a8748274668b8cd26547))
+* replace broken adcontextprotocol.org auth setup guide link ([#1252](https://github.com/prebid/salesagent/issues/1252)) ([#1253](https://github.com/prebid/salesagent/issues/1253)) ([beeff5c](https://github.com/prebid/salesagent/commit/beeff5ca3f8ac0dcbac9a6b5abd43b9bc691df24))
+* **tests:** remove stale strict xfails on get-products schema drift ([#1336](https://github.com/prebid/salesagent/issues/1336)) ([8aebd75](https://github.com/prebid/salesagent/commit/8aebd755d0d4799b8905074b0511ae8350ab3386))
+* wrap account dict in AccountReference and normalise list-form assignments in sync_creatives ([#1251](https://github.com/prebid/salesagent/issues/1251)) ([14dbefd](https://github.com/prebid/salesagent/commit/14dbefdda32108cc062e16eea4b519a5ae55fa99))
+
+
+### Code Refactoring
+
+* extract shared helpers in property discovery service ([#1206](https://github.com/prebid/salesagent/issues/1206)) ([426fd97](https://github.com/prebid/salesagent/commit/426fd97e8634ffa9c5e4a6da011cebcd91d421eb))
+* move billing policy and approval mode to tenant configuration ([#1184](https://github.com/prebid/salesagent/issues/1184)) ([#1186](https://github.com/prebid/salesagent/issues/1186)) ([5ef141a](https://github.com/prebid/salesagent/commit/5ef141aaf37b0258a2d5768be93101c2e56b043d))
+* replace 6 SUSPECT auth_setup_mode tests with endpoint-level coverage ([c05aa70](https://github.com/prebid/salesagent/commit/c05aa707fbe8112f5e9ee5c7f37983f8de93fcc8))
+* replace SUSPECT auth_setup_mode tests with endpoint-level coverage ([f4aa3ad](https://github.com/prebid/salesagent/commit/f4aa3adcc15b30c89b45e7df640c7131bc1f3067))
+
 ## [1.7.0](https://github.com/prebid/salesagent/compare/v1.6.0...v1.7.0) (2026-04-09)
 
 
