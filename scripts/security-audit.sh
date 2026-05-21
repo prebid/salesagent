@@ -25,6 +25,17 @@
 #     unflagged across runs as the upstream record gets re-curated, hence
 #     ``--allow-unused-ignores`` below.
 #
+# - GHSA-cqp8-fcvh-x7r3 / CVE-2026-46678: pydantic-ai arbitrary code execution
+#     via unsafe deserialization. Fixed in pydantic-ai >= 1.99.0. Upgrading
+#     requires pulling in pydantic-ai 1.100.0 which also upgrades fastmcp to
+#     3.3.1 — and fastmcp 3.3.1 removed the top-level FastMCP re-export that
+#     our codebase depends on. A coordinated pydantic-ai + fastmcp migration is
+#     tracked in issue #1234 (PR 2 scope). Until that lands, this advisory is
+#     suppressed here. The vulnerability is exploitable only through attacker-
+#     controlled model output passed to pydantic-ai's agent evaluation path,
+#     which is not exposed in this codebase's current feature set.
+#     TODO(#1234-pr2): remove this entry once pydantic-ai >= 1.99.0 lands.
+#
 # Previously ignored, now resolved by real dep bumps (kept here as a record):
 # - GHSA-7gcm-g887-7qv7 (protobuf DoS) — resolved by bumping protobuf to 6.33.6.
 # - GHSA-5239-wwwm-4pmq (Pygments AdlLexer ReDoS) — resolved by bumping
@@ -37,6 +48,6 @@
 # Extra arguments are forwarded to uv-secure (e.g. ``--no-check-uv-tool``).
 set -euo pipefail
 
-IGNORED_VULNS="PYSEC-2026-89,PYSEC-2025-183"
+IGNORED_VULNS="PYSEC-2026-89,PYSEC-2025-183,GHSA-cqp8-fcvh-x7r3"
 
 exec uvx uv-secure --ignore-vulns "$IGNORED_VULNS" --allow-unused-ignores "$@"

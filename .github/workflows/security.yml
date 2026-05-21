@@ -21,7 +21,10 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb  # v5.4.0
       - run: uv export --no-hashes --format requirements-txt > /tmp/requirements.txt
-      - run: uvx pip-audit -r /tmp/requirements.txt
+      # CVE-2026-46678 (pydantic-ai < 1.99.0): suppressed pending coordinated
+      # pydantic-ai + fastmcp upgrade; tracked in issue #1234 (PR 2 scope).
+      # See scripts/security-audit.sh for full rationale (single source of truth).
+      - run: uvx pip-audit --ignore-vuln CVE-2026-46678 -r /tmp/requirements.txt
 
   zizmor:
     name: zizmor (workflow security lint)
