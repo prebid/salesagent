@@ -232,15 +232,18 @@ class TestRecoveryClassification:
         exc = AdCPGoneError("proposal expired")
         assert exc.recovery == "correctable"
 
-    def test_account_payment_required_error_defaults_to_correctable(self):
-        """AdCPAccountPaymentRequiredError defaults to recovery='correctable'.
+    def test_account_payment_required_error_defaults_to_terminal(self):
+        """AdCPAccountPaymentRequiredError defaults to recovery='terminal'.
 
-        Buyer can resolve by settling the outstanding balance and retrying.
+        From the sales agent's perspective there is no in-band remediation —
+        the buyer must settle the outstanding balance externally before
+        resubmitting. Matches the BDD storyboard contract for UC-002
+        account-reference partition/boundary rows.
         """
         from src.core.exceptions import AdCPAccountPaymentRequiredError
 
         exc = AdCPAccountPaymentRequiredError("invoice overdue")
-        assert exc.recovery == "correctable"
+        assert exc.recovery == "terminal"
 
     def test_budget_exhausted_error_defaults_to_correctable(self):
         """AdCPBudgetExhaustedError defaults to recovery='correctable'.
