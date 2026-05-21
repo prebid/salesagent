@@ -40,6 +40,7 @@ from src.core.database.repositories.currency_limit import CurrencyLimitRepositor
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.tmp_provider import TMPProviderRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
 logger = logging.getLogger(__name__)
@@ -283,4 +284,33 @@ class AdminCreativeUoW(BaseUoW):
         self.media_buys = None
         self.products = None
         self.workflows = None
+        self.tenant_config = None
+
+
+class TMPProviderUoW(BaseUoW):
+    """Unit of Work for TMP Provider operations.
+
+    Wraps a database session and provides a tenant-scoped TMPProviderRepository
+    and TenantConfigRepository.  The tenant_config repo is included so that
+    admin blueprint handlers can resolve the Tenant row without a raw
+    ``select(Tenant)`` — matching the pattern used by the discovery route.
+
+    Auto-commits on clean exit, rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-tmp-sync
+    """
+
+    tmp_providers: TMPProviderRepository | None
+    tenant_config: TenantConfigRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.tmp_providers = TMPProviderRepository(self._session, self._tenant_id)
+        self.tenant_config = TenantConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.tmp_providers = None
         self.tenant_config = None

@@ -21,7 +21,15 @@ from src.core.database.repositories.currency_limit import CurrencyLimitRepositor
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
-from src.core.database.repositories.uow import AccountUoW, MediaBuyUoW, ProductUoW, TenantConfigUoW, WorkflowUoW
+from src.core.database.repositories.tmp_provider import TMPProviderRepository
+from src.core.database.repositories.uow import (
+    AccountUoW,
+    MediaBuyUoW,
+    ProductUoW,
+    TenantConfigUoW,
+    TMPProviderUoW,
+    WorkflowUoW,
+)
 from src.core.database.repositories.workflow import WorkflowRepository
 
 __all__ = [
@@ -34,6 +42,8 @@ __all__ = [
     "MediaBuyUoW",
     "ProductRepository",
     "ProductUoW",
+    "TMPProviderRepository",
+    "TMPProviderUoW",
     "TenantConfigRepository",
     "TenantConfigUoW",
     "WorkflowRepository",
