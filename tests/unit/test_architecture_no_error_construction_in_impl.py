@@ -12,8 +12,10 @@ sweep). New code is never added to the cap — the only way to add a new file or
 raise a cap is to land a fix that exceeds it intentionally, which is a code-
 review red flag.
 
-Each capped file should carry a ``# FIXME(error-emission-architecture-#N)``
-comment at every Error(code=...) site referencing the architecture issue.
+Capped files may carry a ``# FIXME(salesagent-pattern-a): migrate to typed
+AdCPError raise`` comment at every Error(code=...) site so reviewers can grep
+their way to the cleanup work. The comments are aspirational; the cap dict
++ ratchet (`assert_caps_only_shrink`) is the actual enforcement mechanism.
 
 Spec: AdCP 3.0.6 CHANGELOG 91b6e2c — two-layer envelope is normative.
 """
@@ -27,12 +29,16 @@ from pathlib import Path
 # Cannot be raised; only lowered. The guard fails if any file exceeds its cap
 # or if a new file shows up with Pattern A sites.
 #
-# Every entry below is a MIGRATION TARGET — each capped file carries
-# ``# FIXME(salesagent-pattern-a): migrate to typed AdCPError raise``
-# comments at the Error(code=...) sites so reviewers can grep their way to
-# the cleanup work. There are no legitimate-floor exceptions in this dict;
-# legitimate per-item advisory Error(code=...) sites in success envelopes
-# use the ``# noqa: structural-guard`` marker (4 known sites in PR 2 plan).
+# Every entry below is a MIGRATION TARGET. Capped files may carry
+# ``# FIXME(salesagent-pattern-a): migrate to typed AdCPError raise`` comments
+# at the Error(code=...) sites to help reviewers grep to cleanup work, but
+# the cap dict + ratchet (`assert_caps_only_shrink`) is the actual
+# enforcement; the comments are aspirational.
+#
+# Legitimate per-item advisory Error(code=...) sites in success envelopes
+# (e.g., GetMediaBuysResponse.errors[]) live in this dict too — they're
+# allowlist-permanent, not migration targets. Their entries are marked with
+# an inline comment.
 # When PR 2 sub-batches land, drop the relevant entry below to zero rather
 # than gradually lowering it — keep the cap honest.
 PATTERN_A_PER_FILE_CAP: dict[str, int] = {
