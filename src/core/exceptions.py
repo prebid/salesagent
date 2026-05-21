@@ -315,13 +315,14 @@ class AdCPAccountSuspendedError(AdCPError):
 class AdCPAccountPaymentRequiredError(AdCPError):
     """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED).
 
-    Recovery=correctable: the buyer can resolve by settling the outstanding
-    balance (or the seller can re-activate the account) and retry.
+    Recovery=terminal (inherited): from the sales agent's perspective there is
+    no in-band remediation — the buyer must settle the outstanding balance
+    externally before resubmitting. Matches the BDD storyboard contract for
+    UC-002 account-reference partition/boundary rows.
     """
 
     status_code = 402
     error_code = "ACCOUNT_PAYMENT_REQUIRED"
-    recovery: RecoveryHint = "correctable"
 
 
 class AdCPConflictError(AdCPError):
