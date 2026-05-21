@@ -922,10 +922,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-004-webhook-sequence (production fixed: sequence numbers now strictly ascending)
             # Graduated: T-UC-004-webhook-circuit-halfopen (merge from main fixed circuit breaker probe timing)
             # Graduated: T-UC-004-webhook-retry-5xx (production fixed: retry count now correct)
-            "T-UC-004-webhook-retry-network": (
-                "production off-by-one: range(max_retries) does 3 calls, should do 4 (1 initial + 3 retries)",
-                True,
-            ),
+            # Graduated: T-UC-004-webhook-retry-network (ebb527c6 fixed the off-by-one)
             # Sandbox: not yet in delivery _impl
             "T-UC-004-sandbox-happy": ("sandbox mode not implemented in delivery", True),
             "T-UC-004-sandbox-validation": ("sandbox mode not implemented in delivery", True),
