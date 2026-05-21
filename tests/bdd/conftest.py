@@ -129,6 +129,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
+    # adcp 3.12: FormatCategory/type filter removed from ListCreativeFormatsRequest.
+    # Scenarios that rely on type filter or type-based sorting can no longer pass.
+    "T-UC-005-main-filtered": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
+    "T-UC-005-inv-031-1-holds": "adcp 3.12: type filter removed — combined type+asset_types AND filter not possible",
+    "T-UC-005-inv-031-1-violated": "adcp 3.12: type filter removed — combined type+asset_types AND filter not possible",
+    "T-UC-005-inv-031-2-holds": "adcp 3.12: type field removed — sort by type then name not possible",
+    "T-UC-005-inv-049-1-holds": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
+    "T-UC-005-inv-049-1-violated": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
     # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
     "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
     # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
@@ -279,6 +287,17 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # Graduated: "all 8 positions", "format has no" on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
+    # adcp 3.12: type filter removed — only "invalid" examples fail (valid rows dispatch unfiltered and pass)
+    (
+        "T-UC-005-partition-type-filter",
+        {"invalid_type"},
+        "adcp 3.12: type filter removed from ListCreativeFormatsRequest — invalid type no longer rejected",
+    ),
+    (
+        "T-UC-005-boundary-type-filter",
+        {"invalid type (rejected)"},
+        "adcp 3.12: type filter removed from ListCreativeFormatsRequest — invalid type no longer rejected",
+    ),
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
     # Graduated: T-UC-005-partition-agent-type, T-UC-005-boundary-agent-type,
     # T-UC-005-boundary-agent-asset — all pass now that When steps dispatch through harness.
@@ -354,8 +373,7 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
 # pass coincidentally because unfiltered results include the expected format.
 _REST_XFAIL_TAGS: set[str] = {
     # Invariant filter scenarios where REST unfiltered results break assertions
-    "T-UC-005-inv-049-1-holds",  # type filter
-    "T-UC-005-inv-049-1-violated",
+    # NOTE: inv-049-1-holds/violated moved to _XFAIL_TAGS (adcp 3.12 type filter removal affects all transports)
     "T-UC-005-inv-049-2-holds",  # format_ids filter
     "T-UC-005-inv-049-3-violated",  # asset_types filter
     "T-UC-005-inv-049-4-violated",  # dimension filter
