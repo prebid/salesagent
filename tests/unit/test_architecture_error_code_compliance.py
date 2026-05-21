@@ -29,29 +29,7 @@ _SCAN_DIRS = [
 ]
 
 
-def _collect_error_aliases(tree: ast.AST) -> set[str]:
-    """Collect names that alias the adcp Error type.
-
-    Tracks both module-level and function-level imports of the form:
-
-        from adcp...error import Error
-        from adcp...error import Error as <alias>
-
-    Returns the set of local names that refer to the adcp Error class
-    (always includes "Error" itself, plus any aliases).
-    """
-    aliases: set[str] = {"Error"}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        # Only track imports whose module path mentions "error"
-        module = node.module or ""
-        if "error" not in module.split("."):
-            continue
-        for alias in node.names:
-            if alias.name == "Error":
-                aliases.add(alias.asname or alias.name)
-    return aliases
+from tests.unit._ast_helpers import collect_error_aliases as _collect_error_aliases  # noqa: E402
 
 
 def _collect_error_code_literals() -> list[tuple[str, int, str]]:

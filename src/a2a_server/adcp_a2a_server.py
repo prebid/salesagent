@@ -65,6 +65,7 @@ from src.core.exceptions import (
     AdCPConflictError,
     AdCPError,
     AdCPValidationError,
+    build_two_layer_error_envelope,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
@@ -142,12 +143,25 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
     """Translate AdCPError to an A2A SDK error type preserving semantics.
 
-    The recovery classification, error_code, and details are forwarded in the
-    ``data`` field so that buyer agents (and test harness unwrapping) can
-    reconstruct the original AdCPError. Non-standard codes are translated
-    to STANDARD_ERROR_CODES at this transport boundary.
+    NOTE: currently unused by production code paths. ``_handle_explicit_skill``
+    now re-raises ``AdCPError`` directly so the boundary's exception handler
+    builds the wire envelope. This helper is retained for boundary-translation
+    tests and is the documented API any future direct-translation call site
+    must use to stay byte-identical with the live boundary.
+
+    The A2A error ``data`` field carries the full spec-compliant two-layer
+    envelope (``adcp_error`` + ``errors[]`` + optional ``context``) so the
+    storyboard runner can read either layer. ``error_code`` and ``recovery``
+    are also surfaced at top-level for backward compatibility with the test
+    harness unwrapper. Non-standard codes are translated to
+    STANDARD_ERROR_CODES via ``exc.wire_error_code`` inside the envelope.
     """
-    data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.wire_error_code}
+    envelope = build_two_layer_error_envelope(exc)
+    data: dict[str, Any] = {
+        **envelope,
+        "error_code": exc.wire_error_code,
+        "recovery": exc.recovery,
+    }
     if exc.details:
         data["details"] = exc.details
     if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
@@ -185,6 +199,40 @@ class AdCPRequestHandler(RequestHandler):
         self.tasks: dict[str, Task] = {}  # In-memory task storage
         self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
+
+    @staticmethod
+    def _build_error_envelope(exc: Exception) -> dict[str, Any]:
+        """Build a spec-compliant two-layer envelope for any exception.
+
+        Single source of truth for "wrap-arbitrary-exception → wire envelope"
+        used by both the per-skill dispatcher (``_build_failed_skill_result``)
+        and the top-level ``on_message_send`` error handler. Untyped exceptions
+        are wrapped in a synthetic ``AdCPError`` (``INTERNAL_ERROR`` →
+        ``SERVICE_UNAVAILABLE`` via ``wire_error_code``) so the wire output
+        stays in ``STANDARD_ERROR_CODES`` and the envelope shape never
+        degrades to a flat ``{"error": "..."}`` dict the storyboard runner
+        would synthesize as ``MCP_ERROR``.
+        """
+
+        if not isinstance(exc, AdCPError):
+            exc = AdCPError(str(exc) or type(exc).__name__)
+        return build_two_layer_error_envelope(exc)
+
+    @staticmethod
+    def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
+        """Build the dispatcher result dict for a failed skill invocation.
+
+        Both the typed-AdCPError branch and the untyped fallthrough land here so
+        the artifact DataPart always carries a spec-compliant two-layer envelope
+        — never a flat ``{"error": "..."}`` dict.
+        """
+        envelope = AdCPRequestHandler._build_error_envelope(exc)
+        return {
+            "skill": skill_name,
+            "error": envelope["errors"][0]["message"],
+            "error_envelope": envelope,
+            "success": False,
+        }
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
@@ -596,11 +644,29 @@ class AdCPRequestHandler(RequestHandler):
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
-                        # A2AError should bubble up immediately (JSON-RPC error)
+                        # A2AError should bubble up immediately (JSON-RPC error).
+                        # Reserved for transport-protocol failures (MethodNotFound,
+                        # malformed request, etc.) — never AdCP-level errors, which
+                        # are now caught below and surfaced as failed Tasks with a
+                        # two-layer envelope in the artifact DataPart.
                         raise
+                    except AdCPError as e:
+                        # AdCP-level errors are async-task failures, not JSON-RPC
+                        # errors. Mirrors the SDK's _send_adcp_error reference for
+                        # storyboard scenarios that exercise invalid-state
+                        # transitions on an otherwise-routable skill.
+                        logger.warning(
+                            "AdCPError in explicit skill %s: %s — emitting failed Task with envelope",
+                            skill_name,
+                            e.error_code,
+                        )
+                        results.append(self._build_failed_skill_result(skill_name, e))
                     except Exception as e:
-                        logger.error(f"Error in explicit skill {skill_name}: {e}")
-                        results.append({"skill": skill_name, "error": str(e), "success": False})
+                        # Untyped fallthrough — same envelope shape as the AdCPError
+                        # branch so storyboard runners can `JSON.parse` the DataPart
+                        # uniformly regardless of which branch caught the failure.
+                        logger.error(f"Error in explicit skill {skill_name}: {e}", exc_info=True)
+                        results.append(self._build_failed_skill_result(skill_name, e))
 
                 # Check for submitted status (manual approval required) - return early without artifacts
                 # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
@@ -620,7 +686,15 @@ class AdCPRequestHandler(RequestHandler):
 
                 # Create artifacts for all skill results with human-readable text
                 for i, res in enumerate(results):
-                    artifact_data = res["result"] if res["success"] else {"error": res["error"]}
+                    if res["success"]:
+                        artifact_data = res["result"]
+                    elif "error_envelope" in res:
+                        # AdCPError path: surface the full two-layer envelope as
+                        # the DataPart so the storyboard runner / harness can
+                        # read either ``adcp_error.code`` or ``errors[0].code``.
+                        artifact_data = res["error_envelope"]
+                    else:
+                        artifact_data = {"error": res["error"]}
 
                     # Generate human-readable text from response __str__()
                     # Per A2A spec, use TextPart + DataPart pattern (not description field)
@@ -903,13 +977,16 @@ class AdCPRequestHandler(RequestHandler):
 
             # Send protocol-level webhook notification for failure if configured
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-            # Attach error to task artifacts
+            # Attach error to task artifacts as a spec-compliant two-layer
+            # envelope (same shape as failed-skill DataParts) so storyboard
+            # runners can ``JSON.parse`` the artifact uniformly regardless of
+            # which failure path produced it.
             del task.artifacts[:]
             task.artifacts.append(
                 Artifact(
                     artifact_id="error_1",
                     name="processing_error",
-                    parts=[Part(data=_dict_to_value({"error": str(e), "error_type": type(e).__name__}))],
+                    parts=[Part(data=_dict_to_value(self._build_error_envelope(e)))],
                 )
             )
 
@@ -1395,20 +1472,39 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (already properly formatted)
             raise
         except AdCPError as e:
-            # Translate AdCPError to protocol-specific A2A error
+            # Audit-log the failure before propagating so the audit logger /
+            # Slack notifications fire even on the failed-Task envelope path.
+            # Defensive about identity shape — test fixtures sometimes pass a
+            # string or partially-built identity instead of ResolvedIdentity.
             logger.error(f"AdCPError in skill handler {skill_name}: {e.error_code} - {e.message}")
-            raise _adcp_to_a2a_error(e)
+            tenant_id = getattr(identity, "tenant_id", None)
+            if tenant_id:
+                self._log_a2a_operation(
+                    operation=skill_name,
+                    tenant_id=tenant_id,
+                    principal_id=getattr(identity, "principal_id", None) or "anonymous",
+                    success=False,
+                    error=e.message,
+                )
+            # Propagate the typed exception up to the explicit-skill dispatcher
+            # so it can wrap a two-layer envelope into the Task's DataPart and
+            # mark the Task as failed. Translating to a JSON-RPC error here
+            # (the previous behavior) elevated AdCP-level errors to transport
+            # failures, breaking the storyboard invalid_transitions contract.
+            raise
         except ValueError as e:
-            # Same translation as MCP: ValueError → VALIDATION_ERROR
+            # Wrap as typed AdCPValidationError so the outer dispatcher's
+            # `except AdCPError` branch produces a failed Task with a two-layer
+            # envelope — same wire shape as natively-raised AdCPErrors.
             logger.error(f"ValueError in skill handler {skill_name}: {e}")
-            raise InvalidParamsError(message=str(e))
+            raise AdCPValidationError(str(e)) from e
         except PermissionError as e:
-            # Same translation as MCP: PermissionError → AUTHORIZATION_ERROR
+            # Same wrap-and-raise treatment for PermissionError → AUTH_REQUIRED.
             logger.error(f"PermissionError in skill handler {skill_name}: {e}")
-            raise InvalidRequestError(message=str(e))
-        except Exception as e:
-            logger.error(f"Error in skill handler {skill_name}: {e}")
-            raise InternalError(message=f"Skill {skill_name} failed: {str(e)}")
+            raise AdCPAuthorizationError(str(e)) from e
+        # Untyped exceptions fall through to the dispatcher's `except Exception`
+        # at the call site, which routes them through `_build_failed_skill_result`
+        # for uniform envelope shape. No catch-all here.
 
     async def _handle_get_products_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_products skill invocation.

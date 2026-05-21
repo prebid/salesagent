@@ -439,55 +439,139 @@ class TestA2AErrorResponseStructure:
         assert "required_parameters" in result, "Validation error should list required params"
 
     async def test_adcp_error_carries_recovery_through_a2a_boundary(self, integration_db, handler):
-        """A2A boundary translates AdCPError to A2AError with recovery in data field.
+        """AdCPError propagates from _handle_explicit_skill with recovery preserved.
 
-        This tests _adcp_to_a2a_error propagation through _handle_explicit_skill.
+        Post-B4 contract: _handle_explicit_skill no longer translates AdCPError
+        to a JSON-RPC A2AError. The typed exception propagates so the outer
+        dispatcher loop can wrap the two-layer envelope into a failed Task's
+        artifact DataPart. The envelope built from the exception carries
+        ``recovery`` from the AdCPError class default (or override).
         """
         from unittest.mock import patch
 
-        from a2a.utils.errors import A2AError
-
-        from src.core.exceptions import AdCPAdapterError, AdCPValidationError
+        from src.core.exceptions import (
+            AdCPAdapterError,
+            AdCPValidationError,
+            build_two_layer_error_envelope,
+        )
 
         # Test transient recovery (AdCPAdapterError)
         async def mock_adapter_fail(params, token):
             raise AdCPAdapterError("GAM timeout")
 
         with patch.object(handler, "_handle_get_products_skill", mock_adapter_fail):
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPAdapterError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.data is not None, "A2AError data must not be None"
-            assert error.data["recovery"] == "transient", "AdCPAdapterError must have transient recovery"
+            assert error.recovery == "transient", "AdCPAdapterError must have transient recovery"
+            # Envelope built from the propagated exception preserves recovery.
+            envelope = build_two_layer_error_envelope(error)
+            assert envelope["adcp_error"]["recovery"] == "transient"
+            assert envelope["errors"][0]["recovery"] == "transient"
 
         # Test correctable recovery (AdCPValidationError)
         async def mock_validation_fail(params, token):
             raise AdCPValidationError("invalid brief")
 
         with patch.object(handler, "_handle_get_products_skill", mock_validation_fail):
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.data["recovery"] == "correctable", "AdCPValidationError must have correctable recovery"
+            assert error.recovery == "correctable", "AdCPValidationError must have correctable recovery"
+            envelope = build_two_layer_error_envelope(error)
+            assert envelope["adcp_error"]["recovery"] == "correctable"
 
     async def test_custom_recovery_override_preserved_through_a2a(self, integration_db, handler):
-        """Custom recovery= override on AdCPError is preserved through A2A serialization."""
+        """Custom recovery= override on AdCPError is preserved when propagating.
+
+        Post-B4 contract: a raise-site override on ``recovery`` survives the
+        propagation through ``_handle_explicit_skill`` and round-trips through
+        the two-layer envelope builder unchanged.
+        """
         from unittest.mock import patch
 
-        from a2a.utils.errors import A2AError
-
-        from src.core.exceptions import AdCPNotFoundError
+        from src.core.exceptions import AdCPNotFoundError, build_two_layer_error_envelope
 
         async def mock_transient_not_found(params, token):
             raise AdCPNotFoundError("temporarily gone", recovery="transient")
 
         with patch.object(handler, "_handle_get_products_skill", mock_transient_not_found):
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPNotFoundError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.data["recovery"] == "transient", (
+            assert error.recovery == "transient", (
                 "Custom recovery='transient' override must be preserved, not default 'terminal'"
             )
+            envelope = build_two_layer_error_envelope(error)
+            assert envelope["adcp_error"]["recovery"] == "transient"
+
+    async def test_valueerror_wraps_to_adcp_validation_error(self, integration_db, handler):
+        """ValueError in a skill handler propagates as AdCPValidationError.
+
+        Post-R3 fix: ``_handle_explicit_skill`` no longer translates ValueError
+        to a JSON-RPC ``InvalidParamsError``. It wraps the ValueError as a
+        synthetic ``AdCPValidationError`` and re-raises, so the outer dispatcher
+        catches it via ``except AdCPError`` and produces a failed Task with a
+        two-layer envelope — same wire shape as natively-raised AdCPErrors.
+        """
+        from unittest.mock import patch
+
+        from src.core.exceptions import AdCPValidationError
+
+        async def mock_valueerror(params, identity):
+            raise ValueError("missing required field")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_valueerror):
+            with pytest.raises(AdCPValidationError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+            assert "missing required field" in str(exc_info.value)
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            # AdCPValidationError class default — preserved through the wrap.
+            assert exc_info.value.recovery == "correctable"
+            # Original ValueError is chained via __cause__ for traceability.
+            assert isinstance(exc_info.value.__cause__, ValueError)
+
+    async def test_permissionerror_wraps_to_adcp_authorization_error(self, integration_db, handler):
+        """PermissionError in a skill handler propagates as AdCPAuthorizationError.
+
+        Symmetric with ValueError handling. Outer dispatcher produces a failed
+        Task with envelope (AUTH_REQUIRED, recovery=terminal).
+        """
+        from unittest.mock import patch
+
+        from src.core.exceptions import AdCPAuthorizationError
+
+        async def mock_permerror(params, identity):
+            raise PermissionError("tenant scope mismatch")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_permerror):
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+            assert "tenant scope mismatch" in str(exc_info.value)
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert isinstance(exc_info.value.__cause__, PermissionError)
+
+    async def test_untyped_exception_falls_through_to_dispatcher(self, integration_db, handler):
+        """Untyped exceptions from a skill handler are no longer caught locally.
+
+        Post-R3 fix: the ``except Exception`` catch-all in ``_handle_explicit_skill``
+        was removed. Untyped exceptions propagate to the outer dispatcher's
+        ``except Exception`` branch, which routes them through
+        ``_build_failed_skill_result`` for uniform envelope shape — no double
+        wrapping, no JSON-RPC translation.
+        """
+        from unittest.mock import patch
+
+        async def mock_runtime_error(params, identity):
+            raise RuntimeError("downstream service exploded")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_runtime_error):
+            with pytest.raises(RuntimeError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+            assert "downstream service exploded" in str(exc_info.value)

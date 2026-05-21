@@ -726,7 +726,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-explicit_account_id",
                     "mcp-natural_key",
                     "mcp-invalid_oneOf_both",
-                    "mcp-account_not_found",
                     "mcp-empty_object",
                     "rest-explicit_account_id",
                     "rest-natural_key",

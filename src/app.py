@@ -42,8 +42,14 @@ def _install_admin_mounts() -> None:
         filtered_routes.append(route)
 
     app.router.routes = filtered_routes
-    app.mount("/admin", admin_wsgi)  # type: ignore[arg-type]
-    app.mount("/", admin_wsgi)  # type: ignore[arg-type]
+    # WSGIMiddleware is an ASGI-compatible adapter that Starlette accepts at runtime,
+    # but mypy sees a protocol mismatch with Starlette.mount's ASGIApp expectation.
+    # ``unused-ignore`` keeps both environments happy: CI's mypy (full project venv
+    # with starlette stubs) flags the arg-type error so we suppress it; pre-commit's
+    # isolated mypy hook env lacks starlette and reports the type:ignore as unused,
+    # which the ``unused-ignore`` category suppresses too.
+    app.mount("/admin", admin_wsgi)  # type: ignore[arg-type, unused-ignore]
+    app.mount("/", admin_wsgi)  # type: ignore[arg-type, unused-ignore]
 
 
 @asynccontextmanager
@@ -87,23 +93,97 @@ app.mount("/mcp", mcp_app)
 # AdCP exception handlers — translate typed exceptions to HTTP responses.
 # ---------------------------------------------------------------------------
 
-from src.core.exceptions import AdCPError  # noqa: E402
+from src.core.exceptions import (  # noqa: E402
+    AdCPAuthorizationError,
+    AdCPError,
+    AdCPValidationError,
+    build_two_layer_error_envelope,
+)
+
+
+def _envelope_response(exc: AdCPError) -> JSONResponse:
+    """Build a JSONResponse carrying the two-layer envelope for ``exc``.
+
+    Single source of truth for the REST envelope-response shape — used by
+    every exception handler so HTTP status, body envelope, and wire codes
+    are constructed identically regardless of which exception type fired
+    the handler.
+    """
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=build_two_layer_error_envelope(exc),
+    )
 
 
 @app.exception_handler(AdCPError)
 async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
-    """Convert AdCP exceptions to structured JSON error responses.
+    """Convert AdCP exceptions to the spec-compliant two-layer envelope.
 
-    Translates non-standard error codes to STANDARD_ERROR_CODES via
-    ERROR_CODE_MAPPING at this REST transport boundary so wire output
-    is always spec-compliant.
+    Body shape::
+
+        {
+            "adcp_error": {"code": "...", "message": "...", ...},
+            "errors": [{"code": "...", "message": "...", ...}],
+            "context": {...},     # echoed when present
+        }
+
+    HTTP status comes from ``exc.status_code``; the matching MCP/A2A
+    transport markers (``isError: true`` / ``failed``) are set by their
+    own boundary translators. Wire codes are translated through
+    ``ERROR_CODE_MAPPING`` inside the envelope builder.
     """
-    body = exc.to_dict()
-    body["error_code"] = exc.wire_error_code
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=body,
-    )
+    return _envelope_response(exc)
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+    """Cross-transport symmetry: REST wraps raw ``ValueError`` as VALIDATION_ERROR.
+
+    MCP's ``_translate_to_tool_error`` and A2A's dispatcher both catch raw
+    ``ValueError`` and wrap it in a synthetic ``AdCPValidationError`` envelope.
+    REST mirrors that here so a buyer-facing ``ValueError`` raised by
+    application code surfaces with the same wire shape and HTTP 400 status
+    on every transport, not the 500 default FastAPI gives unhandled errors.
+
+    Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
+    ValueError subclass) — request-body validation keeps its existing handler.
+    """
+    return _envelope_response(AdCPValidationError(str(exc)))
+
+
+@app.exception_handler(PermissionError)
+async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
+    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as AUTH_REQUIRED.
+
+    Mirror of the MCP / A2A boundaries which translate ``PermissionError`` to
+    a synthetic ``AdCPAuthorizationError`` envelope. Without this handler a
+    raw ``PermissionError`` on the REST path would render as a 500 server
+    error instead of the 403 authorization envelope every transport should
+    emit for the same condition.
+    """
+    return _envelope_response(AdCPAuthorizationError(str(exc)))
+
+
+from fastmcp.exceptions import ToolError  # noqa: E402
+
+
+@app.exception_handler(ToolError)
+async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
+    """Global ToolError handler — catches MCP boundary errors that reach REST.
+
+    The MCP boundary translator (``with_error_logging``) converts typed
+    AdCPErrors into ``AdCPToolError`` carrying a two-layer envelope and
+    ``status_code``. When MCP-wrapped tools are invoked from REST paths and
+    that envelope bubbles up, this handler forwards it unchanged — removing
+    the need for every REST route to duplicate a ``try/except ToolError``
+    block. Plain ``ToolError`` (no typed source) falls through
+    ``_handle_tool_error``'s ``_ERROR_CODE_TO_STATUS`` lookup.
+
+    Matches subclasses, so ``AdCPToolError`` is caught here too.
+    """
+    from src.routes.api_v1 import _handle_tool_error
+
+    return _handle_tool_error(exc)
 
 
 # ---------------------------------------------------------------------------

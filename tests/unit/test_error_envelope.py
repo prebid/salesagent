@@ -1,0 +1,339 @@
+"""Unit tests for build_two_layer_error_envelope().
+
+This serializer is the single source of truth for AdCP spec-compliant
+two-layer error responses. Boundary translators (MCP, A2A, REST) and
+ContextManager.fail_step both call this so wire responses and persisted
+workflow_step.response_data are byte-identical by construction.
+
+The two-layer model is normative since AdCP spec 3.0.6 (CHANGELOG 91b6e2c).
+Storyboard runners (e.g., @adcp/sdk@6.11.0) read errors[0].code AND
+adcp_error.code; missing either layer triggers MCP_ERROR synthesis.
+"""
+
+from __future__ import annotations
+
+from src.core.exceptions import (
+    AdCPError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+    build_two_layer_error_envelope,
+)
+
+
+class TestEnvelopeShape:
+    """Both adcp_error.code (envelope) AND errors[0].code (payload) must be present."""
+
+    def test_envelope_has_both_layers(self):
+        exc = AdCPNotFoundError("media buy not found")
+        envelope = build_two_layer_error_envelope(exc)
+
+        assert "adcp_error" in envelope, "envelope-level adcp_error key missing"
+        assert "errors" in envelope, "payload-level errors[] key missing"
+        assert envelope["errors"], "errors[] must contain at least one entry"
+
+    def test_codes_match_across_layers(self):
+        """envelope.adcp_error.code == envelope.errors[0].code."""
+        exc = AdCPNotFoundError("missing")
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["adcp_error"]["code"] == envelope["errors"][0]["code"]
+
+    def test_wire_translation_applied(self):
+        """Internal error_code is translated through ERROR_CODE_MAPPING."""
+        exc = AdCPError("bad token")
+        exc.error_code = "AUTH_TOKEN_INVALID"
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["adcp_error"]["code"] == "AUTH_REQUIRED"
+        assert envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+
+    def test_message_present_in_both_layers(self):
+        exc = AdCPValidationError("budget must be positive")
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["adcp_error"]["message"] == "budget must be positive"
+        assert envelope["errors"][0]["message"] == "budget must be positive"
+
+    def test_recovery_present_in_both_layers(self):
+        exc = AdCPValidationError("...")
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["adcp_error"]["recovery"] == "correctable"
+        assert envelope["errors"][0]["recovery"] == "correctable"
+
+    def test_returns_plain_dict_not_pydantic(self):
+        """Wire transports need a JSON-serializable dict."""
+        exc = AdCPNotFoundError("x")
+        envelope = build_two_layer_error_envelope(exc)
+        assert isinstance(envelope, dict)
+        assert isinstance(envelope["errors"], list)
+        assert isinstance(envelope["adcp_error"], dict)
+
+
+class TestContextEcho:
+    """exc.context echoes into envelope.context when present (3.0.6 spec)."""
+
+    def test_context_echoed_when_present(self):
+        from adcp.types import ContextObject
+
+        ctx = ContextObject(correlation_id="abc-123")
+        exc = AdCPNotFoundError("not found", context=ctx)
+        envelope = build_two_layer_error_envelope(exc)
+        assert "context" in envelope
+        assert envelope["context"]["correlation_id"] == "abc-123"
+
+    def test_context_omitted_when_none(self):
+        exc = AdCPNotFoundError("not found")
+        envelope = build_two_layer_error_envelope(exc)
+        assert "context" not in envelope
+
+    def test_context_accepts_plain_dict(self):
+        """Builder tolerates dict context (for paths without ContextObject access)."""
+        exc = AdCPNotFoundError("not found", context={"correlation_id": "dict-ctx"})
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["context"]["correlation_id"] == "dict-ctx"
+
+    def test_dict_context_is_shallow_copied(self):
+        """Mutating the source dict context must not mutate emitted envelope context.
+
+        The three serialization paths (``to_dict``, ``to_adcp_error``,
+        ``build_two_layer_error_envelope``) all funnel through
+        ``_serialize_context`` and must shallow-copy dict context so an
+        exception held across multiple serializations doesn't leak mutations
+        from one envelope into another (aliasing footgun before PR 3
+        async/submitted work starts touching both layers).
+        """
+        source_ctx = {"correlation_id": "orig"}
+        exc = AdCPNotFoundError("not found", context=source_ctx)
+        envelope = build_two_layer_error_envelope(exc)
+
+        source_ctx["correlation_id"] = "mutated"
+        source_ctx["new_key"] = "added"
+
+        assert envelope["context"]["correlation_id"] == "orig"
+        assert "new_key" not in envelope["context"]
+
+    def test_context_object_uses_exclude_none(self):
+        """``ContextObject`` serialization must drop unset optional fields.
+
+        ``_serialize_context`` invokes ``model_dump(mode="json", exclude_none=True)``
+        so the wire envelope only carries populated fields — matches the
+        spec's emit-only-populated-fields norm.
+        """
+        from adcp.types import ContextObject
+
+        ctx = ContextObject(correlation_id="cid")
+        exc = AdCPNotFoundError("x", context=ctx)
+        envelope = build_two_layer_error_envelope(exc)
+
+        # Every emitted field must be non-None — exclude_none drops unset optionals
+        assert envelope["context"]["correlation_id"] == "cid"
+        assert all(v is not None for v in envelope["context"].values())
+
+    def test_three_paths_emit_consistent_context(self):
+        """``to_dict``, ``to_adcp_error``, and envelope emit identical context payloads.
+
+        Single source of truth (``_serialize_context``) means all three
+        serialization paths must produce byte-identical context dicts for
+        the same input — boundary handlers can swap between them without
+        observable shape differences.
+        """
+        from adcp.types import ContextObject
+
+        for ctx_input in (ContextObject(correlation_id="abc"), {"correlation_id": "xyz"}):
+            exc = AdCPNotFoundError("x", context=ctx_input)
+
+            flat = exc.to_dict()
+            payload = exc.to_adcp_error()
+            envelope = build_two_layer_error_envelope(exc)
+
+            assert flat["context"] == envelope["context"]
+            assert payload["errors"][0]["details"]["context"] == envelope["context"]
+
+
+class TestRestAndA2AReconstructionAgree:
+    """``parse_rest_error`` and ``_envelope_to_adcp_error`` agree byte-for-byte.
+
+    Both reconstruct an AdCPError subclass from an envelope dict — the REST
+    body comes from the FastAPI ``adcp_error_handler``, the A2A body comes
+    from the explicit-skill dispatcher's artifact DataPart. The DRY invariant
+    says they must produce identical exceptions for identical envelope input,
+    so storyboard runners that hit either transport see the same typed result.
+    """
+
+    def test_validation_error_envelope_reconstructs_identically(self):
+        from src.core.exceptions import AdCPValidationError
+        from tests.harness._base import _envelope_to_adcp_error
+
+        source = AdCPValidationError("bad input", details={"field": "budget"})
+        envelope = build_two_layer_error_envelope(source)
+
+        from tests.harness._base import BaseTestEnv
+
+        # parse_rest_error is a method — call via a minimal subclass instance
+        env = BaseTestEnv.__new__(BaseTestEnv)  # bypass __init__
+        rest_exc = env.parse_rest_error(400, envelope)
+        a2a_exc = _envelope_to_adcp_error(envelope)
+
+        assert isinstance(rest_exc, AdCPValidationError)
+        assert isinstance(a2a_exc, AdCPValidationError)
+        assert rest_exc.error_code == a2a_exc.error_code == "VALIDATION_ERROR"
+        assert rest_exc.message == a2a_exc.message == "bad input"
+        assert rest_exc.recovery == a2a_exc.recovery == "correctable"
+        assert rest_exc.details == a2a_exc.details == {"field": "budget"}
+
+    def test_not_found_envelope_reconstructs_identically(self):
+        from src.core.exceptions import AdCPMediaBuyNotFoundError
+        from tests.harness._base import BaseTestEnv, _envelope_to_adcp_error
+
+        source = AdCPMediaBuyNotFoundError("buy_x missing")
+        envelope = build_two_layer_error_envelope(source)
+
+        env = BaseTestEnv.__new__(BaseTestEnv)
+        rest_exc = env.parse_rest_error(404, envelope)
+        a2a_exc = _envelope_to_adcp_error(envelope)
+
+        assert type(rest_exc) is type(a2a_exc) is AdCPMediaBuyNotFoundError
+        assert rest_exc.error_code == a2a_exc.error_code == "MEDIA_BUY_NOT_FOUND"
+        assert rest_exc.recovery == a2a_exc.recovery == "correctable"
+
+    def test_rest_falls_back_to_status_when_envelope_lacks_code(self):
+        """REST keeps its HTTP-status fallback for unstructured bodies."""
+        from src.core.exceptions import AdCPRateLimitError
+        from tests.harness._base import BaseTestEnv
+
+        env = BaseTestEnv.__new__(BaseTestEnv)
+        # Body without any envelope or legacy keys → status code fallback kicks in
+        exc = env.parse_rest_error(429, {"message": "slow down"})
+        assert isinstance(exc, AdCPRateLimitError)
+
+
+class TestOptionalFieldsPropagate:
+    """field, suggestion, details propagate into both layers."""
+
+    def test_field_propagates(self):
+        exc = AdCPValidationError("invalid", field="budget")
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["errors"][0]["field"] == "budget"
+        assert envelope["adcp_error"]["field"] == "budget"
+
+    def test_suggestion_propagates(self):
+        exc = AdCPValidationError("too low", suggestion="set budget >= 100")
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["errors"][0]["suggestion"] == "set budget >= 100"
+        assert envelope["adcp_error"]["suggestion"] == "set budget >= 100"
+
+    def test_details_propagate(self):
+        exc = AdCPValidationError("multi-field", details={"min": 100, "got": 50})
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["errors"][0]["details"] == {"min": 100, "got": 50}
+        assert envelope["adcp_error"]["details"] == {"min": 100, "got": 50}
+
+
+class TestAdCPErrorContextAttribute:
+    """AdCPError.__init__ accepts a context keyword for spec-compliant echo."""
+
+    def test_accepts_context_kwarg(self):
+        from adcp.types import ContextObject
+
+        ctx = ContextObject(correlation_id="xyz")
+        exc = AdCPNotFoundError("x", context=ctx)
+        assert exc.context is ctx
+
+    def test_context_defaults_to_none(self):
+        exc = AdCPNotFoundError("x")
+        assert exc.context is None
+
+    def test_to_adcp_error_does_not_include_context(self):
+        """The payload-only helper preserves SDK adcp_error() shape; envelope is for context."""
+        from adcp.types import ContextObject
+
+        exc = AdCPNotFoundError("x", context=ContextObject(correlation_id="abc"))
+        payload = exc.to_adcp_error()
+        # SDK adcp_error() does not have context — only build_two_layer_error_envelope adds it
+        assert "context" not in payload
+
+
+class TestTypedSubclasses:
+    """7 new subclasses pin their wire error_code to STANDARD_ERROR_CODES entries."""
+
+    def test_media_buy_not_found(self):
+        from src.core.exceptions import AdCPMediaBuyNotFoundError, AdCPNotFoundError
+
+        exc = AdCPMediaBuyNotFoundError("buy_x missing")
+        assert isinstance(exc, AdCPNotFoundError)
+        assert exc.error_code == "MEDIA_BUY_NOT_FOUND"
+        assert exc.status_code == 404
+
+    def test_package_not_found(self):
+        from src.core.exceptions import AdCPNotFoundError, AdCPPackageNotFoundError
+
+        exc = AdCPPackageNotFoundError("package_x missing")
+        assert isinstance(exc, AdCPNotFoundError)
+        assert exc.error_code == "PACKAGE_NOT_FOUND"
+        assert exc.status_code == 404
+
+    def test_creative_rejected(self):
+        from src.core.exceptions import AdCPCreativeRejectedError
+
+        exc = AdCPCreativeRejectedError("policy violation")
+        assert exc.error_code == "CREATIVE_REJECTED"
+        assert exc.status_code == 422
+        assert exc.recovery == "correctable"
+
+    def test_budget_exceeded(self):
+        from src.core.exceptions import AdCPBudgetExceededError
+
+        exc = AdCPBudgetExceededError("over ceiling")
+        assert exc.error_code == "BUDGET_EXCEEDED"
+        assert exc.status_code == 422
+        assert exc.recovery == "correctable"
+
+    def test_budget_too_low(self):
+        from src.core.exceptions import AdCPBudgetTooLowError
+
+        exc = AdCPBudgetTooLowError("below minimum")
+        assert exc.error_code == "BUDGET_TOO_LOW"
+        assert exc.status_code == 422
+        assert exc.recovery == "correctable"
+
+    def test_capability_not_supported(self):
+        from src.core.exceptions import AdCPCapabilityNotSupportedError
+
+        exc = AdCPCapabilityNotSupportedError("vCPM unsupported")
+        assert exc.error_code == "UNSUPPORTED_FEATURE"
+        assert exc.status_code == 422
+        assert exc.recovery == "correctable"
+
+    def test_product_unavailable(self):
+        from src.core.exceptions import AdCPProductUnavailableError
+
+        exc = AdCPProductUnavailableError("product offline")
+        assert exc.error_code == "PRODUCT_UNAVAILABLE"
+        assert exc.status_code == 422
+        assert exc.recovery == "correctable"
+
+    def test_substrate_subclasses_present_with_standard_codes(self):
+        """Each substrate subclass exists and pins a code in STANDARD_ERROR_CODES.
+
+        Verifies by-name lookup against the exceptions module — keeps this test
+        decoupled from the harness's ``_CODE_TO_CLASS`` registry to avoid the
+        DRY guard catching duplicated class lists.
+        """
+        import importlib
+
+        from adcp.server.helpers import STANDARD_ERROR_CODES
+
+        exc_mod = importlib.import_module("src.core.exceptions")
+        substrate = {
+            "AdCPMediaBuyNotFoundError": "MEDIA_BUY_NOT_FOUND",
+            "AdCPPackageNotFoundError": "PACKAGE_NOT_FOUND",
+            "AdCPCreativeRejectedError": "CREATIVE_REJECTED",
+            "AdCPBudgetExceededError": "BUDGET_EXCEEDED",
+            "AdCPBudgetTooLowError": "BUDGET_TOO_LOW",
+            "AdCPCapabilityNotSupportedError": "UNSUPPORTED_FEATURE",
+            "AdCPProductUnavailableError": "PRODUCT_UNAVAILABLE",
+        }
+        for class_name, expected_code in substrate.items():
+            cls = getattr(exc_mod, class_name, None)
+            assert cls is not None, f"{class_name} missing from src.core.exceptions"
+            assert cls.error_code == expected_code, (
+                f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
+            )
+            assert expected_code in STANDARD_ERROR_CODES, f"{expected_code!r} missing from STANDARD_ERROR_CODES"

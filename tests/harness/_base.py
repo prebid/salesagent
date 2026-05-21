@@ -53,11 +53,17 @@ def _adcp_error_from_code(
         AdCPAccountSuspendedError,
         AdCPAdapterError,
         AdCPAuthenticationError,
-        AdCPAuthorizationError,
+        AdCPBudgetExceededError,
         AdCPBudgetExhaustedError,
+        AdCPBudgetTooLowError,
+        AdCPCapabilityNotSupportedError,
         AdCPConflictError,
+        AdCPCreativeRejectedError,
         AdCPError,
+        AdCPMediaBuyNotFoundError,
         AdCPNotFoundError,
+        AdCPPackageNotFoundError,
+        AdCPProductUnavailableError,
         AdCPRateLimitError,
         AdCPServiceUnavailableError,
         AdCPValidationError,
@@ -67,11 +73,6 @@ def _adcp_error_from_code(
         cls.error_code: cls
         for cls in (
             AdCPValidationError,
-            # AdCPAuthorizationError listed before AdCPAuthenticationError so the
-            # latter wins the dict comprehension for the shared AUTH_REQUIRED code
-            # — at the wire we can't disambiguate auth-missing from auth-insufficient,
-            # and Authentication is the more common case (missing tenant/token).
-            AdCPAuthorizationError,
             AdCPAuthenticationError,
             AdCPNotFoundError,
             AdCPAccountNotFoundError,
@@ -84,8 +85,24 @@ def _adcp_error_from_code(
             AdCPRateLimitError,
             AdCPAdapterError,
             AdCPServiceUnavailableError,
+            # PR 1 substrate subclasses — match on their wire-standard codes so
+            # the harness reconstructs the specific subclass after a roundtrip
+            # (preserves type for isinstance() checks in tests).
+            AdCPMediaBuyNotFoundError,
+            AdCPPackageNotFoundError,
+            AdCPCreativeRejectedError,
+            AdCPBudgetExceededError,
+            AdCPBudgetTooLowError,
+            AdCPCapabilityNotSupportedError,
+            AdCPProductUnavailableError,
         )
     }
+    # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED
+    # wire code — we can't disambiguate auth-missing from auth-insufficient at
+    # the wire, and Authentication (missing token/tenant) is the more common
+    # buyer-facing case. Pin Authentication explicitly here so the mapping
+    # doesn't depend on dict-comprehension insertion order.
+    _CODE_TO_CLASS[AdCPAuthenticationError.error_code] = AdCPAuthenticationError
     exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
     reconstructed = exc_cls(
         message=message,
@@ -100,49 +117,60 @@ def _adcp_error_from_code(
 def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
     """Translate FastMCP ToolError back to the corresponding AdCPError.
 
-    The MCP tool wrappers (via with_error_logging) convert AdCPError to
-    ToolError(error_code, message, recovery). When the error travels through
-    the MCP Client, the structured args are serialized to a single string:
-    ``"('VALIDATION_ERROR', 'message', 'correctable')"``.
+    The MCP boundary translator raises ``AdCPToolError`` (single-arg JSON
+    envelope) so FastMCP serializes ``str(exc)`` as the JSON-encoded two-layer
+    error envelope. This unwrapper parses that JSON and reconstructs the
+    matching AdCPError subclass.
 
-    This parses the string back to a tuple via ast.literal_eval and
-    reconstructs the AdCPError subclass.
+    Falls back to legacy tuple-string parsing for any plain ``ToolError`` that
+    might be raised by code paths outside the MCP boundary translator (these
+    are rare and shrink over time per the architecture cleanup).
 
     If the exception is not a ToolError or can't be parsed, returns it unchanged.
     """
     import ast
+    import json
 
     from fastmcp.exceptions import ToolError
 
     if not isinstance(exc, ToolError):
         return exc
 
-    # ToolError from Client has a single string arg containing the repr'd tuple.
     error_str = str(exc)
 
-    # Try to parse as a Python tuple: ('CODE', 'message', 'recovery', '{"details": ...}')
+    # New shape: single-arg JSON envelope `{"adcp_error": {...}, "errors": [...]}`.
+    try:
+        envelope = json.loads(error_str)
+        if isinstance(envelope, dict) and isinstance(envelope.get("errors"), list) and envelope["errors"]:
+            err = envelope["errors"][0]
+            return _adcp_error_from_code(
+                str(err.get("code", "INTERNAL_ERROR")),
+                str(err.get("message", "")),
+                err.get("recovery"),
+                err.get("details"),
+            )
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Legacy shape (test fixtures that mock ToolError directly):
+    # tuple-stringified `('CODE', 'message', 'recovery', '{"details": ...}')`.
     try:
         parsed = ast.literal_eval(error_str)
         if isinstance(parsed, tuple) and len(parsed) >= 2:
             error_code = str(parsed[0])
             message = str(parsed[1])
             recovery = str(parsed[2]) if len(parsed) > 2 else None
-
-            # 4th element is JSON-serialized details dict (if present)
             details = None
             if len(parsed) > 3 and parsed[3] is not None:
-                import json
-
                 try:
                     details = json.loads(str(parsed[3]))
                 except (json.JSONDecodeError, TypeError):
                     pass
-
             return _adcp_error_from_code(error_code, message, recovery, details)
     except (ValueError, SyntaxError):
         pass
 
-    # Fallback: try extract_error_info (handles direct ToolError construction)
+    # Fallback: try extract_error_info (handles ToolError("message") single-arg form)
     from src.core.tool_error_logging import extract_error_info
 
     error_code, message, recovery = extract_error_info(exc)
@@ -152,12 +180,56 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
     return exc
 
 
+def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Exception | None:
+    """Reconstruct an AdCPError subclass from a two-layer envelope dict.
+
+    Accepts the envelope shape produced by ``build_two_layer_error_envelope``:
+    ``{"adcp_error": {code, message, recovery, details, ...}, "errors": [...], ...}``.
+    Also accepts the legacy flat shape ``{"error_code": ..., "recovery": ...}``
+    for tests that predate the envelope.
+
+    Single source of truth for envelope→exception reconstruction — called by
+    ``_unwrap_a2a_server_error`` (A2AError.data path) and
+    ``BaseTestEnv.parse_rest_error`` (REST response body path). Returns the
+    reconstructed ``AdCPError`` subclass, or ``None`` if no ``error_code`` can
+    be extracted (caller picks a fallback).
+    """
+    if not isinstance(envelope, dict):
+        return None
+    error_code: str | None = None
+    message = fallback_message
+    recovery: str | None = None
+    details: dict | None = None
+    adcp_err = envelope.get("adcp_error")
+    if isinstance(adcp_err, dict):
+        error_code = adcp_err.get("code")
+        message = adcp_err.get("message", message) or message
+        recovery = adcp_err.get("recovery")
+        details = adcp_err.get("details")
+    if not error_code:
+        errors = envelope.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            error_code = errors[0].get("code")
+            message = errors[0].get("message", message) or message
+            recovery = errors[0].get("recovery", recovery)
+            details = details or errors[0].get("details")
+    if not error_code:
+        # Legacy flat shape: top-level error_code key.
+        error_code = envelope.get("error_code")
+        recovery = recovery or envelope.get("recovery")
+        details = details or envelope.get("details")
+    if not error_code:
+        return None
+    return _adcp_error_from_code(error_code, message, recovery, details)
+
+
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     """Translate a2a A2AError back to the corresponding AdCPError.
 
     The A2A handler wraps AdCPError → A2AError (via _adcp_to_a2a_error).
-    This reverses that translation so callers can ``pytest.raises(AdCPAuthenticationError)``
-    instead of catching the transport-level wrapper.
+    The ``data`` field now carries the full two-layer envelope plus
+    backward-compat ``error_code`` / ``recovery`` top-level keys. This
+    unwrapper checks the envelope first, then falls back to legacy keys.
 
     If the exception is not a A2AError or lacks enough info, returns it unchanged.
     """
@@ -171,10 +243,9 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     message = getattr(exc, "message", str(exc))
     data = getattr(exc, "data", None) or {}
 
-    # If _adcp_to_a2a_error stored the error_code, reconstruct the exact subclass.
-    error_code = data.get("error_code")
-    if error_code:
-        return _adcp_error_from_code(error_code, message, data.get("recovery"))
+    reconstructed = _envelope_to_adcp_error(data, fallback_message=message) if isinstance(data, dict) else None
+    if reconstructed is not None:
+        return reconstructed
 
     from src.core.exceptions import (
         AdCPAuthenticationError,
@@ -470,6 +541,24 @@ class BaseTestEnv:
         # Parse Task.artifacts[0] into response_cls
         if not isinstance(task_result, Task):
             raise TypeError(f"Expected Task, got {type(task_result).__name__}: {task_result}")
+
+        # AdCP-domain errors now surface as a failed Task with the two-layer
+        # envelope in the artifact DataPart (B4 contract). Reconstruct the
+        # AdCPError so callers can catch domain exceptions instead of getting
+        # a pydantic ValidationError from trying to parse the envelope as a
+        # success response.
+        from a2a.types import TaskState
+
+        if task_result.status.state == TaskState.TASK_STATE_FAILED:
+            from src.core.exceptions import AdCPError
+
+            if task_result.artifacts:
+                envelope = extract_data_from_artifact(task_result.artifacts[0])
+                reconstructed = _envelope_to_adcp_error(envelope, fallback_message="A2A skill failed")
+                if reconstructed is not None:
+                    raise reconstructed
+            raise AdCPError(f"A2A task failed: {task_result.status}")
+
         if not task_result.artifacts:
             raise ValueError(f"Task has no artifacts. Status: {task_result.status}")
         artifact_data = extract_data_from_artifact(task_result.artifacts[0])
@@ -558,6 +647,7 @@ class BaseTestEnv:
                             f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
                         )
                         return response_cls(**result.structured_content)
+
         else:
             # Unit mode: inject identity directly.
             async def _call():
@@ -714,17 +804,17 @@ class BaseTestEnv:
     def parse_rest_error(self, status_code: int, data: dict[str, Any]) -> Exception:
         """Reconstruct an AdCPError from REST error response.
 
-        Prefers the structured error_code in the response body (same precision
-        as MCP and A2A unwrappers). Falls back to HTTP status mapping.
+        Delegates envelope and legacy-flat parsing to the shared
+        ``_envelope_to_adcp_error`` helper (same path used by the A2A
+        unwrapper) so REST and A2A reconstruction stay byte-identical.
+        Falls back to HTTP status mapping only when no ``error_code`` is
+        recoverable from the body.
         """
         message = data.get("message", data.get("error", str(data)))
 
-        # Try structured error_code first (same as MCP/A2A unwrappers)
-        error_code = data.get("error_code")
-        if error_code:
-            recovery = data.get("recovery")
-            details = data.get("details")
-            return _adcp_error_from_code(error_code, message, recovery, details)
+        reconstructed = _envelope_to_adcp_error(data, fallback_message=message)
+        if reconstructed is not None:
+            return reconstructed
 
         # Fallback: map HTTP status to exception class
         from src.core.exceptions import (

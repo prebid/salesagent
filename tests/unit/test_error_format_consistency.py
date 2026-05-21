@@ -10,7 +10,7 @@ Verifies that:
 These are unit tests that mock database/adapter calls to isolate error formatting.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from a2a.utils.errors import A2AError
@@ -26,38 +26,58 @@ class TestMCPErrorShapes:
     """Test that MCP tool errors have consistent structure."""
 
     @pytest.mark.asyncio
-    async def test_missing_required_field_raises_error(self):
-        """MCP create_media_buy raises AdCPValidationError when context is missing."""
-        from src.core.tools.media_buy_create import create_media_buy
+    async def test_missing_identity_raises_adcp_validation_error(self):
+        """_create_media_buy_impl raises AdCPValidationError when identity is missing.
 
-        # Call with missing context triggers AdCPValidationError (transport-agnostic)
-        with pytest.raises((AdCPValidationError, ToolError)) as exc_info:
-            await create_media_buy(
-                brand={"domain": "test.com"},
-                packages=[],  # Empty but present; validation will catch the issue
-                start_time="2026-01-01T00:00:00Z",
-                end_time="2026-02-01T00:00:00Z",
-                ctx=None,  # Missing context triggers AdCPValidationError
-            )
+        Pins on the typed exception (not ``(AdCPValidationError, ToolError)``):
+        boundary translation to ToolError is the transport wrapper's job, so
+        calling ``_impl`` directly bypasses it and we can assert the
+        production code's actual contract — typed exception + error_code +
+        message — without the union dilution.
+        """
+        from src.core.schemas import CreateMediaBuyRequest
+        from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Error should have a meaningful message string
+        req = CreateMediaBuyRequest(
+            brand={"domain": "test.com"},
+            packages=[],
+            start_time="2026-01-01T00:00:00Z",
+            end_time="2026-02-01T00:00:00Z",
+        )
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            await _create_media_buy_impl(req=req, identity=None)
+
         error = exc_info.value
-        assert len(str(error)) > 0, "Error message must not be empty"
+        assert error.error_code == "VALIDATION_ERROR"
+        assert "Identity is required" in error.message
 
-    @pytest.mark.asyncio
-    async def test_validation_error_raises_error_with_details(self):
-        """MCP create_media_buy raises error for Pydantic validation failures."""
-        from src.core.tools.media_buy_create import create_media_buy
+    def test_pydantic_validation_error_for_invalid_request_shape(self):
+        """CreateMediaBuyRequest raises Pydantic ValidationError for malformed input.
 
-        # Provide invalid types that fail Pydantic validation
-        with pytest.raises((AdCPValidationError, ToolError, ValidationError)):
-            await create_media_buy(
-                brand={"invalid_key": "no_domain"},  # Wrong structure: missing required 'domain' field
-                packages="not_a_list",  # Wrong type: should be list
+        Pre-_impl Pydantic validation owns request-shape errors; ``_impl`` itself
+        never sees them. The test is most meaningful when run at the schema
+        layer it actually fires from, pinned to ``ValidationError`` rather
+        than a union with the runtime exceptions.
+        """
+        from src.core.schemas import CreateMediaBuyRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            CreateMediaBuyRequest(
+                brand={"invalid_key": "no_domain"},  # Wrong structure: missing required 'domain'
+                packages="not_a_list",  # type: ignore[arg-type]  # Wrong type: should be list
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
-                ctx=MagicMock(),
             )
+
+        # Pydantic's ValidationError surfaces every offending field — at least one
+        # of these errors should point at the malformed packages payload or the
+        # missing brand.domain field. We don't pin on a specific code because
+        # Pydantic v2's error codes vary by union/discriminator path.
+        error_msg = str(exc_info.value)
+        assert "packages" in error_msg or "domain" in error_msg, (
+            f"Pydantic error should reference the malformed field, got: {error_msg}"
+        )
 
     @pytest.mark.asyncio
     async def test_auth_error_raises_validation_error(self):
@@ -555,13 +575,15 @@ class TestMCPRecoveryInErrorResponses:
     @pytest.mark.parametrize(
         "exc_class,msg,expected_code,expected_recovery",
         [
-            ("AdCPError", "internal error", "INTERNAL_ERROR", "terminal"),
+            # INTERNAL_ERROR and NOT_FOUND are INTERNAL_CODES; the boundary
+            # translator maps them to STANDARD_ERROR_CODES at wire emission.
+            ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
             ("AdCPAuthenticationError", "bad token", "AUTH_REQUIRED", "terminal"),
             ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
-            ("AdCPNotFoundError", "gone", "NOT_FOUND", "terminal"),
+            ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
-            ("AdCPGoneError", "expired", "INVALID_STATE", "terminal"),
+            ("AdCPGoneError", "expired", "INVALID_STATE", "correctable"),
             ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),
             ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
             ("AdCPAdapterError", "GAM down", "SERVICE_UNAVAILABLE", "transient"),
@@ -586,11 +608,20 @@ class TestMCPRecoveryInErrorResponses:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
+        from src.core.tool_error_logging import AdCPToolError
+
         tool_error = exc_info.value
-        assert tool_error.args[0] == expected_code
-        assert tool_error.args[1] == msg
-        assert len(tool_error.args) >= 3, f"ToolError for {exc_class} must have 3 args (code, msg, recovery)"
-        assert tool_error.args[2] == expected_recovery
+        assert isinstance(tool_error, AdCPToolError), (
+            f"MCP boundary must raise AdCPToolError for {exc_class}, got {type(tool_error).__name__}"
+        )
+        err = tool_error.envelope["errors"][0]
+        assert err["code"] == expected_code, f"{exc_class}: code={err['code']!r}, expected {expected_code!r}"
+        assert err["message"] == msg, f"{exc_class}: message={err['message']!r}, expected {msg!r}"
+        assert err["recovery"] == expected_recovery, (
+            f"{exc_class}: recovery={err['recovery']!r}, expected {expected_recovery!r}"
+        )
+        # adcp_error envelope-level mirror also present
+        assert tool_error.envelope["adcp_error"]["code"] == expected_code
 
 
 # ---------------------------------------------------------------------------
@@ -599,10 +630,13 @@ class TestMCPRecoveryInErrorResponses:
 
 
 class TestA2ARecoveryInErrorResponses:
-    """Verify that A2A A2AError carries recovery in data for every AdCPError subclass.
+    """Verify recovery semantics propagate from every AdCPError subclass.
 
-    The A2A boundary (_handle_explicit_skill) translates AdCPError -> A2AError
-    with data={"recovery": ...}. Buyer agents parse this to decide retry strategy.
+    After the B4 review fix, ``_handle_explicit_skill`` no longer translates
+    AdCPError to A2AError — the typed exception propagates so the explicit-
+    skill dispatcher can wrap it into a failed Task with a two-layer envelope
+    DataPart. The buyer agent parses ``recovery`` from the propagated exception
+    (or from the envelope's ``adcp_error.recovery`` once it reaches the wire).
     """
 
     def setup_method(self):
@@ -619,7 +653,7 @@ class TestA2ARecoveryInErrorResponses:
             ("AdCPAuthorizationError", "forbidden", "terminal"),
             ("AdCPNotFoundError", "missing", "terminal"),
             ("AdCPConflictError", "dup", "correctable"),
-            ("AdCPGoneError", "expired", "terminal"),
+            ("AdCPGoneError", "expired", "correctable"),
             ("AdCPBudgetExhaustedError", "broke", "correctable"),
             ("AdCPRateLimitError", "slow", "transient"),
             ("AdCPAdapterError", "down", "transient"),
@@ -627,11 +661,10 @@ class TestA2ARecoveryInErrorResponses:
         ],
         ids=lambda x: x if isinstance(x, str) and x.startswith("AdCP") else "",
     )
-    async def test_a2a_server_error_carries_recovery(self, exc_class, msg, expected_recovery):
-        """A2AError from A2A boundary has data.recovery={expected_recovery} for {exc_class}."""
-        from a2a.utils.errors import A2AError
-
+    async def test_a2a_propagated_error_carries_recovery(self, exc_class, msg, expected_recovery):
+        """Typed AdCPError propagates from _handle_explicit_skill with recovery={expected_recovery}."""
         import src.core.exceptions as exc_mod
+        from src.core.exceptions import AdCPError, build_two_layer_error_envelope
 
         klass = getattr(exc_mod, exc_class)
 
@@ -639,13 +672,15 @@ class TestA2ARecoveryInErrorResponses:
             raise klass(msg)
 
         with patch.object(self.handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPError) as exc_info:
                 await self.handler._handle_explicit_skill("get_products", {}, "token")
 
-            # a2a-sdk 1.0: error attributes are directly on the exception
-            assert exc_info.value.data is not None, f"A2AError.data must not be None for {exc_class}"
-            assert "recovery" in exc_info.value.data, f"A2AError.data must contain 'recovery' for {exc_class}"
-            assert exc_info.value.data["recovery"] == expected_recovery
+            # Recovery is on the propagated exception itself (the dispatcher will
+            # build the envelope when wrapping into the failed Task's DataPart).
+            assert exc_info.value.recovery == expected_recovery
+            # And the envelope builder surfaces it on the wire shape.
+            envelope = build_two_layer_error_envelope(exc_info.value)
+            assert envelope["adcp_error"]["recovery"] == expected_recovery
 
 
 # ---------------------------------------------------------------------------
@@ -740,6 +775,14 @@ class TestErrorCodeVocabularyConsistency:
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
         "CONFIGURATION_ERROR",  # Internal only: server config broken
+        # SDK standard codes added by the error-emission-architecture substrate.
+        "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
+        "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
+        "CREATIVE_REJECTED",  # SDK standard: AdCPCreativeRejectedError
+        "BUDGET_EXCEEDED",  # SDK standard: AdCPBudgetExceededError
+        "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
+        "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
+        "PRODUCT_UNAVAILABLE",  # SDK standard: AdCPProductUnavailableError
     }
 
     def test_all_exception_error_codes_are_canonical(self):

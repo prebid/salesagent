@@ -383,20 +383,38 @@ class TestSyncCreativesErrorPaths:
             }
         ]
 
-        # Should handle gracefully, not crash
+        # The contract under test: sync_creatives_raw must surface a typed,
+        # buyer-visible validation error for a malformed creative. Either it
+        # returns a response carrying failed-creative entries, or it raises
+        # a typed AdCPError / Pydantic ValidationError / ValueError —
+        # anything else (e.g. RuntimeError, KeyError, NameError) is a bug,
+        # not an "ok" outcome the original ``except Exception: pass`` was
+        # silently accepting.
+        from pydantic import ValidationError
+
+        from src.core.exceptions import AdCPError
+
         try:
-            response = await sync_creatives_raw(
+            response = sync_creatives_raw(
                 creatives=invalid_creatives,
                 identity=identity,
             )
-            # If it returns, check for errors
-            assert response is not None
-        except NameError:
-            # ❌ FAIL: NameError means Error class wasn't imported
-            pytest.fail("sync_creatives_raw raised NameError - Error class not imported")
-        except Exception:
-            # ✅ Other exceptions are fine (validation errors, etc.)
-            pass
+        except (AdCPError, ValidationError, ValueError):
+            return  # typed validation surface — the contract is honored
+
+        # sync_creatives_raw returned a response: it must report the failure
+        # explicitly via a per-creative ``action == failed`` entry, not silently
+        # accept the malformed creative as a success.
+        from src.core.schemas import CreativeAction
+
+        assert response is not None, "sync_creatives_raw must not return None for invalid input"
+        failed = [c for c in response.creatives if c.action == CreativeAction.failed]
+        succeeded = [c for c in response.creatives if c.action in (CreativeAction.created, CreativeAction.updated)]
+        assert len(failed) >= 1, (
+            f"Invalid creative should land in creatives[] with action=failed, "
+            f"got {[c.action for c in response.creatives]}"
+        )
+        assert not succeeded, f"Invalid creative must not be reported as created/updated, got {succeeded!r}"
 
 
 @pytest.mark.integration
@@ -478,12 +496,14 @@ class TestImportValidation:
 class TestRecoveryFieldInErrorResponses:
     """Verify recovery field appears in REST error responses via the exception handler.
 
-    The REST boundary uses AdCPError.to_dict() which includes recovery.
-    These tests confirm the full chain: AdCPError raised -> exception handler -> JSON body.
+    The REST boundary now serializes the AdCP spec 3.0.6 two-layer envelope:
+    recovery lives inside ``adcp_error.recovery`` and ``errors[0].recovery``,
+    not at the top level. These tests confirm the full chain: AdCPError raised
+    -> exception handler -> envelope JSON body.
     """
 
     def test_rest_validation_error_has_correctable_recovery(self):
-        """REST 400 from AdCPValidationError includes recovery='correctable'."""
+        """REST 400 from AdCPValidationError includes recovery='correctable' in both layers."""
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
@@ -499,11 +519,11 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 400
             body = response.json()
-            assert "recovery" in body, "REST error response must include 'recovery' field"
-            assert body["recovery"] == "correctable"
+            assert body["adcp_error"]["recovery"] == "correctable"
+            assert body["errors"][0]["recovery"] == "correctable"
 
     def test_rest_adapter_error_has_transient_recovery(self):
-        """REST 502 from AdCPAdapterError includes recovery='transient'."""
+        """REST 502 from AdCPAdapterError includes recovery='transient' in both layers."""
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
@@ -519,11 +539,11 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
             body = response.json()
-            assert "recovery" in body, "REST error response must include 'recovery' field"
-            assert body["recovery"] == "transient"
+            assert body["adcp_error"]["recovery"] == "transient"
+            assert body["errors"][0]["recovery"] == "transient"
 
     def test_rest_custom_recovery_override_preserved(self):
-        """Custom recovery= override is preserved through REST boundary."""
+        """Custom recovery= override is preserved through REST boundary (both layers)."""
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
@@ -539,9 +559,10 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             body = response.json()
-            assert body["recovery"] == "transient", (
-                "Custom recovery='transient' must be preserved, not default 'terminal'"
+            assert body["adcp_error"]["recovery"] == "transient", (
+                "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
             )
+            assert body["errors"][0]["recovery"] == "transient"
 
     def test_to_dict_serialization_roundtrip(self):
         """AdCPError.to_dict() -> JSON -> verify recovery is present and correct."""
