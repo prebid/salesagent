@@ -410,5 +410,3 @@ def health_check_tmp_provider(tenant_id, provider_id):
     except Exception as e:
         logger.error("Error checking TMP provider health: %s", e, exc_info=True)
         return jsonify({"error": "Error checking provider health"}), 500
-
-

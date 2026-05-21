@@ -179,7 +179,7 @@ class TestDiscoveryTenantNotFound:
                 response = client.get("/tenant/nonexistent/tmp-providers/discovery")
 
         assert response.status_code == 404
-        assert "not found" in response.json()["detail"].lower()
+        assert "not found" in response.json()["detail"]["message"].lower()
 
 
 class TestDiscoveryEmptyProviders:
