@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
 # adcp 3.6.0: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.adapters.base import (
     AdapterCapabilities,
@@ -40,14 +40,35 @@ class MockConnectionConfig(BaseConnectionConfig):
     dry_run: bool = Field(default=False, description="When true, simulates operations without persisting state")
 
 
-class MockProductConfig(BaseProductConfig):
-    """Product config for Mock adapter simulation parameters."""
+class DeliverySimulationConfig(BaseModel):
+    """Nested config for delivery simulation timing in MockProductConfig."""
 
-    daily_impressions: int = Field(default=10000, ge=0)
-    fill_rate: float = Field(default=0.85, ge=0.0, le=1.0)
-    ctr: float = Field(default=0.02, ge=0.0, le=1.0)
-    viewability: float = Field(default=0.65, ge=0.0, le=1.0)
-    scenario: str = Field(default="normal")
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False)
+    time_acceleration: int = Field(default=3600, ge=1)
+    update_interval_seconds: float = Field(default=1.0, ge=0.1)
+
+
+class MockProductConfig(BaseProductConfig):
+    """Product config for Mock adapter simulation parameters.
+
+    All rate fields (fill_rate, ctr, viewability_rate, error_rate) use percents (0–100),
+    matching what the admin form stores in implementation_config.
+    """
+
+    daily_impressions: int = Field(default=100000, ge=0)
+    fill_rate: float = Field(default=85.0, ge=0.0, le=100.0)
+    ctr: float = Field(default=0.5, ge=0.0, le=100.0)
+    viewability_rate: float = Field(default=70.0, ge=0.0, le=100.0)
+    latency_ms: int = Field(default=50, ge=0)
+    error_rate: float = Field(default=0.1, ge=0.0, le=100.0)
+    test_mode: str = Field(default="normal")
+    price_variance: float = Field(default=10.0, ge=0.0)
+    seasonal_factor: float = Field(default=1.0, ge=0.0)
+    verbose_logging: bool = Field(default=False)
+    predictable_ids: bool = Field(default=False)
+    delivery_simulation: DeliverySimulationConfig = Field(default_factory=DeliverySimulationConfig)
 
 
 class MockAdServer(AdServerAdapter):
@@ -1346,8 +1367,6 @@ class MockAdServer(AdServerAdapter):
     def register_ui_routes(self, app):
         """Register Flask routes for the mock adapter configuration UI."""
 
-        from flask import render_template, request
-
         @app.route("/adapters/mock/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
         def mock_product_config(tenant_id, product_id):
             # Import here to avoid circular imports
@@ -1361,6 +1380,7 @@ class MockAdServer(AdServerAdapter):
             @require_auth()
             @wraps(mock_product_config)
             def wrapped_view():
+                from flask import render_template, request
                 from sqlalchemy import select
 
                 with get_db_session() as session:
@@ -1377,39 +1397,42 @@ class MockAdServer(AdServerAdapter):
                     config = product_obj.implementation_config or {}
 
                     if request.method == "POST":
-                        # Update configuration
-                        new_config = {
-                            "daily_impressions": int(request.form.get("daily_impressions", 100000)),
-                            "fill_rate": float(request.form.get("fill_rate", 85)),
-                            "ctr": float(request.form.get("ctr", 0.5)),
-                            "viewability_rate": float(request.form.get("viewability_rate", 70)),
-                            "latency_ms": int(request.form.get("latency_ms", 50)),
-                            "error_rate": float(request.form.get("error_rate", 0.1)),
-                            "test_mode": request.form.get("test_mode", "normal"),
-                            "price_variance": float(request.form.get("price_variance", 10)),
-                            "seasonal_factor": float(request.form.get("seasonal_factor", 1.0)),
-                            "verbose_logging": "verbose_logging" in request.form,
-                            "predictable_ids": "predictable_ids" in request.form,
-                            "delivery_simulation": {
-                                "enabled": "delivery_simulation_enabled" in request.form,
-                                "time_acceleration": int(request.form.get("time_acceleration", 3600)),
-                                "update_interval_seconds": float(request.form.get("update_interval_seconds", 1.0)),
-                            },
-                        }
-
                         # Handle format selection
                         formats = request.form.getlist("formats")
                         if formats:
                             product_obj.format_ids = formats
 
-                        # Validate the configuration
-                        validation_errors = self.validate_product_config(new_config)
-                        if validation_errors:
-                            # Get formats for re-rendering
+                        # Build and validate config via Pydantic — raises ValidationError or
+                        # ValueError on bad form input
+                        try:
+                            new_config = MockProductConfig(
+                                daily_impressions=int(request.form.get("daily_impressions", 100000)),
+                                fill_rate=float(request.form.get("fill_rate", 85)),
+                                ctr=float(request.form.get("ctr", 0.5)),
+                                viewability_rate=float(request.form.get("viewability_rate", 70)),
+                                latency_ms=int(request.form.get("latency_ms", 50)),
+                                error_rate=float(request.form.get("error_rate", 0.1)),
+                                test_mode=request.form.get("test_mode", "normal"),
+                                price_variance=float(request.form.get("price_variance", 10)),
+                                seasonal_factor=float(request.form.get("seasonal_factor", 1.0)),
+                                verbose_logging="verbose_logging" in request.form,
+                                predictable_ids="predictable_ids" in request.form,
+                                delivery_simulation={
+                                    "enabled": "delivery_simulation_enabled" in request.form,
+                                    "time_acceleration": int(request.form.get("time_acceleration", 3600)),
+                                    "update_interval_seconds": float(request.form.get("update_interval_seconds", 1.0)),
+                                },
+                            ).model_dump()
+                        except (ValidationError, ValueError) as exc:
                             from src.admin.blueprints.products import get_creative_formats
 
                             available_formats = get_creative_formats(tenant_id=tenant_id)
-
+                            if isinstance(exc, ValidationError):
+                                first = exc.errors()[0]
+                                field = first["loc"][0] if first["loc"] else "config"
+                                error_msg = f"{field}: {first['msg']}"
+                            else:
+                                error_msg = str(exc)
                             return render_template(
                                 "adapters/mock_product_config.html",
                                 tenant_id=tenant_id,
@@ -1417,7 +1440,7 @@ class MockAdServer(AdServerAdapter):
                                 config=config,
                                 formats=available_formats,
                                 selected_formats=product_obj.format_ids or [],
-                                error=validation_errors[0],
+                                error=error_msg,
                             )
 
                         # Save to database
@@ -1454,33 +1477,6 @@ class MockAdServer(AdServerAdapter):
                     )
 
             return wrapped_view()
-
-    def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
-        """Validate mock adapter configuration."""
-        errors: list[str] = []
-
-        # Validate ranges
-        if config.get("fill_rate", 0) < 0 or config.get("fill_rate", 0) > 100:
-            errors.append("Fill rate must be between 0 and 100")
-
-        if config.get("error_rate", 0) < 0 or config.get("error_rate", 0) > 100:
-            errors.append("Error rate must be between 0 and 100")
-
-        if config.get("ctr", 0) < 0 or config.get("ctr", 0) > 100:
-            errors.append("CTR must be between 0 and 100")
-
-        if config.get("viewability_rate", 0) < 0 or config.get("viewability_rate", 0) > 100:
-            errors.append("Viewability rate must be between 0 and 100")
-
-        if config.get("daily_impressions", 0) < 1000:
-            errors.append("Daily impressions must be at least 1000")
-
-        if config.get("latency_ms", 0) < 0:
-            errors.append("Latency cannot be negative")
-
-        if errors:
-            return False, "; ".join(errors)
-        return True, None
 
     def _calculate_delivery_progress(self, profile: str, current_day: int, total_days: int) -> float:
         """Calculate delivery progress based on profile.

@@ -56,26 +56,56 @@ class TestMockSchemas:
         assert config.dry_run is True
 
     def test_mock_product_config_defaults(self):
-        """MockProductConfig should have simulation defaults."""
+        """MockProductConfig should have simulation defaults (percents)."""
         config = MockProductConfig()
-        assert config.daily_impressions == 10000
-        assert config.fill_rate == 0.85
-        assert config.ctr == 0.02
-        assert config.viewability == 0.65
-        assert config.scenario == "normal"
+        assert config.daily_impressions == 100000
+        assert config.fill_rate == 85.0
+        assert config.ctr == 0.5
+        assert config.viewability_rate == 70.0
+        assert config.test_mode == "normal"
+        assert config.latency_ms == 50
+        assert config.error_rate == 0.1
+        assert config.verbose_logging is False
+        assert config.predictable_ids is False
+        assert config.delivery_simulation.enabled is False
 
     def test_mock_product_config_validation(self):
-        """MockProductConfig should validate field constraints."""
-        # fill_rate must be between 0 and 1
+        """MockProductConfig should validate field constraints (percents 0-100)."""
+        # fill_rate must be between 0 and 100
         with pytest.raises(ValidationError):
-            MockProductConfig(fill_rate=1.5)
+            MockProductConfig(fill_rate=101.0)
 
         with pytest.raises(ValidationError):
-            MockProductConfig(fill_rate=-0.1)
+            MockProductConfig(fill_rate=-1.0)
 
         # daily_impressions must be non-negative
         with pytest.raises(ValidationError):
             MockProductConfig(daily_impressions=-100)
+
+        # viewability_rate must be between 0 and 100
+        with pytest.raises(ValidationError):
+            MockProductConfig(viewability_rate=101.0)
+
+        # error_rate must be between 0 and 100
+        with pytest.raises(ValidationError):
+            MockProductConfig(error_rate=-0.1)
+
+    def test_mock_product_config_round_trip(self):
+        """MockProductConfig should round-trip through model_dump/model_validate."""
+        config = MockProductConfig(
+            daily_impressions=50000,
+            fill_rate=75.0,
+            ctr=1.5,
+            viewability_rate=60.0,
+            test_mode="stress",
+            delivery_simulation={"enabled": True, "time_acceleration": 1800, "update_interval_seconds": 2.0},
+        )
+        dumped = config.model_dump()
+        restored = MockProductConfig.model_validate(dumped)
+        assert restored.fill_rate == 75.0
+        assert restored.test_mode == "stress"
+        assert restored.delivery_simulation.enabled is True
+        assert restored.delivery_simulation.time_acceleration == 1800
 
 
 class TestAdapterCapabilities:
@@ -178,10 +208,11 @@ class TestSchemaJsonSerialization:
         assert "properties" in schema
         assert "daily_impressions" in schema["properties"]
         assert "fill_rate" in schema["properties"]
-        # Check that constraints are in schema
+        assert "viewability_rate" in schema["properties"]
+        # Rate fields use percents (0–100)
         fill_rate_schema = schema["properties"]["fill_rate"]
         assert fill_rate_schema.get("minimum") == 0.0
-        assert fill_rate_schema.get("maximum") == 1.0
+        assert fill_rate_schema.get("maximum") == 100.0
 
     def test_schema_descriptions_present(self):
         """Schema fields should have descriptions."""

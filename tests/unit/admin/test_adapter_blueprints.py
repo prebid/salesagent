@@ -87,7 +87,7 @@ class TestAdapterConfigValidation:
             schemas.connection_config(unknown_field="value")
 
     def test_mock_product_config_validates_ranges(self):
-        """MockProductConfig should enforce value ranges."""
+        """MockProductConfig should enforce value ranges (percents 0-100)."""
         from pydantic import ValidationError
 
         from src.adapters import get_adapter_schemas
@@ -95,13 +95,13 @@ class TestAdapterConfigValidation:
         schemas = get_adapter_schemas("mock")
         MockProductConfig = schemas.product_config
 
-        # Valid ranges
-        valid = MockProductConfig(fill_rate=0.5, ctr=0.05, viewability=0.7)
-        assert valid.fill_rate == 0.5
+        # Valid ranges (percents)
+        valid = MockProductConfig(fill_rate=50.0, ctr=5.0, viewability_rate=70.0)
+        assert valid.fill_rate == 50.0
 
-        # Invalid: fill_rate > 1
+        # Invalid: fill_rate > 100
         with pytest.raises(ValidationError):
-            MockProductConfig(fill_rate=1.5)
+            MockProductConfig(fill_rate=101.0)
 
         # Invalid: negative impressions
         with pytest.raises(ValidationError):
