@@ -195,49 +195,56 @@ class TestA2AErrorShapes:
         assert "Authentication required" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_missing_params_returns_error_dict(self):
-        """A2A create_media_buy returns error dict for missing required params."""
+    async def test_missing_params_raises_typed_validation_error(self):
+        """A2A create_media_buy raises typed AdCPValidationError for missing required params.
+
+        The previous behavior returned a custom error dict that bypassed
+        the envelope builder — Konstantine's structural follow-up review
+        flagged this as a Critical issue because buyers couldn't see the
+        real wire code. Skill handlers now raise typed AdCPError; the
+        outer dispatcher routes through ``_build_failed_skill_result``
+        which calls ``_build_error_envelope`` for the two-layer wire shape.
+        """
+        from src.core.exceptions import AdCPValidationError
+
         mock_identity = ResolvedIdentity(
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
 
-        result = await self.handler._handle_create_media_buy_skill(
-            parameters={"brand": {"domain": "testbrand.com"}},
-            identity=mock_identity,
-        )
+        with pytest.raises(AdCPValidationError) as exc_info:
+            await self.handler._handle_create_media_buy_skill(
+                parameters={"brand": {"domain": "testbrand.com"}},
+                identity=mock_identity,
+            )
 
-        # A2A handler returns dict with consistent error structure
-        assert isinstance(result, dict)
-        assert result["success"] is False
-        assert "message" in result
-        assert "Missing required AdCP parameters" in result["message"]
-        assert "errors" in result
-        assert len(result["errors"]) > 0
-        assert result["errors"][0]["code"] == "VALIDATION_ERROR"
+        assert "Missing required AdCP parameters" in str(exc_info.value)
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
-    async def test_validation_error_returns_error_dict(self):
-        """A2A create_media_buy returns error dict for invalid parameter types."""
+    async def test_validation_error_raises_typed_validation_error(self):
+        """A2A create_media_buy raises typed AdCPValidationError for invalid parameter types.
+
+        Same envelope-builder contract as the missing-params case.
+        """
+        from src.core.exceptions import AdCPValidationError
+
         mock_identity = ResolvedIdentity(
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
 
-        # Provide all required params but with invalid types
-        result = await self.handler._handle_create_media_buy_skill(
-            parameters={
-                "brand": {"domain": "testbrand.com"},
-                "packages": "not_a_list",  # Invalid type
-                "start_time": "2026-01-01T00:00:00Z",
-                "end_time": "2026-02-01T00:00:00Z",
-            },
-            identity=mock_identity,
-        )
+        with pytest.raises(AdCPValidationError) as exc_info:
+            # Provide all required params but with invalid types
+            await self.handler._handle_create_media_buy_skill(
+                parameters={
+                    "brand": {"domain": "testbrand.com"},
+                    "packages": "not_a_list",  # Invalid type
+                    "start_time": "2026-01-01T00:00:00Z",
+                    "end_time": "2026-02-01T00:00:00Z",
+                },
+                identity=mock_identity,
+            )
 
-        # Should return error dict (not raise)
-        assert isinstance(result, dict)
-        assert result["success"] is False
-        assert "errors" in result
-        assert result["errors"][0]["code"] == "VALIDATION_ERROR"
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_discovery_skill_no_auth_does_not_raise_auth_error(self):
@@ -386,10 +393,14 @@ class TestCrossTransportErrorConsistency:
         """Both transports report missing required parameters consistently.
 
         MCP path: CreateMediaBuyRequest validation -> ToolError with field details
-        A2A path: _handle_create_media_buy_skill -> dict with errors array
+        A2A path: _handle_create_media_buy_skill -> raises typed AdCPValidationError
 
-        Both should mention the missing fields.
+        Both should mention the missing fields. Skill handlers now raise
+        typed AdCPError on validation failure (Konstantine's Critical fix);
+        the outer dispatcher's _build_failed_skill_result produces the
+        two-layer envelope on the wire.
         """
+        from src.core.exceptions import AdCPValidationError
         from src.core.schemas import CreateMediaBuyRequest
 
         # MCP path: test the request validation itself
@@ -409,16 +420,11 @@ class TestCrossTransportErrorConsistency:
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
 
-        a2a_result = await self.handler._handle_create_media_buy_skill(
-            parameters={"brand": {"domain": "testbrand.com"}},
-            identity=mock_identity,
-        )
-
-        # A2A should return error dict
-        assert isinstance(a2a_result, dict)
-        assert a2a_result["success"] is False
-        assert "errors" in a2a_result
-        assert len(a2a_result["errors"]) > 0
+        with pytest.raises(AdCPValidationError) as a2a_exc_info:
+            await self.handler._handle_create_media_buy_skill(
+                parameters={"brand": {"domain": "testbrand.com"}},
+                identity=mock_identity,
+            )
 
         # Both identify validation/parameter issues
         if mcp_error_message:
@@ -429,9 +435,10 @@ class TestCrossTransportErrorConsistency:
                 or "validation" in mcp_error_message.lower()
             )
 
-        # A2A error identifies missing params
-        a2a_error_msg = a2a_result["errors"][0]["message"]
+        # A2A error identifies missing params via the typed exception's message
+        a2a_error_msg = str(a2a_exc_info.value)
         assert "Missing required" in a2a_error_msg or "parameters" in a2a_error_msg.lower()
+        assert a2a_exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_nonexistent_principal_error_consistent(self):

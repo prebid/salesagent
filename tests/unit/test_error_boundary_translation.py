@@ -862,14 +862,22 @@ class TestHandleToolErrorPreservesStatusCode:
         response = _handle_tool_error(ToolError("VALIDATION_ERROR", "missing required field"))
         assert response.status_code == 400
 
-    def test_plain_tool_error_with_auth_code_returns_401(self):
-        """Plain ToolError("AUTH_REQUIRED", "msg") → 401 via _ERROR_CODE_TO_STATUS."""
+    def test_plain_tool_error_with_auth_code_returns_403(self):
+        """Plain ToolError("AUTH_REQUIRED", "msg") → 403 via _ERROR_CODE_TO_STATUS.
+
+        AUTH_REQUIRED is declared by both AdCPAuthenticationError (401) and
+        AdCPAuthorizationError (403). The auto-derived table picks the more
+        restrictive status (403) since a plain-ToolError fallback carries no
+        context to disambiguate. Konstantine flagged the previous hand-coded
+        ``AUTH_REQUIRED → 401`` mapping as a conflict against
+        AdCPAuthorizationError.status_code=403.
+        """
         from fastmcp.exceptions import ToolError
 
         from src.routes.api_v1 import _handle_tool_error
 
         response = _handle_tool_error(ToolError("AUTH_REQUIRED", "missing token"))
-        assert response.status_code == 401
+        assert response.status_code == 403
 
     def test_plain_tool_error_with_not_found_code_returns_404(self):
         """Plain ToolError("MEDIA_BUY_NOT_FOUND", "msg") → 404 via _ERROR_CODE_TO_STATUS."""

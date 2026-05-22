@@ -5,14 +5,15 @@ the wire response has both ``adcp_error.code`` (envelope) and ``errors[0].code``
 (payload) — required by AdCP spec 3.0.6 and by storyboard runners that check
 either layer.
 
-This guard is AST-based: scan the three boundary functions and verify their
+This guard is AST-based: scan the production boundary functions and verify their
 bodies contain a call to ``build_two_layer_error_envelope``. If someone later
 removes the call (e.g., a refactor that consolidates error handling), this
 test fires.
 
-Boundaries enforced:
+Boundaries enforced (production paths only — dead helpers are deliberately not
+pinned because a guard against unreachable code is a false positive of safety):
   - ``src/core/tool_error_logging.py::_translate_to_tool_error`` (MCP)
-  - ``src/a2a_server/adcp_a2a_server.py::_adcp_to_a2a_error`` (A2A)
+  - ``src/a2a_server/adcp_a2a_server.py::AdCPRequestHandler._build_error_envelope`` (A2A — production path called from on_message_send)
   - ``src/app.py::adcp_error_handler`` (REST/FastAPI)
 """
 
@@ -21,9 +22,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+# (filepath, qualified_name) — qualified_name supports `Class.method` for class methods.
 BOUNDARY_FUNCTIONS = [
     ("src/core/tool_error_logging.py", "_translate_to_tool_error"),
-    ("src/a2a_server/adcp_a2a_server.py", "_adcp_to_a2a_error"),
+    ("src/a2a_server/adcp_a2a_server.py", "AdCPRequestHandler._build_error_envelope"),
     ("src/app.py", "adcp_error_handler"),
 ]
 
@@ -31,11 +33,22 @@ ENVELOPE_BUILDER = "build_two_layer_error_envelope"
 
 
 def _collect_module_functions(tree: ast.AST) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
-    """Return ``{name: FunctionDef}`` for every module-level function in ``tree``."""
+    """Return ``{name: FunctionDef}`` for every function in ``tree``.
+
+    Indexes both module-level functions (``def foo``) and class methods
+    (``def Class.method``) so guards can pin production paths that live
+    inside a class body (e.g., ``AdCPRequestHandler._build_error_envelope``).
+    """
     out: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             out[node.name] = node
+    for cls in ast.walk(tree):
+        if not isinstance(cls, ast.ClassDef):
+            continue
+        for item in cls.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out[f"{cls.name}.{item.name}"] = item
     return out
 
 
@@ -101,10 +114,17 @@ class TestBoundaryTranslatorsUseEnvelope:
         )
 
     def test_a2a_boundary_uses_envelope(self):
-        """``_adcp_to_a2a_error`` must call build_two_layer_error_envelope()."""
-        path, fn = "src/a2a_server/adcp_a2a_server.py", "_adcp_to_a2a_error"
+        """``AdCPRequestHandler._build_error_envelope`` must call build_two_layer_error_envelope().
+
+        This is the production A2A path — called from ``on_message_send`` whenever
+        an AdCPError reaches the dispatcher. The standalone ``_adcp_to_a2a_error``
+        helper at module scope is intentionally NOT pinned here because it has no
+        production callers (verified by grep); pinning unreachable code would be
+        a false positive of safety.
+        """
+        path, fn = "src/a2a_server/adcp_a2a_server.py", "AdCPRequestHandler._build_error_envelope"
         assert _function_calls_builder(path, fn), (
-            f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so the A2AError.data "
+            f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so the A2A failed-Task DataPart "
             f"carries the spec two-layer envelope alongside legacy keys."
         )
 

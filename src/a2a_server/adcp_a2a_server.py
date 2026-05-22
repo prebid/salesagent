@@ -1464,19 +1464,37 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
-            # Handlers return raw Pydantic models (or dicts for early-return errors)
+            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             result = await handler(parameters, identity)  # type: ignore[arg-type]
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except A2AError:
             # Re-raise A2AError as-is (already properly formatted)
             raise
-        except AdCPError as e:
-            # Audit-log the failure before propagating so the audit logger /
-            # Slack notifications fire even on the failed-Task envelope path.
+        except (AdCPError, ValueError, PermissionError) as e:
+            # Normalize ValueError/PermissionError to typed AdCPError so audit
+            # logging and propagation are uniform across all three exception
+            # types. Previously only the AdCPError branch called
+            # `_log_a2a_operation`; the wrapped-from-ValueError/PermissionError
+            # paths silently skipped audit and the activity feed. The outer
+            # dispatcher's `except AdCPError` branch wraps the resulting typed
+            # exception into a failed Task with the two-layer envelope.
+            if isinstance(e, ValueError) and not isinstance(e, AdCPError):
+                normalized: AdCPError = AdCPValidationError(str(e))
+                cause: BaseException | None = e
+            elif isinstance(e, PermissionError):
+                normalized = AdCPAuthorizationError(str(e))
+                cause = e
+            else:
+                # Already an AdCPError — propagate as-is.
+                normalized = e
+                cause = None
+
+            logger.error(
+                f"{type(e).__name__} in skill handler {skill_name}: {normalized.error_code} - {normalized.message}"
+            )
             # Defensive about identity shape — test fixtures sometimes pass a
             # string or partially-built identity instead of ResolvedIdentity.
-            logger.error(f"AdCPError in skill handler {skill_name}: {e.error_code} - {e.message}")
             tenant_id = getattr(identity, "tenant_id", None)
             if tenant_id:
                 self._log_a2a_operation(
@@ -1484,24 +1502,12 @@ class AdCPRequestHandler(RequestHandler):
                     tenant_id=tenant_id,
                     principal_id=getattr(identity, "principal_id", None) or "anonymous",
                     success=False,
-                    error=e.message,
+                    error=normalized.message,
                 )
-            # Propagate the typed exception up to the explicit-skill dispatcher
-            # so it can wrap a two-layer envelope into the Task's DataPart and
-            # mark the Task as failed. Translating to a JSON-RPC error here
-            # (the previous behavior) elevated AdCP-level errors to transport
-            # failures, breaking the storyboard invalid_transitions contract.
+
+            if cause is not None:
+                raise normalized from cause
             raise
-        except ValueError as e:
-            # Wrap as typed AdCPValidationError so the outer dispatcher's
-            # `except AdCPError` branch produces a failed Task with a two-layer
-            # envelope — same wire shape as natively-raised AdCPErrors.
-            logger.error(f"ValueError in skill handler {skill_name}: {e}")
-            raise AdCPValidationError(str(e)) from e
-        except PermissionError as e:
-            # Same wrap-and-raise treatment for PermissionError → AUTH_REQUIRED.
-            logger.error(f"PermissionError in skill handler {skill_name}: {e}")
-            raise AdCPAuthorizationError(str(e)) from e
         # Untyped exceptions fall through to the dispatcher's `except Exception`
         # at the call site, which routes them through `_build_failed_skill_result`
         # for uniform envelope shape. No catch-all here.
@@ -1595,34 +1601,23 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(params.get("brand"), str):
                 params["brand"] = {"domain": params["brand"]}
 
-            # Validate required AdCP parameters (packages is optional in model but required by spec)
+            # Validate required AdCP parameters (packages is optional in model but required by spec).
+            # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch
+            # routes through `_build_failed_skill_result` -> `_build_error_envelope`, producing
+            # the single two-layer envelope wire shape. Returning a custom dict here bypasses
+            # the envelope builder and erases the real code on the buyer side.
             required_params = ["brand", "packages", "start_time", "end_time"]
             missing_params = [p for p in required_params if p not in params]
             if missing_params:
-                from adcp.server.helpers import adcp_error
-
-                error_body = adcp_error("VALIDATION_ERROR", f"Missing required AdCP parameters: {missing_params}")
-                return {
-                    "success": False,
-                    "message": f"Missing required AdCP parameters: {missing_params}",
-                    "required_parameters": required_params,
-                    "received_parameters": list(parameters.keys()),
-                    **error_body,
-                }
+                raise AdCPValidationError(
+                    f"Missing required AdCP parameters: {missing_params}",
+                    suggestion=f"Required: {required_params}",
+                )
 
             try:
                 req = CreateMediaBuyRequest.model_validate(params)
             except ValidationError as e:
-                from adcp.server.helpers import adcp_error
-
-                error_body = adcp_error("VALIDATION_ERROR", str(e))
-                return {
-                    "success": False,
-                    "message": f"Invalid parameters: {e}",
-                    "required_parameters": required_params,
-                    "received_parameters": list(parameters.keys()),
-                    **error_body,
-                }
+                raise AdCPValidationError(f"Invalid parameters: {e}") from e
 
             # Call core function with validated parameters and identity.
             # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
@@ -1658,14 +1653,13 @@ class AdCPRequestHandler(RequestHandler):
             # Create ToolContext from A2A auth info and resolve identity
             tool_context = self._make_tool_context(identity, "sync_creatives")
 
-            # Map A2A parameters - creatives is required
+            # Map A2A parameters - creatives is required.
+            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
             if "creatives" not in parameters:
-                return {
-                    "success": False,
-                    "message": "Missing required parameter: 'creatives'",
-                    "required_parameters": ["creatives"],
-                    "received_parameters": list(parameters.keys()),
-                }
+                raise AdCPValidationError(
+                    "Missing required parameter: 'creatives'",
+                    suggestion="Required: ['creatives']",
+                )
 
             # Construct typed models at the A2A boundary (Pydantic validation at entry).
             # Pre-process format_id: upgrade legacy strings to FormatId models.
@@ -1739,17 +1733,16 @@ class AdCPRequestHandler(RequestHandler):
         try:
             tool_context = self._make_tool_context(identity, "create_creative")
 
-            # Map A2A parameters - format_id, content_uri, and name are required
+            # Map A2A parameters - format_id, content_uri, and name are required.
+            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
             required_params = ["format_id", "content_uri", "name"]
             missing_params = [param for param in required_params if param not in parameters]
 
             if missing_params:
-                return {
-                    "success": False,
-                    "message": f"Missing required parameters: {missing_params}",
-                    "required_parameters": required_params,
-                    "received_parameters": list(parameters.keys()),
-                }
+                raise AdCPValidationError(
+                    f"Missing required parameters: {missing_params}",
+                    suggestion=f"Required: {required_params}",
+                )
 
             # TODO: Implement create_creative tool
             # Call core function with individual parameters
@@ -1790,17 +1783,16 @@ class AdCPRequestHandler(RequestHandler):
         try:
             tool_context = self._make_tool_context(identity, "assign_creative")
 
-            # Map A2A parameters - media_buy_id, package_id, and creative_id are required
+            # Map A2A parameters - media_buy_id, package_id, and creative_id are required.
+            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
             required_params = ["media_buy_id", "package_id", "creative_id"]
             missing_params = [param for param in required_params if param not in parameters]
 
             if missing_params:
-                return {
-                    "success": False,
-                    "message": f"Missing required parameters: {missing_params}",
-                    "required_parameters": required_params,
-                    "received_parameters": list(parameters.keys()),
-                }
+                raise AdCPValidationError(
+                    f"Missing required parameters: {missing_params}",
+                    suggestion=f"Required: {required_params}",
+                )
 
             # TODO: Implement assign_creative tool
             # identity already resolved at transport boundary
@@ -2108,12 +2100,8 @@ class AdCPRequestHandler(RequestHandler):
             try:
                 req = UpdatePerformanceIndexRequest.model_validate(parameters)
             except ValidationError as e:
-                return {
-                    "success": False,
-                    "message": f"Invalid parameters: {e}",
-                    "required_parameters": ["media_buy_id", "performance_data"],
-                    "received_parameters": list(parameters.keys()),
-                }
+                # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
+                raise AdCPValidationError(f"Invalid parameters: {e}") from e
 
             # Call core function with validated fields and identity
             response = core_update_performance_index_tool(

@@ -49,36 +49,65 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # ---------------------------------------------------------------------------
 
 
+def _build_error_code_to_status() -> dict[str, int]:
+    """Derive the wire-code → HTTP status map from ``AdCPError`` subclasses.
+
+    Walks every concrete subclass of ``AdCPError`` and reads its
+    class-level ``error_code`` + ``status_code`` declarations, then
+    propagates each declaration to its wire-translated equivalents via
+    ``ERROR_CODE_MAPPING``. Eliminates the drift potential of a
+    hand-maintained table — previously the table declared
+    ``AUTH_REQUIRED → 401`` while ``AdCPAuthorizationError`` (same wire
+    code) carried ``status_code = 403``; a plain-ToolError raise from
+    authorization code surfaced as 401 instead of 403. Same pattern for
+    ``SERVICE_UNAVAILABLE`` (table said 503, adapter class said 502).
+    The class attribute is the source of truth.
+
+    When a wire code is shared by multiple subclasses (e.g.,
+    ``AUTH_REQUIRED`` from both ``AdCPAuthenticationError`` 401 and
+    ``AdCPAuthorizationError`` 403), the **highest** status code wins —
+    the more restrictive one is the spec-aligned answer when the table
+    is used for a plain-ToolError fallback that has no carried context.
+    """
+    from src.core.exceptions import ERROR_CODE_MAPPING
+
+    # INVALID_REQUEST is AdCP's "generic 4xx bucket" wire code that does not
+    # correspond to any specific typed subclass — it's the translation target
+    # for several upstream codes. Anchor it to HTTP 400 (the conventional
+    # bad-request status) so propagation from differently-statused upstream
+    # codes (e.g., NOT_FOUND=404 -> INVALID_REQUEST) doesn't accidentally
+    # promote it to 404.
+    table: dict[str, int] = {"INVALID_REQUEST": 400}
+    _GENERIC_CATCHALLS = {"INVALID_REQUEST"}
+
+    stack = list(AdCPError.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        stack.extend(cls.__subclasses__())
+        code = getattr(cls, "error_code", None)
+        status = getattr(cls, "status_code", None)
+        if not code or not status:
+            continue
+        # Index the raw class code so plain-ToolError("CODE") fallbacks resolve.
+        existing = table.get(code)
+        if existing is None or status > existing:
+            table[code] = status
+        # Also index the wire-translated code so the same status applies after
+        # ``translate_error_code()`` rewrites it at the boundary. Skip generic
+        # catchall targets like INVALID_REQUEST — they have a fixed status
+        # independent of which specific upstream code triggered them.
+        wire_code = ERROR_CODE_MAPPING.get(code)
+        if wire_code and wire_code not in _GENERIC_CATCHALLS:
+            existing_wire = table.get(wire_code)
+            if existing_wire is None or status > existing_wire:
+                table[wire_code] = status
+    return table
+
+
 # Plain ``ToolError("CODE", "message")`` legacy paths don't carry the typed
-# AdCPError that owns ``status_code``. Map well-known wire codes to their
-# canonical HTTP status so the fallback doesn't mislabel 4xx errors as 5xx.
-# Mirrors the per-class ``status_code`` declared on the typed exceptions in
-# ``src.core.exceptions``. Unknown codes fall through to 500.
-_ERROR_CODE_TO_STATUS: dict[str, int] = {
-    "INVALID_REQUEST": 400,
-    "VALIDATION_ERROR": 400,
-    "AUTH_REQUIRED": 401,
-    "ACCOUNT_PAYMENT_REQUIRED": 402,
-    "FORBIDDEN": 403,
-    "ACCOUNT_SUSPENDED": 403,
-    "NOT_FOUND": 404,
-    "ACCOUNT_NOT_FOUND": 404,
-    "MEDIA_BUY_NOT_FOUND": 404,
-    "PACKAGE_NOT_FOUND": 404,
-    "CONFLICT": 409,
-    "ACCOUNT_AMBIGUOUS": 409,
-    "INVALID_STATE": 410,
-    "ACCOUNT_SETUP_REQUIRED": 422,
-    "BUDGET_EXHAUSTED": 422,
-    "BUDGET_EXCEEDED": 422,
-    "BUDGET_TOO_LOW": 422,
-    "UNSUPPORTED_FEATURE": 422,
-    "PRODUCT_UNAVAILABLE": 422,
-    "CREATIVE_REJECTED": 422,
-    "RATE_LIMITED": 429,
-    "ADAPTER_ERROR": 502,
-    "SERVICE_UNAVAILABLE": 503,
-}
+# AdCPError that owns ``status_code``. Derived from class declarations at
+# import time so the table cannot drift from the source of truth.
+_ERROR_CODE_TO_STATUS: dict[str, int] = _build_error_code_to_status()
 
 
 def _handle_tool_error(e: ToolError) -> JSONResponse:

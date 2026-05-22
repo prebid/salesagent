@@ -242,14 +242,18 @@ class TestA2AParameterMapping:
 
             import asyncio
 
-            result = asyncio.run(
-                handler._handle_create_media_buy_skill(parameters=incomplete_parameters, identity=_MOCK_IDENTITY)
-            )
+            # Skill handlers raise typed AdCPValidationError on missing-params; the
+            # outer dispatcher catches AdCPError and routes through
+            # _build_failed_skill_result to produce the two-layer envelope.
+            # Asserting on the raised exception (not a returned dict) verifies the
+            # bypass path Konstantine flagged is gone.
+            from src.core.exceptions import AdCPValidationError
 
-            # Should reject and list missing required parameters
-            assert result["success"] is False, "Should reject request missing required AdCP parameters"
+            with pytest.raises(AdCPValidationError) as exc_info:
+                asyncio.run(
+                    handler._handle_create_media_buy_skill(parameters=incomplete_parameters, identity=_MOCK_IDENTITY)
+                )
 
-            # ValidationError message includes missing field names
-            error_message = str(result.get("message", "")).lower()
+            error_message = str(exc_info.value).lower()
             assert "brand" in error_message, "Error message should mention missing 'brand'"
             assert "packages" in error_message, "Error message should mention missing 'packages'"

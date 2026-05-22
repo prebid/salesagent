@@ -101,14 +101,27 @@ from src.core.exceptions import (  # noqa: E402
 )
 
 
-def _envelope_response(exc: AdCPError) -> JSONResponse:
+def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
     """Build a JSONResponse carrying the two-layer envelope for ``exc``.
 
     Single source of truth for the REST envelope-response shape — used by
-    every exception handler so HTTP status, body envelope, and wire codes
-    are constructed identically regardless of which exception type fired
-    the handler.
+    every exception handler so HTTP status, body envelope, wire codes,
+    and observability (logger + audit log) are constructed identically
+    regardless of which exception type fired the handler.
+
+    Symmetric with the A2A boundary at
+    ``AdCPRequestHandler._handle_explicit_skill`` which also normalizes
+    ValueError/PermissionError, logs, and audit-logs uniformly before
+    emitting the failed-Task envelope. Previously each REST handler
+    returned JSON silently — a 4xx response left no breadcrumb in logs.
     """
+    logger.warning(
+        "REST boundary translating %s to envelope: %s - %s (path=%s)",
+        type(exc).__name__,
+        exc.error_code,
+        exc.message,
+        request.url.path,
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content=build_two_layer_error_envelope(exc),
@@ -130,9 +143,11 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
     HTTP status comes from ``exc.status_code``; the matching MCP/A2A
     transport markers (``isError: true`` / ``failed``) are set by their
     own boundary translators. Wire codes are translated through
-    ``ERROR_CODE_MAPPING`` inside the envelope builder.
+    ``ERROR_CODE_MAPPING`` inside the envelope builder. Logging happens
+    in ``_envelope_response`` so all three handlers leave a uniform
+    breadcrumb.
     """
-    return _envelope_response(exc)
+    return _envelope_response(request, exc)
 
 
 @app.exception_handler(ValueError)
@@ -148,7 +163,7 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
     ValueError subclass) — request-body validation keeps its existing handler.
     """
-    return _envelope_response(AdCPValidationError(str(exc)))
+    return _envelope_response(request, AdCPValidationError(str(exc)))
 
 
 @app.exception_handler(PermissionError)
@@ -161,7 +176,7 @@ async def permission_error_handler(request: Request, exc: PermissionError) -> JS
     error instead of the 403 authorization envelope every transport should
     emit for the same condition.
     """
-    return _envelope_response(AdCPAuthorizationError(str(exc)))
+    return _envelope_response(request, AdCPAuthorizationError(str(exc)))
 
 
 from fastmcp.exceptions import ToolError  # noqa: E402
