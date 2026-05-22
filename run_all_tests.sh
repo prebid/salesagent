@@ -54,6 +54,24 @@ collect_reports() {
     return 0
 }
 
+needs_creative_agent() {
+    # Full local runs execute the creative suite, so they need the pinned
+    # reference creative agent. Targeted non-creative slices should not pay
+    # the Docker/memory cost for that unrelated sidecar.
+    [ -z "$PYTEST_TARGET" ] && return 0
+
+    local targeted_scope="${PYTEST_TARGET} ${PYTEST_ARGS}"
+    [[ "$targeted_scope" == *creative* ]]
+}
+
+CREATIVE_AGENT_STARTED=false
+cleanup_ci() {
+    if [ "$CREATIVE_AGENT_STARTED" = true ]; then
+        ./scripts/creative-agent-stack.sh down 2>/dev/null || true
+    fi
+    ./scripts/test-stack.sh down 2>/dev/null || true
+}
+
 # --- Quick mode (no Docker) ---
 if [ "$MODE" = "quick" ]; then
     validate_imports
@@ -81,15 +99,18 @@ elif [ "$MODE" = "ci" ]; then
     # Start Docker stack (writes .test-stack.env)
     ./scripts/test-stack.sh up
     source .test-stack.env
+    trap cleanup_ci EXIT
 
     # Pinned reference creative agent (salesagent-kczg): the authoritative run
     # must NOT silently hit the live public agent (its catalog drifts). This
     # mirrors the CI `creative` matrix group exactly — the commit pin is
     # single-sourced in scripts/creative-agent-stack.sh. Idempotent (reuses a
     # healthy stack across runs); torn down with the Docker stack on EXIT.
-    ./scripts/creative-agent-stack.sh up
-    export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
-    trap './scripts/creative-agent-stack.sh down 2>/dev/null || true; ./scripts/test-stack.sh down 2>/dev/null || true' EXIT
+    if needs_creative_agent; then
+        ./scripts/creative-agent-stack.sh up
+        CREATIVE_AGENT_STARTED=true
+        export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
+    fi
 
     if [ -n "$PYTEST_TARGET" ]; then
         # Targeted test run — see "set +eo pipefail / PIPESTATUS[0]" rationale in quick mode.

@@ -297,6 +297,7 @@ from src.core.tools.media_buy_update import update_media_buy
 from src.core.tools.performance import update_performance_index
 from src.core.tools.products import get_products
 from src.core.tools.properties import list_authorized_properties
+from src.core.tools.signals import activate_signal, get_signals
 from src.core.tools.task_management import complete_task, get_task, list_tasks
 
 _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
@@ -318,6 +319,8 @@ _register_tool(list_accounts)
 _register_tool(sync_accounts)
 _register_tool(get_adcp_capabilities)
 _register_tool(get_products)
+_register_tool(get_signals)
+_register_tool(activate_signal)
 _register_tool(list_creative_formats)
 _register_tool(sync_creatives)
 _register_tool(list_creatives)

@@ -34,6 +34,7 @@ from tests.factories.targeting import (
     PropertyListReferenceFactory,
     TargetingFactory,
 )
+from tests.factories.tenant_signal import TenantSignalFactory
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory
 
@@ -58,6 +59,7 @@ ALL_FACTORIES = [
     FormatPerformanceMetricsFactory,
     UserFactory,
     TenantAuthConfigFactory,
+    TenantSignalFactory,
 ]
 
 __all__ = [
@@ -87,5 +89,6 @@ __all__ = [
     "TargetingFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",
+    "TenantSignalFactory",
     "UserFactory",
 ]

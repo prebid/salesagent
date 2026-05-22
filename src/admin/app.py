@@ -38,6 +38,7 @@ from src.admin.blueprints.signals_agents import signals_agents_bp
 from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
+from src.admin.composition_api import composition_api
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
@@ -368,6 +369,8 @@ def create_app(config=None):
         app.register_blueprint(tenant_management_api)
     except ImportError:
         logger.warning("tenant_management_api blueprint not found")
+
+    app.register_blueprint(composition_api)
 
     try:
         from src.admin.sync_api import sync_api

@@ -1373,6 +1373,10 @@ class InventoryProfile(Base, JSONValidatorMixin):
     # Structure: AdCP targeting object
     targeting_template: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
+    # Typed AdCP capability narrowings used by the embedded composition API.
+    constraints: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Optional GAM integration
     gam_preset_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     gam_preset_sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
@@ -1390,6 +1394,43 @@ class InventoryProfile(Base, JSONValidatorMixin):
     __table_args__ = (
         UniqueConstraint("tenant_id", "profile_id", name="uq_inventory_profile"),
         Index("idx_inventory_profiles_tenant", "tenant_id"),
+    )
+
+
+class TenantSignal(Base, JSONValidatorMixin):
+    """Operator-authored map of one adapter targeting capability."""
+
+    __tablename__ = "tenant_signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    signal_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    categories: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    tags: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    range_min: Mapped[Decimal | None] = mapped_column(DECIMAL(20, 6), nullable=True)
+    range_max: Mapped[Decimal | None] = mapped_column(DECIMAL(20, 6), nullable=True)
+    adapter_config: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    data_provider: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    targeting_dimension: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now()
+    )
+
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "signal_id", name="uq_tenant_signal"),
+        Index("idx_tenant_signals_tenant", "tenant_id"),
     )
 
 

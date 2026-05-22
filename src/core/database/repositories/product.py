@@ -137,6 +137,62 @@ class ProductRepository:
         self._session.flush()
         return product
 
+    def delete(self, product: Product) -> None:
+        """Delete a product within this tenant."""
+        if product.tenant_id != self._tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: product.tenant_id={product.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
+            )
+        self._session.delete(product)
+        self._session.flush()
+
+    def replace_pricing_options(self, product: Product, pricing_options: list[PricingOption]) -> None:
+        """Replace a product's pricing options with tenant-scoped rows.
+
+        Updates existing rows before adding/removing rows so the database
+        trigger that prevents products from ever having zero pricing options
+        is not tripped during replacement.
+        """
+        if product.tenant_id != self._tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: product.tenant_id={product.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
+            )
+        for option in pricing_options:
+            self._validate_pricing_option(product, option)
+
+        existing_options = list(product.pricing_options or [])
+        for idx, option in enumerate(pricing_options):
+            if idx < len(existing_options):
+                self._copy_pricing_option_fields(existing_options[idx], option)
+            else:
+                self._session.add(option)
+
+        for option in existing_options[len(pricing_options) :]:
+            self._session.delete(option)
+        self._session.flush()
+
+    def _validate_pricing_option(self, product: Product, option: PricingOption) -> None:
+        if option.tenant_id != self._tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: pricing_option.tenant_id={option.tenant_id!r} "
+                f"!= repository tenant_id={self._tenant_id!r}"
+            )
+        if option.product_id != product.product_id:
+            raise ValueError(
+                f"Product mismatch: pricing_option.product_id={option.product_id!r} "
+                f"!= product.product_id={product.product_id!r}"
+            )
+
+    @staticmethod
+    def _copy_pricing_option_fields(target: PricingOption, source: PricingOption) -> None:
+        target.pricing_model = source.pricing_model
+        target.rate = source.rate
+        target.currency = source.currency
+        target.is_fixed = source.is_fixed
+        target.price_guidance = source.price_guidance
+        target.parameters = source.parameters
+        target.min_spend_per_package = source.min_spend_per_package
+
     def update_fields(self, product_id: str, **kwargs: Any) -> Product | None:
         """Update arbitrary fields on a product within this tenant.
 

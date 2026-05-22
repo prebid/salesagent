@@ -23,6 +23,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     MediaBuy,
     Portfolio,
     PublisherDomain,
+    Signals,
     SupportedProtocol,
     Targeting,
 )
@@ -91,8 +92,13 @@ def _get_adcp_capabilities_impl(
                 major_versions=[MajorVersion(root=3)],
                 idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
             ),
-            supported_protocols=[SupportedProtocol.media_buy],
-            specialisms=[AdcpSpecialism.sales_non_guaranteed],
+            supported_protocols=[SupportedProtocol.media_buy, SupportedProtocol.signals],
+            specialisms=[
+                AdcpSpecialism.sales_non_guaranteed,
+                AdcpSpecialism.signal_marketplace,
+                AdcpSpecialism.signal_owned,
+            ],
+            signals=Signals(features={"catalog_signals": True}),
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -264,8 +270,13 @@ def _get_adcp_capabilities_impl(
             major_versions=[MajorVersion(root=3)],
             idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
         ),
-        supported_protocols=[SupportedProtocol.media_buy],
-        specialisms=[AdcpSpecialism.sales_non_guaranteed],
+        supported_protocols=[SupportedProtocol.media_buy, SupportedProtocol.signals],
+        specialisms=[
+            AdcpSpecialism.sales_non_guaranteed,
+            AdcpSpecialism.signal_marketplace,
+            AdcpSpecialism.signal_owned,
+        ],
+        signals=Signals(features={"catalog_signals": True}),
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
     )

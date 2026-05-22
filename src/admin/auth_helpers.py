@@ -72,3 +72,15 @@ def require_api_key_auth(*, env_var: str, config_key: str, header: str) -> Any:
         return decorated_function
 
     return decorator
+
+
+def protect_docs_with_api_key(auth_decorator: Any) -> Any | None:
+    """Apply an API-key decorator to Spectree docs routes only."""
+    if "/docs/" not in request.path:
+        return None
+
+    @auth_decorator
+    def _authorized() -> None:
+        return None
+
+    return _authorized()

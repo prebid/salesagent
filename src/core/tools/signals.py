@@ -16,11 +16,19 @@ from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
+from adcp.types.generated_poc.core.account_ref import AccountReference
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.core.destination import Destination
+from adcp.types.generated_poc.core.ext import ExtensionObject
+from adcp.types.generated_poc.core.pagination_request import PaginationRequest
 from adcp.types.generated_poc.core.signal_id import SignalId, SignalId18
 from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
+from adcp.types.generated_poc.signals.get_signals_request import Country
+from adcp.types.generated_poc.signals.get_signals_response import Range
 
 from src.core.auth import get_principal_object
+from src.core.database.models import TenantSignal
+from src.core.database.repositories.tenant_signal import TenantSignalRepository
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ActivateSignalResponse,
@@ -28,8 +36,24 @@ from src.core.schemas import (
     GetSignalsResponse,
     Signal,
     SignalDeployment,
+    SignalFilters,
 )
 from src.core.testing_hooks import AdCPTestContext
+
+_SAMPLE_SIGNAL_IDS: frozenset[str] = frozenset(
+    {
+        "auto_intenders_q1_2025",
+        "luxury_travel_enthusiasts",
+        "sports_content",
+        "finance_content",
+        "urban_millennials",
+        "pet_owners",
+    }
+)
+
+
+def _canonical_signal_id(signal_id: str) -> str:
+    return signal_id.replace(".", "_")
 
 
 def _agent_signal_id(segment_id: str) -> SignalId:
@@ -44,6 +68,60 @@ def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricing
             {"pricing_option_id": f"cpm_{currency.lower()}", "model": "cpm", "cpm": cpm, "currency": currency}
         )
     ]
+
+
+def _tenant_signal_to_adcp(
+    tenant_signal: TenantSignal,
+    *,
+    ad_server: str | None,
+    agent_url: str | None,
+) -> Signal:
+    """Translate an operator-authored TenantSignal row to AdCP Signal."""
+    range_obj: Range | None = None
+    if tenant_signal.range_min is not None or tenant_signal.range_max is not None:
+        range_obj = Range(min=tenant_signal.range_min, max=tenant_signal.range_max)
+
+    wire_id = _canonical_signal_id(tenant_signal.signal_id)
+    signal_kwargs: dict = {
+        "signal_id": {
+            "source": "agent",
+            "agent_url": agent_url or "https://salesagent.adcontextprotocol.org/signals",
+            "id": wire_id,
+        },
+        "signal_agent_segment_id": wire_id,
+        "name": tenant_signal.name,
+        "description": tenant_signal.description or "",
+        "signal_type": "owned",
+        "data_provider": tenant_signal.data_provider or "publisher",
+        "coverage_percentage": 100.0,
+        "deployments": [
+            SignalDeployment(
+                platform=ad_server or "mock",
+                is_live=True,
+                type="platform",
+            )
+        ],
+        "pricing_options": _cpm_pricing_option(0.0),
+    }
+    if tenant_signal.value_type:
+        signal_kwargs["value_type"] = tenant_signal.value_type
+    if tenant_signal.categories:
+        signal_kwargs["categories"] = list(tenant_signal.categories)
+    if range_obj is not None:
+        signal_kwargs["range"] = range_obj
+    if tenant_signal.tags:
+        signal_kwargs["tags"] = list(tenant_signal.tags)
+    return Signal.model_validate(signal_kwargs)
+
+
+def _load_tenant_signals(
+    tenant_id: str,
+    *,
+    ad_server: str | None,
+    agent_url: str | None,
+) -> list[Signal]:
+    rows = TenantSignalRepository.list_for_tenant(tenant_id)
+    return [_tenant_signal_to_adcp(row, ad_server=ad_server, agent_url=agent_url) for row in rows]
 
 
 async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
@@ -64,10 +142,9 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     tenant = identity.tenant
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
-
-    # Mock implementation - in production, this would query from a signal provider
-    # or the ad server's available audience segments
-    signals = []
+    tenant_id = identity.tenant_id
+    if tenant_id is None:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Sample signals for demonstration using local types (extend AdCP library types)
     sample_signals = [
@@ -138,9 +215,15 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             pricing_options=_cpm_pricing_option(1.2),
         ),
     ]
+    tenant_signals = _load_tenant_signals(
+        tenant_id,
+        ad_server=tenant.get("ad_server") if isinstance(tenant, dict) else None,
+        agent_url=tenant.get("public_agent_url") if isinstance(tenant, dict) else None,
+    )
 
     # Filter based on request parameters using AdCP-compliant fields
-    for signal in sample_signals:
+    signals = []
+    for signal in [*tenant_signals, *sample_signals]:
         # Apply signal_spec filter (natural language description matching)
         if req.signal_spec:
             spec_lower = req.signal_spec.lower()
@@ -179,28 +262,62 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     if req.max_results:
         signals = signals[: req.max_results]
 
-    # Signals are already constructed as local types (extending library types),
-    # so no conversion needed — pass directly to response.
     return GetSignalsResponse(signals=signals, errors=None, context=req.context)
 
 
-async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | None = None):
+async def get_signals(
+    adcp_major_version: int | None = None,
+    account: AccountReference | None = None,
+    signal_spec: str | None = None,
+    signal_ids: list[SignalId] | None = None,
+    destinations: list[Destination] | None = None,
+    countries: list[Country] | None = None,
+    filters: SignalFilters | None = None,
+    max_results: int | None = None,
+    pagination: PaginationRequest | None = None,
+    context: ContextObject | None = None,
+    ext: ExtensionObject | None = None,
+    ctx: Context | ToolContext | None = None,
+):
     """Optional endpoint for discovering available signals (audiences, contextual, etc.)
 
     MCP tool wrapper that delegates to the shared implementation.
 
     Args:
-        req: Request containing query parameters for signal discovery
-        context: FastMCP context (automatically provided)
+        adcp_major_version: Requested AdCP major version.
+        account: Optional account reference.
+        signal_spec: Natural-language signal discovery request.
+        signal_ids: Optional explicit signal IDs to retrieve.
+        destinations: Optional deployment destinations.
+        countries: Optional country filters.
+        filters: Optional structured signal filters.
+        max_results: Optional maximum result count.
+        pagination: Optional pagination request.
+        context: Application level context per AdCP spec.
+        ext: Extension object per AdCP spec.
+        ctx: FastMCP context (automatically provided).
 
     Returns:
         ToolResult with GetSignalsResponse data
     """
     from src.core.transport_helpers import resolve_identity_from_context
 
-    identity = resolve_identity_from_context(context, require_valid_token=False)
+    req = GetSignalsRequest(
+        adcp_major_version=adcp_major_version,
+        account=account,
+        signal_spec=signal_spec,
+        signal_ids=signal_ids,
+        destinations=destinations,
+        countries=countries,
+        filters=filters,
+        max_results=max_results,
+        pagination=pagination,
+        context=context,
+        ext=ext,
+    )
+    identity = resolve_identity_from_context(ctx, require_valid_token=False)
     response = await _get_signals_impl(req, identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 async def _activate_signal_impl(
@@ -230,11 +347,23 @@ async def _activate_signal_impl(
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available")
+    tenant_id = identity.tenant_id
+    if tenant_id is None:
+        raise AdCPAuthenticationError("No tenant context available")
 
     # Get the Principal object with ad server mappings
     if not principal_id:
         raise AdCPAuthenticationError("Authentication required for signal activation")
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
+
+    tenant_signal_ids = {
+        _canonical_signal_id(signal_id) for signal_id in TenantSignalRepository.list_signal_ids_for_tenant(tenant_id)
+    }
+    if signal_agent_segment_id not in tenant_signal_ids and signal_agent_segment_id not in _SAMPLE_SIGNAL_IDS:
+        raise AdCPValidationError(
+            f"Signal {signal_agent_segment_id!r} is not declared for tenant {tenant_id!r}",
+            recovery="terminal",
+        )
 
     # Apply testing hooks
     if not identity:

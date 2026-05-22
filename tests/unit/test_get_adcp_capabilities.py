@@ -194,9 +194,9 @@ class TestGetAdcpCapabilitiesImpl:
 
         assert "adcp" in data
         assert "supported_protocols" in data
-        assert data["supported_protocols"] == ["media_buy"]
+        assert data["supported_protocols"] == ["media_buy", "signals"]
         assert "specialisms" in data
-        assert data["specialisms"] == ["sales-non-guaranteed"]
+        assert data["specialisms"] == ["sales-non-guaranteed", "signal-marketplace", "signal-owned"]
 
 
 class TestGetAdcpCapabilitiesWithTenant:
@@ -685,7 +685,7 @@ class TestResponseShapeCapabilities:
         assert "adcp" in data
         assert "supported_protocols" in data
         assert "media_buy" in data
-        assert data["supported_protocols"] == ["media_buy"]
+        assert data["supported_protocols"] == ["media_buy", "signals"]
         assert "portfolio" in data["media_buy"]
         assert "features" in data["media_buy"]
         assert "execution" in data["media_buy"]
