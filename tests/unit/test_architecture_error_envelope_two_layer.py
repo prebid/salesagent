@@ -55,13 +55,14 @@ def _collect_module_functions(tree: ast.AST) -> dict[str, ast.FunctionDef | ast.
 def _body_contains_builder_call(
     body_node: ast.AST, all_funcs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef], seen: set[str]
 ) -> bool:
-    """Return True if ``body_node`` calls ``build_two_layer_error_envelope`` directly or via an in-module helper.
+    """Return True if ``body_node`` calls ``build_two_layer_error_envelope`` directly or transitively.
 
-    1-level transitive call analysis: handler → in-module helper → builder.
-    Prevents DRY refactors (extracting the envelope-building call into a shared
-    ``_envelope_response`` helper) from defeating the guard without weakening
-    its actual intent (every boundary's wire response must run through the
-    builder).
+    N-level transitive call analysis with cycle detection via ``seen``: handler →
+    in-module helper → … → builder. Recursion stops when a helper is revisited
+    (cycle) or the call graph is exhausted. Prevents DRY refactors (extracting
+    the envelope-building call into a shared ``_envelope_response`` helper) from
+    defeating the guard without weakening its actual intent — every boundary's
+    wire response must reach the builder somewhere in its call chain.
     """
     for child in ast.walk(body_node):
         if not isinstance(child, ast.Call):
@@ -83,7 +84,7 @@ def _body_contains_builder_call(
 def _function_calls_builder(filepath: str, func_name: str) -> bool:
     """Return True if ``func_name`` in ``filepath`` reaches ``build_two_layer_error_envelope``.
 
-    Accepts both direct calls and 1-level transitive calls through helpers
+    Accepts both direct calls and N-level transitive calls through helpers
     defined in the same module, so DRY refactors that extract a shared
     envelope-response helper still satisfy the guard.
     """

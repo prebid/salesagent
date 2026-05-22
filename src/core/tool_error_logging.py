@@ -9,7 +9,7 @@ import inspect
 import json
 import logging
 from collections.abc import Callable
-from typing import Any, NoReturn
+from typing import Any, NoReturn, get_args
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
@@ -106,7 +106,7 @@ def extract_error_info(error: Exception) -> tuple[str, str, RecoveryHint | None]
     """
     if isinstance(error, AdCPToolError):
         first = error.envelope["errors"][0]
-        return first["code"], first.get("message", ""), first.get("recovery")
+        return first["code"], first.get("message", ""), _coerce_recovery(first.get("recovery"))
     if isinstance(error, AdCPError):
         return error.error_code, error.message, error.recovery
     elif isinstance(error, ToolError):
@@ -125,9 +125,7 @@ def extract_error_info(error: Exception) -> tuple[str, str, RecoveryHint | None]
                 # Structured format: ToolError("CODE", "message") or ("CODE", "message", "recovery")
                 recovery: RecoveryHint | None = None
                 if len(error.args) > 2:
-                    raw = str(error.args[2])
-                    if raw in ("transient", "correctable", "terminal"):
-                        recovery = raw  # type: ignore[assignment]
+                    recovery = _coerce_recovery(str(error.args[2]))
                 return first_arg, str(error.args[1]), recovery
             else:
                 # Single-arg format: ToolError("message")
@@ -135,6 +133,26 @@ def extract_error_info(error: Exception) -> tuple[str, str, RecoveryHint | None]
         return "TOOL_ERROR", str(error), None
     else:
         return type(error).__name__, str(error), None
+
+
+# Valid recovery values — sourced from the RecoveryHint Literal so a future
+# extension of the Literal doesn't silently drop values in this validator.
+_VALID_RECOVERY_VALUES: frozenset[str] = frozenset(get_args(RecoveryHint))
+
+
+def _coerce_recovery(value: object) -> RecoveryHint | None:
+    """Validate that ``value`` is a valid ``RecoveryHint`` literal, else ``None``.
+
+    The envelope's ``recovery`` field is typed ``str | None`` on the wire,
+    but ``extract_error_info`` advertises ``RecoveryHint | None``. Without
+    membership validation the legacy ToolError path passes any string
+    through (silently bypassing the type contract), and the envelope branch
+    returns whatever the wire payload carries unchanged. Coerce both paths
+    through this helper so downstream consumers can trust the declared type.
+    """
+    if value in _VALID_RECOVERY_VALUES:
+        return value  # type: ignore[return-value]
+    return None
 
 
 def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, principal_id: str | None) -> None:
@@ -193,11 +211,13 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
     produce the same envelope shape. Already-translated AdCPToolError and
     plain ToolError pass through.
 
-    This function always raises — it never returns.
+    This function always raises — it never returns. Uses ``raise error`` (not
+    bare ``raise``) on the passthrough branches so the function works even if
+    the caller is not inside an active ``except`` block.
     """
     if isinstance(error, ToolError):
         # Includes AdCPToolError — already in wire shape.
-        raise
+        raise error
     if isinstance(error, AdCPError):
         envelope = build_two_layer_error_envelope(error)
         raise AdCPToolError(envelope, status_code=error.status_code) from error
@@ -207,7 +227,7 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
     if isinstance(error, PermissionError):
         synthetic = AdCPAuthorizationError(str(error))
         raise AdCPToolError(build_two_layer_error_envelope(synthetic), status_code=synthetic.status_code) from error
-    raise
+    raise error
 
 
 def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, kwargs: dict) -> NoReturn:
@@ -217,14 +237,23 @@ def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, k
     logs the error to activity feed + audit log, then translates to AdCPToolError
     at the MCP boundary. Always raises — never returns.
     """
+    # Use explicit isinstance instead of ``hasattr(arg, "tenant_id")`` —
+    # the broader hasattr check matched any Pydantic model that happens to
+    # declare a ``tenant_id`` field, leading the helper to treat request
+    # bodies as Contexts. Only the actual transport-context types should
+    # qualify.
+    from src.core.tool_context import ToolContext
+
+    _ContextLike = (FastMCPContext, ToolContext)
+
     context = None
     for arg in args:
-        if isinstance(arg, FastMCPContext) or hasattr(arg, "tenant_id"):
+        if isinstance(arg, _ContextLike):
             context = arg
             break
     if context is None:
         for v in kwargs.values():
-            if isinstance(v, FastMCPContext) or hasattr(v, "tenant_id"):
+            if isinstance(v, _ContextLike):
                 context = v
                 break
 

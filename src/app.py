@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastmcp.exceptions import ToolError
 from fastmcp.utilities.lifespan import combine_lifespans
 
 from src.core.lifecycle import run_all_shutdown_callbacks
@@ -177,9 +178,6 @@ async def permission_error_handler(request: Request, exc: PermissionError) -> JS
     emit for the same condition.
     """
     return _envelope_response(request, AdCPAuthorizationError(str(exc)))
-
-
-from fastmcp.exceptions import ToolError  # noqa: E402
 
 
 @app.exception_handler(ToolError)

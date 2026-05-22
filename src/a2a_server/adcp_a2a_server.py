@@ -655,11 +655,10 @@ class AdCPRequestHandler(RequestHandler):
                         # errors. Mirrors the SDK's _send_adcp_error reference for
                         # storyboard scenarios that exercise invalid-state
                         # transitions on an otherwise-routable skill.
-                        logger.warning(
-                            "AdCPError in explicit skill %s: %s — emitting failed Task with envelope",
-                            skill_name,
-                            e.error_code,
-                        )
+                        # NOTE: logging happens in ``_handle_explicit_skill``'s
+                        # except branch (with audit log + activity feed); duplicating
+                        # the logger call here would produce two messages for the
+                        # same failure.
                         results.append(self._build_failed_skill_result(skill_name, e))
                     except Exception as e:
                         # Untyped fallthrough — same envelope shape as the AdCPError

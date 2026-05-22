@@ -122,7 +122,11 @@ def _handle_tool_error(e: ToolError) -> JSONResponse:
     through to 500 only when the code is unrecognized.
     """
     if isinstance(e, AdCPToolError):
-        return JSONResponse(status_code=e.status_code, content=e.envelope)
+        # Defensive copy: the envelope dict is owned by the AdCPToolError instance,
+        # which may be referenced elsewhere (audit log, retry buffer). Returning
+        # the dict by reference lets FastAPI's JSON serializer mutate it indirectly,
+        # so we copy to preserve the envelope-builder's immutability contract.
+        return JSONResponse(status_code=e.status_code, content=dict(e.envelope))
 
     error_code, error_message, recovery = extract_error_info(e)
     synthetic = AdCPError(error_message)
