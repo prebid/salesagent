@@ -154,10 +154,6 @@ if __name__ == "__main__":
         await test_schema_validator_initialization()
         print("✓ Initialization test passed")
 
-        print("Testing valid response validation...")
-        await test_valid_get_products_response()
-        print("✓ Valid response test passed")
-
         print("Testing invalid response validation...")
         await test_invalid_get_products_response()
         print("✓ Invalid response test passed")
