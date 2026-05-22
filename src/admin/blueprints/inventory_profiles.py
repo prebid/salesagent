@@ -511,14 +511,71 @@ def _resolve_inventory_names(
     }
 
 
-def _inventory_picker_row(row) -> dict:
+def _placement_child_ids(row) -> list[str]:
+    metadata = (row.raw or {}).get("metadata") or {}
+    raw_ids = metadata.get("ad_unit_ids") or metadata.get("targeted_ad_unit_ids") or []
+    return [str(ad_unit_id) for ad_unit_id in raw_ids if ad_unit_id]
+
+
+def _placement_subkind(row, child_ids: list[str]) -> str:
+    metadata = (row.raw or {}).get("metadata") or {}
+    explicit = metadata.get("bundle_kind") or metadata.get("placement_kind") or metadata.get("kind")
+    if explicit in {"site", "tag"}:
+        return explicit
+    return "site" if child_ids else "tag"
+
+
+def _format_ad_unit_sizes(row) -> list[str]:
+    metadata = (row.raw or {}).get("metadata") or {}
+    sizes = metadata.get("sizes") or []
+    formatted: list[str] = []
+    for size in sizes:
+        if isinstance(size, dict) and size.get("width") and size.get("height"):
+            formatted.append(f"{size['width']}x{size['height']}")
+        elif isinstance(size, str):
+            formatted.append(size)
+    return formatted
+
+
+def _bundle_membership_counts(session, tenant_id: str, ids_by_key: dict[str, set[str]]) -> dict[str, dict[str, int]]:
+    """Return direct bundle membership counts for picker row badges."""
+    counts: dict[str, dict[str, int]] = {"ad_units": {}, "placements": {}}
+    relevant_ids = {key: {str(external_id) for external_id in ids} for key, ids in ids_by_key.items()}
+    if not relevant_ids["ad_units"] and not relevant_ids["placements"]:
+        return counts
+
+    configs = session.scalars(
+        select(InventoryProfile.inventory_config).where(InventoryProfile.tenant_id == tenant_id)
+    ).all()
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        for key in ("ad_units", "placements"):
+            for external_id in set(config.get(key) or []):
+                external_id = str(external_id)
+                if external_id not in relevant_ids[key]:
+                    continue
+                counts[key][external_id] = counts[key].get(external_id, 0) + 1
+    return counts
+
+
+def _inventory_picker_row(row, bundle_count: int = 0) -> dict:
+    child_ids = _placement_child_ids(row) if row.entity_type == "placement" else []
+    raw = row.raw or {}
+    metadata = raw.get("metadata") or {}
     return {
         "id": row.external_id,
         "name": row.name,
         "kind": row.entity_type,
+        "subkind": _placement_subkind(row, child_ids) if row.entity_type == "placement" else "unit",
         "meta": row.meta,
-        "path": row.raw.get("path") or [],
-        "status": row.raw.get("status") or "",
+        "path": raw.get("path") or [],
+        "status": raw.get("status") or "",
+        "child_ids": child_ids,
+        "child_count": len(child_ids),
+        "parent_id": str(metadata.get("parent_id") or "") if row.entity_type == "ad_unit" else "",
+        "sizes": _format_ad_unit_sizes(row) if row.entity_type == "ad_unit" else [],
+        "bundle_count": bundle_count,
     }
 
 
@@ -550,12 +607,37 @@ def _build_inventory_picker_payload(
     if adapter is None:
         return {"ad_units": [], "placements": []}
 
-    payload: dict[str, list[dict]] = {}
-    for entity_type, key in (("ad_unit", "ad_units"), ("placement", "placements")):
-        rows = adapter.list_inventory(session, tenant_id, entity_type, limit=limit)
-        selected_ids = list((inventory_config or {}).get(key) or [])
-        selected_rows = adapter.list_inventory_by_ids(session, tenant_id, entity_type, selected_ids)
-        payload[key] = [_inventory_picker_row(row) for row in _merge_picker_rows(rows, selected_rows)]
+    selected_ad_unit_ids = list((inventory_config or {}).get("ad_units") or [])
+    selected_placement_ids = list((inventory_config or {}).get("placements") or [])
+
+    placement_rows = _merge_picker_rows(
+        adapter.list_inventory(session, tenant_id, "placement", limit=limit),
+        adapter.list_inventory_by_ids(session, tenant_id, "placement", selected_placement_ids),
+    )
+    child_ad_unit_ids = sorted({child_id for row in placement_rows for child_id in _placement_child_ids(row)})
+
+    ad_unit_rows = adapter.list_inventory(session, tenant_id, "ad_unit", limit=limit)
+    selected_ad_unit_rows = adapter.list_inventory_by_ids(session, tenant_id, "ad_unit", selected_ad_unit_ids)
+    child_ad_unit_rows = adapter.list_inventory_by_ids(session, tenant_id, "ad_unit", child_ad_unit_ids)
+    ad_unit_rows = _merge_picker_rows(_merge_picker_rows(ad_unit_rows, selected_ad_unit_rows), child_ad_unit_rows)
+    membership_counts = _bundle_membership_counts(
+        session,
+        tenant_id,
+        {
+            "ad_units": {row.external_id for row in ad_unit_rows},
+            "placements": {row.external_id for row in placement_rows},
+        },
+    )
+
+    payload = {
+        "ad_units": [
+            _inventory_picker_row(row, membership_counts["ad_units"].get(row.external_id, 0)) for row in ad_unit_rows
+        ],
+        "placements": [
+            _inventory_picker_row(row, membership_counts["placements"].get(row.external_id, 0))
+            for row in placement_rows
+        ],
+    }
     return payload
 
 
@@ -807,6 +889,7 @@ def add_inventory_profile(tenant_id: str):
         blast_radius=[],
         inventory_names=inventory_names,
         inventory_picker=inventory_picker,
+        inventory_picker_limit=INVENTORY_PICKER_LIMIT,
         known_property_tags=known_property_tags,
         products_using=[],
         form_mode="create",
@@ -1065,6 +1148,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             blast_radius=blast_radius,
             inventory_names=inventory_names,
             inventory_picker=inventory_picker,
+            inventory_picker_limit=INVENTORY_PICKER_LIMIT,
             known_property_tags=known_property_tags,
             products_using=products_using,
             active_tab="inventory_profiles",

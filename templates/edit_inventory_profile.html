@@ -237,44 +237,45 @@
                                 </p>
                             </div>
                             <div class="card__controls">
-                                <button type="button" class="btn btn-secondary btn-sm"
-                                        onclick="openInventoryPicker('ad_unit')">
-                                    Pick ad units
-                                </button>
-                                <button type="button" class="btn btn-secondary btn-sm"
-                                        onclick="openInventoryPicker('placement')">
-                                    Pick placements
-                                </button>
+                                <div class="seg" id="inventory-picker-mode" aria-label="Inventory picker mode">
+                                    <button type="button" class="active" data-picker-mode="tree" aria-pressed="true">Tree</button>
+                                    <button type="button" data-picker-mode="flat" aria-pressed="false">Flat ad units</button>
+                                </div>
                             </div>
                         </div>
                         <div class="card__body">
-                            <p class="card__sub" style="margin: 0 0 12px;">
-                                Search synced inventory here, or open the
-                                <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">
-                                    Inventory browser</a>
-                                for the full sync surface.
-                            </p>
+                            <div id="inventory-selected-strip" class="chip-strip inventory-selected-strip"></div>
 
-                            <div class="field" style="margin-bottom: 14px;">
-                                <label>Ad units in this bundle</label>
-                                <div id="selected-ad-units" style="min-height: 60px; border: 1px solid var(--sig-bd-hairline); border-radius: 6px; padding: 8px; background: var(--sig-bg-page); margin-top: 6px;">
-                                    <span style="color: var(--sig-fg-muted); font-size: 12.5px;">No ad units selected</span>
+                            <div class="picker__toolbar">
+                                <div class="picker__search">
+                                    <span class="picker__search-icon" aria-hidden="true">⌕</span>
+                                    <input type="search" id="inventory-picker-search"
+                                           placeholder="Filter placements, ad units, or IDs"
+                                           aria-label="Filter inventory picker"
+                                           autocomplete="off">
                                 </div>
-                                <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;"></textarea>
+                                <span class="picker__count" id="inventory-picker-status" aria-live="polite"></span>
+                                <a class="picker__browse" href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">
+                                    Browse inventory
+                                </a>
+                                <div class="picker__spacer"></div>
+                                <label class="picker__toggle">
+                                    <input type="checkbox" name="include_descendants" checked>
+                                    Include child ad units
+                                </label>
                             </div>
 
-                            <div class="field" style="margin-bottom: 14px;">
-                                <label>Placements in this bundle</label>
-                                <div id="selected-placements" style="min-height: 60px; border: 1px solid var(--sig-bd-hairline); border-radius: 6px; padding: 8px; background: var(--sig-bg-page); margin-top: 6px;">
-                                    <span style="color: var(--sig-fg-muted); font-size: 12.5px;">No placements selected</span>
-                                </div>
-                                <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;"></textarea>
+                            <div class="tree-picker" id="inventory-picker-list"></div>
+                            <div class="reuse-strip" id="inventory-picker-help">
+                                <span class="reuse-strip__icon" aria-hidden="true">▦</span>
+                                <span>
+                                    <strong>Picking a placement</strong> includes its child ad units automatically.
+                                    Flip to <strong>Flat ad units</strong> to pick individual units only.
+                                </span>
                             </div>
 
-                            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--sig-fg-secondary);">
-                                <input type="checkbox" name="include_descendants" checked>
-                                Include child ad units when a placement is picked
-                            </label>
+                            <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;"></textarea>
+                            <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;"></textarea>
                         </div>
                     </div>
 
@@ -532,34 +533,6 @@
     </div>
 </div>
 
-<div class="inventory-picker" id="inventory-picker" hidden>
-    <div class="inventory-picker__scrim" data-picker-close></div>
-    <section class="inventory-picker__dialog" role="dialog" aria-modal="true" aria-labelledby="inventory-picker-title">
-        <div class="inventory-picker__head">
-            <div>
-                <h2 id="inventory-picker-title">Pick inventory</h2>
-                <p id="inventory-picker-subtitle">Select synced inventory to include in this bundle.</p>
-            </div>
-            <button type="button" class="inventory-picker__close" data-picker-close aria-label="Close inventory picker">
-                ×
-            </button>
-        </div>
-        <div class="inventory-picker__tools">
-            <input type="search" id="inventory-picker-search" placeholder="Search by name, ID, or path">
-            <label class="inventory-picker__toggle">
-                <input type="checkbox" id="inventory-picker-include-descendants">
-                Include child ad units for selected placements
-            </label>
-        </div>
-        <div class="inventory-picker__status" id="inventory-picker-status" aria-live="polite"></div>
-        <div class="inventory-picker__list" id="inventory-picker-list"></div>
-        <div class="inventory-picker__foot">
-            <button type="button" class="btn btn-secondary" data-picker-close>Cancel</button>
-            <button type="button" class="btn btn-primary" id="inventory-picker-apply">Apply selection</button>
-        </div>
-    </section>
-</div>
-
 <script>
 // Format selection state
 let selectedFormats = new Set();
@@ -582,13 +555,13 @@ const INVENTORY_NAMES = {
 };
 
 const INVENTORY_PICKER = {{ inventory_picker | tojson | safe }};
+const INVENTORY_PICKER_LIMIT = {{ inventory_picker_limit | tojson }};
 const INVENTORY_CHIP_REUSE_ENABLED = {{ (not is_create) | tojson }};
 const BUNDLE_ADAPTER_ID = {{ (s.adapter_id or '') | tojson }};
 const KNOWN_PROPERTY_TAGS = new Set({{ known_property_tags | tojson | safe }});
 
-// Base path for the Reuse page; ``renderInventoryChips`` builds per-chip
-// "Add to other bundles…" links by appending ``?item=<id>&kind=<kind>``.
-// (#542)
+// Base path for the Reuse page; picker rows and selected chips append
+// ``?item=<id>&kind=<kind>``. (#542)
 const REUSE_BASE_URL = '{{ url_for("inventory_profiles.reuse_inventory_bundles", tenant_id=tenant_id) }}';
 
 function _escAttr(s) {
@@ -597,251 +570,346 @@ function _escAttr(s) {
     })[c]);
 }
 
-function renderInventoryChips(containerId, ids, namesByExtId, kind) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-    if (!ids || ids.length === 0) {
-        const label = kind === 'ad_unit' ? 'ad units' : 'placements';
-        container.innerHTML = `<span style="color: var(--sig-fg-muted); font-size: 12.5px;">No ${label} selected</span>`;
-        return;
-    }
-    container.innerHTML = ids.map(id => {
-        const info = namesByExtId[id];
-        const reuseHref = `${REUSE_BASE_URL}?item=${encodeURIComponent(id)}&kind=${encodeURIComponent(kind)}`;
-        const reuseLink = INVENTORY_CHIP_REUSE_ENABLED ? `<a class="inv-chip__reuse" href="${_escAttr(reuseHref)}"`
-            + ` aria-label="Add this ${kind === 'ad_unit' ? 'ad unit' : 'placement'} to other bundles"`
-            + ` title="Add to other bundles…"`
-            + ` onclick="event.stopPropagation();">`
-            + `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"`
-            + ` stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
-            + `<polyline points="16 3 21 3 21 8"/>`
-            + `<line x1="4" y1="20" x2="21" y2="3"/>`
-            + `<polyline points="21 16 21 21 16 21"/>`
-            + `<line x1="15" y1="15" x2="21" y2="21"/>`
-            + `<line x1="4" y1="4" x2="9" y2="9"/></svg>`
-            + `</a>` : '';
-        if (info) {
-            return `<span class="inv-chip" title="${_escAttr(info.id)}">`
-                + `<span class="inv-chip__name">${_escAttr(info.name)}</span>`
-                + `<span class="inv-chip__id">#${_escAttr(info.id)}</span>`
-                + reuseLink
-                + `</span>`;
-        }
-        // Fallback: entity not in sync table — show raw ID with an unknown marker.
-        // The reuse link still works — operators can still wire an unresolved
-        // id into other bundles if they know what they're doing.
-        return `<span class="inv-chip inv-chip--unknown" title="Not found in synced inventory">`
-            + `<span class="inv-chip__name">${_escAttr(id)}</span>`
-            + `<span class="inv-chip__id">unresolved</span>`
-            + reuseLink
-            + `</span>`;
-    }).join('');
+let inventoryPickerMode = 'tree';
+let inventoryOpenPlacements = new Set();
+let inventoryConfigPrepopulated = false;
+const inventorySelection = {
+    ad_units: new Set(),
+    placements: new Set(),
+};
+
+function isInventoryPickerOpen() {
+    return false;
 }
 
-function inventoryKeyForKind(kind) {
-    return kind === 'placement' ? 'placements' : 'ad_units';
+function inventoryRows(key) {
+    return INVENTORY_PICKER[key] || [];
 }
 
-function inventoryContainerForKind(kind) {
-    return kind === 'placement' ? 'selected-placements' : 'selected-ad-units';
+function inventoryRowById(key, id) {
+    return inventoryRows(key).find(row => row.id === id) || null;
 }
 
-function inventoryHiddenForKind(kind) {
-    return kind === 'placement' ? 'targeted_placement_ids' : 'targeted_ad_unit_ids';
+function inventoryKindLabel(row) {
+    if (row.kind === 'placement') return row.subkind === 'tag' ? 'TAG' : 'SITE';
+    return 'AD UNIT';
 }
 
-function inventoryLabelForKind(kind) {
-    return kind === 'placement' ? 'placements' : 'ad units';
+function inventoryKindClass(row) {
+    if (row.kind === 'placement') return row.subkind === 'tag' ? 'kindchip--tag' : 'kindchip--site';
+    return 'kindchip--unit';
+}
+
+function inventoryReuseHref(row) {
+    const kind = row.kind === 'placement' ? 'placement' : 'ad_unit';
+    return `${REUSE_BASE_URL}?item=${encodeURIComponent(row.id)}&kind=${encodeURIComponent(kind)}`;
+}
+
+function inventoryBundleBadge(row, cascade = false) {
+    if (cascade) return 'via placement';
+    const count = Number(row.bundle_count || 0);
+    if (count > 0) return `in ${count} bundle${count === 1 ? '' : 's'}`;
+    return 'not yet bundled';
 }
 
 function seedInventoryNameMaps() {
     Object.entries(INVENTORY_PICKER || {}).forEach(([key, rows]) => {
         if (!INVENTORY_NAMES[key]) INVENTORY_NAMES[key] = {};
         (rows || []).forEach(row => {
-            INVENTORY_NAMES[key][row.id] = { name: row.name, id: row.id };
+            INVENTORY_NAMES[key][row.id] = { name: row.name, id: row.id, subkind: row.subkind };
         });
     });
 }
 
-function selectedInventoryIds(kind) {
-    try {
-        return JSON.parse(document.getElementById(inventoryHiddenForKind(kind)).value || '[]');
-    } catch {
-        return [];
-    }
-}
-
-function writeSelectedInventory(kind, ids) {
-    const uniqueIds = Array.from(new Set(ids));
-    const key = inventoryKeyForKind(kind);
-    const hidden = document.getElementById(inventoryHiddenForKind(kind));
-    hidden.value = JSON.stringify(uniqueIds);
-    renderInventoryChips(inventoryContainerForKind(kind), uniqueIds, INVENTORY_NAMES[key], kind);
+function writeInventoryHidden(key) {
+    const hiddenId = key === 'placements' ? 'targeted_placement_ids' : 'targeted_ad_unit_ids';
+    const hidden = document.getElementById(hiddenId);
+    if (!hidden) return;
+    hidden.value = JSON.stringify(Array.from(inventorySelection[key]));
     hidden.dispatchEvent(new Event('input', { bubbles: true }));
-    if (typeof recomputeValidity === 'function') {
-        recomputeValidity();
+}
+
+function syncInventorySelection() {
+    const focusSelector = inventoryFocusSelector(document.activeElement);
+    writeInventoryHidden('placements');
+    writeInventoryHidden('ad_units');
+    renderSelectedInventoryStrip();
+    renderInventoryPicker(focusSelector);
+    if (typeof recomputeValidity === 'function') recomputeValidity();
+}
+
+function togglePlacement(id) {
+    if (inventorySelection.placements.has(id)) inventorySelection.placements.delete(id);
+    else {
+        inventorySelection.placements.add(id);
+        inventoryOpenPlacements.add(id);
     }
+    syncInventorySelection();
 }
 
-let inventoryPickerKind = 'ad_unit';
-let inventoryPickerDraft = new Set();
-let inventoryPickerLastFocus = null;
-let inventoryConfigPrepopulated = false;
-
-function isInventoryPickerOpen() {
-    const picker = document.getElementById('inventory-picker');
-    return !!picker && !picker.hidden;
+function toggleAdUnit(id) {
+    if (inventorySelection.ad_units.has(id)) inventorySelection.ad_units.delete(id);
+    else inventorySelection.ad_units.add(id);
+    syncInventorySelection();
 }
 
-function openInventoryPicker(kind) {
-    inventoryPickerKind = kind === 'placement' ? 'placement' : 'ad_unit';
-    inventoryPickerDraft = new Set(selectedInventoryIds(inventoryPickerKind));
-
-    const picker = document.getElementById('inventory-picker');
-    const title = document.getElementById('inventory-picker-title');
-    const subtitle = document.getElementById('inventory-picker-subtitle');
-    const search = document.getElementById('inventory-picker-search');
-    const includeDesc = document.getElementById('inventory-picker-include-descendants');
-    const includeDescSource = document.querySelector('input[name="include_descendants"]');
-
-    inventoryPickerLastFocus = document.activeElement;
-    title.textContent = `Pick ${inventoryLabelForKind(inventoryPickerKind)}`;
-    subtitle.textContent = `Select synced ${inventoryLabelForKind(inventoryPickerKind)} to include in this bundle.`;
-    if (search) search.value = '';
-    if (includeDesc && includeDescSource) {
-        includeDesc.checked = includeDescSource.checked;
-        includeDesc.closest('.inventory-picker__toggle').hidden = inventoryPickerKind !== 'placement';
-    }
-    picker.hidden = false;
-    renderInventoryPickerRows();
-    if (search) search.focus();
+function removeSelectedInventory(kind, id) {
+    const key = kind === 'placement' ? 'placements' : 'ad_units';
+    inventorySelection[key].delete(id);
+    syncInventorySelection();
 }
 
-function closeInventoryPicker() {
-    const picker = document.getElementById('inventory-picker');
-    if (picker) picker.hidden = true;
-    if (inventoryPickerLastFocus && typeof inventoryPickerLastFocus.focus === 'function') {
-        inventoryPickerLastFocus.focus();
-    }
-}
+function renderSelectedInventoryStrip() {
+    const strip = document.getElementById('inventory-selected-strip');
+    if (!strip) return;
 
-function _inventoryPickerRows() {
-    const key = inventoryKeyForKind(inventoryPickerKind);
-    const rows = INVENTORY_PICKER[key] || [];
-    const query = (document.getElementById('inventory-picker-search')?.value || '').toLowerCase().trim();
-    if (!query) return rows;
-    return rows.filter(row => {
-        const haystack = [row.name, row.id, row.meta, ...(row.path || [])].join(' ').toLowerCase();
-        return haystack.includes(query);
+    const items = [];
+    inventorySelection.placements.forEach(id => {
+        const row = inventoryRowById('placements', id) || { id, name: id, kind: 'placement', subkind: 'site' };
+        items.push(row);
     });
-}
+    inventorySelection.ad_units.forEach(id => {
+        const row = inventoryRowById('ad_units', id) || { id, name: id, kind: 'ad_unit', subkind: 'unit' };
+        items.push(row);
+    });
 
-function renderInventoryPickerRows() {
-    const rows = _inventoryPickerRows();
-    const list = document.getElementById('inventory-picker-list');
-    if (!list) return;
-
-    renderInventoryPickerStatus(rows.length);
-
-    if (!rows.length) {
-        list.innerHTML = '<div class="inventory-picker__empty">No matching inventory.</div>';
+    if (!items.length) {
+        strip.innerHTML = '<div class="inventory-selected-strip__empty">No inventory selected yet. Pick placements or ad units below.</div>';
         return;
     }
 
-    list.innerHTML = rows.map(row => {
-        const path = Array.isArray(row.path) ? row.path : [];
-        const depth = Math.max(0, Math.min(path.length - 1, 5));
-        const checked = inventoryPickerDraft.has(row.id) ? 'checked' : '';
-        const pathText = path.length ? path.join(' › ') : row.meta;
-        return `
-            <label class="inventory-picker__row" style="--picker-depth: ${depth};">
-                <input type="checkbox" data-inventory-id="${_escAttr(row.id)}" ${checked}>
-                <span class="inventory-picker__node">
-                    <span class="inventory-picker__name">${_escAttr(row.name)}</span>
-                    <span class="inventory-picker__meta">${_escAttr(pathText || '—')}</span>
-                </span>
-                <span class="inventory-picker__id">#${_escAttr(row.id)}</span>
-            </label>
-        `;
+    strip.innerHTML = items.map(row => {
+        const kind = row.kind === 'placement' ? 'placement' : 'ad_unit';
+        return `<span class="sel-chip">`
+            + `<span class="kindchip ${inventoryKindClass(row)}">${inventoryKindLabel(row)}</span>`
+            + `<span class="sel-chip__label">${_escAttr(row.name)}</span>`
+            + `<span class="sel-chip__id">#${_escAttr(row.id)}</span>`
+            + `<button type="button" class="sel-chip__x" data-remove-kind="${kind}" data-remove-id="${_escAttr(row.id)}" aria-label="Remove ${_escAttr(row.name)}">×</button>`
+            + `</span>`;
     }).join('');
 }
 
-function renderInventoryPickerStatus(visibleCount = _inventoryPickerRows().length) {
-    const status = document.getElementById('inventory-picker-status');
-    if (!status) return;
-    const total = (INVENTORY_PICKER[inventoryKeyForKind(inventoryPickerKind)] || []).length;
-    const selectedCount = inventoryPickerDraft.size;
-    status.textContent = total
-        ? `${selectedCount} selected · ${visibleCount} of ${total} ${inventoryLabelForKind(inventoryPickerKind)} shown`
-        : `No synced ${inventoryLabelForKind(inventoryPickerKind)} found.`;
+function inventoryQuery() {
+    return (document.getElementById('inventory-picker-search')?.value || '').toLowerCase().trim();
 }
 
-function trapInventoryPickerFocus(e) {
-    if (e.key !== 'Tab' || !isInventoryPickerOpen()) return;
-    const dialog = document.querySelector('#inventory-picker .inventory-picker__dialog');
-    if (!dialog) return;
-    const focusable = Array.from(dialog.querySelectorAll(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )).filter(el => el.offsetParent !== null);
-    if (!focusable.length) return;
+function inventoryRowMatches(row, query) {
+    if (!query) return true;
+    const haystack = [
+        row.name,
+        row.id,
+        row.meta,
+        row.subkind,
+        ...(row.path || []),
+        ...(row.sizes || []),
+    ].join(' ').toLowerCase();
+    return haystack.includes(query);
+}
 
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
+function childRowsForPlacement(placement) {
+    const childIds = new Set(placement.child_ids || []);
+    return inventoryRows('ad_units').filter(row => childIds.has(row.id));
+}
+
+function inventoryIncludesDescendants() {
+    return document.querySelector('input[name="include_descendants"]')?.checked !== false;
+}
+
+function inventoryPickerMayBeCapped() {
+    return inventoryRows('ad_units').length >= INVENTORY_PICKER_LIMIT ||
+        inventoryRows('placements').length >= INVENTORY_PICKER_LIMIT;
+}
+
+function cssEscapeValue(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function inventoryFocusSelector(el) {
+    if (!el) return null;
+    const placementId = el.dataset?.togglePlacement;
+    if (placementId) return `[data-toggle-placement="${cssEscapeValue(placementId)}"]`;
+    const adUnitId = el.dataset?.toggleAdUnit;
+    if (adUnitId) return `[data-toggle-ad-unit="${cssEscapeValue(adUnitId)}"]:not([disabled])`;
+    const openId = el.dataset?.toggleOpen;
+    if (openId) return `.chev[data-toggle-open="${cssEscapeValue(openId)}"]`;
+    return null;
+}
+
+function restoreInventoryFocus(selector) {
+    if (!selector) return;
+    const next = document.querySelector(`#inventory-picker-list ${selector}`);
+    if (next && typeof next.focus === 'function') next.focus();
+}
+
+function renderInventoryPickerStatus(visibleCount = 0) {
+    const status = document.getElementById('inventory-picker-status');
+    if (!status) return;
+    const placementCount = inventorySelection.placements.size;
+    const adUnitCount = inventorySelection.ad_units.size;
+    const capped = inventoryPickerMayBeCapped() ? ` of first ${INVENTORY_PICKER_LIMIT} synced rows` : '';
+    status.innerHTML = `<strong>${placementCount}</strong> placements, <strong>${adUnitCount}</strong> standalone ad units · ${visibleCount} shown${capped}`;
+}
+
+function treeSection(label, note) {
+    return `<div class="tree-picker__section">${_escAttr(label)}`
+        + `<span>${_escAttr(note)}</span></div>`;
+}
+
+function renderPlacementRow(row, query) {
+    const children = childRowsForPlacement(row);
+    const childVisible = children.filter(child => inventoryRowMatches(child, query));
+    const open = inventoryOpenPlacements.has(row.id) || (!!query && childVisible.length > 0);
+    const selected = inventorySelection.placements.has(row.id);
+    const childSelected = children.filter(child => inventorySelection.ad_units.has(child.id)).length;
+    const partial = !selected && childSelected > 0;
+    const cascadesChildren = selected && inventoryIncludesDescendants();
+    const expandable = row.subkind !== 'tag' && children.length > 0;
+    const checked = selected ? 'checked' : '';
+    const partialAttr = partial ? 'data-partial="true"' : '';
+    const nameToggleAttr = expandable
+        ? `data-toggle-open="${_escAttr(row.id)}"`
+        : `data-toggle-placement="${_escAttr(row.id)}"`;
+
+    let html = `<div class="tree__row ${selected ? 'selected' : ''} ${partial ? 'partial' : ''} ${open ? 'open' : ''}" data-kind="placement" data-depth="0" data-row-id="${_escAttr(row.id)}">`
+        + `<button type="button" class="chev ${expandable ? '' : 'placeholder'}" data-toggle-open="${_escAttr(row.id)}" aria-expanded="${open ? 'true' : 'false'}" aria-label="Toggle ${_escAttr(row.name)}">${expandable ? '›' : ''}</button>`
+        + `<span class="check"><input type="checkbox" data-toggle-placement="${_escAttr(row.id)}" aria-label="Select ${_escAttr(row.name)}" ${checked} ${partialAttr}></span>`
+        + `<button type="button" class="tree__name" ${nameToggleAttr} aria-label="${expandable ? 'Expand' : 'Select'} ${_escAttr(row.name)}">`
+        + `<span class="kindchip ${inventoryKindClass(row)}">${inventoryKindLabel(row)}</span>`
+        + `<span class="label">${_escAttr(row.name)}</span>`
+        + `<span class="id">#${_escAttr(row.id)}</span>`
+        + `</button>`
+        + `<span class="tree__meta"><span class="num">${row.child_count || children.length}</span><span>${(row.child_count || children.length) === 1 ? 'ad unit' : 'ad units'}</span></span>`
+        + `<a class="tree__use ${row.bundle_count ? '' : 'solo'}" href="${_escAttr(inventoryReuseHref(row))}">${_escAttr(inventoryBundleBadge(row))}<span class="tree__reuse-arrow">Reuse →</span></a>`
+        + `</div>`;
+
+    if (open && expandable) {
+        html += childVisible.map(child => renderAdUnitRow(child, 1, cascadesChildren)).join('');
     }
+    return html;
+}
+
+function renderAdUnitRow(row, depth = 0, cascade = false) {
+    const selected = inventorySelection.ad_units.has(row.id);
+    const checked = selected || cascade ? 'checked' : '';
+    const disabled = cascade ? 'disabled' : '';
+    const sizes = (row.sizes || []).length ? row.sizes.join(', ') : row.meta;
+    return `<div class="tree__row ${selected || cascade ? 'selected' : ''}" data-kind="ad-unit" data-depth="${depth}" data-row-id="${_escAttr(row.id)}">`
+        + `<span class="chev placeholder"></span>`
+        + `<span class="check"><input type="checkbox" data-toggle-ad-unit="${_escAttr(row.id)}" aria-label="Select ${_escAttr(row.name)}" ${checked} ${disabled}></span>`
+        + `<button type="button" class="tree__name" data-toggle-ad-unit="${_escAttr(row.id)}" aria-label="Select ${_escAttr(row.name)}" ${disabled}>`
+        + `<span class="kindchip kindchip--unit">AD UNIT</span>`
+        + `<span class="label">${_escAttr(row.name)}</span>`
+        + `<span class="id">#${_escAttr(row.id)}</span>`
+        + `</button>`
+        + `<span class="tree__meta">${_escAttr(sizes || '—')}</span>`
+        + `<a class="tree__use ${row.bundle_count ? '' : 'solo'}" href="${_escAttr(inventoryReuseHref(row))}">${_escAttr(inventoryBundleBadge(row, cascade))}<span class="tree__reuse-arrow">Reuse →</span></a>`
+        + `</div>`;
+}
+
+function renderInventoryPicker(focusSelector = null) {
+    const list = document.getElementById('inventory-picker-list');
+    if (!list) return;
+    const query = inventoryQuery();
+    const help = document.getElementById('inventory-picker-help');
+    if (help) {
+        help.hidden = inventoryPickerMode !== 'tree';
+        const helpText = inventoryIncludesDescendants()
+            ? '<strong>Picking a placement</strong> includes its child ad units automatically.'
+            : '<strong>Picking a placement</strong> targets only that placement. Child ad units stay standalone.';
+        help.innerHTML = '<span class="reuse-strip__icon" aria-hidden="true">▦</span>'
+            + `<span>${helpText} Flip to <strong>Flat ad units</strong> to pick individual units only.</span>`;
+    }
+
+    if (inventoryPickerMode === 'flat') {
+        const rows = inventoryRows('ad_units').filter(row => inventoryRowMatches(row, query));
+        renderInventoryPickerStatus(rows.length);
+        list.innerHTML = rows.length
+            ? rows.map(row => renderAdUnitRow(row)).join('')
+            : '<div class="tree-picker__empty">No ad units match.</div>';
+        hydratePartialCheckboxes();
+        restoreInventoryFocus(focusSelector);
+        return;
+    }
+
+    const placements = inventoryRows('placements');
+    const sitePlacements = placements.filter(row => row.subkind !== 'tag');
+    const tagPlacements = placements.filter(row => row.subkind === 'tag');
+    const renderGroup = (rows, label, note) => {
+        const visible = rows.filter(row => inventoryRowMatches(row, query) ||
+            childRowsForPlacement(row).some(child => inventoryRowMatches(child, query)));
+        if (!visible.length) return { html: '', count: 0 };
+        return {
+            html: treeSection(label, note) + visible.map(row => renderPlacementRow(row, query)).join(''),
+            count: visible.length,
+        };
+    };
+    const site = renderGroup(sitePlacements, 'Site placements', 'wrap a set of ad units');
+    const tag = renderGroup(tagPlacements, 'Tag-level placements', 'cross-section groups');
+    renderInventoryPickerStatus(site.count + tag.count);
+    list.innerHTML = (site.html + tag.html) || '<div class="tree-picker__empty">No placements match.</div>';
+    hydratePartialCheckboxes();
+    restoreInventoryFocus(focusSelector);
+}
+
+function hydratePartialCheckboxes() {
+    document.querySelectorAll('#inventory-picker-list input[data-partial="true"]').forEach(input => {
+        input.indeterminate = true;
+    });
 }
 
 document.addEventListener('DOMContentLoaded', function() {
     seedInventoryNameMaps();
     prePopulateInventoryConfig();
 
-    const picker = document.getElementById('inventory-picker');
     const pickerList = document.getElementById('inventory-picker-list');
     const pickerSearch = document.getElementById('inventory-picker-search');
-    const pickerApply = document.getElementById('inventory-picker-apply');
-    const pickerIncludeDesc = document.getElementById('inventory-picker-include-descendants');
-    const includeDescSource = document.querySelector('input[name="include_descendants"]');
+    const modeSwitch = document.getElementById('inventory-picker-mode');
+    const selectedStrip = document.getElementById('inventory-selected-strip');
+    const includeDesc = document.querySelector('input[name="include_descendants"]');
 
     if (pickerList) {
-        pickerList.addEventListener('change', (e) => {
-            const checkbox = e.target.closest('input[type="checkbox"][data-inventory-id]');
-            if (!checkbox) return;
-            if (checkbox.checked) inventoryPickerDraft.add(checkbox.dataset.inventoryId);
-            else inventoryPickerDraft.delete(checkbox.dataset.inventoryId);
-            renderInventoryPickerStatus();
+        pickerList.addEventListener('click', (e) => {
+            const reuse = e.target.closest('a.tree__use');
+            if (reuse) return;
+            const open = e.target.closest('[data-toggle-open]');
+            if (open && !e.target.closest('[data-toggle-placement]')) {
+                const id = open.dataset.toggleOpen;
+                if (inventoryOpenPlacements.has(id)) inventoryOpenPlacements.delete(id);
+                else inventoryOpenPlacements.add(id);
+                renderInventoryPicker();
+                return;
+            }
+            const placement = e.target.closest('[data-toggle-placement]');
+            if (placement) {
+                togglePlacement(placement.dataset.togglePlacement);
+                return;
+            }
+            const adUnit = e.target.closest('[data-toggle-ad-unit]');
+            if (adUnit && !adUnit.disabled) toggleAdUnit(adUnit.dataset.toggleAdUnit);
         });
     }
-    if (pickerSearch) pickerSearch.addEventListener('input', renderInventoryPickerRows);
-    if (pickerApply) {
-        pickerApply.addEventListener('click', () => {
-            const rows = INVENTORY_PICKER[inventoryKeyForKind(inventoryPickerKind)] || [];
-            const rowOrder = rows.map(row => row.id);
-            const sorted = rowOrder.filter(id => inventoryPickerDraft.has(id));
-            for (const id of inventoryPickerDraft) {
-                if (!sorted.includes(id)) sorted.push(id);
-            }
-            writeSelectedInventory(inventoryPickerKind, sorted);
-            if (inventoryPickerKind === 'placement' && pickerIncludeDesc && includeDescSource) {
-                includeDescSource.checked = pickerIncludeDesc.checked;
-                includeDescSource.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            closeInventoryPicker();
+    if (pickerSearch) pickerSearch.addEventListener('input', renderInventoryPicker);
+    if (modeSwitch) {
+        modeSwitch.addEventListener('click', (e) => {
+            const button = e.target.closest('[data-picker-mode]');
+            if (!button) return;
+            inventoryPickerMode = button.dataset.pickerMode === 'flat' ? 'flat' : 'tree';
+            modeSwitch.querySelectorAll('[data-picker-mode]').forEach(btn => {
+                btn.classList.toggle('active', btn === button);
+                btn.setAttribute('aria-pressed', btn === button ? 'true' : 'false');
+            });
+            renderInventoryPicker();
         });
     }
-    document.querySelectorAll('[data-picker-close]').forEach(el => {
-        el.addEventListener('click', closeInventoryPicker);
-    });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && picker && !picker.hidden) {
-            closeInventoryPicker();
-        }
-        trapInventoryPickerFocus(e);
-    });
+    if (selectedStrip) {
+        selectedStrip.addEventListener('click', (e) => {
+            const button = e.target.closest('[data-remove-kind][data-remove-id]');
+            if (!button) return;
+            removeSelectedInventory(button.dataset.removeKind, button.dataset.removeId);
+        });
+    }
+    if (includeDesc) includeDesc.addEventListener('change', renderInventoryPicker);
 });
 
 // Load formats from API on page load
@@ -954,16 +1022,24 @@ function prePopulateInventoryConfig() {
     if (existingProfile.inventory_config) {
         const adUnitIds = existingProfile.inventory_config.ad_units || [];
         const placementIds = existingProfile.inventory_config.placements || [];
-
-        document.getElementById('targeted_ad_unit_ids').value = JSON.stringify(adUnitIds);
-        document.getElementById('targeted_placement_ids').value = JSON.stringify(placementIds);
-
-        renderInventoryChips('selected-ad-units', adUnitIds, INVENTORY_NAMES.ad_units, 'ad_unit');
-        renderInventoryChips('selected-placements', placementIds, INVENTORY_NAMES.placements, 'placement');
-
         if (existingProfile.inventory_config.include_descendants !== undefined) {
             document.querySelector('input[name="include_descendants"]').checked = existingProfile.inventory_config.include_descendants;
         }
+
+        inventorySelection.ad_units = new Set(adUnitIds);
+        inventorySelection.placements = new Set(placementIds);
+        inventoryOpenPlacements = new Set([
+            ...placementIds,
+            ...(INVENTORY_PICKER.placements || []).slice(0, 1).map(row => row.id),
+        ]);
+        writeInventoryHidden('ad_units');
+        writeInventoryHidden('placements');
+        renderSelectedInventoryStrip();
+        renderInventoryPicker();
+    } else {
+        inventoryOpenPlacements = new Set((INVENTORY_PICKER.placements || []).slice(0, 1).map(row => row.id));
+        renderSelectedInventoryStrip();
+        renderInventoryPicker();
     }
     inventoryConfigPrepopulated = true;
 }
@@ -1399,7 +1475,7 @@ function computeValidity() {
             ok: invSize > 0,
             text: invParts.length ? invParts.join(' · ') : 'none yet',
             message: 'Add at least one placement or ad unit to save.',
-            focusId: 'placement-search',
+            focusId: 'inventory-picker-search',
         }),
         formats: item({
             ok: formatCount > 0,

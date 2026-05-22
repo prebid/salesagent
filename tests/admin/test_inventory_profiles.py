@@ -426,10 +426,12 @@ class TestInventoryProfileEdit:
 
         assert response.status_code == 200
         html = response.data.decode()
-        assert 'id="inventory-picker"' in html
-        assert "Pick ad units" in html
-        assert "Pick placements" in html
+        assert 'id="inventory-picker-list"' in html
+        assert 'id="inventory-picker-mode"' in html
+        assert "Flat ad units" in html
+        assert "Browse inventory" in html
         assert "INVENTORY_PICKER" in html
+        assert "INVENTORY_PICKER_LIMIT" in html
         assert "Homepage Top" in html
         assert "au_picker" in html
         assert "Homepage Placement" in html

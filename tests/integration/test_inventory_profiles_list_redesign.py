@@ -193,7 +193,7 @@ class TestBundleCardCoverage:
 
 
 class TestInventoryPickerPayload:
-    """The in-page picker payload is bounded for large synced inventories."""
+    """The in-page picker payload supports the tree-first editor."""
 
     def test_caps_default_rows_but_keeps_selected_inventory(self, factory_session):
         tenant = TenantFactory(ad_server="google_ad_manager")
@@ -224,6 +224,56 @@ class TestInventoryPickerPayload:
         assert len(payload["ad_units"]) == 3
         assert [row["id"] for row in payload["ad_units"][:2]] == ["au_0", "au_1"]
         assert payload["ad_units"][2]["id"] == "zz_selected"
+
+    def test_tree_payload_includes_placement_children_and_membership_counts(self, factory_session):
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        placement = GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="placement",
+            inventory_id="pl_site",
+            name="Homepage Site Placement",
+            inventory_metadata={"ad_unit_ids": ["au_child"], "bundle_kind": "site"},
+        )
+        child = GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="au_child",
+            name="Homepage Leaderboard",
+            inventory_metadata={
+                "parent_id": placement.inventory_id,
+                "sizes": [{"width": 728, "height": 90}],
+            },
+        )
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": [placement.inventory_id], "include_descendants": True},
+        )
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [child.inventory_id], "placements": [], "include_descendants": True},
+        )
+
+        payload = _build_inventory_picker_payload(
+            factory_session,
+            tenant.tenant_id,
+            GAM_ADAPTER,
+            inventory_config={"ad_units": [], "placements": [], "include_descendants": True},
+            limit=1,
+        )
+
+        placement_row = next(row for row in payload["placements"] if row["id"] == "pl_site")
+        child_row = next(row for row in payload["ad_units"] if row["id"] == "au_child")
+        assert placement_row["subkind"] == "site"
+        assert placement_row["child_ids"] == ["au_child"]
+        assert placement_row["child_count"] == 1
+        assert placement_row["bundle_count"] == 1
+        assert child_row["parent_id"] == "pl_site"
+        assert child_row["sizes"] == ["728x90"]
+        assert child_row["bundle_count"] == 1
 
 
 class TestBuildCoverageSummary:
