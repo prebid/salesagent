@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # Multi-stage build for smaller image
 # Cache bust: 2026-02-27
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 # Disable man pages and docs to speed up apt operations
 RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
@@ -40,7 +40,7 @@ RUN --mount=type=cache,target=/cache/uv \
     uv sync --frozen
 
 # Runtime stage
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.title="AdCP Sales Agent"
