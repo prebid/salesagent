@@ -303,6 +303,12 @@ repos:
 
   # Type checking with mypy - ENFORCED (0 errors in src/)
   # After achieving 100% compliance, mypy is now mandatory for all commits
+  #
+  # FIXME(#1234-pr2): This hook still uses mirrors-mypy + additional_dependencies,
+  # which violates ADR-001 (uv.lock as single source of truth). Migration to
+  # language: system / entry: uv run mypy is PR 2 scope — it requires deleting
+  # [project.optional-dependencies].dev and wiring the pydantic.mypy plugin.
+  # Until then, adcp pin here must be kept in sync with uv.lock manually.
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: d2823d321df3af8f878f7ee3414dc94d037145b9  # frozen: v2.1.0
     hooks:

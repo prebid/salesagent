@@ -27,7 +27,7 @@ rules:
   # archived-uses — ipr-agreement.yml uses contributor-assistant/github-action
   # from an archived repository. There is no maintained alternative for the
   # CLA/IPR assistant workflow at this time.
-  # Risk accepted by @chrishuie; tracked for replacement in a future PR.
+  # Risk accepted by @chrishuie; tracked for replacement in #1234-pr6.
   # ─────────────────────────────────────────────────────────────────────────────
   archived-uses:
     ignore:
@@ -42,11 +42,11 @@ rules:
   #
   # release-please.yml: contents/pull-requests/packages: write are required at
   # workflow level for release-please-action (tag/release creation) and
-  # docker/build-push-action (GHCR push). Narrowing to job-level tracked for PR 3.
+  # docker/build-push-action (GHCR push). Narrowing to job-level tracked for #1234-pr3.
   #
   # pr-title-check.yml: no explicit permissions block — uses workflow default.
   # The amannn/action-semantic-pull-request action requires pull-requests: write
-  # to post status checks. Narrowing tracked for PR 3.
+  # to post status checks. Narrowing tracked for #1234-pr3.
   # ─────────────────────────────────────────────────────────────────────────────
   excessive-permissions:
     ignore:

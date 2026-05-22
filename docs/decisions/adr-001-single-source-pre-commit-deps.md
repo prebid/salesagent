@@ -1,6 +1,6 @@
 # ADR-001 — uv.lock as single source of truth for pre-commit deps
 
-**Status:** Accepted (PR 1 / issue #1234)
+**Status:** Accepted — partially implemented. PR 1 establishes the rule and SHA-freezes all hooks. The `mirrors-mypy` hook still uses `additional_dependencies:` (see `.pre-commit-config.yaml` FIXME comment) because full migration requires restructuring `[project.optional-dependencies]` and wiring the `pydantic.mypy` plugin — scoped to PR 2 of issue #1234.
 **Date:** 2026-05
 **Deciders:** @chrishuie, @mkostromin-sigma
 
