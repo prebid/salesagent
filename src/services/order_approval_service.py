@@ -77,7 +77,11 @@ def start_order_approval_background(
     # block legitimate re-approval forever.
     with _approval_lock:
         with get_db_session() as db:
+            # Scope the duplicate-order scan to this tenant. Without `tenant_id` in
+            # the filter the scan walks every tenant's running approval rows in
+            # Python and matches on order_id alone — a cross-tenant read.
             stmt = select(SyncJob).where(
+                SyncJob.tenant_id == tenant_id,
                 SyncJob.sync_type == "order_approval",
                 SyncJob.status == "running",
             )
