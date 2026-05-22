@@ -36,6 +36,12 @@
 #     which is not exposed in this codebase's current feature set.
 #     TODO(#1234-pr2): remove this entry once pydantic-ai >= 1.99.0 lands.
 #
+# - PYSEC-2026-161: starlette 0.50.0 vulnerability. Fixed in starlette >= 1.0.1.
+#     Upgrade blocked: fastapi 0.128.0 constrains starlette < 1.0.0, and
+#     mcp/fastmcp also pins starlette via their own constraints. Requires a
+#     coordinated fastapi + starlette upgrade tracked in issue #1234 (PR 2 scope).
+#     TODO(#1234-pr2): remove once fastapi + starlette upgrade lands.
+#
 # Previously ignored, now resolved by real dep bumps (kept here as a record):
 # - GHSA-7gcm-g887-7qv7 (protobuf DoS) — resolved by bumping protobuf to 6.33.6.
 # - GHSA-5239-wwwm-4pmq (Pygments AdlLexer ReDoS) — resolved by bumping
