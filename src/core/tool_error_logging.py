@@ -43,7 +43,10 @@ class AdCPToolError(ToolError):
     plain ToolError fallback in ``_handle_tool_error``).
     """
 
-    def __init__(self, envelope: dict[str, Any], status_code: int = 500):
+    def __init__(self, envelope: dict[str, Any], *, status_code: int = 500):
+        # ``status_code`` is keyword-only so a missing positional arg cannot
+        # silently default to 500, misclassifying a 4xx as 5xx. Callers must
+        # opt in explicitly when not supplying a typed source AdCPError.
         self.envelope = envelope
         self.status_code = status_code
         super().__init__(json.dumps(envelope))

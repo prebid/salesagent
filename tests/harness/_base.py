@@ -214,7 +214,13 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
             recovery = errors[0].get("recovery", recovery)
             details = details or errors[0].get("details")
     if not error_code:
-        # Legacy flat shape: top-level error_code key.
+        # DEPRECATED legacy flat shape: top-level error_code key. Production
+        # envelopes never set this — they use the two-layer adcp_error/errors[]
+        # shape handled above. Only retained because the test-only helper
+        # _adcp_to_a2a_error (src/a2a_server/adcp_a2a_server.py) still emits
+        # top-level error_code for backward compat with this harness unwrapper.
+        # FIXME(adcp-pr2): remove this branch when _adcp_to_a2a_error is deleted
+        # (tracked alongside the per-boundary wrapper consolidation in #7).
         error_code = envelope.get("error_code")
         recovery = recovery or envelope.get("recovery")
         details = details or envelope.get("details")

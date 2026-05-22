@@ -22,6 +22,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+# Anchor scan paths on this file's location so guards work regardless of pytest's
+# working directory (CI runs from repo root; agents/IDEs may launch from a subdir).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # (filepath, qualified_name) — qualified_name supports `Class.method` for class methods.
 BOUNDARY_FUNCTIONS = [
     ("src/core/tool_error_logging.py", "_translate_to_tool_error"),
@@ -88,7 +92,7 @@ def _function_calls_builder(filepath: str, func_name: str) -> bool:
     defined in the same module, so DRY refactors that extract a shared
     envelope-response helper still satisfy the guard.
     """
-    path = Path(filepath)
+    path = _REPO_ROOT / filepath
     if not path.exists():
         return False
     try:

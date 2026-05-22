@@ -23,9 +23,14 @@ logger = logging.getLogger(__name__)
 # All acceptable codes: SDK standard + justified internal
 _ALLOWED_CODES = set(STANDARD_ERROR_CODES) | INTERNAL_CODES
 
+# Anchor scan paths on the test file's location so they resolve correctly
+# regardless of pytest's working directory (CI runs from the repo root;
+# agents/IDEs may launch pytest from a subdir, which would make the relative
+# paths silently match nothing).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCAN_DIRS = [
-    Path("src/core/tools"),
-    Path("src/adapters"),
+    _REPO_ROOT / "src/core/tools",
+    _REPO_ROOT / "src/adapters",
 ]
 
 
