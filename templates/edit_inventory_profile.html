@@ -527,7 +527,18 @@ const INVENTORY_NAMES = {
     placements: {{ inventory_names.placements | tojson | safe }}
 };
 
-function renderInventoryChips(containerId, ids, namesByExtId) {
+// Base path for the Reuse page; ``renderInventoryChips`` builds per-chip
+// "Add to other bundles…" links by appending ``?item=<id>&kind=<kind>``.
+// (#542)
+const REUSE_BASE_URL = '{{ url_for("inventory_profiles.reuse_inventory_bundles", tenant_id=tenant_id) }}';
+
+function _escAttr(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+}
+
+function renderInventoryChips(containerId, ids, namesByExtId, kind) {
     const container = document.getElementById(containerId);
     if (!container) return;
     if (!ids || ids.length === 0) {
@@ -535,16 +546,33 @@ function renderInventoryChips(containerId, ids, namesByExtId) {
     }
     container.innerHTML = ids.map(id => {
         const info = namesByExtId[id];
+        const reuseHref = `${REUSE_BASE_URL}?item=${encodeURIComponent(id)}&kind=${encodeURIComponent(kind)}`;
+        const reuseLink = `<a class="inv-chip__reuse" href="${_escAttr(reuseHref)}"`
+            + ` aria-label="Add this ${kind === 'ad_unit' ? 'ad unit' : 'placement'} to other bundles"`
+            + ` title="Add to other bundles…"`
+            + ` onclick="event.stopPropagation();">`
+            + `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"`
+            + ` stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
+            + `<polyline points="16 3 21 3 21 8"/>`
+            + `<line x1="4" y1="20" x2="21" y2="3"/>`
+            + `<polyline points="21 16 21 21 16 21"/>`
+            + `<line x1="15" y1="15" x2="21" y2="21"/>`
+            + `<line x1="4" y1="4" x2="9" y2="9"/></svg>`
+            + `</a>`;
         if (info) {
-            return `<span class="inv-chip" title="${info.id}">`
-                + `<span class="inv-chip__name">${info.name}</span>`
-                + `<span class="inv-chip__id">#${info.id}</span>`
+            return `<span class="inv-chip" title="${_escAttr(info.id)}">`
+                + `<span class="inv-chip__name">${_escAttr(info.name)}</span>`
+                + `<span class="inv-chip__id">#${_escAttr(info.id)}</span>`
+                + reuseLink
                 + `</span>`;
         }
         // Fallback: entity not in sync table — show raw ID with an unknown marker.
+        // The reuse link still works — operators can still wire an unresolved
+        // id into other bundles if they know what they're doing.
         return `<span class="inv-chip inv-chip--unknown" title="Not found in synced inventory">`
-            + `<span class="inv-chip__name">${id}</span>`
+            + `<span class="inv-chip__name">${_escAttr(id)}</span>`
             + `<span class="inv-chip__id">unresolved</span>`
+            + reuseLink
             + `</span>`;
     }).join('');
 }
@@ -662,8 +690,8 @@ function prePopulateData() {
         document.getElementById('targeted_ad_unit_ids').value = JSON.stringify(adUnitIds);
         document.getElementById('targeted_placement_ids').value = JSON.stringify(placementIds);
 
-        renderInventoryChips('selected-ad-units', adUnitIds, INVENTORY_NAMES.ad_units);
-        renderInventoryChips('selected-placements', placementIds, INVENTORY_NAMES.placements);
+        renderInventoryChips('selected-ad-units', adUnitIds, INVENTORY_NAMES.ad_units, 'ad_unit');
+        renderInventoryChips('selected-placements', placementIds, INVENTORY_NAMES.placements, 'placement');
 
         if (existingProfile.inventory_config.include_descendants !== undefined) {
             document.querySelector('input[name="include_descendants"]').checked = existingProfile.inventory_config.include_descendants;

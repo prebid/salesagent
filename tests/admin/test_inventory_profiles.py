@@ -261,6 +261,21 @@ class TestInventoryProfileEdit:
         # Back link to list page
         assert "Back to Inventory bundles" in html
 
+    def test_edit_get_exposes_reuse_base_url_for_chip_links(self, client, test_tenant):
+        """Per-chip Reuse links (#542) need REUSE_BASE_URL in the inline JS.
+
+        The chip render function builds links by appending ``?item=...&kind=...``
+        to this constant. Confirms the template wires the URL correctly.
+        """
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="ChipReuse", profile_id="chip_reuse")
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit")
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "REUSE_BASE_URL" in html
+        assert f"/tenant/{test_tenant}/inventory-profiles/reuse" in html
+
 
 class TestInventoryProfilePreview:
     """Preview surface — HTML at /preview, JSON at /api/preview (#531)."""

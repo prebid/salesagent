@@ -918,6 +918,35 @@
 }
 .inv-chip--unknown .inv-chip__id { color: var(--sig-amber, #b8861a); font-style: italic; }
 
+/* Per-chip "Add to other bundles…" action (#542). Hover-revealed so chips
+   stay compact at rest; visible on focus for keyboard users. */
+.inv-chip__reuse {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    color: var(--sig-fg-tertiary);
+    background: transparent;
+    text-decoration: none;
+    opacity: 0;
+    transition: opacity 80ms ease, background 80ms ease, color 80ms ease;
+    margin-left: 2px;
+}
+.inv-chip:hover .inv-chip__reuse,
+.inv-chip__reuse:focus-visible {
+    opacity: 1;
+}
+.inv-chip__reuse:hover {
+    background: var(--sig-bg-info);
+    color: var(--sig-blue, #0d6efd);
+}
+.inv-chip__reuse:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.4);
+}
+
 .usedby { padding: 8px 16px 14px; }
 .usedby__row {
     display: flex;
