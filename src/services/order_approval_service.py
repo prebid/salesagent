@@ -367,19 +367,13 @@ def _mark_approval_complete(
     principal_id: str,
     media_buy_id: str,
 ):
-    """Mark approval as completed, advance MediaBuy.status, audit, and webhook."""
+    """Mark approval as completed, advance MediaBuy.status, audit, and webhook.
+
+    Ordering: MediaBuy update (consumer-visible) commits BEFORE SyncJob flips
+    to "completed". If MediaBuy update fails the SyncJob stays at "running" and
+    the stale-approval reaper eventually picks it up.
+    """
     try:
-        with get_db_session() as db:
-            import json
-
-            stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
-            approval_job = db.scalars(stmt).first()
-            if approval_job:
-                approval_job.status = "completed"
-                approval_job.completed_at = datetime.now(UTC)
-                approval_job.summary = json.dumps(summary) if summary else None
-                db.commit()
-
         _finalize_approval(
             media_buy_id=media_buy_id,
             tenant_id=tenant_id,
@@ -400,6 +394,17 @@ def _mark_approval_complete(
             webhook_attempts=summary.get("attempts"),
         )
 
+        with get_db_session() as db:
+            import json
+
+            stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
+            approval_job = db.scalars(stmt).first()
+            if approval_job:
+                approval_job.status = "completed"
+                approval_job.completed_at = datetime.now(UTC)
+                approval_job.summary = json.dumps(summary) if summary else None
+                db.commit()
+
     except Exception as e:
         logger.error(f"Failed to mark approval complete: {e}")
 
@@ -412,21 +417,21 @@ def _mark_approval_failed(
     principal_id: str,
     media_buy_id: str,
 ):
-    """Mark approval as failed, terminalize MediaBuy.status, audit, and webhook."""
+    """Mark approval as failed, terminalize MediaBuy.status, audit, and webhook.
+
+    Ordering: MediaBuy update (consumer-visible) commits BEFORE SyncJob flips
+    to "failed". If MediaBuy update fails the SyncJob stays at "running" and
+    the stale-approval reaper eventually picks it up.
+    """
     order_id: str | None = None
     attempts: int | None = None
     try:
         with get_db_session() as db:
             stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
             approval_job = db.scalars(stmt).first()
-            if approval_job:
-                approval_job.status = "failed"
-                approval_job.completed_at = datetime.now(UTC)
-                approval_job.error_message = error_message
-                db.commit()
-                if approval_job.progress:
-                    order_id = approval_job.progress.get("order_id")
-                    attempts = approval_job.progress.get("attempts")
+            if approval_job and approval_job.progress:
+                order_id = approval_job.progress.get("order_id")
+                attempts = approval_job.progress.get("attempts")
 
         _finalize_approval(
             media_buy_id=media_buy_id,
@@ -446,6 +451,15 @@ def _mark_approval_failed(
             webhook_order_id=order_id,
             webhook_attempts=attempts,
         )
+
+        with get_db_session() as db:
+            stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
+            approval_job = db.scalars(stmt).first()
+            if approval_job:
+                approval_job.status = "failed"
+                approval_job.completed_at = datetime.now(UTC)
+                approval_job.error_message = error_message
+                db.commit()
 
     except Exception as e:
         logger.error(f"Failed to mark approval failed: {e}")

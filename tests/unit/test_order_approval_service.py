@@ -292,3 +292,73 @@ def test_webhook_retries_on_failure(mock_sleep):
         assert call_counter["count"] <= 4, (
             f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
         )
+
+
+class TestSyncJobTerminalOrdering:
+    """SyncJob terminal write must happen AFTER buyer-facing MediaBuy update.
+
+    Otherwise a buyer polling the SyncJob can see status='completed' while the
+    MediaBuy is still pinned at pending_approval, or status='failed' while the
+    MediaBuy is still active. Consumer-visible state must commit last.
+    """
+
+    def test_mark_complete_keeps_syncjob_running_when_finalize_raises(self):
+        from src.services import order_approval_service as service_module
+
+        approval_job = MagicMock()
+        approval_job.status = "running"
+
+        with (
+            patch.object(service_module, "_finalize_approval") as mock_finalize,
+            patch.object(service_module, "get_db_session") as mock_session,
+        ):
+            mock_db = MagicMock()
+            mock_session.return_value.__enter__.return_value = mock_db
+            mock_db.scalars.return_value.first.return_value = approval_job
+            mock_finalize.side_effect = RuntimeError("media buy update failed")
+
+            service_module._mark_approval_complete(
+                approval_id="approval_test_1",
+                summary={"order_id": "12345", "attempts": 1, "duration_seconds": 5},
+                webhook_url=None,
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_1",
+            )
+
+            assert approval_job.status == "running", (
+                f"SyncJob.status flipped to {approval_job.status!r} despite finalize failure — "
+                "buyer would observe premature completion"
+            )
+            mock_db.commit.assert_not_called()
+
+    def test_mark_failed_keeps_syncjob_running_when_finalize_raises(self):
+        from src.services import order_approval_service as service_module
+
+        approval_job = MagicMock()
+        approval_job.status = "running"
+        approval_job.progress = {"order_id": "12345", "attempts": 3}
+
+        with (
+            patch.object(service_module, "_finalize_approval") as mock_finalize,
+            patch.object(service_module, "get_db_session") as mock_session,
+        ):
+            mock_db = MagicMock()
+            mock_session.return_value.__enter__.return_value = mock_db
+            mock_db.scalars.return_value.first.return_value = approval_job
+            mock_finalize.side_effect = RuntimeError("media buy update failed")
+
+            service_module._mark_approval_failed(
+                approval_id="approval_test_2",
+                error_message="approval timed out",
+                webhook_url=None,
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_1",
+            )
+
+            assert approval_job.status == "running", (
+                f"SyncJob.status flipped to {approval_job.status!r} despite finalize failure — "
+                "buyer would observe premature termination"
+            )
+            mock_db.commit.assert_not_called()
