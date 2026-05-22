@@ -197,9 +197,15 @@ class TestA2AErrorPropagation:
         artifact = result.artifacts[0]
         artifact_data = self.extract_data_from_artifact(artifact)
 
-        # CRITICAL ASSERTIONS: Error propagation
-        assert "success" in artifact_data, "Response must include 'success' field"
-        assert artifact_data["success"] is False, "success must be False when errors present"
+        # CRITICAL ASSERTIONS: Error propagation via the spec two-layer envelope.
+        # Skill handlers now raise typed AdCPError; the dispatcher surfaces the
+        # ``error_envelope`` (built by ``build_two_layer_error_envelope``) as the
+        # DataPart. The wire shape is the spec envelope (adcp_error + errors),
+        # not the previous {success: False, errors: [...]} ad-hoc dict.
+        assert "adcp_error" in artifact_data, "Response must carry the envelope-level adcp_error key"
+        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR", (
+            f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
+        )
         assert "errors" in artifact_data, "Response must include 'errors' field"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
 
@@ -207,6 +213,7 @@ class TestA2AErrorPropagation:
         error = artifact_data["errors"][0]
         assert "message" in error, "Error must include message"
         assert "Missing required AdCP parameters" in error["message"]
+        assert error["code"] == "VALIDATION_ERROR"
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Test that authentication errors include errors field in A2A response."""
@@ -251,8 +258,9 @@ class TestA2AErrorPropagation:
         artifact = result.artifacts[0]
         artifact_data = self.extract_data_from_artifact(artifact)
 
-        # CRITICAL ASSERTIONS: Error propagation for auth failures
-        assert artifact_data["success"] is False, "success must be False for auth errors"
+        # CRITICAL ASSERTIONS: Error propagation for auth failures via the
+        # spec two-layer envelope (adcp_error + errors).
+        assert "adcp_error" in artifact_data, "Response must carry the envelope-level adcp_error key"
         assert "errors" in artifact_data, "Response must include 'errors' field for auth errors"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
 
@@ -260,6 +268,7 @@ class TestA2AErrorPropagation:
         error = artifact_data["errors"][0]
         assert "code" in error, "Error must include code"
         assert error["code"] == "AUTH_REQUIRED"
+        assert artifact_data["adcp_error"]["code"] == "AUTH_REQUIRED"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""

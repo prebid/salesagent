@@ -302,11 +302,19 @@ class TestA2AWebhookPayloadTypes:
                             "data": {
                                 "skill": "create_media_buy",
                                 "parameters": {
-                                    "product_ids": ["video_premium"],
-                                    "total_budget": 5000.0,
+                                    # AdCP-spec-compliant shape (per the handler docstring at
+                                    # _handle_create_media_buy_skill — legacy product_ids /
+                                    # total_budget is NOT supported and now raises
+                                    # AdCPValidationError instead of silently failing the task).
+                                    "packages": [
+                                        {
+                                            "product_ids": ["video_premium"],
+                                            "budget": {"total": 5000.0, "currency": "USD"},
+                                        }
+                                    ],
+                                    "brand": {"domain": "testbrand.com"},
                                     "start_time": "2025-03-01T00:00:00Z",
                                     "end_time": "2025-03-31T23:59:59Z",
-                                    "brand": {"domain": "testbrand.com"},
                                     "context": {"e2e": "webhook_completed_test"},
                                 },
                             }
@@ -540,11 +548,16 @@ class TestA2AWebhookPayloadTypes:
                             "data": {
                                 "skill": "create_media_buy",
                                 "parameters": {
-                                    "product_ids": ["video_premium"],
-                                    "total_budget": 8000.0,
+                                    # AdCP-spec-compliant shape per _handle_create_media_buy_skill docstring.
+                                    "packages": [
+                                        {
+                                            "product_ids": ["video_premium"],
+                                            "budget": {"total": 8000.0, "currency": "USD"},
+                                        }
+                                    ],
+                                    "brand": {"domain": "testbrand.com"},
                                     "start_time": "2025-05-01T00:00:00Z",
                                     "end_time": "2025-05-31T23:59:59Z",
-                                    "brand": {"domain": "testbrand.com"},
                                 },
                             }
                         }
@@ -666,8 +679,14 @@ class TestWebhookPayloadStructure:
                             "data": {
                                 "skill": "create_media_buy",
                                 "parameters": {
-                                    "product_ids": ["video_premium"],
-                                    "total_budget": 3000.0,
+                                    # AdCP-spec-compliant shape per _handle_create_media_buy_skill docstring.
+                                    "packages": [
+                                        {
+                                            "product_ids": ["video_premium"],
+                                            "budget": {"total": 3000.0, "currency": "USD"},
+                                        }
+                                    ],
+                                    "brand": {"domain": "testbrand.com"},
                                     "start_time": "2025-06-01T00:00:00Z",
                                     "end_time": "2025-06-30T23:59:59Z",
                                 },
