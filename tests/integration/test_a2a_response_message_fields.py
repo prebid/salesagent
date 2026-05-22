@@ -87,6 +87,10 @@ class TestA2AMessageFieldValidation:
             start_date = datetime.now(UTC) + timedelta(days=1)
             end_date = start_date + timedelta(days=30)
 
+            # Per AdCP v2.2.0 spec, budget is at the PACKAGE level, not top level.
+            # The previous top-level ``budget`` field was tolerated by an older code
+            # path that swallowed Pydantic ValidationError into a dict-return; now
+            # CreateMediaBuyRequest validates strictly.
             params = {
                 "brand": {"domain": "testbrand.com"},
                 "packages": [
@@ -96,7 +100,6 @@ class TestA2AMessageFieldValidation:
                         "budget": 10000.0,
                     }
                 ],
-                "budget": {"total": 10000.0, "currency": "USD"},
                 "start_time": start_date.isoformat(),
                 "end_time": end_date.isoformat(),
             }
@@ -322,9 +325,9 @@ class TestA2AResponseDictConstruction:
             # For now, just check the class definition
             has_message_field = "message" in response_cls.model_fields
 
-            assert has_str_method or has_message_field, (
-                f"{response_cls.__name__} must have either __str__ method or .message field for A2A compatibility"
-            )
+            assert (
+                has_str_method or has_message_field
+            ), f"{response_cls.__name__} must have either __str__ method or .message field for A2A compatibility"
 
 
 @pytest.mark.integration
@@ -354,6 +357,6 @@ class TestA2AErrorHandling:
                     assert "message" in result or "error" in result, "Error response must have message or error field"
             except Exception as e:
                 # Errors are expected for invalid params
-                assert "message" not in str(e) or "AttributeError" not in str(e), (
-                    "Should not get AttributeError when handling skill errors"
-                )
+                assert "message" not in str(e) or "AttributeError" not in str(
+                    e
+                ), "Should not get AttributeError when handling skill errors"

@@ -203,9 +203,9 @@ class TestA2AErrorPropagation:
         # DataPart. The wire shape is the spec envelope (adcp_error + errors),
         # not the previous {success: False, errors: [...]} ad-hoc dict.
         assert "adcp_error" in artifact_data, "Response must carry the envelope-level adcp_error key"
-        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR", (
-            f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
-        )
+        assert (
+            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
         assert "errors" in artifact_data, "Response must include 'errors' field"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
 
@@ -258,9 +258,12 @@ class TestA2AErrorPropagation:
         artifact = result.artifacts[0]
         artifact_data = self.extract_data_from_artifact(artifact)
 
-        # CRITICAL ASSERTIONS: Error propagation for auth failures via the
-        # spec two-layer envelope (adcp_error + errors).
-        assert "adcp_error" in artifact_data, "Response must carry the envelope-level adcp_error key"
+        # "Principal not found" is an established Pattern A site — the
+        # impl returns a CreateMediaBuyError variant carrying the
+        # Error(code=AUTH_REQUIRED) inside its ``errors`` list, NOT a raised
+        # AdCPAuthorizationError producing the envelope. The advisory pattern
+        # is documented in test_media_buy.py::test_principal_not_found_returns_error_response
+        # and is allowlist-permanent per the error-emission design decisions.
         assert "errors" in artifact_data, "Response must include 'errors' field for auth errors"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
 
@@ -268,7 +271,6 @@ class TestA2AErrorPropagation:
         error = artifact_data["errors"][0]
         assert "code" in error, "Error must include code"
         assert error["code"] == "AUTH_REQUIRED"
-        assert artifact_data["adcp_error"]["code"] == "AUTH_REQUIRED"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
@@ -314,9 +316,9 @@ class TestA2AErrorPropagation:
 
         # CRITICAL ASSERTIONS: Success response
         assert artifact_data["success"] is True, "success must be True for successful operation"
-        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
-            "errors field must be None or empty array for success"
-        )
+        assert (
+            artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0
+        ), "errors field must be None or empty array for success"
         assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
@@ -402,7 +404,17 @@ class TestA2AErrorResponseStructure:
         return AdCPRequestHandler()
 
     async def test_error_response_has_consistent_structure(self, integration_db, handler):
-        """Test that all error responses have consistent field structure."""
+        """Skill handlers raise typed AdCPValidationError on missing required params.
+
+        Previously the handler returned a custom error dict bypassing the
+        envelope builder; Konstantine's structural follow-up flagged this as
+        Critical. Now the handler raises and the outer dispatcher's
+        ``_build_failed_skill_result`` produces the spec-compliant
+        two-layer envelope. This test verifies the contract at the
+        skill-handler layer.
+        """
+        from src.core.exceptions import AdCPValidationError
+
         identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
@@ -411,21 +423,25 @@ class TestA2AErrorResponseStructure:
             protocol="a2a",
         )
 
-        # Call handler directly with invalid params
-        result = await handler._handle_create_media_buy_skill(
-            parameters={"brand": {"domain": "testbrand.com"}},
-            identity=identity,  # Missing required fields
-        )
+        with pytest.raises(AdCPValidationError) as exc_info:
+            await handler._handle_create_media_buy_skill(
+                parameters={"brand": {"domain": "testbrand.com"}},  # Missing required fields
+                identity=identity,
+            )
 
-        # Verify error response structure
-        assert isinstance(result, dict), "Error response must be dict"
-        assert "success" in result, "Error response must have success field"
-        assert result["success"] is False, "Error response success must be False"
-        assert "message" in result, "Error response must have message field"
-        assert "required_parameters" in result, "Validation error must list required parameters"
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        assert "Missing required AdCP parameters" in str(exc_info.value)
 
     async def test_errors_field_structure_from_validation_error(self, integration_db, handler):
-        """Test that validation errors produce properly structured errors field."""
+        """Validation errors raise typed AdCPValidationError with structured suggestion.
+
+        The ``suggestion`` attribute carries the required-parameters list so
+        the envelope's ``errors[].suggestion`` field documents what the
+        caller should retry with. Replaces the prior ``required_parameters``
+        top-level field on the dict-return shape.
+        """
+        from src.core.exceptions import AdCPValidationError
+
         identity = ResolvedIdentity(
             principal_id="test_principal",
             tenant_id="test_tenant",
@@ -434,18 +450,19 @@ class TestA2AErrorResponseStructure:
             protocol="a2a",
         )
 
-        # Call with invalid params (missing required fields) - returns immediately without DB
-        result = await handler._handle_create_media_buy_skill(
-            parameters={
-                "brand": {"domain": "testbrand.com"},
-                # Missing: packages, budget, start_time, end_time
-            },
-            identity=identity,
-        )
+        with pytest.raises(AdCPValidationError) as exc_info:
+            await handler._handle_create_media_buy_skill(
+                parameters={
+                    "brand": {"domain": "testbrand.com"},
+                    # Missing: packages, budget, start_time, end_time
+                },
+                identity=identity,
+            )
 
-        # Verify this is a validation error response
-        assert result["success"] is False, "Validation error should have success=False"
-        assert "required_parameters" in result, "Validation error should list required params"
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        # The required-parameters list is carried in suggestion so buyers see
+        # what to add on retry through the envelope's errors[].suggestion field.
+        assert "packages" in (exc_info.value.suggestion or "")
 
     async def test_adcp_error_carries_recovery_through_a2a_boundary(self, integration_db, handler):
         """AdCPError propagates from _handle_explicit_skill with recovery preserved.
@@ -511,9 +528,9 @@ class TestA2AErrorResponseStructure:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.recovery == "transient", (
-                "Custom recovery='transient' override must be preserved, not default 'terminal'"
-            )
+            assert (
+                error.recovery == "transient"
+            ), "Custom recovery='transient' override must be preserved, not default 'terminal'"
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
 

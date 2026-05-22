@@ -112,9 +112,9 @@ def assert_no_classification_errors(received: list[dict[str, Any]]) -> None:
     it is a spec violation that must fail the test loudly — never pass as 'unknown'.
     """
     errors = [(w["status"], w["classification_error"]) for w in received if w["classification_error"] is not None]
-    assert not errors, (
-        f"{len(errors)} webhook payload(s) failed A2A wire classification (snake_case or unrecognised shape): {errors}"
-    )
+    assert (
+        not errors
+    ), f"{len(errors)} webhook payload(s) failed A2A wire classification (snake_case or unrecognised shape): {errors}"
 
 
 class WebhookPayloadCapture(BaseHTTPRequestHandler):
@@ -287,7 +287,18 @@ class TestA2AWebhookPayloadTypes:
         a2a_url = f"{live_server['a2a']}/a2a"
         context_id = str(uuid.uuid4())
 
-        # Send A2A create_media_buy message with push notification config
+        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+        media_buy_params = build_adcp_media_buy_request(
+            product_ids=[product_id],
+            total_budget=5000.0,
+            start_time=start_time,
+            end_time=end_time,
+            brand={"domain": "testbrand.com"},
+            pricing_option_id=pricing_option_id,
+            context={"e2e": "webhook_completed_test"},
+        )
+
         message = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -301,22 +312,7 @@ class TestA2AWebhookPayloadTypes:
                         {
                             "data": {
                                 "skill": "create_media_buy",
-                                "parameters": {
-                                    # AdCP-spec-compliant shape (per the handler docstring at
-                                    # _handle_create_media_buy_skill — legacy product_ids /
-                                    # total_budget is NOT supported and now raises
-                                    # AdCPValidationError instead of silently failing the task).
-                                    "packages": [
-                                        {
-                                            "product_ids": ["video_premium"],
-                                            "budget": {"total": 5000.0, "currency": "USD"},
-                                        }
-                                    ],
-                                    "brand": {"domain": "testbrand.com"},
-                                    "start_time": "2025-03-01T00:00:00Z",
-                                    "end_time": "2025-03-31T23:59:59Z",
-                                    "context": {"e2e": "webhook_completed_test"},
-                                },
+                                "parameters": media_buy_params,
                             }
                         }
                     ],
@@ -367,9 +363,9 @@ class TestA2AWebhookPayloadTypes:
         # `if completed_webhooks:` guard — a missing or misclassified webhook is
         # a failure, not a silent pass.
         completed_webhooks = [w for w in received if w["status"] == "completed"]
-        assert completed_webhooks, (
-            f"Expected a 'completed' status webhook. Received statuses: {[w['status'] for w in received]}"
-        )
+        assert (
+            completed_webhooks
+        ), f"Expected a 'completed' status webhook. Received statuses: {[w['status'] for w in received]}"
 
         webhook = completed_webhooks[0]
         # Per AdCP spec: completed status should send Task (has 'id' field)
@@ -494,9 +490,9 @@ class TestA2AWebhookPayloadTypes:
         # TaskStatusUpdateEvent. No `if submitted_webhooks:` guard — a missing or
         # misclassified webhook is a failure, not a silent pass.
         submitted_webhooks = [w for w in received if w["status"] == "submitted"]
-        assert submitted_webhooks, (
-            f"Expected a 'submitted' status webhook. Received statuses: {[w['status'] for w in received]}"
-        )
+        assert (
+            submitted_webhooks
+        ), f"Expected a 'submitted' status webhook. Received statuses: {[w['status'] for w in received]}"
 
         webhook = submitted_webhooks[0]
         # Per AdCP spec: submitted status should send TaskStatusUpdateEvent (has 'taskId' field)
@@ -533,7 +529,18 @@ class TestA2AWebhookPayloadTypes:
         a2a_url = f"{live_server['a2a']}/a2a"
         context_id = str(uuid.uuid4())
 
-        # Send create_media_buy request
+        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+        media_buy_params = build_adcp_media_buy_request(
+            product_ids=[product_id],
+            total_budget=8000.0,
+            start_time=start_time,
+            end_time=end_time,
+            brand={"domain": "testbrand.com"},
+            pricing_option_id=pricing_option_id,
+            context={"e2e": "webhook_payload_type_match_test"},
+        )
+
         message = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -547,18 +554,7 @@ class TestA2AWebhookPayloadTypes:
                         {
                             "data": {
                                 "skill": "create_media_buy",
-                                "parameters": {
-                                    # AdCP-spec-compliant shape per _handle_create_media_buy_skill docstring.
-                                    "packages": [
-                                        {
-                                            "product_ids": ["video_premium"],
-                                            "budget": {"total": 8000.0, "currency": "USD"},
-                                        }
-                                    ],
-                                    "brand": {"domain": "testbrand.com"},
-                                    "start_time": "2025-05-01T00:00:00Z",
-                                    "end_time": "2025-05-31T23:59:59Z",
-                                },
+                                "parameters": media_buy_params,
                             }
                         }
                     ],
@@ -610,9 +606,9 @@ class TestA2AWebhookPayloadTypes:
                 assert payload_type == "Task", f"Final state '{status}' should use Task payload, got {payload_type}"
                 asserted += 1
             elif status in intermediate_states:
-                assert payload_type == "TaskStatusUpdateEvent", (
-                    f"Intermediate state '{status}' should use TaskStatusUpdateEvent payload, got {payload_type}"
-                )
+                assert (
+                    payload_type == "TaskStatusUpdateEvent"
+                ), f"Intermediate state '{status}' should use TaskStatusUpdateEvent payload, got {payload_type}"
                 asserted += 1
             else:
                 raise AssertionError(
@@ -665,6 +661,18 @@ class TestWebhookPayloadStructure:
 
         a2a_url = f"{live_server['a2a']}/a2a"
 
+        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+        media_buy_params = build_adcp_media_buy_request(
+            product_ids=[product_id],
+            total_budget=3000.0,
+            start_time=start_time,
+            end_time=end_time,
+            brand={"domain": "testbrand.com"},
+            pricing_option_id=pricing_option_id,
+            context={"e2e": "webhook_task_required_fields_test"},
+        )
+
         message = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -678,18 +686,7 @@ class TestWebhookPayloadStructure:
                         {
                             "data": {
                                 "skill": "create_media_buy",
-                                "parameters": {
-                                    # AdCP-spec-compliant shape per _handle_create_media_buy_skill docstring.
-                                    "packages": [
-                                        {
-                                            "product_ids": ["video_premium"],
-                                            "budget": {"total": 3000.0, "currency": "USD"},
-                                        }
-                                    ],
-                                    "brand": {"domain": "testbrand.com"},
-                                    "start_time": "2025-06-01T00:00:00Z",
-                                    "end_time": "2025-06-30T23:59:59Z",
-                                },
+                                "parameters": media_buy_params,
                             }
                         }
                     ],
@@ -719,9 +716,9 @@ class TestWebhookPayloadStructure:
         assert_no_classification_errors(received)
 
         task_webhooks = [w for w in received if w["payload_type"] == "Task"]
-        assert task_webhooks, (
-            f"Expected at least one Task webhook. Received payload types: {[w['payload_type'] for w in received]}"
-        )
+        assert (
+            task_webhooks
+        ), f"Expected at least one Task webhook. Received payload types: {[w['payload_type'] for w in received]}"
 
         for webhook in task_webhooks:
             payload = webhook["payload"]
@@ -917,9 +914,9 @@ class TestProtocolWebhookWireFormat:
         capture = self._send_and_capture(event)
         payload = capture["payload"]
 
-        assert capture["classification_error"] is None, (
-            f"Wire payload failed A2A classification (snake_case regression?): {capture['classification_error']}"
-        )
+        assert (
+            capture["classification_error"] is None
+        ), f"Wire payload failed A2A classification (snake_case regression?): {capture['classification_error']}"
         assert capture["payload_type"] == "TaskStatusUpdateEvent"
         assert payload["taskId"] == "t-123", f"Expected camelCase 'taskId', got payload keys {sorted(payload)}"
         assert payload["contextId"] == "c-456", f"Expected camelCase 'contextId', got payload keys {sorted(payload)}"
@@ -939,9 +936,9 @@ class TestProtocolWebhookWireFormat:
         capture = self._send_and_capture(task)
         payload = capture["payload"]
 
-        assert capture["classification_error"] is None, (
-            f"Wire payload failed A2A classification: {capture['classification_error']}"
-        )
+        assert (
+            capture["classification_error"] is None
+        ), f"Wire payload failed A2A classification: {capture['classification_error']}"
         assert capture["payload_type"] == "Task"
         assert payload["id"] == "t-789"
         assert payload["contextId"] == "c-789", f"Expected camelCase 'contextId', got payload keys {sorted(payload)}"
