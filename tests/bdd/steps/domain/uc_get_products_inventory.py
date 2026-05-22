@@ -18,6 +18,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
+    PrincipalFactory,
     ProductFactory,
     TenantFactory,
 )
@@ -53,7 +54,9 @@ def _get_first_prop(ctx: dict) -> Any:
     assert pp is not None, "publisher_properties is None"
     assert len(pp) >= 1, "publisher_properties is empty"
     inner = pp[0]
-    return inner.root if hasattr(inner, "root") else inner
+    if hasattr(inner, "root"):  # noqa: rootmodel — library version drift; both shapes valid
+        return inner.root
+    return inner
 
 
 # ── Given steps ─────────────────────────────────────────────────────
@@ -67,7 +70,9 @@ def given_tenant(ctx: dict) -> None:
         subdomain="test_tenant",
         ad_server="mock",
     )
+    principal = PrincipalFactory(tenant=tenant)
     ctx["tenant"] = tenant
+    ctx["principal"] = principal
 
 
 @given(parsers.parse('an inventory profile with property_ids "{ids}" for domain "{domain}"'))
@@ -178,7 +183,12 @@ def then_has_property_ids(ctx: dict, expected: str) -> None:
     inner = _get_first_prop(ctx)
     ids = getattr(inner, "property_ids", None) or (inner.get("property_ids") if isinstance(inner, dict) else None)
     assert ids is not None, "property_ids is None"
-    id_strings = [str(pid.root) if hasattr(pid, "root") else str(pid) for pid in ids]
+    id_strings = []
+    for pid in ids:
+        if hasattr(pid, "root"):  # noqa: rootmodel — library version drift; both shapes valid
+            id_strings.append(str(pid.root))
+        else:
+            id_strings.append(str(pid))
     assert expected in id_strings, f"Expected {expected!r} in property_ids, got {id_strings}"
 
 
@@ -188,7 +198,12 @@ def then_has_property_tags(ctx: dict, expected: str) -> None:
     inner = _get_first_prop(ctx)
     tags = getattr(inner, "property_tags", None) or (inner.get("property_tags") if isinstance(inner, dict) else None)
     assert tags is not None, "property_tags is None"
-    tag_strings = [str(t.root) if hasattr(t, "root") else str(t) for t in tags]
+    tag_strings = []
+    for t in tags:
+        if hasattr(t, "root"):  # noqa: rootmodel — library version drift; both shapes valid
+            tag_strings.append(str(t.root))
+        else:
+            tag_strings.append(str(t))
     assert expected in tag_strings, f"Expected {expected!r} in property_tags, got {tag_strings}"
 
 

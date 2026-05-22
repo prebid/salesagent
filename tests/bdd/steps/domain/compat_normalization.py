@@ -15,12 +15,14 @@ from src.core.request_compat import normalize_request_params
 @given("a tenant with products configured")
 def given_tenant_with_products(ctx: dict) -> None:
     """Create a tenant with at least one product and pricing option."""
-    from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+    from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 
     tenant = TenantFactory(tenant_id="compat_tenant")
+    principal = PrincipalFactory(tenant=tenant)
     product = ProductFactory(tenant=tenant, product_id="compat_prod", name="Compat Product")
     PricingOptionFactory(tenant_id=tenant.tenant_id, product_id=product.product_id)
     ctx["tenant"] = tenant
+    ctx["principal"] = principal
     ctx["product"] = product
 
 

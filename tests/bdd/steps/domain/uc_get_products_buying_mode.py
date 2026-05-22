@@ -115,9 +115,10 @@ def given_seller_operational(ctx: dict) -> None:
 def given_tenant_with_products(ctx: dict) -> None:
     """Create a tenant with the standard buying-mode test product set."""
     tenant = TenantFactory(tenant_id="bm-bdd", subdomain="bm-bdd")
-    PrincipalFactory(tenant=tenant, principal_id="bm-bdd-principal")
+    principal = PrincipalFactory(tenant=tenant, principal_id="bm-bdd-principal")
     create_buying_mode_test_products(tenant)
     ctx["tenant"] = tenant
+    ctx["principal"] = principal
 
 
 @given("a previous get_products response returned products and proposals")
@@ -209,9 +210,9 @@ def then_products_no_brief_relevance(ctx: dict) -> None:
     """Wholesale mode does not run the ranker, so brief_relevance is None on every product."""
     resp = ctx["response"]
     for p in resp.products:
-        assert p.brief_relevance is None, (
-            f"Product {p.product_id} has brief_relevance set in wholesale mode: {p.brief_relevance!r}"
-        )
+        assert (
+            p.brief_relevance is None
+        ), f"Product {p.product_id} has brief_relevance set in wholesale mode: {p.brief_relevance!r}"
 
 
 @then('the response should NOT contain "proposals" array')
