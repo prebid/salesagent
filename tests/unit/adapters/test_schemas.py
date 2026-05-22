@@ -97,13 +97,13 @@ class TestMockSchemas:
             fill_rate=75.0,
             ctr=1.5,
             viewability_rate=60.0,
-            test_mode="stress",
+            test_mode="high_demand",
             delivery_simulation={"enabled": True, "time_acceleration": 1800, "update_interval_seconds": 2.0},
         )
         dumped = config.model_dump()
         restored = MockProductConfig.model_validate(dumped)
         assert restored.fill_rate == 75.0
-        assert restored.test_mode == "stress"
+        assert restored.test_mode == "high_demand"
         assert restored.delivery_simulation.enabled is True
         assert restored.delivery_simulation.time_acceleration == 1800
 

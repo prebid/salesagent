@@ -20,7 +20,7 @@ VALID_FORM_DATA = {
     "viewability_rate": "60.0",
     "latency_ms": "100",
     "error_rate": "5.0",
-    "test_mode": "stress",
+    "test_mode": "high_demand",
     "price_variance": "5.0",
     "seasonal_factor": "1.2",
 }
@@ -79,7 +79,7 @@ class TestMockProductConfigPost:
         assert resp.status_code == 200
         saved = product.implementation_config
         assert saved["fill_rate"] == 75.0
-        assert saved["test_mode"] == "stress"
+        assert saved["test_mode"] == "high_demand"
         assert saved["daily_impressions"] == 50000
         session.commit.assert_called_once_with()
 
