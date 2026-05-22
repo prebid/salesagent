@@ -1,7 +1,7 @@
 import logging
 import random
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class MockProductConfig(BaseProductConfig):
     viewability_rate: float = Field(default=70.0, ge=0.0, le=100.0)
     latency_ms: int = Field(default=50, ge=0)
     error_rate: float = Field(default=0.1, ge=0.0, le=100.0)
-    test_mode: str = Field(default="normal")
+    test_mode: Literal["normal", "high_demand", "degraded", "outage"] = Field(default="normal")
     price_variance: float = Field(default=10.0, ge=0.0)
     seasonal_factor: float = Field(default=1.0, ge=0.0)
     verbose_logging: bool = Field(default=False)
