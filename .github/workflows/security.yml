@@ -21,10 +21,14 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb  # v5.4.0
       - run: uv export --no-hashes --format requirements-txt > /tmp/requirements.txt
-      # CVE-2026-46678 (pydantic-ai < 1.99.0): suppressed pending coordinated
-      # pydantic-ai + fastmcp upgrade; tracked in issue #1234 (PR 2 scope).
-      # See scripts/security-audit.sh for full rationale (single source of truth).
-      - run: uvx pip-audit --ignore-vuln CVE-2026-46678 -r /tmp/requirements.txt
+      - run: |
+          source scripts/security-ignored-vulns.sh
+          IFS=',' read -r -a pip_ignores <<< "$PIP_AUDIT_IGNORED_VULNS"
+          ignore_args=()
+          for vuln in "${pip_ignores[@]}"; do
+            ignore_args+=(--ignore-vuln "$vuln")
+          done
+          uvx pip-audit "${ignore_args[@]}" -r /tmp/requirements.txt
 
   zizmor:
     name: zizmor (workflow security lint)
@@ -54,9 +58,13 @@ jobs:
         with:
           persist-credentials: false
       - run: |
-          PINACT_VERSION=v3.10.1
-          curl -sSfL "https://github.com/suzuki-shunsuke/pinact/releases/download/${PINACT_VERSION}/pinact_linux_amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin/ pinact
+          set -euo pipefail
+          PINACT_VERSION=3.10.1
+          PINACT_TARBALL="pinact_linux_amd64.tar.gz"
+          curl -sSfL "https://github.com/suzuki-shunsuke/pinact/releases/download/v${PINACT_VERSION}/${PINACT_TARBALL}" -o "${PINACT_TARBALL}"
+          curl -sSfL "https://github.com/suzuki-shunsuke/pinact/releases/download/v${PINACT_VERSION}/pinact_${PINACT_VERSION}_checksums.txt" -o pinact_checksums.txt
+          grep "  ${PINACT_TARBALL}$" pinact_checksums.txt | sha256sum -c -
+          tar -xzf "${PINACT_TARBALL}" -C /usr/local/bin/ pinact
           pinact run --check
 
   actionlint:
@@ -69,5 +77,11 @@ jobs:
         with:
           persist-credentials: false
       - run: |
-          curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash -s -- 1.7.7
+          set -euo pipefail
+          ACTIONLINT_VERSION=1.7.7
+          ACTIONLINT_TARBALL="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${ACTIONLINT_TARBALL}" -o "${ACTIONLINT_TARBALL}"
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_checksums.txt" -o actionlint_checksums.txt
+          grep "  ${ACTIONLINT_TARBALL}$" actionlint_checksums.txt | sha256sum -c -
+          tar -xzf "${ACTIONLINT_TARBALL}" actionlint
           ./actionlint -color

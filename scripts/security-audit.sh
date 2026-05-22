@@ -46,8 +46,9 @@
 # red on the next run.
 #
 # Extra arguments are forwarded to uv-secure (e.g. ``--no-check-uv-tool``).
+# Ignore IDs are sourced from scripts/security-ignored-vulns.sh.
 set -euo pipefail
 
-IGNORED_VULNS="PYSEC-2026-89,PYSEC-2025-183,GHSA-cqp8-fcvh-x7r3"
+source "$(dirname "$0")/security-ignored-vulns.sh"
 
-exec uvx uv-secure --ignore-vulns "$IGNORED_VULNS" --allow-unused-ignores "$@"
+exec uvx uv-secure --ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores "$@"
