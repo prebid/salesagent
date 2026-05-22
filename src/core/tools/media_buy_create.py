@@ -127,6 +127,14 @@ from src.core.tools.financial_validation import validate_max_daily_package_spend
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
 from src.services.activity_feed import activity_feed
+from src.services.targeting_capabilities import (
+    property_list_unsupported_advisories,
+    raise_if_property_targeting_violations,
+    validate_geo_overlap,
+    validate_overlay_targeting,
+    validate_property_targeting_allowed,
+    validate_unknown_targeting_fields,
+)
 
 # --- Helper Functions ---
 
@@ -637,13 +645,27 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         }
 
                     # Get targeting_overlay from package_config if present
-                    # Fallback to "targeting" key for data written before salesagent-dzr fix
+                    # Fallback to "targeting" key for data written before salesagent-dzr fix.
+                    # Corrupt targeting in package_config (non-dict input, schema drift)
+                    # would otherwise surface from the outer ``except Exception`` below as
+                    # an opaque message like "'str' object is not a mapping" — admin sees
+                    # something cryptic, has to grep the audit log to find which package.
+                    # Narrow exception + targeted message gives the approver actionable
+                    # context immediately. Abort (not skip) — execute_approved_media_buy
+                    # is a mutating operation; silently dropping targeting would ship
+                    # a buy without the buyer's intended targeting.
                     targeting_overlay = None
                     targeting_raw = package_config.get("targeting_overlay") or package_config.get("targeting")
                     if targeting_raw:
-                        from src.core.schemas import Targeting
-
-                        targeting_overlay = Targeting(**targeting_raw)
+                        try:
+                            targeting_overlay = Targeting(**targeting_raw)
+                        except (TypeError, ValidationError) as exc:
+                            error_msg = (
+                                f"Failed to reconstruct package {package_id}: "
+                                f"targeting_overlay corrupt in package_config: {exc}"
+                            )
+                            logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
+                            return False, error_msg
 
                     # Create MediaPackage object (what adapters expect)
                     # Note: Product model has 'formats' not 'format_ids'
@@ -663,16 +685,14 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         delivery_type_str = "non_guaranteed"  # Default fallback
 
                     # Convert formats to FormatId objects with comprehensive validation
-                    from src.core.schemas import FormatId as FormatIdType
-
-                    format_ids_list: list[FormatIdType] = []
+                    format_ids_list: list[FormatId] = []
                     formats = product.format_ids or []
 
                     logger.debug(f"[APPROVAL] Converting {len(formats)} formats for package {package_id}")
 
                     for idx, fmt in enumerate(formats):
                         try:
-                            validated = FormatIdType.model_validate(fmt)
+                            validated = FormatId.model_validate(fmt)
                             url_str = str(validated.agent_url)
                             if not url_str.startswith(("http://", "https://")):
                                 raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
@@ -1277,11 +1297,19 @@ def _build_idempotency_hit_result(
     idempotency_key: str | None,
     principal_id: str,
     context: ContextObject | None,
+    req: "CreateMediaBuyRequest | None" = None,
+    adapter: "Any | None" = None,
 ) -> CreateMediaBuyResult:
     """Re-query the winner of an idempotency race and return its result.
 
     Used both for the happy-path idempotency lookup and for the TOCTOU
     race-condition recovery (IntegrityError on commit).
+
+    ``req`` + ``adapter`` are optional so the property_list advisory can be
+    rebuilt on every replay (rebuild, don't persist — capability could have
+    flipped True between the original call and the replay). Callers that
+    have them in scope pass them; the function tolerates None for callers
+    that don't yet.
     """
     from src.core.database.repositories import MediaBuyUoW
 
@@ -1303,6 +1331,13 @@ def _build_idempotency_hit_result(
         except ValueError:
             adcp_status = MediaBuyStatus.pending_start
 
+        # Rebuild the property_list advisory live rather than reading a cached
+        # copy: between the original request and this replay, an adapter could
+        # have flipped supports_property_list_filtering=True. The advisory
+        # must reflect the current capability state, not whatever was true at
+        # the original Day-1 call.
+        advisories = property_list_unsupported_advisories(req.packages, adapter) if req is not None else None
+
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
                 media_buy_id=existing.media_buy_id,
@@ -1310,6 +1345,7 @@ def _build_idempotency_hit_result(
                 status=adcp_status,
                 valid_actions=valid_actions_for_status(adcp_status.value),
                 context=context,
+                errors=advisories,
             ),
             status=AdcpTaskStatus.completed.value,
         )
@@ -1407,6 +1443,15 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key,
                     principal_id=principal_id,
                     context=req.context,
+                    req=req,
+                    # FIXME(idempotency-adapter): adapter isn't initialized yet
+                    # at this early happy-path check, so the advisory may
+                    # misfire once Kevel's capability flips to True
+                    # (Kevel tenants would see a stale UNSUPPORTED_FEATURE
+                    # on replay). Today no adapter compiles property_list,
+                    # so the advisory is always correct. Untangle when the
+                    # idempotency probe moves after adapter init.
+                    adapter=None,
                 )
 
     # Context management and workflow step creation - create workflow step FIRST
@@ -1624,6 +1669,23 @@ async def _create_media_buy_impl(
             if missing_product_ids:
                 error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
                 raise ValueError(error_msg)
+
+            # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
+            # error if the product has property_targeting_allowed: false."
+            # Lives here because product_map is in scope; the rest of targeting
+            # validation runs further down outside this UoW block.
+            if req.packages:
+                property_targeting_violations = [
+                    v
+                    for package in req.packages
+                    if package.product_id in product_map
+                    and (
+                        v := validate_property_targeting_allowed(
+                            product_map[package.product_id], package.targeting_overlay
+                        )
+                    )
+                ]
+                raise_if_property_targeting_violations(property_targeting_violations)
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
@@ -1901,12 +1963,6 @@ async def _create_media_buy_impl(
         if req.packages:
             for pkg in req.packages:
                 if pkg.targeting_overlay is not None:
-                    from src.services.targeting_capabilities import (
-                        validate_geo_overlap,
-                        validate_overlay_targeting,
-                        validate_unknown_targeting_fields,
-                    )
-
                     # Reject unknown targeting fields (typos, bogus names) via model_extra
                     unknown_violations = validate_unknown_targeting_fields(pkg.targeting_overlay)
 
@@ -2152,6 +2208,8 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
                     context=req.context,
+                    req=req,
+                    adapter=adapter,
                 )
 
             # Log to activity feed for manual approval case
@@ -2423,6 +2481,7 @@ async def _create_media_buy_impl(
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
                     context=req.context,
+                    errors=property_list_unsupported_advisories(req.packages, adapter),
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -2581,6 +2640,7 @@ async def _create_media_buy_impl(
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                     workflow_step_id=step.step_id,
                     context=req.context,
+                    errors=property_list_unsupported_advisories(req.packages, adapter),
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -2702,9 +2762,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
@@ -2922,6 +2982,7 @@ async def _create_media_buy_impl(
                 packages=simulated_packages,
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
+                errors=property_list_unsupported_advisories(req.packages, adapter),
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3022,6 +3083,8 @@ async def _create_media_buy_impl(
                 idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
                 context=req.context,
+                req=req,
+                adapter=adapter,
             )
 
         # Populate media_packages table for structured querying
@@ -3507,6 +3570,7 @@ async def _create_media_buy_impl(
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
+            errors=property_list_unsupported_advisories(req.packages, adapter),
         )
 
         # Log activity
@@ -3634,15 +3698,20 @@ async def _create_media_buy_impl(
         return CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
 
     except AdCPError as adcp_err:
-        # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping
+        # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping.
+        # fail_workflow_step_for_exception threads the two-layer envelope into
+        # response_data so push notification subscribers see the same wire shape
+        # the synchronous caller receives, AND wraps in try/except so a DB hiccup
+        # during audit can't shadow the original AdCPError on re-raise.
         if step:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(adcp_err))
+            ctx_manager.fail_workflow_step_for_exception(step.step_id, adcp_err)
         raise
 
     except Exception as e:
-        # Update workflow step as failed on any error during execution
+        # Untyped exception — same audit treatment (wire-shape response_data +
+        # original exception preserved on re-raise).
         if step:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
+            ctx_manager.fail_workflow_step_for_exception(step.step_id, e)
 
         # Send Slack notification for failed media buy creation
         try:

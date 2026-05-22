@@ -7,6 +7,7 @@ import logging
 import threading
 from datetime import UTC, datetime
 
+from src.core.thread_registry import ThreadRegistry
 from src.services.webhook_delivery_service import webhook_delivery_service
 
 logger = logging.getLogger(__name__)
@@ -24,11 +25,23 @@ class GAMReportingManager:
         """
         self.gam_client = gam_client
         self.config = config
-        self._active_reports: dict[str, threading.Thread] = {}
+        # ThreadRegistry reaps dead reporting threads on every read. The reap
+        # callback drops the parallel _stop_signals entry in lockstep
+        # (lock-free dict.pop — ABBA-safe vs self._lock).
+        self._active_reports = ThreadRegistry()
         self._stop_signals: dict[str, threading.Event] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # Protect _stop_signals
+        self._active_reports.add_reap_callback(self._on_report_reaped)
 
         logger.info("✅ GAM Reporting Manager initialized")
+
+    def _on_report_reaped(self, media_buy_id: str) -> None:
+        """Drop the parallel _stop_signals entry when a dead report is reaped.
+
+        Lock-free (``dict.pop`` is atomic under the GIL). MUST NOT acquire
+        ``self._lock`` — see ThreadRegistry.add_reap_callback docstring.
+        """
+        self._stop_signals.pop(media_buy_id, None)
 
     def start_delivery_reporting(
         self,
@@ -55,36 +68,37 @@ class GAMReportingManager:
             total_budget: Total campaign budget
             reporting_interval_hours: Hours between reports (default: 24)
         """
+        # Atomically reserve the slot via _stop_signals under self._lock.
+        # Concurrent callers serialize here. Never call into the registry
+        # while holding self._lock (registry has its own lock + a reap
+        # callback that re-enters _stop_signals — ABBA avoidance).
         with self._lock:
-            # Don't start if already running
-            if media_buy_id in self._active_reports:
+            if media_buy_id in self._stop_signals:
                 logger.warning(f"Delivery reporting already running for {media_buy_id}")
                 return
-
-            # Create stop signal
             stop_signal = threading.Event()
             self._stop_signals[media_buy_id] = stop_signal
 
-            # Start reporting thread
-            thread = threading.Thread(
-                target=self._run_reporting,
-                args=(
-                    media_buy_id,
-                    tenant_id,
-                    principal_id,
-                    order_id,
-                    start_time,
-                    end_time,
-                    total_budget,
-                    reporting_interval_hours,
-                    stop_signal,
-                ),
-                daemon=True,
-            )
-            self._active_reports[media_buy_id] = thread
-            thread.start()
+        # Start reporting thread (registry has its own lock)
+        thread = threading.Thread(
+            target=self._run_reporting,
+            args=(
+                media_buy_id,
+                tenant_id,
+                principal_id,
+                order_id,
+                start_time,
+                end_time,
+                total_budget,
+                reporting_interval_hours,
+                stop_signal,
+            ),
+            daemon=True,
+        )
+        self._active_reports.add(media_buy_id, thread)
+        thread.start()
 
-            logger.info(f"✅ Started delivery reporting for {media_buy_id} (interval: {reporting_interval_hours}h)")
+        logger.info(f"✅ Started delivery reporting for {media_buy_id} (interval: {reporting_interval_hours}h)")
 
     def stop_delivery_reporting(self, media_buy_id: str):
         """Stop delivery reporting for a media buy.
@@ -191,12 +205,12 @@ class GAMReportingManager:
         except Exception as e:
             logger.error(f"❌ Error in delivery reporting for {media_buy_id}: {e}", exc_info=True)
         finally:
-            # Thread-safe cleanup
+            # Thread-safe cleanup. Drop the registry entry first (its own
+            # lock); then drop the parallel _stop_signals entry under
+            # self._lock. Never nest the two locks.
+            self._active_reports.remove(media_buy_id)
             with self._lock:
-                if media_buy_id in self._active_reports:
-                    del self._active_reports[media_buy_id]
-                if media_buy_id in self._stop_signals:
-                    del self._stop_signals[media_buy_id]
+                self._stop_signals.pop(media_buy_id, None)
 
             # Reset webhook sequence number
             webhook_delivery_service.reset_sequence(media_buy_id)

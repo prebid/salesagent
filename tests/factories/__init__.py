@@ -33,6 +33,11 @@ from tests.factories.product import (
     ProductFactory,
     create_buying_mode_test_products,
 )
+from tests.factories.targeting import (
+    CollectionListReferenceFactory,
+    PropertyListReferenceFactory,
+    TargetingFactory,
+)
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory
 
@@ -64,6 +69,7 @@ __all__ = [
     "AccountFactory",
     "AdapterConfigFactory",
     "AgentAccountAccessFactory",
+    "CollectionListReferenceFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
@@ -78,10 +84,12 @@ __all__ = [
     "PricingOptionFactory",
     "PrincipalFactory",
     "ProductFactory",
-    "create_buying_mode_test_products",
+    "PropertyListReferenceFactory",
     "PropertyTagFactory",
+    "create_buying_mode_test_products",
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
+    "TargetingFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",
     "UserFactory",

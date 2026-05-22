@@ -1,8 +1,17 @@
-"""Integration tests against creative agent (live or local mock).
+"""Integration tests against a CONTROLLED reference creative agent.
 
-By default, tests hit the real creative agent at https://creative.adcontextprotocol.org.
-In CI, set CREATIVE_AGENT_URL to point at the local mock server started by the workflow
-(e.g., http://localhost:9999/mcp/) to eliminate network flakiness and rate limits.
+These tests require a deterministic, pinned creative agent — they must NEVER
+silently fall back to the live public agent (https://creative.adcontextprotocol.org),
+whose catalog drifts (it dropped display_image/html/js/video_standard), which
+made this suite red non-deterministically (salesagent-kczg).
+
+CREATIVE_AGENT_URL must point at the pinned reference agent. The authoritative
+runner brings it up automatically (run_all_tests.sh → scripts/creative-agent-stack.sh,
+mirroring the CI `creative` matrix group, single-sourced pin). To run ad-hoc:
+``scripts/creative-agent-stack.sh up`` then export the URL. If it is unset or
+points at the public host, the guard below FAILS LOUD with instructions — it
+does not hit the internet (set ALLOW_LIVE_CREATIVE_AGENT=1 to deliberately
+override for manual prod testing).
 
 NOTE: The conftest test_environment fixture sets ADCP_TESTING=true globally,
 which enables mock mode. These tests override it back to false via the
@@ -20,6 +29,34 @@ from src.core.exceptions import AdCPNotFoundError
 # The live creative agent URL — reads env var so CI can point at a containerized agent
 CREATIVE_AGENT_URL = os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org")
 CREATIVE_AGENT_URL_WITH_SLASH = CREATIVE_AGENT_URL.rstrip("/") + "/"
+
+
+_PUBLIC_CREATIVE_AGENT_HOST = "creative.adcontextprotocol.org"
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _require_controlled_creative_agent():
+    """Refuse to run against the live public agent — fail loud, never silently (salesagent-kczg).
+
+    The gating suite must be hermetic: CREATIVE_AGENT_URL must point at the
+    pinned reference agent. If it is unset or points at the public host, we
+    fail with actionable instructions instead of hitting the internet and
+    asserting a third-party catalog that has drifted. ALLOW_LIVE_CREATIVE_AGENT=1
+    is an explicit, deliberate override for manual prod testing only.
+    """
+    if os.environ.get("ALLOW_LIVE_CREATIVE_AGENT") == "1":
+        return
+    url = os.environ.get("CREATIVE_AGENT_URL", "")
+    if not url or _PUBLIC_CREATIVE_AGENT_HOST in url:
+        pytest.fail(
+            "Controlled creative agent required (salesagent-kczg). CREATIVE_AGENT_URL is "
+            f"{url!r} — unset or the live public host. These tests must NOT hit "
+            "https://creative.adcontextprotocol.org (its catalog drifts). Bring up the pinned "
+            "reference agent: `scripts/creative-agent-stack.sh up` then "
+            "`export CREATIVE_AGENT_URL=$(scripts/creative-agent-stack.sh url)`. The authoritative "
+            "runner does this automatically. Deliberate prod test: ALLOW_LIVE_CREATIVE_AGENT=1.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)

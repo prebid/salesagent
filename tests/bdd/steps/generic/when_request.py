@@ -403,14 +403,32 @@ def _partition_disclosure(ctx: dict, partition: str) -> None:
     elif partition == "multiple_positions_all_match":
         _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent", "footer"]))
     elif partition == "all_positions":
+        # All 8 values of the DisclosurePosition enum (adcp library):
+        # prominent, footer, audio, subtitle, overlay, end_card, pre_roll,
+        # companion. Earlier wiring used stale literals (corner/inline/
+        # before/after) that no longer exist in the enum, so the request
+        # never built and the scenario passed vacuously under a blanket
+        # strict=False marker — a broken step, not a production gap.
         _call(
             ctx,
             req=ListCreativeFormatsRequest(
-                disclosure_positions=["prominent", "footer", "overlay", "audio", "corner", "inline", "before", "after"]
+                disclosure_positions=[
+                    "prominent",
+                    "footer",
+                    "audio",
+                    "subtitle",
+                    "overlay",
+                    "end_card",
+                    "pre_roll",
+                    "companion",
+                ]
             ),
         )
     elif partition == "no_matching_formats":
-        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["corner"]))
+        # "subtitle" is a valid DisclosurePosition the seeded formats
+        # (prominent-ad → ["prominent"], footer-ad → ["footer"]) do not
+        # support, so a working filter would yield zero matches.
+        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["subtitle"]))
     elif partition == "empty_array":
         try:
             _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=[]))

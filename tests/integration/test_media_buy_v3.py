@@ -576,9 +576,9 @@ class TestGetMediaBuysResponseFields:
         )
         response = _get_media_buys_impl(get_req, identity=mb_identity, include_snapshot=True)
 
-        assert len(response.media_buys) == 1, (
-            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
-        )
+        assert (
+            len(response.media_buys) == 1
+        ), f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
         assert len(mb_response.packages) >= 1
@@ -666,9 +666,9 @@ class TestGetMediaBuysResponseFields:
         )
         response = _get_media_buys_impl(get_req, identity=mb_identity)
 
-        assert len(response.media_buys) == 1, (
-            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
-        )
+        assert (
+            len(response.media_buys) == 1
+        ), f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
 
@@ -681,12 +681,96 @@ class TestGetMediaBuysResponseFields:
         assert target_pkg is not None, f"Package {package_id} not found in response"
 
         # Creative approvals should be populated
-        assert target_pkg.creative_approvals is not None, (
-            "creative_approvals should be populated after creative assignment"
-        )
+        assert (
+            target_pkg.creative_approvals is not None
+        ), "creative_approvals should be populated after creative assignment"
         assert len(target_pkg.creative_approvals) >= 1
         approval_ids = {a.creative_id for a in target_pkg.creative_approvals}
         assert "c_approval_test" in approval_ids
+
+    @pytest.mark.parametrize(
+        ("persisted_status", "expected"),
+        [
+            ("completed", MediaBuyStatus.completed),
+            ("paused", MediaBuyStatus.paused),
+            ("rejected", MediaBuyStatus.rejected),
+            ("canceled", MediaBuyStatus.canceled),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_persisted_status_authoritative_over_flight_window(
+        self, mb_tenant, mb_principal, mb_products, mb_identity, persisted_status, expected
+    ):
+        """Regression (salesagent-36d): list_media_buys must report the persisted
+        MediaBuy.status for terminal/explicit lifecycle states even when the
+        media buy's flight window covers today.
+
+        Identical defect to salesagent-18h.1 (fixed in _get_target_media_buys):
+        terminal states are lifecycle decisions and cannot be re-derived from
+        flight dates. Before the fix, _compute_status recomputed status purely
+        from dates, so a completed/paused/rejected/canceled buy whose flight
+        window spans today was incorrectly reported as 'active'.
+        """
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+
+        create_req = _make_create_request(
+            start_time=_future(1),
+            end_time=_future(8),
+            packages=[
+                {
+                    "product_id": "guaranteed_display",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                }
+            ],
+        )
+        create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
+        assert create_result.status == "completed", f"Create failed: {create_result.response}"
+        media_buy_id = create_result.response.media_buy_id
+
+        # Persist a terminal/explicit lifecycle status AND a flight window that
+        # spans "today" (started yesterday, ends in a week). Date-derivation
+        # would report this buy as 'active'; the persisted status must win.
+        now = datetime.now(UTC)
+        with MediaBuyUoW(mb_identity.tenant_id) as uow:
+            assert uow.media_buys is not None
+            updated = uow.media_buys.update_fields(
+                media_buy_id,
+                status=persisted_status,
+                start_date=(now - timedelta(days=1)).date(),
+                end_date=(now + timedelta(days=7)).date(),
+                start_time=now - timedelta(days=1),
+                end_time=now + timedelta(days=7),
+            )
+            assert updated is not None
+        # MediaBuyUoW auto-commits on clean context exit.
+
+        get_req = GetMediaBuysRequest(
+            media_buy_ids=[media_buy_id],
+            status_filter=[
+                MediaBuyStatus.active,
+                MediaBuyStatus.pending_creatives,
+                MediaBuyStatus.pending_start,
+                MediaBuyStatus.completed,
+                MediaBuyStatus.paused,
+                MediaBuyStatus.rejected,
+                MediaBuyStatus.canceled,
+            ],
+        )
+        response = _get_media_buys_impl(get_req, identity=mb_identity)
+
+        assert (
+            len(response.media_buys) == 1
+        ), f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
+        mb_response = response.media_buys[0]
+        assert mb_response.media_buy_id == media_buy_id
+        assert mb_response.status == expected, (
+            f"Persisted status {persisted_status!r} must be authoritative; "
+            f"got {mb_response.status} for a buy whose flight window covers today"
+        )
 
 
 # ---------------------------------------------------------------------------
