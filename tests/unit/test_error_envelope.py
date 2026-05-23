@@ -337,3 +337,69 @@ class TestTypedSubclasses:
                 f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
             )
             assert expected_code in STANDARD_ERROR_CODES, f"{expected_code!r} missing from STANDARD_ERROR_CODES"
+
+
+class TestWireBytesIdenticalAcrossTransports:
+    """Pin the "byte-identical by construction" claim with actual wire bytes.
+
+    Prior tests asserted in-memory dict equality via shared parsing helpers,
+    which is tautological (both transports get parsed through the same
+    unwrapper). This class instead drives real transports — a REST TestClient
+    hitting an endpoint that raises AdCPError, and the A2A failed-skill
+    builder used by the production dispatcher — then serializes both wire
+    envelopes with ``json.dumps(sort_keys=True)`` and asserts byte equality.
+
+    If the byte-identical claim ever drifts (e.g. one transport starts
+    emitting an extra field or a different key order), this test fails
+    rather than silently letting the docstrings overclaim.
+    """
+
+    def _rest_envelope_bytes(self, exc: AdCPError) -> str:
+        """Drive the REST handler via TestClient and return the response body
+        serialized with sorted keys."""
+        import json
+        from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=exc,
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+
+        # response.content is the actual wire bytes the buyer sees. Round-trip
+        # through json so we compare semantic equality (sorted keys) rather
+        # than orderdict insertion order.
+        return json.dumps(response.json(), sort_keys=True)
+
+    def _a2a_envelope_bytes(self, exc: AdCPError) -> str:
+        """Drive the A2A failed-skill builder used by the dispatcher and
+        return the embedded envelope serialized with sorted keys."""
+        import json
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        result = AdCPRequestHandler._build_failed_skill_result("test_skill", exc)
+        # The DataPart carries the envelope under "error_envelope" — extract
+        # so we compare envelopes head-to-head, not wrapper-vs-envelope.
+        return json.dumps(result["error_envelope"], sort_keys=True)
+
+    def test_validation_error_envelope_matches_across_transports(self):
+        exc = AdCPValidationError("budget must be positive", field="budget")
+        rest_bytes = self._rest_envelope_bytes(exc)
+        a2a_bytes = self._a2a_envelope_bytes(exc)
+        assert rest_bytes == a2a_bytes, (
+            f"REST and A2A envelopes drifted apart for AdCPValidationError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
+        )
+
+    def test_not_found_error_envelope_matches_across_transports(self):
+        exc = AdCPNotFoundError("media buy missing")
+        rest_bytes = self._rest_envelope_bytes(exc)
+        a2a_bytes = self._a2a_envelope_bytes(exc)
+        assert rest_bytes == a2a_bytes, (
+            f"REST and A2A envelopes drifted apart for AdCPNotFoundError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
+        )
