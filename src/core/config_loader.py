@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from src.core.database.models import Principal, Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -285,11 +285,50 @@ def is_single_tenant_mode() -> bool:
     return os.environ.get("ADCP_MULTI_TENANT", "false").lower() != "true"
 
 
+def _ensure_default_principal(db_session: Any, tenant_id: str) -> None:
+    """Seed a default principal for the given tenant from ADCP_AUTH_TOKEN env, idempotent.
+
+    Storyboard CI and ``docker compose up`` need an authenticated principal in the
+    default tenant so MCP tool calls (sync_accounts, create_media_buy, etc.) don't
+    fail with "Authentication token is invalid for tenant 'default'". Migrations alone
+    only create the Tenant row — they don't seed principals. The full demo seeder
+    (``scripts/setup/init_database.py``) does, but it is not part of the docker
+    startup chain.
+
+    Seeding here is opt-in via ``ADCP_AUTH_TOKEN`` so production deployments without
+    that env var are unaffected. The lookup-and-skip pattern mirrors the existing
+    init_database.py:140 idempotency.
+    """
+    token = os.environ.get("ADCP_AUTH_TOKEN")
+    if not token:
+        return
+
+    existing_principal = db_session.scalars(select(Principal).filter_by(tenant_id=tenant_id)).first()
+    if existing_principal:
+        logger.debug("Tenant %s already has a principal, skipping seed", tenant_id)
+        return
+
+    principal = Principal(
+        tenant_id=tenant_id,
+        principal_id="default_principal",
+        name="Default Principal",
+        platform_mappings={"mock": {"advertiser_id": "mock-default"}},
+        access_token=token,
+    )
+    db_session.add(principal)
+    db_session.commit()
+    logger.info("Seeded default principal for tenant %s (token len=%d)", tenant_id, len(token))
+
+
 def ensure_default_tenant_exists() -> dict[str, Any] | None:
     """Ensure a default tenant exists for single-tenant deployments.
 
     In single-tenant mode, this creates a default tenant if none exists.
     This should be called after database migrations complete.
+
+    Also seeds a default Principal from ADCP_AUTH_TOKEN when that env var is
+    set (storyboard CI + ``docker compose up`` developer ergonomics) — see
+    ``_ensure_default_principal``.
 
     Returns:
         The default tenant dict if created/exists, None if in multi-tenant mode
@@ -306,6 +345,9 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
 
             if existing:
                 logger.debug(f"Tenant already exists: {existing.name}")
+                # Even when the tenant already exists, ensure a principal is seeded
+                # (idempotent) so storyboard CI works on subsequent docker compose runs.
+                _ensure_default_principal(db_session, existing.tenant_id)
                 from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
                 return serialize_tenant_to_dict(existing)
@@ -341,6 +383,8 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
             db_session.refresh(default_tenant)
 
             logger.info(f"Created default tenant: {default_tenant.name} (id: {default_tenant.tenant_id})")
+
+            _ensure_default_principal(db_session, default_tenant.tenant_id)
 
             from src.core.utils.tenant_utils import serialize_tenant_to_dict
 

@@ -469,6 +469,11 @@ jobs:
         node-version: '22'
 
     - name: Start salesagent stack with docker compose
+      env:
+        # Passed through to db-init container so ensure_default_tenant_exists
+        # seeds a default Principal with this token. Must match the value used
+        # in the storyboard step below so the SDK's --auth flag authenticates.
+        ADCP_AUTH_TOKEN: test123
       run: |
         docker compose up -d --wait --wait-timeout 180
 
