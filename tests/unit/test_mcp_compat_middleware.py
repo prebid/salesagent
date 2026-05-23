@@ -8,7 +8,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.mcp_compat_middleware import RequestCompatMiddleware
+from src.core.mcp_compat_middleware import ENVELOPE_FIELDS, RequestCompatMiddleware
 from src.core.request_compat import NormalizationResult
 
 
@@ -178,3 +178,106 @@ class TestMiddlewareEdgeCases:
             await middleware.on_call_tool(ctx, call_next)
 
             call_next.assert_called_once_with(ctx)
+
+
+class TestEnvelopeFieldStripping:
+    """Envelope metadata fields (adcp_major_version etc.) are stripped at the MCP
+    boundary in all environments so wrappers don't have to declare them.
+
+    Closes #1308 — the @adcp/sdk storyboard runner injects adcp_major_version=3
+    on every tool call as envelope metadata; FastMCP's TypeAdapter would
+    otherwise raise unexpected_keyword_argument before the request reaches the
+    tool. REST (api_v1.py Body schemas with Pydantic extra='ignore') and A2A
+    (parameters.get() lookups) already silently ignore the field; this restores
+    cross-transport symmetry by giving MCP the same behavior.
+    """
+
+    def test_envelope_fields_allowlist_includes_adcp_major_version(self):
+        """The allowlist must include adcp_major_version (the SDK's envelope field).
+
+        Pinning prevents accidental removal — if the allowlist shrinks, the next
+        storyboard CI run regresses with the same unexpected_keyword_argument
+        error documented in #1308.
+        """
+        assert "adcp_major_version" in ENVELOPE_FIELDS
+
+    @pytest.mark.asyncio
+    async def test_adcp_major_version_stripped_before_dispatch(self, middleware):
+        """Envelope field is removed from arguments before call_next runs.
+
+        Verifies the strip happens at the middleware layer — the tool wrapper
+        never sees adcp_major_version, so its signature does not need to
+        declare it (matching the project convention 'declare fields you use').
+        """
+        ctx = _make_context("get_products", {"brief": "ads", "adcp_major_version": 3})
+        captured = {}
+
+        async def capturing_call_next(context):
+            captured["arguments"] = dict(context.message.arguments)
+            return MagicMock()
+
+        with patch("src.core.mcp_compat_middleware.normalize_request_params") as mock_norm:
+            mock_norm.return_value = NormalizationResult(
+                params={"brief": "ads", "adcp_major_version": 3},
+                translations_applied=[],
+            )
+            await middleware.on_call_tool(ctx, capturing_call_next)
+
+        assert "adcp_major_version" not in captured["arguments"], (
+            f"adcp_major_version must be stripped at the MCP boundary, got {captured['arguments']!r}"
+        )
+        assert captured["arguments"] == {"brief": "ads"}, (
+            f"non-envelope fields must be preserved, got {captured['arguments']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_envelope_fields_preserved(self, middleware):
+        """Unknown fields that are NOT envelope metadata still reach call_next.
+
+        Confirms the strip is an allowlist (not a blanket unknown-strip) — the
+        dev loud-fail signal for actual protocol drift stays intact, because
+        only listed envelope fields are removed.
+        """
+        ctx = _make_context("get_products", {"brief": "ads", "unknown_drift_field": "x"})
+        captured = {}
+
+        async def capturing_call_next(context):
+            captured["arguments"] = dict(context.message.arguments)
+            return MagicMock()
+
+        with patch("src.core.mcp_compat_middleware.normalize_request_params") as mock_norm:
+            mock_norm.return_value = NormalizationResult(
+                params={"brief": "ads", "unknown_drift_field": "x"},
+                translations_applied=[],
+            )
+            await middleware.on_call_tool(ctx, capturing_call_next)
+
+        # unknown_drift_field reaches call_next so TypeAdapter raises loudly in dev.
+        assert captured["arguments"].get("unknown_drift_field") == "x"
+
+    @pytest.mark.asyncio
+    async def test_envelope_strip_fires_in_dev_environment(self, middleware):
+        """Strip runs regardless of is_production() — envelope fields are
+        environment-independent metadata, not "tolerated unknown drift".
+
+        Distinct from the Step 2 production-gated unknown-stripping (which keeps
+        the dev loud-fail signal). The envelope strip happens BEFORE step 2.
+        """
+        ctx = _make_context("get_products", {"brief": "ads", "adcp_major_version": 3})
+        captured = {}
+
+        async def capturing_call_next(context):
+            captured["arguments"] = dict(context.message.arguments)
+            return MagicMock()
+
+        with (
+            patch("src.core.mcp_compat_middleware.normalize_request_params") as mock_norm,
+            patch("src.core.config.is_production", return_value=False),
+        ):
+            mock_norm.return_value = NormalizationResult(
+                params={"brief": "ads", "adcp_major_version": 3},
+                translations_applied=[],
+            )
+            await middleware.on_call_tool(ctx, capturing_call_next)
+
+        assert "adcp_major_version" not in captured["arguments"]

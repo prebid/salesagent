@@ -19,6 +19,17 @@ from src.core.request_compat import deep_strip_to_schema, normalize_request_para
 logger = logging.getLogger(__name__)
 
 
+# Spec-defined envelope fields the SDK injects on every tool call as metadata
+# (e.g. @adcp/sdk v6.11.0 adds adcp_major_version=3 to every request bypassing
+# its per-tool field-stripping). These are NOT per-tool wrapper concerns — they
+# describe the transport envelope, not the payload. Stripped at the MCP boundary
+# in ALL environments (dev + production) so wrappers don't have to declare them
+# individually. Add new entries here when the spec defines additional
+# envelope-level metadata. (Allowlist, not blanket-strip — preserves the dev
+# loud-fail signal for actual protocol drift.)
+ENVELOPE_FIELDS: frozenset[str] = frozenset({"adcp_major_version"})
+
+
 class RequestCompatMiddleware(Middleware):
     """Normalize, strip, and provide forward-compatible fallback for MCP tools.
 
@@ -52,6 +63,23 @@ class RequestCompatMiddleware(Middleware):
         normalized = compat_result.params
         if compat_result.translations_applied:
             modified = True
+
+        # Step 1b: Strip envelope-level metadata in ALL environments.
+        # SDK envelope fields (adcp_major_version, etc.) live in ENVELOPE_FIELDS
+        # and don't belong on per-tool wrapper signatures — they describe the
+        # transport envelope, not the payload. This is an explicit allowlist
+        # (not a blanket unknown-strip) so the dev loud-fail signal for actual
+        # protocol drift stays intact.
+        envelope_stripped = [k for k in list(normalized.keys()) if k in ENVELOPE_FIELDS]
+        if envelope_stripped:
+            for k in envelope_stripped:
+                normalized.pop(k)
+            modified = True
+            logger.debug(
+                "Stripped envelope fields from %s: %s",
+                tool_name,
+                ", ".join(envelope_stripped),
+            )
 
         # Step 2: Strip unknown fields (schema-aware, production only)
         # In dev mode, unknown fields reach TypeAdapter and fail loudly —
