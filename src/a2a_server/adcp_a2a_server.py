@@ -4,6 +4,7 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
+import functools
 import json
 import logging
 import uuid
@@ -189,6 +190,38 @@ DISCOVERY_SKILLS = frozenset(
         "get_products",  # Conditional: depends on tenant brand_manifest_policy setting
     }
 )
+
+
+def _a2a_skill(skill_name: str):
+    """Decorator: wrap a skill handler in the canonical AdCPError-passthrough +
+    untyped-Exception → InternalError ladder.
+
+    AdCPError flows through unchanged so the dispatcher's ``except AdCPError``
+    branch (in ``on_message_send``) routes it through
+    ``_build_failed_skill_result`` → the two-layer envelope. Untyped Exception
+    is logged with full traceback (``exc_info=True``) and wrapped in
+    ``InternalError`` with a standardized message — previously each handler
+    picked its own prefix ("Unable to retrieve", "Failed to", "Error in")
+    so semantically identical failures had divergent wire messages.
+
+    Removes ~10 lines of try/except boilerplate per handler (~14 handlers).
+    """
+
+    def decorator(handler):
+        @functools.wraps(handler)
+        async def wrapper(self, *args, **kwargs):
+            try:
+                return await handler(self, *args, **kwargs)
+            except AdCPError:
+                # Let dispatcher translate to wire envelope.
+                raise
+            except Exception as e:
+                logger.error(f"Error in {skill_name} skill: {e}", exc_info=True)
+                raise InternalError(message=f"{skill_name} skill handler failed: {e}") from e
+
+        return wrapper
+
+    return decorator
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -1464,7 +1497,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            result = await handler(parameters, identity)  # type: ignore[arg-type]
+            result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except A2AError:
@@ -1511,6 +1544,7 @@ class AdCPRequestHandler(RequestHandler):
         # at the call site, which routes them through `_build_failed_skill_result`
         # for uniform envelope shape. No catch-all here.
 
+    @_a2a_skill("get_products")
     async def _handle_get_products_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_products skill invocation.
 
@@ -1519,44 +1553,37 @@ class AdCPRequestHandler(RequestHandler):
         NOTE: Authentication is OPTIONAL for this endpoint. Access depends on tenant's
         brand_manifest_policy setting (public/require_brand/require_auth).
         """
-        try:
-            brief = parameters.get("brief", "")
-            brand = parameters.get("brand")
-            filters = parameters.get("filters")
+        brief = parameters.get("brief", "")
+        brand = parameters.get("brand")
+        filters = parameters.get("filters")
 
-            # Call core function with identity — _impl validates search criteria
-            response = await core_get_products_tool(
-                brief=brief,
-                brand=brand,
-                filters=filters,
-                property_list=parameters.get("property_list"),
-                context=parameters.get("context"),
-                identity=identity,
-            )
+        # Call core function with identity — _impl validates search criteria
+        response = await core_get_products_tool(
+            brief=brief,
+            brand=brand,
+            filters=filters,
+            property_list=parameters.get("property_list"),
+            context=parameters.get("context"),
+            identity=identity,
+        )
 
-            # Apply v2 compat for pre-3.0 clients at the boundary
-            from src.core.version_compat import apply_version_compat
+        # Apply v2 compat for pre-3.0 clients at the boundary
+        from src.core.version_compat import apply_version_compat
 
-            adcp_version = parameters.get("adcp_version")
-            if isinstance(response, dict):
-                response_data = response
-            else:
-                # Capture human-readable message before converting to dict
-                message = str(response)
-                response_data = response.model_dump(mode="json")
-                # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
-                # since returning a dict bypasses that logic
-                response_data["message"] = message
-                response_data.setdefault("success", True)
-            return apply_version_compat("get_products", response_data, adcp_version)
+        adcp_version = parameters.get("adcp_version")
+        if isinstance(response, dict):
+            response_data = response
+        else:
+            # Capture human-readable message before converting to dict
+            message = str(response)
+            response_data = response.model_dump(mode="json")
+            # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
+            # since returning a dict bypasses that logic
+            response_data["message"] = message
+            response_data.setdefault("success", True)
+        return apply_version_compat("get_products", response_data, adcp_version)
 
-        except AdCPError:
-            # Let AdCPError propagate to outer handler for proper translation
-            raise
-        except Exception as e:
-            logger.error(f"Error in get_products skill: {e}")
-            raise InternalError(message=f"Unable to retrieve products: {str(e)}")
-
+    @_a2a_skill("create_media_buy")
     async def _handle_create_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
@@ -1569,249 +1596,212 @@ class AdCPRequestHandler(RequestHandler):
         Per AdCP v2.2.0 spec, budget is specified at the PACKAGE level, not top level.
         Legacy format (product_ids, total_budget, start_date, end_date) is NOT supported.
         """
-        try:
-            tool_context = self._make_tool_context(identity, "create_media_buy")
+        tool_context = self._make_tool_context(identity, "create_media_buy")
 
-            # Parse parameters into typed request model (validation at A2A boundary)
-            from pydantic import ValidationError
+        # Parse parameters into typed request model (validation at A2A boundary)
+        from pydantic import ValidationError
 
-            from src.core.schemas import CreateMediaBuyRequest
+        from src.core.schemas import CreateMediaBuyRequest
 
-            # Pre-process: A2A field name translations
-            params = {**parameters}
-            if "custom_targeting" in params:
-                params.setdefault("targeting_overlay", params.pop("custom_targeting"))
-            # Set A2A defaults for optional fields
-            params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
-            # buyer_ref removed in adcp 3.12
+        # Pre-process: A2A field name translations
+        params = {**parameters}
+        if "custom_targeting" in params:
+            params.setdefault("targeting_overlay", params.pop("custom_targeting"))
+        # Set A2A defaults for optional fields
+        params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
+        # buyer_ref removed in adcp 3.12
 
-            # push_notification_config is an A2A *transport-layer* parameter
-            # (injected by _handle_explicit_skill from the SendMessageConfiguration).
-            # It is forwarded to core_create_media_buy_tool as a SEPARATE argument
-            # below — exactly like create_media_buy_raw / the MCP wrapper, which
-            # never fold it into CreateMediaBuyRequest. Validating it as part of
-            # the request body would apply the adcp Authentication.credentials
-            # MinLen(32) constraint to the whole create_media_buy, so a short
-            # webhook credential would (incorrectly) divert the request away from
-            # the manual-approval gate (gh-#1299).
-            push_notification_config = params.pop("push_notification_config", None)
+        # push_notification_config is an A2A *transport-layer* parameter
+        # (injected by _handle_explicit_skill from the SendMessageConfiguration).
+        # It is forwarded to core_create_media_buy_tool as a SEPARATE argument
+        # below — exactly like create_media_buy_raw / the MCP wrapper, which
+        # never fold it into CreateMediaBuyRequest. Validating it as part of
+        # the request body would apply the adcp Authentication.credentials
+        # MinLen(32) constraint to the whole create_media_buy, so a short
+        # webhook credential would (incorrectly) divert the request away from
+        # the manual-approval gate (gh-#1299).
+        push_notification_config = params.pop("push_notification_config", None)
 
-            # Coerce string brand shorthand to BrandReference dict (A2A may send "acme.com")
-            if isinstance(params.get("brand"), str):
-                params["brand"] = {"domain": params["brand"]}
+        # Coerce string brand shorthand to BrandReference dict (A2A may send "acme.com")
+        if isinstance(params.get("brand"), str):
+            params["brand"] = {"domain": params["brand"]}
 
-            # Validate required AdCP parameters (packages is optional in model but required by spec).
-            # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch
-            # routes through `_build_failed_skill_result` -> `_build_error_envelope`, producing
-            # the single two-layer envelope wire shape. Returning a custom dict here bypasses
-            # the envelope builder and erases the real code on the buyer side.
-            required_params = ["brand", "packages", "start_time", "end_time"]
-            missing_params = [p for p in required_params if p not in params]
-            if missing_params:
-                raise AdCPValidationError(
-                    f"Missing required AdCP parameters: {missing_params}",
-                    suggestion=f"Required: {required_params}",
-                )
-
-            try:
-                req = CreateMediaBuyRequest.model_validate(params)
-            except ValidationError as e:
-                raise AdCPValidationError(f"Invalid parameters: {e}") from e
-
-            # Call core function with validated parameters and identity.
-            # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
-            # PackageRequest; only request-level spec fields are forwarded here.
-            response = await core_create_media_buy_tool(
-                brand=params.get("brand"),
-                po_number=req.po_number,
-                packages=params["packages"],  # Required — validated above
-                start_time=params.get("start_time"),
-                end_time=params.get("end_time"),
-                push_notification_config=push_notification_config,
-                reporting_webhook=params.get("reporting_webhook"),
-                context=params.get("context"),
-                identity=identity,
+        # Validate required AdCP parameters (packages is optional in model but required by spec).
+        # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch
+        # routes through `_build_failed_skill_result` -> `_build_error_envelope`, producing
+        # the single two-layer envelope wire shape. Returning a custom dict here bypasses
+        # the envelope builder and erases the real code on the buyer side.
+        required_params = ["brand", "packages", "start_time", "end_time"]
+        missing_params = [p for p in required_params if p not in params]
+        if missing_params:
+            raise AdCPValidationError(
+                f"Missing required AdCP parameters: {missing_params}",
+                suggestion=f"Required: {required_params}",
             )
 
-            return response
+        try:
+            req = CreateMediaBuyRequest.model_validate(params)
+        except ValidationError as e:
+            raise AdCPValidationError(f"Invalid parameters: {e}") from e
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in create_media_buy skill: {e}")
-            raise InternalError(message=f"Failed to create media buy: {str(e)}")
+        # Call core function with validated parameters and identity.
+        # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
+        # PackageRequest; only request-level spec fields are forwarded here.
+        response = await core_create_media_buy_tool(
+            brand=params.get("brand"),
+            po_number=req.po_number,
+            packages=params["packages"],  # Required — validated above
+            start_time=params.get("start_time"),
+            end_time=params.get("end_time"),
+            push_notification_config=push_notification_config,
+            reporting_webhook=params.get("reporting_webhook"),
+            context=params.get("context"),
+            identity=identity,
+        )
 
+        return response
+
+    @_a2a_skill("sync_creatives")
     async def _handle_sync_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit sync_creatives skill invocation (AdCP spec endpoint)."""
-        try:
-            # DEBUG: Log incoming parameters
-            logger.info(f"[A2A sync_creatives] Received parameters keys: {list(parameters.keys())}")
-            logger.info(f"[A2A sync_creatives] assignments param: {parameters.get('assignments')}")
-            logger.info(f"[A2A sync_creatives] creatives count: {len(parameters.get('creatives', []))}")
+        # DEBUG: Log incoming parameters
+        logger.info(f"[A2A sync_creatives] Received parameters keys: {list(parameters.keys())}")
+        logger.info(f"[A2A sync_creatives] assignments param: {parameters.get('assignments')}")
+        logger.info(f"[A2A sync_creatives] creatives count: {len(parameters.get('creatives', []))}")
 
-            # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._make_tool_context(identity, "sync_creatives")
+        # Create ToolContext from A2A auth info and resolve identity
+        tool_context = self._make_tool_context(identity, "sync_creatives")
 
-            # Map A2A parameters - creatives is required.
-            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-            if "creatives" not in parameters:
-                raise AdCPValidationError(
-                    "Missing required parameter: 'creatives'",
-                    suggestion="Required: ['creatives']",
-                )
-
-            # Construct typed models at the A2A boundary (Pydantic validation at entry).
-            # Pre-process format_id: upgrade legacy strings to FormatId models.
-            from src.core.format_cache import upgrade_legacy_format_id
-
-            creatives = []
-            for c in parameters["creatives"]:
-                if isinstance(c, dict) and "format_id" in c:
-                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
-                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
-
-            ctx_param = parameters.get("context")
-            context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
-
-            # Call core function with spec-compliant parameters (AdCP v2.5)
-            response = core_sync_creatives_tool(
-                creatives=creatives,
-                # AdCP 2.5: Full upsert semantics (patch parameter removed)
-                creative_ids=parameters.get("creative_ids"),
-                assignments=parameters.get("assignments"),
-                delete_missing=parameters.get("delete_missing", False),
-                dry_run=parameters.get("dry_run", False),
-                validation_mode=parameters.get("validation_mode", "strict"),
-                push_notification_config=parameters.get("push_notification_config"),
-                context=context,
-                account=_coerce_account_reference(parameters.get("account")),
-                identity=identity,
+        # Map A2A parameters - creatives is required.
+        # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
+        if "creatives" not in parameters:
+            raise AdCPValidationError(
+                "Missing required parameter: 'creatives'",
+                suggestion="Required: ['creatives']",
             )
 
-            return response
+        # Construct typed models at the A2A boundary (Pydantic validation at entry).
+        # Pre-process format_id: upgrade legacy strings to FormatId models.
+        from src.core.format_cache import upgrade_legacy_format_id
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in sync_creatives skill: {e}")
-            raise InternalError(message=f"Failed to sync creatives: {str(e)}")
+        creatives = []
+        for c in parameters["creatives"]:
+            if isinstance(c, dict) and "format_id" in c:
+                c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+            creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
 
+        ctx_param = parameters.get("context")
+        context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
+
+        # Call core function with spec-compliant parameters (AdCP v2.5)
+        response = core_sync_creatives_tool(
+            creatives=creatives,
+            # AdCP 2.5: Full upsert semantics (patch parameter removed)
+            creative_ids=parameters.get("creative_ids"),
+            assignments=parameters.get("assignments"),
+            delete_missing=parameters.get("delete_missing", False),
+            dry_run=parameters.get("dry_run", False),
+            validation_mode=parameters.get("validation_mode", "strict"),
+            push_notification_config=parameters.get("push_notification_config"),
+            context=context,
+            account=_coerce_account_reference(parameters.get("account")),
+            identity=identity,
+        )
+
+        return response
+
+    @_a2a_skill("list_creatives")
     async def _handle_list_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit list_creatives skill invocation (AdCP spec endpoint)."""
-        try:
-            # Create ToolContext from A2A auth info and resolve identity
-            tool_context = self._make_tool_context(identity, "list_creatives")
+        # Create ToolContext from A2A auth info and resolve identity
+        tool_context = self._make_tool_context(identity, "list_creatives")
 
-            # Call core function with optional parameters (fixing original validation bug)
-            response = core_list_creatives_tool(
-                media_buy_id=parameters.get("media_buy_id"),
-                status=parameters.get("status"),
-                format=parameters.get("format"),
-                tags=parameters.get("tags", []),
-                created_after=parameters.get("created_after"),
-                created_before=parameters.get("created_before"),
-                search=parameters.get("search"),
-                page=parameters.get("page", 1),
-                limit=parameters.get("limit", 50),
-                sort_by=parameters.get("sort_by", "created_date"),
-                sort_order=parameters.get("sort_order", "desc"),
-                context=parameters.get("context"),
-                identity=identity,
-            )
+        # Call core function with optional parameters (fixing original validation bug)
+        response = core_list_creatives_tool(
+            media_buy_id=parameters.get("media_buy_id"),
+            status=parameters.get("status"),
+            format=parameters.get("format"),
+            tags=parameters.get("tags", []),
+            created_after=parameters.get("created_after"),
+            created_before=parameters.get("created_before"),
+            search=parameters.get("search"),
+            page=parameters.get("page", 1),
+            limit=parameters.get("limit", 50),
+            sort_by=parameters.get("sort_by", "created_date"),
+            sort_order=parameters.get("sort_order", "desc"),
+            context=parameters.get("context"),
+            identity=identity,
+        )
 
-            return response
+        return response
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in list_creatives skill: {e}")
-            raise InternalError(message=f"Failed to list creatives: {str(e)}")
-
+    @_a2a_skill("create_creative")
     async def _handle_create_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit create_creative skill invocation."""
-        try:
-            tool_context = self._make_tool_context(identity, "create_creative")
+        tool_context = self._make_tool_context(identity, "create_creative")
 
-            # Map A2A parameters - format_id, content_uri, and name are required.
-            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-            required_params = ["format_id", "content_uri", "name"]
-            missing_params = [param for param in required_params if param not in parameters]
+        # Map A2A parameters - format_id, content_uri, and name are required.
+        # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
+        required_params = ["format_id", "content_uri", "name"]
+        missing_params = [param for param in required_params if param not in parameters]
 
-            if missing_params:
-                raise AdCPValidationError(
-                    f"Missing required parameters: {missing_params}",
-                    suggestion=f"Required: {required_params}",
-                )
+        if missing_params:
+            raise AdCPValidationError(
+                f"Missing required parameters: {missing_params}",
+                suggestion=f"Required: {required_params}",
+            )
 
-            # TODO: Implement create_creative tool
-            # Call core function with individual parameters
-            # response = core_create_creative_tool(...)
-            raise UnsupportedOperationError(message="create_creative skill not yet implemented")
+        # TODO: Implement create_creative tool
+        # Call core function with individual parameters
+        # response = core_create_creative_tool(...)
+        raise UnsupportedOperationError(message="create_creative skill not yet implemented")
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in create_creative skill: {e}")
-            raise InternalError(message=f"Failed to create creative: {str(e)}")
-
+    @_a2a_skill("get_creatives")
     async def _handle_get_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_creatives skill invocation."""
-        try:
-            tool_context = self._make_tool_context(identity, "get_creatives")
+        tool_context = self._make_tool_context(identity, "get_creatives")
 
-            # TODO: Implement get_creatives tool
-            # identity already resolved at transport boundary
-            # response = core_get_creatives_tool(
-            #     group_id=parameters.get("group_id"),
-            #     media_buy_id=parameters.get("media_buy_id"),
-            #     status=parameters.get("status"),
-            #     tags=parameters.get("tags", []),
-            #     include_assignments=parameters.get("include_assignments", False),
-            #     identity=identity,
-            # )
-            raise UnsupportedOperationError(message="get_creatives skill not yet implemented")
+        # TODO: Implement get_creatives tool
+        # identity already resolved at transport boundary
+        # response = core_get_creatives_tool(
+        #     group_id=parameters.get("group_id"),
+        #     media_buy_id=parameters.get("media_buy_id"),
+        #     status=parameters.get("status"),
+        #     tags=parameters.get("tags", []),
+        #     include_assignments=parameters.get("include_assignments", False),
+        #     identity=identity,
+        # )
+        raise UnsupportedOperationError(message="get_creatives skill not yet implemented")
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in get_creatives skill: {e}")
-            raise InternalError(message=f"Failed to get creatives: {str(e)}")
-
+    @_a2a_skill("assign_creative")
     async def _handle_assign_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit assign_creative skill invocation."""
-        try:
-            tool_context = self._make_tool_context(identity, "assign_creative")
+        tool_context = self._make_tool_context(identity, "assign_creative")
 
-            # Map A2A parameters - media_buy_id, package_id, and creative_id are required.
-            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-            required_params = ["media_buy_id", "package_id", "creative_id"]
-            missing_params = [param for param in required_params if param not in parameters]
+        # Map A2A parameters - media_buy_id, package_id, and creative_id are required.
+        # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
+        required_params = ["media_buy_id", "package_id", "creative_id"]
+        missing_params = [param for param in required_params if param not in parameters]
 
-            if missing_params:
-                raise AdCPValidationError(
-                    f"Missing required parameters: {missing_params}",
-                    suggestion=f"Required: {required_params}",
-                )
+        if missing_params:
+            raise AdCPValidationError(
+                f"Missing required parameters: {missing_params}",
+                suggestion=f"Required: {required_params}",
+            )
 
-            # TODO: Implement assign_creative tool
-            # identity already resolved at transport boundary
-            # response = core_assign_creative_tool(
-            #     media_buy_id=parameters["media_buy_id"],
-            #     package_id=parameters["package_id"],
-            #     creative_id=parameters["creative_id"],
-            #     weight=parameters.get("weight", 100),
-            #     percentage_goal=parameters.get("percentage_goal"),
-            #     rotation_type=parameters.get("rotation_type", "weighted"),
-            #     override_click_url=parameters.get("override_click_url"),
-            #     identity=identity,
-            # )
-            raise UnsupportedOperationError(message="assign_creative skill not yet implemented")
-
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in assign_creative skill: {e}")
-            raise InternalError(message=f"Failed to assign creative: {str(e)}")
+        # TODO: Implement assign_creative tool
+        # identity already resolved at transport boundary
+        # response = core_assign_creative_tool(
+        #     media_buy_id=parameters["media_buy_id"],
+        #     package_id=parameters["package_id"],
+        #     creative_id=parameters["creative_id"],
+        #     weight=parameters.get("weight", 100),
+        #     percentage_goal=parameters.get("percentage_goal"),
+        #     rotation_type=parameters.get("rotation_type", "weighted"),
+        #     override_click_url=parameters.get("override_click_url"),
+        #     identity=identity,
+        # )
+        raise UnsupportedOperationError(message="assign_creative skill not yet implemented")
 
     async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit approve_creative skill invocation."""
@@ -1827,68 +1817,56 @@ class AdCPRequestHandler(RequestHandler):
         """Handle explicit optimize_media_buy skill invocation."""
         raise UnsupportedOperationError(message="optimize_media_buy skill not yet implemented")
 
+    @_a2a_skill("get_adcp_capabilities")
     async def _handle_get_adcp_capabilities_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).
 
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
         Returns agent capabilities including supported protocols, targeting, and portfolio info.
         """
-        try:
-            # Identity already resolved at transport boundary (on_message_send)
+        # Identity already resolved at transport boundary (on_message_send)
 
-            # Import and call the core implementation
-            from src.core.tools.capabilities import get_adcp_capabilities_raw
+        # Import and call the core implementation
+        from src.core.tools.capabilities import get_adcp_capabilities_raw
 
-            # Call core function with identity
-            response = await get_adcp_capabilities_raw(
-                protocols=parameters.get("protocols"),
-                identity=identity,
-            )
+        # Call core function with identity
+        response = await get_adcp_capabilities_raw(
+            protocols=parameters.get("protocols"),
+            identity=identity,
+        )
 
-            return response
+        return response
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in get_adcp_capabilities skill: {e}")
-            raise InternalError(message=f"Unable to retrieve AdCP capabilities: {str(e)}")
-
+    @_a2a_skill("list_creative_formats")
     async def _handle_list_creative_formats_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_creative_formats skill invocation (CRITICAL AdCP endpoint).
 
         NOTE: Authentication is OPTIONAL for this endpoint since it returns public discovery data.
         """
-        try:
-            # Identity already resolved at transport boundary (on_message_send)
+        # Identity already resolved at transport boundary (on_message_send)
 
-            # Build request from parameters (all optional)
-            # Use local schema (extends library type) for proper type compatibility
-            from src.core.schemas import ListCreativeFormatsRequest
+        # Build request from parameters (all optional)
+        # Use local schema (extends library type) for proper type compatibility
+        from src.core.schemas import ListCreativeFormatsRequest
 
-            req = ListCreativeFormatsRequest(
-                format_ids=parameters.get("format_ids"),
-                output_format_ids=parameters.get("output_format_ids"),
-                input_format_ids=parameters.get("input_format_ids"),
-                is_responsive=parameters.get("is_responsive"),
-                name_search=parameters.get("name_search"),
-                asset_types=parameters.get("asset_types"),
-                min_width=parameters.get("min_width"),
-                max_width=parameters.get("max_width"),
-                min_height=parameters.get("min_height"),
-                max_height=parameters.get("max_height"),
-                context=parameters.get("context"),
-            )
+        req = ListCreativeFormatsRequest(
+            format_ids=parameters.get("format_ids"),
+            output_format_ids=parameters.get("output_format_ids"),
+            input_format_ids=parameters.get("input_format_ids"),
+            is_responsive=parameters.get("is_responsive"),
+            name_search=parameters.get("name_search"),
+            asset_types=parameters.get("asset_types"),
+            min_width=parameters.get("min_width"),
+            max_width=parameters.get("max_width"),
+            min_height=parameters.get("min_height"),
+            max_height=parameters.get("max_height"),
+            context=parameters.get("context"),
+        )
 
-            # Call core function with identity
-            response = core_list_creative_formats_tool(req=req, identity=identity)
+        # Call core function with identity
+        response = core_list_creative_formats_tool(req=req, identity=identity)
 
-            return response
-
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in list_creative_formats skill: {e}")
-            raise InternalError(message=f"Unable to retrieve creative formats: {str(e)}")
+        return response
 
     async def _handle_list_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_accounts skill invocation.
@@ -1921,6 +1899,7 @@ class AdCPRequestHandler(RequestHandler):
         )
         return await core_sync_accounts_tool(req=request, identity=identity)
 
+    @_a2a_skill("list_authorized_properties")
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None
     ) -> Any:
@@ -1931,107 +1910,89 @@ class AdCPRequestHandler(RequestHandler):
 
         Per AdCP v2.4 spec, returns publisher_domains (not properties/tags).
         """
-        try:
-            # Identity already resolved at transport boundary (on_message_send)
+        # Identity already resolved at transport boundary (on_message_send)
 
-            # Map A2A parameters to ListAuthorizedPropertiesRequest
-            # Note: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0, use local schema
-            from src.core.schemas import ListAuthorizedPropertiesRequest
+        # Map A2A parameters to ListAuthorizedPropertiesRequest
+        # Note: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0, use local schema
+        from src.core.schemas import ListAuthorizedPropertiesRequest
 
-            # Warn about deprecated 'tags' parameter (removed in AdCP 2.5)
-            if "tags" in parameters:
-                logger.warning(
-                    "Deprecated parameter 'tags' passed to list_authorized_properties. "
-                    "This parameter was removed in AdCP 2.5 and will be ignored."
-                )
-
-            request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
-
-            # Call core function with identity
-            response = core_list_authorized_properties_tool(req=request, identity=identity)
-
-            return response
-
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in list_authorized_properties skill: {e}")
-            raise InternalError(message=f"Unable to retrieve authorized properties: {str(e)}")
-
-    async def _handle_update_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle explicit update_media_buy skill invocation (CRITICAL for campaign management)."""
-        try:
-            # Identity already resolved at transport boundary (on_message_send)
-
-            # Parse parameters into typed request model (validation at A2A boundary)
-            from pydantic import ValidationError
-
-            from src.core.schemas import UpdateMediaBuyRequest
-
-            # Pre-process: support legacy 'updates.packages' → 'packages'
-            params = {**parameters}
-            if "packages" not in params and "updates" in params:
-                legacy_updates = params.pop("updates")
-                if isinstance(legacy_updates, dict) and "packages" in legacy_updates:
-                    params["packages"] = legacy_updates["packages"]
-
-            # media_buy_id is required
-            if "media_buy_id" not in params:
-                raise InvalidParamsError(message="Missing required parameter: 'media_buy_id'")
-
-            # Validate top-level fields via typed model (packages validated by _raw
-            # which handles legacy formats with extra fields like 'status')
-            try:
-                req = UpdateMediaBuyRequest(
-                    media_buy_id=params.get("media_buy_id"),
-                    paused=params.get("paused"),
-                    start_time=params.get("start_time"),
-                    end_time=params.get("end_time"),
-                    context=params.get("context"),
-                )
-            except ValidationError as e:
-                raise InvalidParamsError(message=f"Invalid parameters: {e}")
-
-            # Call core function with validated fields + raw nested structures and identity
-            response = core_update_media_buy_tool(
-                media_buy_id=req.media_buy_id or "",
-                paused=req.paused,
-                start_time=params.get("start_time"),
-                end_time=params.get("end_time"),
-                budget=params.get("budget"),
-                packages=params.get("packages"),
-                push_notification_config=params.get("push_notification_config"),
-                context=params.get("context"),
-                identity=identity,
+        # Warn about deprecated 'tags' parameter (removed in AdCP 2.5)
+        if "tags" in parameters:
+            logger.warning(
+                "Deprecated parameter 'tags' passed to list_authorized_properties. "
+                "This parameter was removed in AdCP 2.5 and will be ignored."
             )
 
-            return response
+        request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in update_media_buy skill: {e}")
-            raise InternalError(message=f"Unable to update media buy: {str(e)}")
+        # Call core function with identity
+        response = core_list_authorized_properties_tool(req=request, identity=identity)
 
+        return response
+
+    @_a2a_skill("update_media_buy")
+    async def _handle_update_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+        """Handle explicit update_media_buy skill invocation (CRITICAL for campaign management)."""
+        # Identity already resolved at transport boundary (on_message_send)
+
+        # Parse parameters into typed request model (validation at A2A boundary)
+        from pydantic import ValidationError
+
+        from src.core.schemas import UpdateMediaBuyRequest
+
+        # Pre-process: support legacy 'updates.packages' → 'packages'
+        params = {**parameters}
+        if "packages" not in params and "updates" in params:
+            legacy_updates = params.pop("updates")
+            if isinstance(legacy_updates, dict) and "packages" in legacy_updates:
+                params["packages"] = legacy_updates["packages"]
+
+        # media_buy_id is required
+        if "media_buy_id" not in params:
+            raise InvalidParamsError(message="Missing required parameter: 'media_buy_id'")
+
+        # Validate top-level fields via typed model (packages validated by _raw
+        # which handles legacy formats with extra fields like 'status')
+        try:
+            req = UpdateMediaBuyRequest(
+                media_buy_id=params.get("media_buy_id"),
+                paused=params.get("paused"),
+                start_time=params.get("start_time"),
+                end_time=params.get("end_time"),
+                context=params.get("context"),
+            )
+        except ValidationError as e:
+            raise InvalidParamsError(message=f"Invalid parameters: {e}")
+
+        # Call core function with validated fields + raw nested structures and identity
+        response = core_update_media_buy_tool(
+            media_buy_id=req.media_buy_id or "",
+            paused=req.paused,
+            start_time=params.get("start_time"),
+            end_time=params.get("end_time"),
+            budget=params.get("budget"),
+            packages=params.get("packages"),
+            push_notification_config=params.get("push_notification_config"),
+            context=params.get("context"),
+            identity=identity,
+        )
+
+        return response
+
+    @_a2a_skill("get_media_buys")
     async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> Any:
         """Handle get_media_buys skill invocation."""
-        try:
-            from src.core.schemas import GetMediaBuysRequest
-            from src.core.tools.media_buy_list import _get_media_buys_impl
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_list import _get_media_buys_impl
 
-            params = {**parameters}
-            include_snapshot = params.pop("include_snapshot", False)
-            req = GetMediaBuysRequest.model_validate(params)
-            response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
+        params = {**parameters}
+        include_snapshot = params.pop("include_snapshot", False)
+        req = GetMediaBuysRequest.model_validate(params)
+        response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
-            return response
+        return response
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in get_media_buys skill: {e}")
-            raise InternalError(message=f"Unable to get media buys: {str(e)}")
-
+    @_a2a_skill("get_media_buy_delivery")
     async def _handle_get_media_buy_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_delivery skill invocation (CRITICAL for monitoring).
 
@@ -2044,79 +2005,66 @@ class AdCPRequestHandler(RequestHandler):
         When no media_buy_ids are provided, returns delivery data for all media buys
         the requester has access to, filtered by the provided criteria.
         """
-        try:
-            # Identity already resolved at transport boundary (on_message_send)
+        # Identity already resolved at transport boundary (on_message_send)
 
-            # Parse parameters into typed request model (validation at A2A boundary)
-            # Pre-process: support singular media_buy_id (legacy) → media_buy_ids (spec)
-            from src.core.schemas import GetMediaBuyDeliveryRequest
+        # Parse parameters into typed request model (validation at A2A boundary)
+        # Pre-process: support singular media_buy_id (legacy) → media_buy_ids (spec)
+        from src.core.schemas import GetMediaBuyDeliveryRequest
 
-            params = {**parameters}
-            if "media_buy_ids" not in params and "media_buy_id" in params:
-                params["media_buy_ids"] = [params.pop("media_buy_id")]
+        params = {**parameters}
+        if "media_buy_ids" not in params and "media_buy_id" in params:
+            params["media_buy_ids"] = [params.pop("media_buy_id")]
 
-            req = GetMediaBuyDeliveryRequest.model_validate(params)
+        req = GetMediaBuyDeliveryRequest.model_validate(params)
 
-            # Call core function with validated fields (all optional per AdCP spec).
-            # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
-            # transport boundary completeness): reporting_dimensions,
-            # attribution_window, include_package_daily_breakdown and account
-            # were previously dropped, silently discarding the buyer's
-            # requested attribution window (gh-#1299 follow-up).
-            # Pass raw values for fields where _raw handles its own type coercion
-            # (e.g., status_filter str→MediaBuyStatus, date str→date).
-            response = core_get_media_buy_delivery_tool(
-                media_buy_ids=req.media_buy_ids,
-                status_filter=params.get("status_filter"),
-                start_date=params.get("start_date"),
-                end_date=params.get("end_date"),
-                reporting_dimensions=req.reporting_dimensions,
-                attribution_window=req.attribution_window,
-                include_package_daily_breakdown=req.include_package_daily_breakdown,
-                account=params.get("account"),
-                context=params.get("context"),
-                identity=identity,
-            )
+        # Call core function with validated fields (all optional per AdCP spec).
+        # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
+        # transport boundary completeness): reporting_dimensions,
+        # attribution_window, include_package_daily_breakdown and account
+        # were previously dropped, silently discarding the buyer's
+        # requested attribution window (gh-#1299 follow-up).
+        # Pass raw values for fields where _raw handles its own type coercion
+        # (e.g., status_filter str→MediaBuyStatus, date str→date).
+        response = core_get_media_buy_delivery_tool(
+            media_buy_ids=req.media_buy_ids,
+            status_filter=params.get("status_filter"),
+            start_date=params.get("start_date"),
+            end_date=params.get("end_date"),
+            reporting_dimensions=req.reporting_dimensions,
+            attribution_window=req.attribution_window,
+            include_package_daily_breakdown=req.include_package_daily_breakdown,
+            account=params.get("account"),
+            context=params.get("context"),
+            identity=identity,
+        )
 
-            return response
+        return response
 
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in get_media_buy_delivery skill: {e}")
-            raise InternalError(message=f"Unable to get media buy delivery: {str(e)}")
-
+    @_a2a_skill("update_performance_index")
     async def _handle_update_performance_index_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
+        # Identity already resolved at transport boundary (on_message_send)
+
+        # Parse parameters into typed request model (validation at A2A boundary)
+        from pydantic import ValidationError
+
+        from src.core.schemas import UpdatePerformanceIndexRequest
+
         try:
-            # Identity already resolved at transport boundary (on_message_send)
+            req = UpdatePerformanceIndexRequest.model_validate(parameters)
+        except ValidationError as e:
+            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
+            raise AdCPValidationError(f"Invalid parameters: {e}") from e
 
-            # Parse parameters into typed request model (validation at A2A boundary)
-            from pydantic import ValidationError
+        # Call core function with validated fields and identity
+        response = core_update_performance_index_tool(
+            media_buy_id=req.media_buy_id,
+            performance_data=[p.model_dump(mode="json") for p in req.performance_data],
+            context=req.context,
+            identity=identity,
+        )
 
-            from src.core.schemas import UpdatePerformanceIndexRequest
-
-            try:
-                req = UpdatePerformanceIndexRequest.model_validate(parameters)
-            except ValidationError as e:
-                # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-                raise AdCPValidationError(f"Invalid parameters: {e}") from e
-
-            # Call core function with validated fields and identity
-            response = core_update_performance_index_tool(
-                media_buy_id=req.media_buy_id,
-                performance_data=[p.model_dump(mode="json") for p in req.performance_data],
-                context=req.context,
-                identity=identity,
-            )
-
-            return response
-
-        except AdCPError:
-            raise  # Let _handle_explicit_skill translate to proper A2A error
-        except Exception as e:
-            logger.error(f"Error in update_performance_index skill: {e}")
-            raise InternalError(message=f"Unable to update performance index: {str(e)}")
+        return response
 
     async def _get_products(self, query: str, identity: ResolvedIdentity | None) -> dict:
         """Get available advertising products by calling core functions directly.
