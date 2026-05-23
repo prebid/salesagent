@@ -349,6 +349,7 @@ class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentB
     by_package: list[AdapterPackageDelivery]
     currency: str
     daily_breakdown: list[dict] | None = None  # Optional day-by-day delivery metrics
+    ext: dict[str, Any] | None = None  # Adapter-private delivery metadata
 
 
 # ---------------------------------------------------------------------------

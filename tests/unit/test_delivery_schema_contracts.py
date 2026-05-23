@@ -333,7 +333,7 @@ class TestAdapterPackageDelivery:
 
 class TestAdapterGetMediaBuyDeliveryResponse:
     def test_fields(self):
-        expected = {"media_buy_id", "reporting_period", "totals", "by_package", "currency", "daily_breakdown"}
+        expected = {"media_buy_id", "reporting_period", "totals", "by_package", "currency", "daily_breakdown", "ext"}
         assert set(AdapterGetMediaBuyDeliveryResponse.model_fields.keys()) == expected
 
     def test_construction(self):

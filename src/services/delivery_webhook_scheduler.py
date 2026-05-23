@@ -328,9 +328,10 @@ class DeliveryWebhookScheduler:
             # Heartbeat reports for pending_start/paused buys carry no real
             # delivery yet; flag partial_data so receivers can route on it.
             # Determined per-delivery: a buy in any non-active state should
-            # mark the response as partial.
+            # mark the response as partial. Preserve adapter/core partial-data
+            # signals too, e.g. FreeWheel Nightly Forecast snapshot fallback.
             non_active_status_strs = {"pending_start", "paused", "ready"}
-            partial = any(
+            partial = bool(getattr(delivery_response, "partial_data", False)) or any(
                 str(getattr(d, "status", "") or "").lower() in non_active_status_strs
                 for d in (delivery_response.media_buy_deliveries or [])
             )

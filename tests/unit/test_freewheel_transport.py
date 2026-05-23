@@ -69,7 +69,7 @@ class TestPasswordGrant:
         assert post_call.args[0].endswith("/auth/token")
         assert post_call.kwargs["data"] == {
             "grant_type": "password",
-            "user_id": "user@example.com",
+            "username": "user@example.com",
             "password": "hunter2",
         }
         # The subsequent GET used the minted token as the bearer

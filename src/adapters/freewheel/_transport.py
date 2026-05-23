@@ -207,7 +207,7 @@ class FreeWheelTransport:
             url,
             data={
                 "grant_type": "password",
-                "user_id": self._username,
+                "username": self._username,
                 "password": self._password,
             },
             timeout=self.timeout,

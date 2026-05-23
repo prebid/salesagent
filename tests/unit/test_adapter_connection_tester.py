@@ -369,7 +369,7 @@ class TestSpringServeProbe:
         fault = result.details["vendor_fault"]
         assert fault["vendor"] == "springserve"
         assert fault["phase"] == "supply_probe"
-        assert fault["endpoint"] == "/supply/tags"
+        assert fault["endpoint"] == "/supply_tags"
         assert fault["vendor_status"] == 403
 
     def test_404_on_supply_probe_classified_as_permission_denied(self):
@@ -390,12 +390,12 @@ class TestSpringServeProbe:
         fault = result.details["vendor_fault"]
         assert fault["vendor"] == "springserve"
         assert fault["phase"] == "supply_probe"
-        assert fault["endpoint"] == "/supply/tags"
+        assert fault["endpoint"] == "/supply_tags"
         assert fault["vendor_status"] == 404
         assert fault["vendor_message"] == "Not Found"
 
     def test_5xx_on_supply_probe_classified_as_upstream_unavailable(self):
-        """5xx from /supply/tags = SpringServe is unhealthy. Distinct from
+        """5xx from /supply_tags = SpringServe is unhealthy. Distinct from
         connection_failed (we never reached them) — retry-eligible."""
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
             client = mock_cls.return_value
@@ -410,7 +410,7 @@ class TestSpringServeProbe:
     def test_auth_failure_attaches_fault_details(self):
         """All SpringServe fail paths must emit a vendor_fault block.
 
-        Phase/endpoint are always ``supply_probe`` / ``/supply/tags`` —
+        Phase/endpoint are always ``supply_probe`` / ``/supply_tags`` —
         ``client.probe()`` always targets the supply endpoint, and any
         token mint that happens is an internal implementation detail of
         the transport. Don't label exceptions with a speculative ``/auth``
@@ -425,7 +425,7 @@ class TestSpringServeProbe:
         fault = result.details["vendor_fault"]
         assert fault["vendor"] == "springserve"
         assert fault["phase"] == "supply_probe"
-        assert fault["endpoint"] == "/supply/tags"
+        assert fault["endpoint"] == "/supply_tags"
         assert fault["vendor_status"] == 401
 
     def test_bare_exception_does_not_leak_str_exc(self):
@@ -438,7 +438,7 @@ class TestSpringServeProbe:
             client = mock_cls.return_value
             client.probe.side_effect = ConnectionError(
                 "HTTPSConnectionPool(host='internal-host.staging.local', port=443): "
-                "Max retries exceeded with url: /supply/tags"
+                "Max retries exceeded with url: /supply_tags"
             )
             result = probe_adapter_connection("springserve", self._config())
         fault = result.details["vendor_fault"]
@@ -454,6 +454,7 @@ class TestSpringServeProbe:
             result = probe_adapter_connection("springserve", self._config())
         assert result.success is True
         assert result.error_code is None
+        client.probe.assert_called_once_with("GET", "/supply_tags?per_page=1")
 
 
 class TestRoutingTable:
@@ -632,6 +633,7 @@ class TestSpringServePreview:
         assert preview.ok is True
         assert preview.network_name == "ops@pub.com"
         assert preview.inventory_reachable is True
+        client.probe.assert_called_once_with("GET", "/supply_tags?per_page=1")
 
     def test_auth_failure_surfaces_inline(self):
         from src.adapters.springserve._transport import SpringServeAuthError
@@ -647,7 +649,7 @@ class TestSpringServePreview:
         fault = preview.details["vendor_fault"]
         assert fault["vendor"] == "springserve"
         assert fault["phase"] == "supply_probe"
-        assert fault["endpoint"] == "/supply/tags"
+        assert fault["endpoint"] == "/supply_tags"
 
     def test_404_on_supply_probe_surfaces_as_permission_denied(self):
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:

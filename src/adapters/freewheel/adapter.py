@@ -67,8 +67,11 @@ Live coverage:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
+
+from adcp.types.aliases import Package as ResponsePackage
 
 from src.adapters.base import (
     AdapterCapabilities,
@@ -87,6 +90,7 @@ from src.adapters.freewheel.targeting import build_targeting, validate_targeting
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
 from src.core.database.repositories.freewheel_placement_stats import FreeWheelPlacementStatsRepository
+from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -104,6 +108,8 @@ from src.core.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+NIGHTLY_FORECAST_CACHE_TTL = timedelta(hours=20)
 
 
 class FreeWheelAdapter(AdServerAdapter):
@@ -652,10 +658,21 @@ class FreeWheelAdapter(AdServerAdapter):
         try:
             campaign = self._client.commercial.create_campaign(name=buy_name, advertiser_id=int(self.advertiser_id))
             io = self._client.commercial.create_insertion_order(name=buy_name, campaign_id=campaign.id)
+            platform_line_item_ids: dict[str, str] = {}
+            package_responses: list[ResponsePackage] = []
             for package in packages:
-                self._client.commercial.create_placement(
+                placement = self._client.commercial.create_placement(
                     name=package.name or package.package_id,
                     insertion_order_id=io.id,
+                )
+                placement_id = str(placement.id)
+                platform_line_item_ids[package.package_id] = placement_id
+                package_responses.append(
+                    ResponsePackage(
+                        package_id=package.package_id,
+                        paused=False,
+                        platform_line_item_id=placement_id,
+                    )
                 )
         except FreeWheelError as exc:
             logger.warning("FreeWheel create_media_buy failed: %s body=%s", exc, exc.body)
@@ -669,7 +686,14 @@ class FreeWheelAdapter(AdServerAdapter):
                 ]
             )
 
-        return self._build_create_success(request, f"freewheel_{io.id}", packages)
+        response = self._build_create_success(
+            request,
+            f"freewheel_{io.id}",
+            packages,
+            package_responses=package_responses,
+        )
+        object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
+        return response
 
     def _buy_name(self, request: CreateMediaBuyRequest) -> str:
         """Derive a human-readable buy name from the AdCP request.
@@ -870,14 +894,27 @@ class FreeWheelAdapter(AdServerAdapter):
             repo = FreeWheelPlacementStatsRepository(session, self.tenant_id or "default")
             stats_rows = repo.list_by_insertion_order(insertion_order_id)
 
+        forecast_backed = False
+        if self._nightly_forecast_cache_stale(stats_rows, today):
+            refreshed_rows = self._refresh_nightly_forecasts_for_media_buy(media_buy_id)
+            if refreshed_rows:
+                stats_rows = self._merge_stats_by_placement(stats_rows, refreshed_rows)
+                forecast_backed = True
         if not stats_rows:
             raise DeliveryDataUnavailable(media_buy_id)
-        return self._aggregate_stat_rows_to_delivery_response(
+        response = self._aggregate_stat_rows_to_delivery_response(
             media_buy_id,
             date_range,
             stats_rows,
             package_id_attr="placement_id",
         )
+        if forecast_backed:
+            response.ext = {
+                "data_source": "freewheel_nightly_forecast",
+                "partial_data": True,
+                "note": "Latest FreeWheel nightly forecast snapshot, not an exact report for the requested period.",
+            }
+        return response
 
     def get_packages_snapshot(
         self, package_refs: list[tuple[str, str, str | None]]
@@ -904,6 +941,16 @@ class FreeWheelAdapter(AdServerAdapter):
         with get_db_session() as session:
             repo = FreeWheelPlacementStatsRepository(session, self.tenant_id or "default")
             stats = repo.get_by_placement_ids(placement_ids)
+
+        stale_refs = [
+            ref
+            for ref in package_refs
+            if ref[2] is not None and (ref[2] not in stats or self._nightly_forecast_cache_stale([stats[ref[2]]], now))
+        ]
+        if stale_refs and not self.dry_run and self._client is not None:
+            refreshed = self._refresh_nightly_forecasts_for_package_refs(stale_refs)
+            if refreshed:
+                stats.update(self._stats_by_placement(refreshed))
 
         for media_buy_id, package_id, placement_id in package_refs:
             row = stats.get(placement_id) if placement_id else None
@@ -938,6 +985,118 @@ class FreeWheelAdapter(AdServerAdapter):
                 currency=row.currency,
             )
         return result
+
+    def _refresh_nightly_forecasts_for_media_buy(self, media_buy_id: str) -> list[Any]:
+        """Fetch nightly forecast rows for the packages stored on one buy."""
+        if self.dry_run or self._client is None:
+            return []
+
+        with get_db_session() as session:
+            media_buy_repo = MediaBuyRepository(session, self.tenant_id or "default")
+            package_refs: list[tuple[str, str, str | None]] = []
+            for package in media_buy_repo.get_packages(media_buy_id):
+                placement_id = (package.package_config or {}).get("platform_line_item_id")
+                if placement_id:
+                    package_refs.append((media_buy_id, package.package_id, str(placement_id)))
+
+        return self._refresh_nightly_forecasts_for_package_refs(package_refs)
+
+    def _refresh_nightly_forecasts_for_package_refs(self, package_refs: list[tuple[str, str, str | None]]) -> list[Any]:
+        """Fetch and cache nightly forecast snapshots for package refs.
+
+        Returns freshly-read cache rows. Individual placement failures are
+        logged and skipped so one missing/permission-denied placement does not
+        hide data for the rest of the buy.
+        """
+        if self.dry_run or self._client is None:
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for media_buy_id, _package_id, placement_id in package_refs:
+            if not placement_id:
+                continue
+            try:
+                forecast = self._client.forecasting.nightly_forecast(placement_id)
+            except FreeWheelError as exc:
+                logger.info("FreeWheel nightly forecast unavailable for placement %s: %s", placement_id, exc)
+                continue
+            rows.append(self._forecast_to_stats_row(forecast, media_buy_id.removeprefix("freewheel_")))
+
+        if not rows:
+            return []
+
+        with get_db_session() as session:
+            repo = FreeWheelPlacementStatsRepository(session, self.tenant_id or "default")
+            repo.bulk_upsert(rows)
+            session.commit()
+            return list(repo.get_by_placement_ids(row["placement_id"] for row in rows).values())
+
+    @staticmethod
+    def _stats_by_placement(stats_rows: list[Any]) -> dict[str, Any]:
+        return {str(row.placement_id): row for row in stats_rows}
+
+    @staticmethod
+    def _merge_stats_by_placement(cached_rows: list[Any], refreshed_rows: list[Any]) -> list[Any]:
+        rows_by_placement = FreeWheelAdapter._stats_by_placement(cached_rows)
+        rows_by_placement.update(FreeWheelAdapter._stats_by_placement(refreshed_rows))
+        return list(rows_by_placement.values())
+
+    @staticmethod
+    def _nightly_forecast_cache_stale(stats_rows: list[Any], now: datetime) -> bool:
+        """Return True when cached forecast/reporting rows are old enough to refresh.
+
+        The delivery webhook scheduler runs hourly but sends at most once per
+        24 hours. A 20-hour TTL refreshes the first daily send after FreeWheel's
+        nightly forecast has had a chance to roll forward, without hammering the
+        endpoint during dashboard polling.
+        """
+        if not stats_rows:
+            return True
+
+        now_utc = now if now.tzinfo else now.replace(tzinfo=UTC)
+        for row in stats_rows:
+            synced_at = getattr(row, "last_synced_at", None)
+            if not isinstance(synced_at, datetime):
+                synced_at = getattr(row, "as_of", None)
+            if not isinstance(synced_at, datetime):
+                return True
+            synced_at_utc = synced_at if synced_at.tzinfo else synced_at.replace(tzinfo=UTC)
+            if now_utc - synced_at_utc >= NIGHTLY_FORECAST_CACHE_TTL:
+                return True
+        return False
+
+    @staticmethod
+    def _forecast_to_stats_row(forecast: Any, insertion_order_id: str | None) -> dict[str, Any]:
+        run_time = FreeWheelAdapter._parse_forecast_run_time(getattr(forecast, "run_time", None))
+        delivered_budget = getattr(forecast, "delivered_budget", None)
+        return {
+            "placement_id": str(forecast.placement_id),
+            "insertion_order_id": insertion_order_id,
+            "impressions": int(getattr(forecast, "delivered_impressions", None) or 0),
+            "completed_views": None,
+            "clicks": None,
+            "spend_micros": FreeWheelAdapter._decimal_to_micros(delivered_budget),
+            "currency": getattr(forecast, "exchange_currency", None),
+            "delivery_status": "delivering" if (getattr(forecast, "delivered_impressions", None) or 0) > 0 else None,
+            "as_of": run_time,
+            "last_synced_at": datetime.now(UTC),
+        }
+
+    @staticmethod
+    def _decimal_to_micros(value: Decimal | None) -> int:
+        if value is None:
+            return 0
+        return int(value * Decimal("1000000"))
+
+    @staticmethod
+    def _parse_forecast_run_time(value: str | None) -> datetime:
+        if not value:
+            return datetime.now(UTC)
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.now(UTC)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
     # FreeWheel performance index updates aren't yet wired — base default applies.
 

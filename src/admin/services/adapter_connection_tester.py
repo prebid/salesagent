@@ -202,7 +202,7 @@ _GAM_PHASE = "get_current_network"
 _GAM_ENDPOINT = "NetworkService.getCurrentNetwork"
 
 _SS_PHASE_PROBE = "supply_probe"
-_SS_ENDPOINT_SUPPLY = "/supply/tags"
+_SS_ENDPOINT_SUPPLY = "/supply_tags"
 
 _FW_PHASE_TOKEN_INFO = "token_info"
 _FW_ENDPOINT_TOKEN_INFO = "/auth/token/info"
@@ -642,11 +642,11 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
 
     Two-step probe mirroring the FreeWheel pattern:
 
-    1. ``GET /auth/check`` via the transport's token cache — the first
+    1. ``GET /supply_tags?per_page=1`` via the transport's token cache — the first
        authenticated call mints (or validates) the bearer. Email-grant
        credentials hit ``POST /auth`` here; bad password surfaces as
        :class:`SpringServeAuthError`.
-    2. ``GET /supply/tags?per_page=1`` — proves the bearer is scoped to
+    2. The supply-tags response proves the bearer is scoped to
        a publisher account with supply inventory. Analogous to FreeWheel's
        ``list_sites`` probe and GAM's ``getCurrentNetwork``.
     """

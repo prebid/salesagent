@@ -316,6 +316,8 @@ def _get_media_buy_delivery_impl(
                         impressions = int(adapter_response.totals.impressions)
                         adapter_conversions = getattr(adapter_response.totals, "conversions", None)
                         adapter_viewability = getattr(adapter_response.totals, "viewability", None)
+                        if isinstance(adapter_response.ext, dict):
+                            adapter_ext = dict(adapter_response.ext)
 
                         # Persist a delivery snapshot on the media buy so the
                         # publisher dashboard can read pacing without making
@@ -622,6 +624,8 @@ def _get_media_buy_delivery_impl(
         else:
             next_expected_at = None
 
+        partial_data = any(isinstance(d.ext, dict) and d.ext.get("partial_data") for d in deliveries)
+
         # sequence_number: persistent auto-increment per media buy via WebhookDeliveryLog
         sequence_number = None
         # FIXME(salesagent-9f2): delivery UoW should provide DeliveryRepository directly
@@ -661,6 +665,7 @@ def _get_media_buy_delivery_impl(
             errors=not_found_errors or None,
             context=context_val,
             notification_type=notification_type,
+            partial_data=partial_data or None,
             sequence_number=sequence_number,
             next_expected_at=next_expected_at,
         )

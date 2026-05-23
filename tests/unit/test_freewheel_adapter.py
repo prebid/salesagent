@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock
 
 import pytest
@@ -133,6 +134,9 @@ class TestLiveCreateMediaBuy:
         # media_buy_id reflects the IO (not the Campaign) — IO is the
         # commercial transaction in Mapping A.
         assert response.media_buy_id == "freewheel_900002"
+        assert response._platform_line_item_ids == {sample_packages[0].package_id: "900003"}
+        assert response.packages is not None
+        assert response.packages[0].platform_line_item_id == "900003"
 
     def test_upstream_error_returns_error_response(self, mock_principal, sample_request, sample_packages):
         from src.adapters.freewheel import FreeWheelError
@@ -164,6 +168,147 @@ class TestCheckMediaBuyStatus:
 
         adapter._client.commercial.get_insertion_order.assert_called_once_with(900002)
         assert result.status == "booked"
+
+
+class TestNightlyForecastDelivery:
+    def test_get_media_buy_delivery_fetches_nightly_forecast_when_cache_empty(self, mock_principal, monkeypatch):
+        from src.adapters.freewheel.entities import NightlyForecast
+        from src.core.schemas import ReportingPeriod
+
+        adapter = FreeWheelAdapter(
+            config={"api_token": "t"},
+            principal=mock_principal,
+            dry_run=False,
+            tenant_id="tenant_fw_1",
+        )
+        adapter._client = MagicMock()
+        adapter._client.forecasting.nightly_forecast.return_value = NightlyForecast(
+            placement_id=900003,
+            run_time="2026-05-22T12:00:00Z",
+            delivered_impressions=12_345,
+            delivered_budget="67.89",
+            exchange_currency="EUR",
+        )
+
+        saved_rows: list[dict] = []
+
+        class FakeStatsRepo:
+            def __init__(self, session, tenant_id):
+                self.tenant_id = tenant_id
+
+            def list_by_insertion_order(self, insertion_order_id):
+                assert insertion_order_id == "900002"
+                return []
+
+            def bulk_upsert(self, rows):
+                saved_rows.extend(rows)
+                return len(rows)
+
+            def get_by_placement_ids(self, placement_ids):
+                ids = set(placement_ids)
+                return {row["placement_id"]: SimpleNamespace(**row) for row in saved_rows if row["placement_id"] in ids}
+
+        class FakeMediaBuyRepo:
+            def __init__(self, session, tenant_id):
+                self.tenant_id = tenant_id
+
+            def get_packages(self, media_buy_id):
+                assert media_buy_id == "freewheel_900002"
+                return [
+                    SimpleNamespace(
+                        package_id="pkg_1",
+                        package_config={"platform_line_item_id": "900003"},
+                    )
+                ]
+
+        monkeypatch.setattr("src.adapters.freewheel.adapter.FreeWheelPlacementStatsRepository", FakeStatsRepo)
+        monkeypatch.setattr("src.adapters.freewheel.adapter.MediaBuyRepository", FakeMediaBuyRepo)
+        monkeypatch.setattr(
+            "src.adapters.freewheel.adapter.get_db_session",
+            lambda: __import__("contextlib").nullcontext(MagicMock()),
+        )
+
+        date_range = ReportingPeriod(start=datetime.now(UTC), end=datetime.now(UTC))
+        response = adapter.get_media_buy_delivery("freewheel_900002", date_range, datetime.now(UTC))
+
+        adapter._client.forecasting.nightly_forecast.assert_called_once_with("900003")
+        assert saved_rows[0]["insertion_order_id"] == "900002"
+        assert saved_rows[0]["impressions"] == 12_345
+        assert saved_rows[0]["spend_micros"] == 67_890_000
+        assert response.totals.impressions == 12_345.0
+        assert response.totals.spend == 67.89
+        assert response.currency == "EUR"
+        assert response.ext == {
+            "data_source": "freewheel_nightly_forecast",
+            "partial_data": True,
+            "note": "Latest FreeWheel nightly forecast snapshot, not an exact report for the requested period.",
+        }
+
+    def test_get_media_buy_delivery_merges_stale_cache_with_partial_refresh(self, mock_principal, monkeypatch):
+        from src.core.schemas import ReportingPeriod
+
+        adapter = FreeWheelAdapter(
+            config={"api_token": "t"},
+            principal=mock_principal,
+            dry_run=False,
+            tenant_id="tenant_fw_1",
+        )
+        adapter._client = MagicMock()
+
+        now = datetime(2026, 5, 23, 12, 0, tzinfo=UTC)
+        stale_row = SimpleNamespace(
+            placement_id="900003",
+            impressions=100,
+            completed_views=None,
+            spend_micros=1_000_000,
+            currency="EUR",
+            as_of=now - timedelta(days=2),
+            last_synced_at=now - timedelta(days=2),
+        )
+        retained_row = SimpleNamespace(
+            placement_id="900004",
+            impressions=200,
+            completed_views=None,
+            spend_micros=2_000_000,
+            currency="EUR",
+            as_of=now - timedelta(days=2),
+            last_synced_at=now - timedelta(days=2),
+        )
+        fresh_row = SimpleNamespace(
+            placement_id="900003",
+            impressions=12_345,
+            completed_views=None,
+            spend_micros=67_890_000,
+            currency="EUR",
+            as_of=now,
+            last_synced_at=now,
+        )
+
+        class FakeStatsRepo:
+            def __init__(self, session, tenant_id):
+                self.tenant_id = tenant_id
+
+            def list_by_insertion_order(self, insertion_order_id):
+                assert insertion_order_id == "900002"
+                return [stale_row, retained_row]
+
+        refresh = MagicMock(return_value=[fresh_row])
+        monkeypatch.setattr("src.adapters.freewheel.adapter.FreeWheelPlacementStatsRepository", FakeStatsRepo)
+        monkeypatch.setattr(
+            "src.adapters.freewheel.adapter.get_db_session",
+            lambda: __import__("contextlib").nullcontext(MagicMock()),
+        )
+        monkeypatch.setattr(adapter, "_refresh_nightly_forecasts_for_media_buy", refresh)
+
+        date_range = ReportingPeriod(start=now, end=now)
+        response = adapter.get_media_buy_delivery("freewheel_900002", date_range, now)
+
+        refresh.assert_called_once_with("freewheel_900002")
+        assert response.totals.impressions == 12_545.0
+        assert response.totals.spend == 69.89
+        assert {package.package_id for package in response.by_package} == {"900003", "900004"}
+        assert response.ext is not None
+        assert response.ext["partial_data"] is True
 
 
 class TestClientConstruction:

@@ -20,6 +20,7 @@ expected fields are present, but unexpected fields must not break parsing.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any, Generic, TypeVar
 
 from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field
@@ -337,3 +338,30 @@ class Placement(_CommercialEntity):
     external_id: str | None = None
     instruction: str | None = None
     schedule: Annotated[Schedule | None, _OptionalNested] = None
+
+
+class NightlyForecast(_APIModel):
+    """Forecasting API v4 nightly result for a single placement.
+
+    The endpoint returns the latest nightly forecast snapshot for a FreeWheel
+    placement. It is not a full reporting export, but it includes current
+    delivered impressions/budget and final-delivery projections, which are
+    enough to back AdCP pacing surfaces when the Query Reporting API is not
+    granted.
+    """
+
+    placement_id: int
+    run_time: str | None = None
+    on_schedule_indicator: int | None = None
+    unconstrained_gross_available: int | None = None
+    gross_available: int | None = None
+    net_available: int | None = None
+    net_unreserved_available: int | None = None
+    exchange_currency: str | None = None
+    budget_is_shared: bool | None = None
+    budget: str | None = None
+    delivered_budget: Decimal | None = None
+    delivered_impressions: int | None = None
+    forecast_to_be_delivered_budget: Decimal | None = None
+    forecast_to_be_delivered_impressions: int | None = None
+    forecast_final_delivery_rate: int | None = None
