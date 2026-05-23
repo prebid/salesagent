@@ -76,9 +76,9 @@ def _response_attribution_window(ctx: dict) -> dict[str, Any]:
     resp_dict = resp.model_dump(mode="json") if hasattr(resp, "model_dump") else resp
     assert isinstance(resp_dict, dict), f"Cannot serialize response: {resp!r}"
     aw = resp_dict.get("attribution_window")
-    assert (
-        aw is not None
-    ), f"Response is missing attribution_window — production must populate it. Response keys: {sorted(resp_dict)}"
+    assert aw is not None, (
+        f"Response is missing attribution_window — production must populate it. Response keys: {sorted(resp_dict)}"
+    )
     assert isinstance(aw, dict), f"attribution_window should be an object, got {aw!r}"
     return aw
 
@@ -1388,15 +1388,15 @@ def then_has_metrics(ctx: dict) -> None:
     d = deliveries[0]
     totals = getattr(d, "totals", None)
     assert totals is not None, "Delivery data missing totals"
-    assert (
-        totals.impressions is not None and totals.impressions >= 0
-    ), f"Expected impressions to be a non-negative number, got {totals.impressions!r}"
-    assert (
-        totals.spend is not None and totals.spend >= 0
-    ), f"Expected spend to be a non-negative number, got {totals.spend!r}"
-    assert (
-        totals.clicks is not None and totals.clicks >= 0
-    ), f"Expected clicks to be a non-negative number, got {totals.clicks!r}"
+    assert totals.impressions is not None and totals.impressions >= 0, (
+        f"Expected impressions to be a non-negative number, got {totals.impressions!r}"
+    )
+    assert totals.spend is not None and totals.spend >= 0, (
+        f"Expected spend to be a non-negative number, got {totals.spend!r}"
+    )
+    assert totals.clicks is not None and totals.clicks >= 0, (
+        f"Expected clicks to be a non-negative number, got {totals.clicks!r}"
+    )
 
 
 @then("the delivery data should include package-level breakdowns")
@@ -1448,12 +1448,12 @@ def then_has_aggregated_totals(ctx: dict) -> None:
     assert resp is not None, "Expected a response"
     agg = getattr(resp, "aggregated_totals", None)
     assert agg is not None, "Response missing aggregated_totals"
-    assert (
-        agg.impressions is not None and agg.impressions >= 0
-    ), f"aggregated_totals.impressions should be a non-negative number, got {agg.impressions!r}"
-    assert (
-        agg.spend is not None and agg.spend >= 0
-    ), f"aggregated_totals.spend should be a non-negative number, got {agg.spend!r}"
+    assert agg.impressions is not None and agg.impressions >= 0, (
+        f"aggregated_totals.impressions should be a non-negative number, got {agg.impressions!r}"
+    )
+    assert agg.spend is not None and agg.spend >= 0, (
+        f"aggregated_totals.spend should be a non-negative number, got {agg.spend!r}"
+    )
 
 
 @then("the aggregated impressions should equal the sum of individual impressions")
@@ -1562,18 +1562,18 @@ def then_webhook_post(ctx: dict) -> None:
     call_args = env.mock["post"].call_args
     called_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
     configured_url = ctx.get("webhook_url", "https://example.com/webhook")
-    assert (
-        called_url == configured_url
-    ), f"Webhook POST went to wrong URL: expected {configured_url!r}, got {called_url!r}"
+    assert called_url == configured_url, (
+        f"Webhook POST went to wrong URL: expected {configured_url!r}, got {called_url!r}"
+    )
 
 
 @then(parsers.parse('the payload should include delivery metrics for "{mb_id}"'))
 def then_webhook_payload_has_metrics(ctx: dict, mb_id: str) -> None:
     """Assert webhook payload includes the media_buy_id for the requested buy."""
     payload = _get_last_webhook_payload(ctx)
-    assert (
-        payload.get("media_buy_id") == mb_id
-    ), f"Expected payload['media_buy_id'] == {mb_id!r}, got {payload.get('media_buy_id')!r}"
+    assert payload.get("media_buy_id") == mb_id, (
+        f"Expected payload['media_buy_id'] == {mb_id!r}, got {payload.get('media_buy_id')!r}"
+    )
 
 
 @then("the payload should include the reporting_period")
@@ -1582,18 +1582,18 @@ def then_webhook_payload_has_period(ctx: dict) -> None:
     payload = _get_last_webhook_payload(ctx)
     period = payload.get("reporting_period")
     assert period is not None, f"Webhook payload missing 'reporting_period': {list(payload.keys())}"
-    assert (
-        period.get("start") is not None and period.get("end") is not None
-    ), f"reporting_period must have non-None start and end: {period}"
+    assert period.get("start") is not None and period.get("end") is not None, (
+        f"reporting_period must have non-None start and end: {period}"
+    )
 
 
 @then(parsers.parse('the payload notification_type should be "{ntype}"'))
 def then_notification_type(ctx: dict, ntype: str) -> None:
     """Assert notification type matches expected value."""
     payload = _get_last_webhook_payload(ctx)
-    assert (
-        payload.get("notification_type") == ntype
-    ), f"Expected notification_type={ntype!r}, got {payload.get('notification_type')!r}"
+    assert payload.get("notification_type") == ntype, (
+        f"Expected notification_type={ntype!r}, got {payload.get('notification_type')!r}"
+    )
 
 
 @then(parsers.re(r"the payload (?P<next_expected>.+) include next_expected_at"))
@@ -1605,9 +1605,9 @@ def then_next_expected(ctx: dict, next_expected: str) -> None:
     if should_include:
         assert has_key, f"Expected 'next_expected_at' in webhook payload but was absent: {list(payload.keys())}"
     else:
-        assert (
-            not has_key or payload["next_expected_at"] is None
-        ), f"Expected 'next_expected_at' to be absent or null, got {payload.get('next_expected_at')!r}"
+        assert not has_key or payload["next_expected_at"] is None, (
+            f"Expected 'next_expected_at' to be absent or null, got {payload.get('next_expected_at')!r}"
+        )
 
 
 @then("each report should have a higher sequence_number than the previous")
@@ -1618,9 +1618,9 @@ def then_sequence_ascending(ctx: dict) -> None:
     seq_nums = [call[1].get("json", {}).get("sequence_number") for call in calls]
     for i in range(1, len(seq_nums)):
         assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
-        assert (
-            seq_nums[i] > seq_nums[i - 1]
-        ), f"sequence_number not ascending at index {i}: {seq_nums[i - 1]} -> {seq_nums[i]}"
+        assert seq_nums[i] > seq_nums[i - 1], (
+            f"sequence_number not ascending at index {i}: {seq_nums[i - 1]} -> {seq_nums[i]}"
+        )
 
 
 @then("the first sequence_number should be >= 1")
@@ -1638,9 +1638,9 @@ def then_first_sequence(ctx: dict) -> None:
 def then_no_aggregated_in_payload(ctx: dict) -> None:
     """Assert webhook payload excludes aggregated_totals (polling-only field)."""
     payload = _get_last_webhook_payload(ctx)
-    assert (
-        "aggregated_totals" not in payload
-    ), f"Webhook payload should not contain 'aggregated_totals' (polling-only field): got keys {list(payload.keys())}"
+    assert "aggregated_totals" not in payload, (
+        f"Webhook payload should not contain 'aggregated_totals' (polling-only field): got keys {list(payload.keys())}"
+    )
 
 
 @then("the system should retry up to 3 times")
@@ -1670,16 +1670,16 @@ def then_exponential_backoff(ctx: dict) -> None:
 def then_retry_with_backoff(ctx: dict) -> None:
     """Assert at most 4 POST calls (1 original + 3 retries) with exponential sleep growth."""
     env = ctx["env"]
-    assert (
-        env.mock["post"].call_count <= 4
-    ), f"Expected at most 4 calls (1 + 3 retries), got {env.mock['post'].call_count}"
+    assert env.mock["post"].call_count <= 4, (
+        f"Expected at most 4 calls (1 + 3 retries), got {env.mock['post'].call_count}"
+    )
     sleep_calls = env.mock["sleep"].call_args_list
     assert len(sleep_calls) >= 1, "Expected at least one sleep call between retries"
     durations = [c[0][0] for c in sleep_calls]
     for i in range(1, len(durations)):
-        assert (
-            durations[i] >= durations[i - 1] * 1.5
-        ), f"Sleep durations are not growing exponentially: {[f'{d:.2f}' for d in durations]}"
+        assert durations[i] >= durations[i - 1] * 1.5, (
+            f"Sleep durations are not growing exponentially: {[f'{d:.2f}' for d in durations]}"
+        )
 
 
 @then("the system should not retry the delivery")
@@ -1768,9 +1768,9 @@ def then_config_rejected(ctx: dict) -> None:
     error = ctx["error"]
     msg = str(error).lower()
     rejection_keywords = {"reject", "invalid", "validation", "minimum", "too short", "credential", "length", "required"}
-    assert any(
-        kw in msg for kw in rejection_keywords
-    ), f"Expected a rejection/validation error message, but got: {error!r}. Expected one of: {rejection_keywords}"
+    assert any(kw in msg for kw in rejection_keywords), (
+        f"Expected a rejection/validation error message, but got: {error!r}. Expected one of: {rejection_keywords}"
+    )
 
 
 @then("the error should indicate minimum credential length is 32 characters")
@@ -1842,9 +1842,9 @@ def then_bearer_header(ctx: dict, header: str) -> None:
     """Assert bearer token header is present and starts with 'Bearer '."""
     headers = _get_last_webhook_headers(ctx)
     assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
-    assert headers[header].startswith(
-        "Bearer "
-    ), f"Header {header!r} should be a Bearer token but got: {headers[header]!r}"
+    assert headers[header].startswith("Bearer "), (
+        f"Header {header!r} should be a Bearer token but got: {headers[header]!r}"
+    )
 
 
 # ── Response field presence assertions ─────────────────────────────
@@ -1907,9 +1907,9 @@ def then_error_no_reveal(ctx: dict) -> None:
     # The media_buy_id should not be echoed back in a way that confirms existence
     mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
     if mb_id:
-        assert (
-            msg.count(mb_id.lower()) <= 1
-        ), f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
+        assert msg.count(mb_id.lower()) <= 1, (
+            f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
+        )
 
 
 # ── Webhook skip assertions ─────────────────────────────────────────
@@ -1963,9 +1963,9 @@ def then_packages_exclude_breakdown(ctx: dict, field: str) -> None:
     packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
     for pkg in packages:
         value = getattr(pkg, field, None)
-        assert not isinstance(
-            value, list
-        ), f"Package {pkg.package_id!r} should not have '{field}' breakdown array: {value!r}"
+        assert not isinstance(value, list), (
+            f"Package {pkg.package_id!r} should not have '{field}' breakdown array: {value!r}"
+        )
 
 
 @then(parsers.parse('the response packages should include "{field}" with at most {n:d} entries'))
@@ -2088,9 +2088,9 @@ def _assert_placement_sorted_by(ctx: dict, metric: str) -> None:
         f"by_placement when reporting_dimensions.placement is requested. Deliveries: {deliveries!r}"
     )
     for placements in non_empty:
-        assert (
-            len(placements) >= 2
-        ), f"placement breakdown must have >= 2 entries for the ordering check to be meaningful, got {placements!r}"
+        assert len(placements) >= 2, (
+            f"placement breakdown must have >= 2 entries for the ordering check to be meaningful, got {placements!r}"
+        )
         values = [(p.get(metric) or 0) for p in placements]
         for earlier, later in zip(values, values[1:], strict=False):
             assert earlier >= later, (
@@ -2139,12 +2139,12 @@ def then_attribution_echo(ctx: dict) -> None:
     assert requested_pc is not None, f"Scenario did not request a post_click window: {requested!r}"
     actual_pc = aw.get("post_click")
     assert actual_pc is not None, f"Response attribution_window did not echo post_click: {aw!r}"
-    assert actual_pc.get("interval") == requested_pc.get(
-        "interval"
-    ), f"post_click interval not echoed: requested {requested_pc!r}, got {actual_pc!r}"
-    assert actual_pc.get("unit") == requested_pc.get(
-        "unit"
-    ), f"post_click unit not echoed: requested {requested_pc!r}, got {actual_pc!r}"
+    assert actual_pc.get("interval") == requested_pc.get("interval"), (
+        f"post_click interval not echoed: requested {requested_pc!r}, got {actual_pc!r}"
+    )
+    assert actual_pc.get("unit") == requested_pc.get("unit"), (
+        f"post_click unit not echoed: requested {requested_pc!r}, got {actual_pc!r}"
+    )
 
 
 @then("the response should include attribution_window with the seller's platform default")
@@ -2170,9 +2170,9 @@ def then_attribution_has_model(ctx: dict) -> None:
     aw = _response_attribution_window(ctx)
     assert "model" in aw, f"attribution_window missing required 'model' field: {aw!r}"
     model = aw.get("model")
-    assert (
-        isinstance(model, str) and model
-    ), f"attribution_window.model must be a non-empty model identifier, got {model!r}"
+    assert isinstance(model, str) and model, (
+        f"attribution_window.model must be a non-empty model identifier, got {model!r}"
+    )
 
 
 @then("the response should include attribution_window with the seller's platform default model")
@@ -2224,9 +2224,9 @@ def then_partial_data(ctx: dict, mb_id: str) -> None:
     deliveries = getattr(resp, "media_buy_deliveries", []) or []
     target = next((d for d in deliveries if d.media_buy_id == mb_id), None)
     assert target is not None, f"No delivery found for {mb_id!r}"
-    assert (
-        target.status == "reporting_delayed"
-    ), f"Expected status='reporting_delayed' for partial/delayed metrics on {mb_id!r}, got {target.status!r}"
+    assert target.status == "reporting_delayed", (
+        f"Expected status='reporting_delayed' for partial/delayed metrics on {mb_id!r}, got {target.status!r}"
+    )
 
 
 @then(parsers.parse('the response should include "{mb_id}" with zero impressions and zero spend'))
@@ -2251,9 +2251,9 @@ def then_no_billing(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     sandbox = getattr(resp, "sandbox", None)
-    assert (
-        sandbox is True
-    ), f"Expected sandbox=True in response indicating no real billing records were created, got sandbox={sandbox!r}"
+    assert sandbox is True, (
+        f"Expected sandbox=True in response indicating no real billing records were created, got sandbox={sandbox!r}"
+    )
     # Secondary: no adapter billing/charge methods should have been called
     env = ctx["env"]
     for mock_name in ("charge", "create_billing_record", "bill"):
@@ -2277,9 +2277,9 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
             for d in deliveries:
                 actual_status = getattr(d, "status", None)
                 if actual_status:
-                    assert (
-                        actual_status in requested_filter
-                    ), f"Status filter violation: got status '{actual_status}' but filter requested {requested_filter}"
+                    assert actual_status in requested_filter, (
+                        f"Status filter violation: got status '{actual_status}' but filter requested {requested_filter}"
+                    )
 
     elif field == "resolution":
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -2288,9 +2288,9 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         if requested_ids and deliveries:
             returned_ids = {getattr(d, "media_buy_id", None) for d in deliveries}
             for req_id in requested_ids:
-                assert (
-                    req_id in returned_ids
-                ), f"Resolution violation: requested media_buy_id '{req_id}' not in response: {returned_ids}"
+                assert req_id in returned_ids, (
+                    f"Resolution violation: requested media_buy_id '{req_id}' not in response: {returned_ids}"
+                )
 
     elif field in ("reporting_dimensions", "reporting dimensions"):
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -2339,9 +2339,9 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
 
         assert "error" in ctx, f"Expected invalid {field} result but operation succeeded"
         error = ctx["error"]
-        assert isinstance(
-            error, (AdCPError, ValidationError)
-        ), f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
+        assert isinstance(error, (AdCPError, ValidationError)), (
+            f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
+        )
     else:
         m = re.match(r'error "(.+?)" with suggestion', expected)
         if m:

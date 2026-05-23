@@ -52,9 +52,9 @@ class TestRawFunctionParameterValidation:
         # Verify all should-be-in-helper params are actually in helper
         missing_in_helper = should_be_in_helper - helper_params
 
-        assert (
-            not missing_in_helper
-        ), f"get_products_raw has parameters not in helper and not documented as valid: {missing_in_helper}"
+        assert not missing_in_helper, (
+            f"get_products_raw has parameters not in helper and not documented as valid: {missing_in_helper}"
+        )
 
     def test_all_raw_functions_have_context_parameter(self):
         """All _raw functions should accept a ctx parameter."""
