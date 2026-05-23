@@ -78,6 +78,7 @@ class CreateMediaBuyBody(BaseModel):
     start_time: str | None = None
     end_time: str | None = None
     po_number: str | None = None
+    idempotency_key: str | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -233,6 +234,7 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
             start_time=body.start_time,
             end_time=body.end_time,
             po_number=body.po_number,
+            idempotency_key=body.idempotency_key,
             identity=identity,
         )
     except ToolError as e:

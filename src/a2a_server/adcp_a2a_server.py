@@ -1540,6 +1540,7 @@ class AdCPRequestHandler(RequestHandler):
                 push_notification_config=push_notification_config,
                 reporting_webhook=params.get("reporting_webhook"),
                 context=params.get("context"),
+                idempotency_key=params.get("idempotency_key"),
                 identity=identity,
             )
 

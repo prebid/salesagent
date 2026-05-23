@@ -4010,6 +4010,16 @@ async def create_media_buy(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
     ext: dict[str, Any] | None = None,
+    idempotency_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional client-supplied key for replay-after-rejection. Retrying with the same key "
+                "returns the cached rejection envelope verbatim; for successful buys, the same key "
+                "returns the original MediaBuy."
+            ),
+        ),
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Create a media buy with the specified parameters.
@@ -4033,6 +4043,7 @@ async def create_media_buy(
         push_notification_config: Push notification config for async notifications (AdCP spec)
         context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
+        idempotency_key: Optional client-supplied key for replay-after-rejection
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -4054,6 +4065,7 @@ async def create_media_buy(
             reporting_webhook=reporting_webhook,
             context=context,
             ext=ext,
+            idempotency_key=idempotency_key,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
@@ -4088,6 +4100,7 @@ async def create_media_buy_raw(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    idempotency_key: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -4108,6 +4121,7 @@ async def create_media_buy_raw(
         push_notification_config: Push notification config for status updates
         context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
+        idempotency_key: Optional client-supplied key for replay-after-rejection
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -4130,6 +4144,7 @@ async def create_media_buy_raw(
             reporting_webhook=to_reporting_webhook(reporting_webhook),
             context=to_context_object(context),
             ext=ext,
+            idempotency_key=idempotency_key,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
