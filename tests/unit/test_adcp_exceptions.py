@@ -293,14 +293,7 @@ class TestRecoveryClassification:
 # ---------------------------------------------------------------------------
 
 
-def _assert_two_layer_envelope(body: dict, expected_code: str, expected_message_substr: str | None = None):
-    """Thin wrapper for callers in this module — delegates to the shared helper.
-
-    See ``tests.helpers.assert_envelope_shape`` for the canonical definition.
-    """
-    from tests.helpers import assert_envelope_shape
-
-    assert_envelope_shape(body, expected_code, message_substr=expected_message_substr)
+from tests.helpers import assert_envelope_shape  # noqa: E402
 
 
 class TestFastAPIExceptionHandlers:
@@ -328,7 +321,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/validation")
         assert response.status_code == 400
-        _assert_two_layer_envelope(response.json(), "VALIDATION_ERROR", "test validation error")
+        assert_envelope_shape(response.json(), "VALIDATION_ERROR", message_substr="test validation error")
 
     def test_authentication_error_returns_401(self):
         """AdCPAuthenticationError raised in a route must return 401."""
@@ -342,7 +335,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
-        _assert_two_layer_envelope(response.json(), "AUTH_REQUIRED")
+        assert_envelope_shape(response.json(), "AUTH_REQUIRED")
 
     def test_not_found_error_returns_404(self):
         """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
@@ -362,7 +355,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/notfound")
         assert response.status_code == 404
-        _assert_two_layer_envelope(response.json(), "INVALID_REQUEST")
+        assert_envelope_shape(response.json(), "INVALID_REQUEST")
 
     def test_adapter_error_returns_502(self):
         """AdCPAdapterError raised in a route must return 502."""
@@ -376,7 +369,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/adapter")
         assert response.status_code == 502
-        _assert_two_layer_envelope(response.json(), "SERVICE_UNAVAILABLE")
+        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE")
 
     def test_conflict_error_returns_409(self):
         """AdCPConflictError raised in a route must return 409."""
@@ -390,7 +383,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        _assert_two_layer_envelope(response.json(), "CONFLICT")
+        assert_envelope_shape(response.json(), "CONFLICT")
 
     def test_gone_error_returns_410(self):
         """AdCPGoneError raised in a route must return 410."""
@@ -404,7 +397,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/gone")
         assert response.status_code == 410
-        _assert_two_layer_envelope(response.json(), "INVALID_STATE")
+        assert_envelope_shape(response.json(), "INVALID_STATE")
 
     def test_budget_exhausted_error_returns_422(self):
         """AdCPBudgetExhaustedError raised in a route must return 422."""
@@ -418,7 +411,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/budget")
         assert response.status_code == 422
-        _assert_two_layer_envelope(response.json(), "BUDGET_EXHAUSTED")
+        assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED")
 
     def test_service_unavailable_error_returns_503(self):
         """AdCPServiceUnavailableError raised in a route must return 503."""
@@ -432,7 +425,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/unavailable")
         assert response.status_code == 503
-        _assert_two_layer_envelope(response.json(), "SERVICE_UNAVAILABLE")
+        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE")
 
     def test_error_response_has_two_layer_envelope(self):
         """Error responses use the spec-compliant two-layer envelope shape."""
@@ -446,7 +439,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/envelope")
         body = response.json()
-        _assert_two_layer_envelope(body, "VALIDATION_ERROR")
+        assert_envelope_shape(body, "VALIDATION_ERROR")
         # Both layers carry recovery
         assert body["adcp_error"]["recovery"] == "correctable"
         assert body["errors"][0]["recovery"] == "correctable"

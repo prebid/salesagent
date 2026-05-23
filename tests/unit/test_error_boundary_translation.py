@@ -30,23 +30,12 @@ from src.core.exceptions import (
 # ---------------------------------------------------------------------------
 from tests.helpers import assert_envelope_shape  # noqa: E402
 
-
-def _assert_mcp_envelope(exc, code, recovery=None, message_substr=None):
-    """MCP-boundary wrapper: validates ``AdCPToolError.envelope`` shape."""
-    from src.core.tool_error_logging import AdCPToolError
-
-    assert isinstance(exc, AdCPToolError), f"expected AdCPToolError, got {type(exc).__name__}"
-    assert_envelope_shape(exc, code, recovery=recovery, message_substr=message_substr)
-
-
-def _assert_a2a_envelope(exc_data, code, recovery):
-    """A2A wrapper: validates envelope plus top-level backward-compat mirrors."""
-    assert_envelope_shape(exc_data, code, recovery=recovery, check_backward_compat=True)
-
-
-def _assert_rest_envelope(body, code, recovery=None, message_substr=None):
-    """REST wrapper: validates JSON body envelope shape."""
-    assert_envelope_shape(body, code, recovery=recovery, message_substr=message_substr)
+# Per-boundary assertion wrappers (_assert_mcp_envelope, _assert_a2a_envelope,
+# _assert_rest_envelope) were removed in favor of the canonical
+# `assert_envelope_shape` helper. Call sites now use keyword flags directly:
+#   MCP:  assert_envelope_shape(exc, code, check_mcp_tool_error=True, ...)
+#   A2A:  assert_envelope_shape(data, code, recovery=..., check_backward_compat=True)
+#   REST: assert_envelope_shape(body, code, recovery=..., message_substr=...)
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +232,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        _assert_mcp_envelope(exc_info.value, "VALIDATION_ERROR", recovery="correctable")
+        assert_envelope_shape(exc_info.value, "VALIDATION_ERROR", check_mcp_tool_error=True, recovery="correctable")
 
     def test_adcp_adapter_tool_error_carries_transient_recovery(self):
         """AdCPAdapterError → ToolError envelope carries 'transient' recovery."""
@@ -259,7 +248,13 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        _assert_mcp_envelope(exc_info.value, "SERVICE_UNAVAILABLE", recovery="transient", message_substr="GAM down")
+        assert_envelope_shape(
+            exc_info.value,
+            "SERVICE_UNAVAILABLE",
+            check_mcp_tool_error=True,
+            recovery="transient",
+            message_substr="GAM down",
+        )
 
     def test_adcp_auth_becomes_tool_error(self):
         """AdCPAuthenticationError from tool → ToolError envelope with AUTH_REQUIRED + terminal."""
@@ -275,7 +270,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        _assert_mcp_envelope(exc_info.value, "AUTH_REQUIRED", recovery="terminal")
+        assert_envelope_shape(exc_info.value, "AUTH_REQUIRED", check_mcp_tool_error=True, recovery="terminal")
 
     @pytest.mark.asyncio
     async def test_async_adcp_validation_becomes_tool_error(self):
@@ -292,7 +287,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             await wrapped()
 
-        _assert_mcp_envelope(exc_info.value, "VALIDATION_ERROR", recovery="correctable")
+        assert_envelope_shape(exc_info.value, "VALIDATION_ERROR", check_mcp_tool_error=True, recovery="correctable")
 
     def test_tool_error_still_passes_through(self):
         """Existing ToolError behavior must be preserved — re-raised unchanged."""
@@ -393,7 +388,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
         translated = _adcp_to_a2a_error(exc)
         assert isinstance(translated, InvalidParamsError)
         assert "invalid param" in translated.message
-        _assert_a2a_envelope(translated.data, "VALIDATION_ERROR", "correctable")
+        assert_envelope_shape(translated.data, "VALIDATION_ERROR", recovery="correctable", check_backward_compat=True)
 
     @pytest.mark.asyncio
     async def test_adcp_auth_propagates_for_dispatcher_wrap(self):
@@ -423,7 +418,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
         translated = _adcp_to_a2a_error(exc)
         assert isinstance(translated, InvalidRequestError)
         assert "bad token" in translated.message
-        _assert_a2a_envelope(translated.data, "AUTH_REQUIRED", "terminal")
+        assert_envelope_shape(translated.data, "AUTH_REQUIRED", recovery="terminal", check_backward_compat=True)
 
     @pytest.mark.asyncio
     async def test_adcp_adapter_propagates_for_dispatcher_wrap(self):
@@ -452,7 +447,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
         translated = _adcp_to_a2a_error(exc)
         assert isinstance(translated, InternalError)
         assert "GAM down" in translated.message
-        _assert_a2a_envelope(translated.data, "SERVICE_UNAVAILABLE", "transient")
+        assert_envelope_shape(translated.data, "SERVICE_UNAVAILABLE", recovery="transient", check_backward_compat=True)
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
@@ -568,7 +563,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 400
-            _assert_rest_envelope(
+            assert_envelope_shape(
                 response.json(), "VALIDATION_ERROR", recovery="correctable", message_substr="invalid request"
             )
 
@@ -585,7 +580,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 401
-            _assert_rest_envelope(response.json(), "AUTH_REQUIRED", recovery="terminal")
+            assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="terminal")
 
     def test_adcp_not_found_from_impl_returns_404(self):
         """AdCPNotFoundError raised in _impl → REST returns 404 with terminal recovery."""
@@ -602,7 +597,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             assert response.status_code == 404
             # AdCPNotFoundError's NOT_FOUND is INTERNAL_CODES; envelope translates
             # to INVALID_REQUEST so the wire code stays in STANDARD_ERROR_CODES.
-            _assert_rest_envelope(response.json(), "INVALID_REQUEST", recovery="terminal")
+            assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="terminal")
 
     def test_adcp_adapter_from_impl_returns_502(self):
         """AdCPAdapterError raised in _impl → REST returns 502 with transient recovery."""
@@ -617,7 +612,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
-            _assert_rest_envelope(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
+            assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
     def test_adcp_conflict_from_impl_returns_409(self):
         """AdCPConflictError raised in _impl → REST returns 409 with correctable recovery."""
@@ -633,7 +628,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 409
-            _assert_rest_envelope(response.json(), "CONFLICT", recovery="correctable")
+            assert_envelope_shape(response.json(), "CONFLICT", recovery="correctable")
 
     def test_adcp_service_unavailable_from_impl_returns_503(self):
         """AdCPServiceUnavailableError raised in _impl → REST returns 503 with transient recovery."""
@@ -649,7 +644,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 503
-            _assert_rest_envelope(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
+            assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
 
 class TestGlobalToolErrorHandler:
@@ -680,7 +675,7 @@ class TestGlobalToolErrorHandler:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
-            _assert_rest_envelope(response.json(), "MEDIA_BUY_NOT_FOUND", recovery="correctable")
+            assert_envelope_shape(response.json(), "MEDIA_BUY_NOT_FOUND", recovery="correctable")
 
     def test_plain_tool_error_with_known_code_through_global_handler(self):
         """Plain ToolError("VALIDATION_ERROR", "msg") → 400 via global handler + status map."""
@@ -721,7 +716,7 @@ class TestRESTSymmetricValueErrorAndPermissionError:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 400
-            _assert_rest_envelope(
+            assert_envelope_shape(
                 response.json(),
                 "VALIDATION_ERROR",
                 recovery="correctable",
@@ -741,7 +736,7 @@ class TestRESTSymmetricValueErrorAndPermissionError:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 403
-            _assert_rest_envelope(
+            assert_envelope_shape(
                 response.json(),
                 "AUTH_REQUIRED",
                 message_substr="tenant scope mismatch",
@@ -991,8 +986,12 @@ class TestCustomRecoveryOverrideMCPBoundary:
 
         # AdCPNotFoundError's NOT_FOUND code maps to INVALID_REQUEST at the wire
         # boundary so output is spec-compliant; custom recovery still propagates.
-        _assert_mcp_envelope(
-            exc_info.value, "INVALID_REQUEST", recovery="transient", message_substr="temporarily missing"
+        assert_envelope_shape(
+            exc_info.value,
+            "INVALID_REQUEST",
+            check_mcp_tool_error=True,
+            recovery="transient",
+            message_substr="temporarily missing",
         )
 
     def test_custom_recovery_in_extract_error_info(self):
@@ -1035,7 +1034,7 @@ class TestCustomRecoveryOverrideA2ABoundary:
 
         # Standalone translator still surfaces the override in the wire envelope.
         translated = _adcp_to_a2a_error(AdCPNotFoundError("temporarily missing", recovery="transient"))
-        _assert_a2a_envelope(translated.data, "INVALID_REQUEST", "transient")
+        assert_envelope_shape(translated.data, "INVALID_REQUEST", recovery="transient", check_backward_compat=True)
 
 
 class TestCustomRecoveryOverrideRESTBoundary:
@@ -1055,7 +1054,7 @@ class TestCustomRecoveryOverrideRESTBoundary:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
-            _assert_rest_envelope(response.json(), "SERVICE_UNAVAILABLE", recovery="terminal")
+            assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="terminal")
 
 
 # ---------------------------------------------------------------------------
@@ -1118,7 +1117,7 @@ class TestRecoveryRoundtrip:
             tool_error = exc_info.value
 
             # Step 1: ToolError carries the spec-compliant envelope
-            _assert_mcp_envelope(tool_error, expected_code, recovery=expected_recovery)
+            assert_envelope_shape(tool_error, expected_code, check_mcp_tool_error=True, recovery=expected_recovery)
 
             # Step 2: extract_error_info can read it back
             code, message_out, recovery = extract_error_info(tool_error)
@@ -1190,7 +1189,12 @@ class TestRecoveryRoundtrip:
                 f"{exc_class.__name__}: expected {expected_a2a_type.__name__}, got {type(translated).__name__}"
             )
             exc_instance = exc_class(msg)
-            _assert_a2a_envelope(translated.data, exc_instance.wire_error_code, expected_recovery)
+            assert_envelope_shape(
+                translated.data,
+                exc_instance.wire_error_code,
+                recovery=expected_recovery,
+                check_backward_compat=True,
+            )
 
     def test_rest_roundtrip_all_subclasses(self):
         """All 11 AdCPError subclasses: raise -> REST handler -> JSON body -> verify recovery."""
@@ -1238,4 +1242,4 @@ class TestRecoveryRoundtrip:
                 assert response.status_code == expected_status, (
                     f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
                 )
-                _assert_rest_envelope(response.json(), expected_code, recovery=expected_recovery)
+                assert_envelope_shape(response.json(), expected_code, recovery=expected_recovery)

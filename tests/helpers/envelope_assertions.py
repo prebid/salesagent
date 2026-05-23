@@ -29,6 +29,7 @@ def assert_envelope_shape(
     recovery: str | None = None,
     message_substr: str | None = None,
     check_backward_compat: bool = False,
+    check_mcp_tool_error: bool = False,
 ) -> None:
     """Assert the AdCP spec two-layer error envelope shape.
 
@@ -49,7 +50,18 @@ def assert_envelope_shape(
                 backward-compat keys ``error_code`` and ``recovery`` that A2A
                 surfaces alongside the spec envelope. Off by default because
                 REST + MCP envelopes don't carry them.
+        check_mcp_tool_error: If ``True``, additionally assert that ``target``
+                is an ``AdCPToolError`` instance before reading its envelope.
+                MCP-boundary call sites use this to pin the exception type as
+                well as the wire shape — a plain ``ToolError`` would still
+                expose ``.envelope`` via duck-typing but would not be the
+                typed MCP-boundary exception the test claims to inspect.
     """
+    if check_mcp_tool_error:
+        from src.core.tool_error_logging import AdCPToolError
+
+        assert isinstance(target, AdCPToolError), f"expected AdCPToolError, got {type(target).__name__}"
+
     body = target.envelope if hasattr(target, "envelope") else target
 
     assert isinstance(body, dict), f"envelope target must resolve to dict, got {type(body).__name__}"
