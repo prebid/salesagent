@@ -66,10 +66,11 @@ class TestBuildRefinementAppliedUnable:
         # Each scope variant carries the right id field (or none for request)
         assert items[1].root.product_id == "p1"
         assert items[2].root.proposal_id == "pp1"
-        # Every status is 'unable' until #1073 lands
+        # Every status is 'unable' until proposal-state persistence ships
         assert all(i.root.status.value == "unable" for i in items)
-        # Notes reference the umbrella issue
-        assert all(i.root.notes and "#1073" in i.root.notes for i in items)
+        # Notes describe the gap functionally (issue numbers are kept out of code per
+        # project convention; git history carries traceability).
+        assert all(i.root.notes and "Proposal-state persistence is not yet implemented" in i.root.notes for i in items)
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +172,8 @@ class TestModeBranching:
             assert len(response.refinement_applied) == 1
             assert response.refinement_applied[0].root.status.value == "unable"
             assert response.refinement_applied[0].root.scope == "request"
-            # Refine mode does not run the ranker until #1073
+            # Refine mode does not run the ranker (no brief_relevance until proposal-state
+            # persistence ships and refine entries can produce relevance-aware results)
             assert all(p.brief_relevance is None for p in response.products)
 
     async def test_brief_mode_runs_ranker_when_configured(self):

@@ -12,6 +12,7 @@ V3 Migration Notes:
 """
 
 import logging
+from typing import NamedTuple
 
 from adcp import (
     CpcPricingOption,
@@ -75,11 +76,22 @@ def is_pre_v3(adcp_version: str | None) -> bool:
     return needs_v2_compat(adcp_version)
 
 
+class PreV3ModeResolution(NamedTuple):
+    """Outcome of the pre-v3 buying_mode shim.
+
+    Named so the audit-log flag (``pre_v3_defaulted``) can never be confused with a
+    second bool that future spec changes might add (e.g. ``brief_inferred``).
+    """
+
+    mode: str | None
+    pre_v3_defaulted: bool
+
+
 def resolve_pre_v3_buying_mode(
     buying_mode: str | None,
     adcp_version: str | None,
     brief: str | None,
-) -> tuple[str | None, bool]:
+) -> PreV3ModeResolution:
     """Resolve buying_mode for pre-v3 clients that omitted the field.
 
     AdCP 3.0 spec text: "Sellers receiving requests from pre-v3 clients without
@@ -98,15 +110,16 @@ def resolve_pre_v3_buying_mode(
         brief: Client-supplied brief text (may be None or empty).
 
     Returns:
-        (resolved_buying_mode, pre_v3_defaulted) — the mode to use and a flag indicating
-        whether this wrapper applied the pre-v3 default. The flag is recorded in the
-        audit log so operations can detect silent v2 client defaults to either mode.
+        PreV3ModeResolution — the mode to use and a flag indicating whether this
+        wrapper applied the pre-v3 default. The flag is recorded in the audit log so
+        operations can detect silent v2 client defaults to either mode. Backwards
+        compatible with tuple unpacking via NamedTuple.
     """
     if buying_mode is not None or not is_pre_v3(adcp_version):
-        return buying_mode, False
+        return PreV3ModeResolution(buying_mode, False)
     if brief and brief.strip():
-        return "brief", True
-    return "wholesale", True
+        return PreV3ModeResolution("brief", True)
+    return PreV3ModeResolution("wholesale", True)
 
 
 def convert_pricing_option_to_adcp(

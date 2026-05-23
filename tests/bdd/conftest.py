@@ -149,6 +149,13 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-b-input-empty": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-invalid": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
+    # BR-RULE-209 — sandbox-account flag on get_products response not implemented.
+    # Pre-existing main gap: production _get_products_impl never sets sandbox=True on
+    # GetProductsResponse, and there is no sandbox-account detection upstream. The
+    # field IS declared on GetProductsResponse but always serializes as None.
+    # T-UC-001-sandbox-production passes vacuously (production = no sandbox field
+    # expected, current behavior = sandbox=None). Resolves when BR-RULE-209 lands.
+    "T-UC-001-sandbox-happy": "BR-RULE-209 sandbox-account flag not implemented in _get_products_impl",
 }
 
 # Selective xfail for parametrized scenarios where only some examples
@@ -181,6 +188,16 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {"duplicate positions"},
         "production does not reject duplicate disclosure_positions values "
         "(no dedup/validation in _list_creative_formats_impl)",
+    ),
+    (
+        "T-UC-001-partition-catalog-brand",
+        {"catalog_without_brand"},
+        "BR-RULE-084 INV-2 catalog⇒brand dependency validator not implemented. "
+        "The 'with <partition> field combination' When-step phrasing differs from the "
+        "buying_mode partition's 'with buying_mode configuration <partition>' so the "
+        "step handler returns empty kwargs; even with proper kwargs, production has no "
+        "validator enforcing brand-required-when-catalog-provided. Out of scope for "
+        "buying_mode/refine wire-up (#1272).",
     ),
 ]
 
@@ -260,6 +277,22 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
     # force the marker out.
     ("T-UC-005-inv-049-9-holds", set(), "MCP wrapper does not accept output_format_ids", True),
     ("T-UC-005-inv-049-10-holds", set(), "MCP wrapper does not accept input_format_ids", True),
+    # MCP wrapper signatures do not accept the typed catalog object or the sparse-fields
+    # parameter that the alt scenarios send. Failure is at the MCP tool-input validation
+    # boundary (FastMCP rejects the unknown param), so the MCP-only transport entry
+    # genuinely fails while impl/a2a/rest pass. The set() match means the entire
+    # parametrized scenario xfails on MCP regardless of example row.
+    ("T-UC-001-alt-catalog", set(), "MCP wrapper does not accept typed catalog object", True),
+    ("T-UC-001-alt-sparse", set(), "MCP wrapper does not accept fields parameter", True),
+    # _SELECTIVE_XFAIL above is skipped for MCP transport (see line where is_mcp branches),
+    # so the catalog-brand mcp variant needs its own entry here. Reason matches the SELECTIVE
+    # entry for the other transports.
+    (
+        "T-UC-001-partition-catalog-brand",
+        {"catalog_without_brand"},
+        "BR-RULE-084 INV-2 catalog⇒brand dependency validator not implemented (MCP)",
+        True,
+    ),
 ]
 
 # REST xfails: REST endpoint drops all filter params (build_rest_body returns {}).

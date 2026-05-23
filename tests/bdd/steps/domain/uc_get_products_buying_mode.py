@@ -173,7 +173,7 @@ def given_tenant_with_products(ctx: dict) -> None:
 def given_previous_response(ctx: dict) -> None:
     """Record that a prior response existed for the refine scenario.
 
-    Until #1073 implements proposal persistence, refine entries resolve to status='unable'
+    Until proposal-state persistence ships, refine entries resolve to status='unable'
     regardless of prior state. We mark the precondition in ctx so the When step knows it
     is exercising the post-prior-response refine path (not initial discovery).
     """
@@ -225,12 +225,15 @@ def then_each_product_has_required_fields(ctx: dict) -> None:
 
 @then("the products should be ordered when buying_mode is brief")
 def then_products_ordered_in_brief_mode(ctx: dict) -> None:
-    """Brief mode produces an ordered list (ranker-driven). Order is not over-asserted —
-    relevance_score is not in the AdCP 3.0.6 spec, so we cannot inspect it as a public field.
-    The contract is: products are returned (ordering is implementation-defined).
+    """Brief mode produces a products list (ranker-driven order). Ordering is
+    implementation-defined per AdCP 3.0.6 — relevance_score is not a public field,
+    so positional comparison is not testable at the BDD layer. The meaningful
+    guarantee here is that brief mode RAN to completion: list-shaped response and
+    no captured error. Production ordering is enforced by ranker unit tests.
     """
     resp = ctx["response"]
-    assert isinstance(resp.products, list)
+    assert ctx.get("error") is None, f"Brief mode raised: {ctx['error']!r}"
+    assert isinstance(resp.products, list), f"Expected products list, got {type(resp.products).__name__}"
 
 
 @then("each product should include brief_relevance explanation")
@@ -248,9 +251,17 @@ def then_brief_relevance_present(ctx: dict) -> None:
 
 @then("the products should NOT be ranked by relevance (catalog order)")
 def then_products_in_catalog_order(ctx: dict) -> None:
-    """Wholesale mode bypasses the ranker; products come back in catalog order."""
+    """Wholesale mode bypasses the ranker; products come back in catalog order.
+
+    Catalog ordering itself is implementation-defined (publisher choice). The
+    meaningful guarantees here are: wholesale mode RAN to completion (list-shaped
+    response, no error) and brief_relevance is None on every product (asserted by
+    the sister step ``then_products_no_brief_relevance``). The ranker-bypass
+    contract is enforced by unit tests on _get_products_impl's mode branching.
+    """
     resp = ctx["response"]
-    assert isinstance(resp.products, list)
+    assert ctx.get("error") is None, f"Wholesale mode raised: {ctx['error']!r}"
+    assert isinstance(resp.products, list), f"Expected products list, got {type(resp.products).__name__}"
 
 
 @then("the products should NOT include brief_relevance field")
@@ -265,7 +276,7 @@ def then_products_no_brief_relevance(ctx: dict) -> None:
 
 @then('the response should NOT contain "proposals" array')
 def then_response_no_proposals(ctx: dict) -> None:
-    """Wholesale mode (and brief mode in this issue) omit proposals — generation lands in #1073."""
+    """Wholesale and brief modes omit proposals — proposal generation lands with proposal-state persistence."""
     resp = ctx["response"]
     assert getattr(resp, "proposals", None) in (
         None,

@@ -97,8 +97,8 @@ def test_wholesale_mode_returns_products_without_brief_relevance(env, transport)
 def test_refine_mode_returns_refinement_applied(env, transport):
     """Refine mode returns refinement_applied with status='unable' at every transport.
 
-    Until #1073 implements proposal-state persistence, every refine entry resolves to
-    'unable'. Storyboard validation passes because the response_schema check requires
+    Until proposal-state persistence ships, every refine entry resolves to 'unable'.
+    Storyboard validation passes because the response_schema check requires
     refinement_applied to be a valid array (or absent), and products to be present.
     """
     result = env.call_via(
@@ -118,7 +118,7 @@ def test_refine_mode_returns_refinement_applied(env, transport):
     assert len(payload.refinement_applied) == 2
     # Each entry is a RefinementApplied root model — read fields via .root.
     # In adcp 4.3, scope is a plain string literal (not an enum); status remains an enum.
-    # Both entries are unable until #1073 lands
+    # Both entries are unable until proposal-state persistence ships
     assert all(item.root.status.value == "unable" for item in payload.refinement_applied)
     # Echo of scope per spec
     assert payload.refinement_applied[0].root.scope == "request"
@@ -186,5 +186,9 @@ def test_v3_client_without_buying_mode_rejected_via_rest(env):
         adcp_version="3.0.6",
     )
 
-    # The wrapper does not default v3 clients; the schema validator rejects.
-    assert response.status_code >= 400
+    # The wrapper does not default v3 clients; the schema validator rejects with
+    # AdCPValidationError (400). Pin to == 400 so a server-side 500 (crash) regression
+    # surfaces here instead of passing under a generic ">= 400" check.
+    assert response.status_code == 400, f"Expected 400 VALIDATION_ERROR, got {response.status_code}: {response.text}"
+    body = response.json()
+    assert body.get("error_code") == "VALIDATION_ERROR", f"Expected VALIDATION_ERROR envelope, got {body!r}"

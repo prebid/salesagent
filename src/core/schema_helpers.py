@@ -10,7 +10,7 @@ Philosophy:
 - Custom logic (validators, conversions) lives here, not in wrapper classes
 """
 
-from typing import Any
+from typing import Any, NamedTuple
 
 from adcp import GetProductsResponse, Product
 from adcp.types import PropertyListReference
@@ -102,6 +102,18 @@ def to_property_list_reference(
     return None  # Fallback for unexpected types
 
 
+class GetProductsRequestBuild(NamedTuple):
+    """Outcome of the request-build + pre-v3 shim helper.
+
+    Named so transport callers cannot accidentally swap the request object and the
+    flag when both happen to be assigned in the same line. Backwards compatible with
+    tuple unpacking (``req, defaulted = create_get_products_request(...)``).
+    """
+
+    req: GetProductsRequest
+    pre_v3_defaulted: bool
+
+
 def create_get_products_request(
     brief: str = "",
     brand: dict[str, Any] | BrandReference | str | None = None,
@@ -111,7 +123,7 @@ def create_get_products_request(
     buying_mode: str | None = None,
     refine: list[dict[str, Any]] | None = None,
     adcp_version: str | None = None,
-) -> tuple[GetProductsRequest, bool]:
+) -> GetProductsRequestBuild:
     """Create GetProductsRequest aligned with the AdCP 3.0 three-mode contract.
 
     Single source of truth for the pre-v3 buying_mode shim — transport
@@ -179,7 +191,7 @@ def create_get_products_request(
     except ValueError as e:
         raise AdCPValidationError(f"Invalid get_products request: {e}") from e
 
-    return req, pre_v3_defaulted
+    return GetProductsRequestBuild(req, pre_v3_defaulted)
 
 
 # Re-export commonly used generated types for convenience

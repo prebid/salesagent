@@ -15,6 +15,7 @@ from adcp import Product as LibraryProduct
 from adcp.types import PropertyListReference
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.media_buy.get_products_request import Refine
 from adcp.types.generated_poc.media_buy.get_products_response import RefinementApplied
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -144,19 +145,17 @@ def filter_products_by_property_list(
     return [p for p in products if should_include_product_for_property_list(p, allowed_properties)]
 
 
-_REFINE_NOT_PERSISTED_NOTES = (
-    "Proposal-state persistence is not yet implemented; refinement cannot be applied. Tracked in #1073."
-)
+_REFINE_NOT_PERSISTED_NOTES = "Proposal-state persistence is not yet implemented; refinement cannot be applied."
 
 
 def _build_refinement_applied_unable(
-    refine_entries: list[Any] | None,
+    refine_entries: list[Refine] | None,
 ) -> list[RefinementApplied]:
     """Build a refinement_applied response for buying_mode='refine'.
 
-    Until #1073 implements proposal persistence and intelligent refinement, every entry
-    reports status='unable' with a notes field that names the umbrella issue. The response
-    matches the request's refine array by position per AdCP spec.
+    Until proposal-state persistence and intelligent refinement ship, every entry reports
+    status='unable' with a notes field that names the gap. The response matches the
+    request's refine array by position per AdCP spec.
 
     Each item echoes the corresponding request entry's scope and id field (product_id /
     proposal_id) so orchestrators can cross-validate alignment.
@@ -817,10 +816,10 @@ async def _get_products_impl(
         for product in eligible_products:
             product.pricing_options = []
 
-    # Build refinement_applied for buying_mode='refine'. Until #1073 implements proposal
-    # persistence and intelligent refinement, every entry reports status='unable' with a
-    # notes field that names the umbrella issue. The response still carries products so
-    # the storyboard's `field_present: products` validation passes.
+    # Build refinement_applied for buying_mode='refine'. Until proposal-state persistence
+    # and intelligent refinement ship, every entry reports status='unable' with a notes
+    # field naming the gap. The response still carries products so the storyboard's
+    # `field_present: products` validation passes.
     refinement_applied = _build_refinement_applied_unable(req.refine) if mode == "refine" else None
 
     # Our Product extends LibraryProduct - cast for type safety since list is invariant
