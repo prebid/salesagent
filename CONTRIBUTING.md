@@ -1,20 +1,31 @@
-# Contributing to prebid/salesagent
-Contributions are always welcome. To contribute, [fork](https://help.github.com/articles/fork-a-repo/) salesagent,
-commit your changes, and [open a pull request](https://help.github.com/articles/using-pull-requests/) against the
-main branch.
+# Contributing to Prebid Sales Agent
 
-## Intellectual Property Rights
-Before contributing to the Prebid Sales Agent project, ensure that you have read and agree with our [Intellectual Property Rights Policy](IPR_POLICY.md).
+Thanks for your interest in contributing! Full contributor workflow lives at:
+**[`docs/development/contributing.md`](docs/development/contributing.md)** (canonical).
 
-## Contributing
-Before contributing please see:
-- [README.md](README.md)
+## Quick start
 
-## Issues
-[adcontextprotocol.org](https://adcontextprotocol.org/) contains documentation that may help answer questions you have about using Prebid Sales Agent. This documentation is moving to [Prebid.org](https://prebid.org/).
-If you can't find the answer there, try searching for a similar issue on the [issues page](https://github.com/prebid/salesagent/issues).
-If you don't find an answer there, [open a new issue](https://github.com/prebid/salesagent/issues/new).
+1. Fork and clone the repo.
+2. Install dev dependencies: `uv sync --group dev`
+3. Install both pre-commit hook stages:
+   ```bash
+   pre-commit install --hook-type pre-commit --hook-type pre-push
+   ```
+4. See `docs/development/contributing.md` for branch naming, testing, PR review process.
 
-## License
-Please see [LICENSE](LICENSE) for the license associated with the prebid/salesagent repository.
-All source code, documentation, and supporting materials making up this repository are subject to the license.
+## PR title format (Conventional Commits)
+
+PR titles MUST use one of these prefixes (release-please uses them to generate changelogs):
+
+- `feat:` — new functionality (Features section)
+- `fix:` — bug fix (Bug Fixes section)
+- `refactor:` — code refactoring (Code Refactoring section)
+- `docs:` — documentation only
+- `chore:` — maintenance / dependencies (hidden from changelog)
+- `perf:` — performance improvements
+
+Without a recognized prefix, the change ships but won't appear in release notes.
+
+## Reporting security issues
+
+See [SECURITY.md](SECURITY.md) — please use private vulnerability reporting, NOT public issues.

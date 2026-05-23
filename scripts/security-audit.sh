@@ -25,6 +25,23 @@
 #     unflagged across runs as the upstream record gets re-curated, hence
 #     ``--allow-unused-ignores`` below.
 #
+# - GHSA-cqp8-fcvh-x7r3 / CVE-2026-46678: pydantic-ai arbitrary code execution
+#     via unsafe deserialization. Fixed in pydantic-ai >= 1.99.0. Upgrading
+#     requires pulling in pydantic-ai 1.100.0 which also upgrades fastmcp to
+#     3.3.1 — and fastmcp 3.3.1 removed the top-level FastMCP re-export that
+#     our codebase depends on. A coordinated pydantic-ai + fastmcp migration is
+#     tracked in issue #1234 (PR 2 scope). Until that lands, this advisory is
+#     suppressed here. The vulnerability is exploitable only through attacker-
+#     controlled model output passed to pydantic-ai's agent evaluation path,
+#     which is not exposed in this codebase's current feature set.
+#     TODO(#1234-pr2): remove this entry once pydantic-ai >= 1.99.0 lands.
+#
+# - PYSEC-2026-161: starlette 0.50.0 vulnerability. Fixed in starlette >= 1.0.1.
+#     Upgrade blocked: fastapi 0.128.0 constrains starlette < 1.0.0, and
+#     mcp/fastmcp also pins starlette via their own constraints. Requires a
+#     coordinated fastapi + starlette upgrade tracked in issue #1234 (PR 2 scope).
+#     TODO(#1234-pr2): remove once fastapi + starlette upgrade lands.
+#
 # Previously ignored, now resolved by real dep bumps (kept here as a record):
 # - GHSA-7gcm-g887-7qv7 (protobuf DoS) — resolved by bumping protobuf to 6.33.6.
 # - GHSA-5239-wwwm-4pmq (Pygments AdlLexer ReDoS) — resolved by bumping
@@ -35,8 +52,9 @@
 # red on the next run.
 #
 # Extra arguments are forwarded to uv-secure (e.g. ``--no-check-uv-tool``).
+# Ignore IDs are sourced from scripts/security-ignored-vulns.sh.
 set -euo pipefail
 
-IGNORED_VULNS="PYSEC-2026-89,PYSEC-2025-183"
+source "$(dirname "$0")/security-ignored-vulns.sh"
 
-exec uvx uv-secure --ignore-vulns "$IGNORED_VULNS" --allow-unused-ignores "$@"
+exec uvx uv-secure --ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores "$@"
