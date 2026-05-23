@@ -108,7 +108,10 @@ class TestMockProductConfigPost:
                     data={**VALID_FORM_DATA, "fill_rate": "200"},
                 )
 
-        assert render_kwargs.get("error") is not None
+        error_msg = render_kwargs.get("error", "")
+        assert "fill_rate" in error_msg, (
+            f"Pydantic out-of-range error must reference the offending field; got: {error_msg!r}"
+        )
         session.commit.assert_not_called()
 
     def test_non_numeric_input_returns_error(self):
@@ -134,5 +137,10 @@ class TestMockProductConfigPost:
                     data={**VALID_FORM_DATA, "fill_rate": "not_a_number"},
                 )
 
-        assert render_kwargs.get("error") is not None
+        error_msg = render_kwargs.get("error", "")
+        # ValueError from float conversion typically says "could not convert string to float"
+        # or surfaces the field name via the form-validator's coerce wrapper.
+        assert "fill_rate" in error_msg or "float" in error_msg.lower() or "numeric" in error_msg.lower(), (
+            f"Non-numeric conversion error must mention the field or the conversion failure; got: {error_msg!r}"
+        )
         session.commit.assert_not_called()

@@ -41,13 +41,23 @@ class MockConnectionConfig(BaseConnectionConfig):
 
 
 class DeliverySimulationConfig(BaseModel):
-    """Nested config for delivery simulation timing in MockProductConfig."""
+    """Nested config for delivery simulation timing in MockProductConfig.
+
+    Upper bounds mirror the form validator in
+    ``src/admin/blueprints/adapters.py``:
+      - ``time_acceleration`` capped at 86400 (24 hours' worth of seconds —
+        beyond which "accelerated simulation" loses meaning).
+      - ``update_interval_seconds`` capped at 60 (one minute — beyond which
+        the UI update cadence becomes irrelevant for delivery polling).
+    Schema-side and form-side bounds stay in lockstep so REST + UI paths
+    accept the same values.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(default=False)
-    time_acceleration: int = Field(default=3600, ge=1)
-    update_interval_seconds: float = Field(default=1.0, ge=0.1)
+    time_acceleration: int = Field(default=3600, ge=1, le=86400)
+    update_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
 
 
 class MockProductConfig(BaseProductConfig):
