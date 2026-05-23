@@ -66,10 +66,12 @@ class TestMockProductConfigPost:
         product = _make_product()
         session, mock_get_db = _mock_db(product)
 
-        with patch("src.admin.utils.require_auth", return_value=lambda f: f), \
-             patch("src.core.database.database_session.get_db_session", mock_get_db), \
-             patch("src.admin.blueprints.products.get_creative_formats", return_value=[]), \
-             patch("flask.render_template", return_value="ok"):
+        with (
+            patch("src.admin.utils.require_auth", return_value=lambda f: f),
+            patch("src.core.database.database_session.get_db_session", mock_get_db),
+            patch("src.admin.blueprints.products.get_creative_formats", return_value=[]),
+            patch("flask.render_template", return_value="ok"),
+        ):
             with app.test_client() as client:
                 resp = client.post(
                     "/adapters/mock/config/tenant1/prod1",
@@ -94,10 +96,12 @@ class TestMockProductConfigPost:
             render_kwargs.update(kwargs)
             return "rendered"
 
-        with patch("src.admin.utils.require_auth", return_value=lambda f: f), \
-             patch("src.core.database.database_session.get_db_session", mock_get_db), \
-             patch("src.admin.blueprints.products.get_creative_formats", return_value=[]), \
-             patch("flask.render_template", side_effect=capture):
+        with (
+            patch("src.admin.utils.require_auth", return_value=lambda f: f),
+            patch("src.core.database.database_session.get_db_session", mock_get_db),
+            patch("src.admin.blueprints.products.get_creative_formats", return_value=[]),
+            patch("flask.render_template", side_effect=capture),
+        ):
             with app.test_client() as client:
                 client.post(
                     "/adapters/mock/config/tenant1/prod1",
@@ -118,10 +122,12 @@ class TestMockProductConfigPost:
             render_kwargs.update(kwargs)
             return "rendered"
 
-        with patch("src.admin.utils.require_auth", return_value=lambda f: f), \
-             patch("src.core.database.database_session.get_db_session", mock_get_db), \
-             patch("src.admin.blueprints.products.get_creative_formats", return_value=[]), \
-             patch("flask.render_template", side_effect=capture):
+        with (
+            patch("src.admin.utils.require_auth", return_value=lambda f: f),
+            patch("src.core.database.database_session.get_db_session", mock_get_db),
+            patch("src.admin.blueprints.products.get_creative_formats", return_value=[]),
+            patch("flask.render_template", side_effect=capture),
+        ):
             with app.test_client() as client:
                 client.post(
                     "/adapters/mock/config/tenant1/prod1",

@@ -1826,9 +1826,9 @@ class TestUC003UpdateTargetingOverlay:
         # response_data) gets caught — that would silently lose the
         # structured payload on the webhook path.
         fail_calls = standard_mocks["ctx_mgr_instance"].fail_workflow_step_for_exception.call_args_list
-        assert (
-            len(fail_calls) == 1
-        ), f"Expected exactly one fail_workflow_step_for_exception call on raise, got {len(fail_calls)}"
+        assert len(fail_calls) == 1, (
+            f"Expected exactly one fail_workflow_step_for_exception call on raise, got {len(fail_calls)}"
+        )
         fail_call = fail_calls[0]
         # Positional args: (step_id, exception)
         assert fail_call.args[0] == standard_mocks["step"].step_id
@@ -1936,9 +1936,9 @@ class TestUC003UpdateTargetingOverlay:
             persisted_list_id = persisted_pl.list_id if persisted_pl is not None else None
         else:
             persisted_list_id = persisted["property_list"]["list_id"]
-        assert (
-            persisted_list_id == "B"
-        ), f"replacement semantic broken — persisted list_id={persisted_list_id!r}, expected 'B'"
+        assert persisted_list_id == "B", (
+            f"replacement semantic broken — persisted list_id={persisted_list_id!r}, expected 'B'"
+        )
         # The original "A" must not survive on list_id specifically (don't
         # substring-match the whole overlay repr — 'AnyUrl' contains 'A' too).
         assert persisted_list_id != "A", "original list_id was not replaced"
