@@ -419,6 +419,20 @@ class ContextManager(DatabaseManager):
         are byte-identical by construction because both call
         ``build_two_layer_error_envelope(exc)``.
 
+        .. note::
+            FIXME(substrate-without-caller): This method currently has zero
+            production callers — production failed-workflow persistence still
+            flows through ``src/services/order_approval_service.py`` (the
+            ``_mark_approval_failed`` path) and the GAM background polling
+            handler. Wiring at least one production site is tracked
+            separately because the most natural caller is in the same
+            function being refactored on another in-flight branch (the
+            SyncJob ordering + ``_mark_approval_failed`` rework). Until that
+            sibling branch lands, the "byte-identical by construction"
+            guarantee above is enforced only by the unit tests in
+            ``test_context_manager_fail_step.py`` — not by any production
+            ingress.
+
         Args:
             step_id: Workflow step ID to update.
             exc: The AdCPError subclass raised by the ``_impl`` function.
