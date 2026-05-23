@@ -457,10 +457,12 @@ jobs:
             artifact: inventory-list-no-match
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      with:
+        persist-credentials: false
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
       with:
         # Node 22+: @adcp/sdk's auth.js requires the ESM-only `jose` package
         # which Node 20's CommonJS require() rejects with ERR_REQUIRE_ESM.
@@ -472,7 +474,7 @@ jobs:
 
     - name: Verify health
       run: |
-        for i in $(seq 1 30); do
+        for _ in $(seq 1 30); do
           if curl -fs http://localhost:8000/health > /dev/null; then
             echo "salesagent healthy"
             break
@@ -519,8 +521,8 @@ jobs:
           > storyboard-result.json
         RC=$?
         set -e
-        cat storyboard-result.json | jq '.' || echo "(storyboard-result.json was empty or non-JSON)"
-        cat storyboard-summary.json | jq '.' || echo "(storyboard-summary.json missing or non-JSON)"
+        jq '.' storyboard-result.json || echo "(storyboard-result.json was empty or non-JSON)"
+        jq '.' storyboard-summary.json || echo "(storyboard-summary.json missing or non-JSON)"
         if [ "$RC" -ne 0 ]; then
           echo "::error::Storyboard $SCENARIO_NAME failed (runner exit $RC)"
           exit "$RC"
@@ -529,7 +531,7 @@ jobs:
 
     - name: Upload storyboard result
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
       with:
         name: storyboard-${{ matrix.scenario.artifact }}-${{ github.run_id }}
         path: |
