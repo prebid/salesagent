@@ -658,7 +658,7 @@ class TestGlobalToolErrorHandler:
     Removes the need for every REST route to wrap its body in
     ``try/except ToolError`` — the global handler catches both plain ``ToolError``
     and ``AdCPToolError`` (subclass) and produces the same envelope shape as
-    the per-route ``_handle_tool_error`` did. Verifies the wiring works
+    the per-route ``handle_tool_error`` did. Verifies the wiring works
     end-to-end through the REST stack.
     """
 
@@ -764,12 +764,12 @@ class TestRESTSymmetricValueErrorAndPermissionError:
 
 
 # ---------------------------------------------------------------------------
-# REST defensive ToolError catch: _handle_tool_error must preserve status_code
+# REST defensive ToolError catch: handle_tool_error must preserve status_code
 # ---------------------------------------------------------------------------
 
 
 class TestHandleToolErrorPreservesStatusCode:
-    """``_handle_tool_error`` must use the source AdCPError's status_code.
+    """``handle_tool_error`` must use the source AdCPError's status_code.
 
     REST routes catch ``ToolError`` defensively (when downstream code is
     wrapped by ``with_error_logging`` and translates AdCPError → AdCPToolError).
@@ -781,70 +781,65 @@ class TestHandleToolErrorPreservesStatusCode:
     def test_validation_tool_error_returns_400(self):
         """AdCPToolError carrying a VALIDATION_ERROR envelope → 400."""
         from src.core.exceptions import AdCPValidationError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
 
         source = AdCPValidationError("invalid request")
         tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
 
-        response = _handle_tool_error(tool_error)
+        response = handle_tool_error(tool_error)
         assert response.status_code == 400
 
     def test_auth_tool_error_returns_401(self):
         """AdCPToolError carrying an AUTH_REQUIRED envelope → 401."""
         from src.core.exceptions import AdCPAuthenticationError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
 
         source = AdCPAuthenticationError("token expired")
         tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
 
-        response = _handle_tool_error(tool_error)
+        response = handle_tool_error(tool_error)
         assert response.status_code == 401
 
     def test_not_found_tool_error_returns_404(self):
         """AdCPToolError carrying a NOT_FOUND envelope → 404."""
         from src.core.exceptions import AdCPMediaBuyNotFoundError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
 
         source = AdCPMediaBuyNotFoundError("buy_x missing")
         tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
 
-        response = _handle_tool_error(tool_error)
+        response = handle_tool_error(tool_error)
         assert response.status_code == 404
 
     def test_budget_exceeded_tool_error_returns_422(self):
         """AdCPToolError carrying a BUDGET_EXCEEDED envelope → 422."""
         from src.core.exceptions import AdCPBudgetExceededError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
 
         source = AdCPBudgetExceededError("over ceiling")
         tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
 
-        response = _handle_tool_error(tool_error)
+        response = handle_tool_error(tool_error)
         assert response.status_code == 422
 
     def test_adapter_tool_error_returns_502(self):
         """AdCPToolError carrying a SERVICE_UNAVAILABLE/adapter envelope → 502."""
         from src.core.exceptions import AdCPAdapterError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
 
         source = AdCPAdapterError("GAM unavailable")
         tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
 
-        response = _handle_tool_error(tool_error)
+        response = handle_tool_error(tool_error)
         assert response.status_code == 502
 
     def test_plain_tool_error_falls_back_to_500(self):
         """Plain ToolError with no recognized wire code defaults to 500."""
         from fastmcp.exceptions import ToolError
 
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import handle_tool_error
 
-        response = _handle_tool_error(ToolError("unstructured failure"))
+        response = handle_tool_error(ToolError("unstructured failure"))
         assert response.status_code == 500
 
     def test_plain_tool_error_with_known_code_uses_status_map(self):
@@ -857,9 +852,9 @@ class TestHandleToolErrorPreservesStatusCode:
         """
         from fastmcp.exceptions import ToolError
 
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import handle_tool_error
 
-        response = _handle_tool_error(ToolError("VALIDATION_ERROR", "missing required field"))
+        response = handle_tool_error(ToolError("VALIDATION_ERROR", "missing required field"))
         assert response.status_code == 400
 
     def test_plain_tool_error_with_auth_code_returns_403(self):
@@ -874,27 +869,27 @@ class TestHandleToolErrorPreservesStatusCode:
         """
         from fastmcp.exceptions import ToolError
 
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import handle_tool_error
 
-        response = _handle_tool_error(ToolError("AUTH_REQUIRED", "missing token"))
+        response = handle_tool_error(ToolError("AUTH_REQUIRED", "missing token"))
         assert response.status_code == 403
 
     def test_plain_tool_error_with_not_found_code_returns_404(self):
         """Plain ToolError("MEDIA_BUY_NOT_FOUND", "msg") → 404 via _ERROR_CODE_TO_STATUS."""
         from fastmcp.exceptions import ToolError
 
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import handle_tool_error
 
-        response = _handle_tool_error(ToolError("MEDIA_BUY_NOT_FOUND", "buy_x missing"))
+        response = handle_tool_error(ToolError("MEDIA_BUY_NOT_FOUND", "buy_x missing"))
         assert response.status_code == 404
 
     def test_plain_tool_error_with_unknown_code_falls_back_to_500(self):
         """Plain ToolError with an unmapped wire code defaults to 500."""
         from fastmcp.exceptions import ToolError
 
-        from src.routes.api_v1 import _handle_tool_error
+        from src.core.tool_error_logging import handle_tool_error
 
-        response = _handle_tool_error(ToolError("WEIRD_LEGACY_CODE", "what is this"))
+        response = handle_tool_error(ToolError("WEIRD_LEGACY_CODE", "what is this"))
         assert response.status_code == 500
 
 

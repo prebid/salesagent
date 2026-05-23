@@ -100,6 +100,7 @@ from src.core.exceptions import (  # noqa: E402
     AdCPValidationError,
     build_two_layer_error_envelope,
 )
+from src.core.tool_error_logging import handle_tool_error  # noqa: E402
 
 
 def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
@@ -190,13 +191,11 @@ async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
     that envelope bubbles up, this handler forwards it unchanged — removing
     the need for every REST route to duplicate a ``try/except ToolError``
     block. Plain ``ToolError`` (no typed source) falls through
-    ``_handle_tool_error``'s ``_ERROR_CODE_TO_STATUS`` lookup.
+    ``handle_tool_error``'s ``_ERROR_CODE_TO_STATUS`` lookup.
 
     Matches subclasses, so ``AdCPToolError`` is caught here too.
     """
-    from src.routes.api_v1 import _handle_tool_error
-
-    return _handle_tool_error(exc)
+    return handle_tool_error(exc)
 
 
 # ---------------------------------------------------------------------------

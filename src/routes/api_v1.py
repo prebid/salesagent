@@ -19,13 +19,9 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     ReportingDimensions,
 )
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-from fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
-from src.core.exceptions import AdCPError, build_two_layer_error_envelope
-from src.core.tool_error_logging import AdCPToolError, extract_error_info
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -44,97 +40,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _build_error_code_to_status() -> dict[str, int]:
-    """Derive the wire-code → HTTP status map from ``AdCPError`` subclasses.
-
-    Walks every concrete subclass of ``AdCPError`` and reads its
-    class-level ``error_code`` + ``status_code`` declarations, then
-    propagates each declaration to its wire-translated equivalents via
-    ``ERROR_CODE_MAPPING``. Eliminates the drift potential of a
-    hand-maintained table — previously the table declared
-    ``AUTH_REQUIRED → 401`` while ``AdCPAuthorizationError`` (same wire
-    code) carried ``status_code = 403``; a plain-ToolError raise from
-    authorization code surfaced as 401 instead of 403. Same pattern for
-    ``SERVICE_UNAVAILABLE`` (table said 503, adapter class said 502).
-    The class attribute is the source of truth.
-
-    When a wire code is shared by multiple subclasses (e.g.,
-    ``AUTH_REQUIRED`` from both ``AdCPAuthenticationError`` 401 and
-    ``AdCPAuthorizationError`` 403), the **highest** status code wins —
-    the more restrictive one is the spec-aligned answer when the table
-    is used for a plain-ToolError fallback that has no carried context.
-    """
-    from src.core.exceptions import ERROR_CODE_MAPPING
-
-    # INVALID_REQUEST is AdCP's "generic 4xx bucket" wire code that does not
-    # correspond to any specific typed subclass — it's the translation target
-    # for several upstream codes. Anchor it to HTTP 400 (the conventional
-    # bad-request status) so propagation from differently-statused upstream
-    # codes (e.g., NOT_FOUND=404 -> INVALID_REQUEST) doesn't accidentally
-    # promote it to 404.
-    table: dict[str, int] = {"INVALID_REQUEST": 400}
-    _GENERIC_CATCHALLS = {"INVALID_REQUEST"}
-
-    stack = list(AdCPError.__subclasses__())
-    while stack:
-        cls = stack.pop()
-        stack.extend(cls.__subclasses__())
-        code = getattr(cls, "error_code", None)
-        status = getattr(cls, "status_code", None)
-        if not code or not status:
-            continue
-        # Index the raw class code so plain-ToolError("CODE") fallbacks resolve.
-        existing = table.get(code)
-        if existing is None or status > existing:
-            table[code] = status
-        # Also index the wire-translated code so the same status applies after
-        # ``translate_error_code()`` rewrites it at the boundary. Skip generic
-        # catchall targets like INVALID_REQUEST — they have a fixed status
-        # independent of which specific upstream code triggered them.
-        wire_code = ERROR_CODE_MAPPING.get(code)
-        if wire_code and wire_code not in _GENERIC_CATCHALLS:
-            existing_wire = table.get(wire_code)
-            if existing_wire is None or status > existing_wire:
-                table[wire_code] = status
-    return table
-
-
-# Plain ``ToolError("CODE", "message")`` legacy paths don't carry the typed
-# AdCPError that owns ``status_code``. Derived from class declarations at
-# import time so the table cannot drift from the source of truth.
-_ERROR_CODE_TO_STATUS: dict[str, int] = _build_error_code_to_status()
-
-
-def _handle_tool_error(e: ToolError) -> JSONResponse:
-    """Convert MCP ToolError to the spec-compliant two-layer envelope body.
-
-    Routes that catch ``ToolError`` defensively land here. If the exception
-    is the typed ``AdCPToolError`` raised by the MCP boundary translator, its
-    envelope and status_code are forwarded unchanged so 4xx errors don't get
-    mislabeled as 5xx. Plain ``ToolError`` (raised by other paths) is rebuilt
-    into an envelope via a synthetic ``AdCPError``; its HTTP status is
-    resolved from ``_ERROR_CODE_TO_STATUS`` for known wire codes and falls
-    through to 500 only when the code is unrecognized.
-    """
-    if isinstance(e, AdCPToolError):
-        # Defensive copy: the envelope dict is owned by the AdCPToolError instance,
-        # which may be referenced elsewhere (audit log, retry buffer). Returning
-        # the dict by reference lets FastAPI's JSON serializer mutate it indirectly,
-        # so we copy to preserve the envelope-builder's immutability contract.
-        return JSONResponse(status_code=e.status_code, content=dict(e.envelope))
-
-    error_code, error_message, recovery = extract_error_info(e)
-    synthetic = AdCPError(error_message)
-    synthetic.error_code = error_code
-    synthetic.status_code = _ERROR_CODE_TO_STATUS.get(error_code, 500)
-    if recovery is not None:
-        synthetic.recovery = recovery
-    return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))
+# Note: handle_tool_error and the wire-code -> HTTP status table moved to
+# src/core/tool_error_logging.py so the REST module does not import an MCP-
+# boundary type (AdCPToolError). app.py imports handle_tool_error directly.
 
 
 # ---------------------------------------------------------------------------
