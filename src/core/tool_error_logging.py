@@ -393,9 +393,10 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
         return JSONResponse(status_code=e.status_code, content=dict(e.envelope))
 
     error_code, error_message, recovery = extract_error_info(e)
-    synthetic = AdCPError(error_message)
-    synthetic.error_code = error_code
-    synthetic.status_code = _ERROR_CODE_TO_STATUS.get(error_code, 500)
-    if recovery is not None:
-        synthetic.recovery = recovery
+    synthetic = AdCPError(
+        error_message,
+        error_code=error_code,
+        status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
+        recovery=recovery,
+    )
     return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))

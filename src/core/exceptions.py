@@ -163,12 +163,20 @@ class AdCPError(Exception):
         self,
         message: str = "",
         *,
+        error_code: str | None = None,
+        status_code: int | None = None,
         details: dict[str, Any] | None = None,
         recovery: RecoveryHint | None = None,
         field: str | None = None,
         suggestion: str | None = None,
         context: ContextObject | dict[str, Any] | None = None,
     ) -> None:
+        # ``error_code`` and ``status_code`` are class attributes on typed
+        # subclasses (AdCPValidationError.error_code = "VALIDATION_ERROR" etc.)
+        # but the base class accepts them as keyword overrides so the REST
+        # boundary handler can synthesize an AdCPError from a plain ToolError
+        # without mutating attributes after construction (was: instance-attr
+        # mutation hiding an undocumented API).
         super().__init__(message)
         self.message = message
         self.details = details
@@ -177,6 +185,10 @@ class AdCPError(Exception):
         self.context = context
         if recovery is not None:
             self.recovery = recovery
+        if error_code is not None:
+            self.error_code = error_code
+        if status_code is not None:
+            self.status_code = status_code
 
     @property
     def wire_error_code(self) -> str:
