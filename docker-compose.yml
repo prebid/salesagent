@@ -48,6 +48,11 @@ services:
     environment:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       PYTHONPATH: "/app"
+      # Opt-in default-principal seed for storyboard CI + developer ergonomics.
+      # When set on the host, migrate.py's ensure_default_tenant_exists also seeds
+      # a Principal with this access_token so MCP tool calls from a fresh `docker
+      # compose up` are authenticated. Empty → no seed (production safe).
+      ADCP_AUTH_TOKEN: "${ADCP_AUTH_TOKEN:-}"
     depends_on:
       postgres:
         condition: service_healthy
