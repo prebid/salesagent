@@ -38,12 +38,18 @@ def _adcp_error_from_code(
     message: str,
     recovery: str | None = None,
     details: dict | None = None,
+    suggestion: str | None = None,
 ) -> Exception:
     """Reconstruct the exact AdCPError subclass from an error_code string.
 
     Shared by MCP and A2A unwrappers. Maps error codes like 'NOT_FOUND'
     to AdCPNotFoundError, 'VALIDATION_ERROR' to AdCPValidationError, etc.
     Falls back to base AdCPError for unknown codes.
+
+    The ``suggestion`` parameter preserves the optional correction hint that
+    cross-mode validators populate via [[reference_bdd_harness_pitfalls]] #2.
+    Dropping it here would make MCP/A2A/REST tests fail
+    ``then_error_has_suggestion`` even though production correctly sends it on the wire.
     """
     from src.core.exceptions import (
         AdCPAccountAmbiguousError,
@@ -91,6 +97,7 @@ def _adcp_error_from_code(
         message=message,
         details=details,
         recovery=recovery or "terminal",
+        suggestion=suggestion,
     )
     if exc_cls is AdCPError:
         reconstructed.error_code = error_code
@@ -174,7 +181,13 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     # If _adcp_to_a2a_error stored the error_code, reconstruct the exact subclass.
     error_code = data.get("error_code")
     if error_code:
-        return _adcp_error_from_code(error_code, message, data.get("recovery"))
+        return _adcp_error_from_code(
+            error_code,
+            message,
+            data.get("recovery"),
+            data.get("details"),
+            data.get("suggestion"),
+        )
 
     from src.core.exceptions import (
         AdCPAuthenticationError,
@@ -725,7 +738,8 @@ class BaseTestEnv:
         if error_code:
             recovery = data.get("recovery")
             details = data.get("details")
-            return _adcp_error_from_code(error_code, message, recovery, details)
+            suggestion = data.get("suggestion")
+            return _adcp_error_from_code(error_code, message, recovery, details, suggestion)
 
         # Fallback: map HTTP status to exception class
         from src.core.exceptions import (

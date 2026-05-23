@@ -112,7 +112,11 @@ def _parse_invalid_fields(spec: str) -> dict[str, Any]:
 
     # buying_mode
     if "no buying_mode field" in spec_lower:
-        pass  # leave buying_mode unset → schema rejects (v3 client)
+        # v3 client (adcp_version="3.0.0") with no buying_mode — the pre-v3 default shim
+        # in create_get_products_request only applies to pre-v3 clients, so for a v3 client
+        # the validator sees buying_mode=None and raises "buying_mode must be one of ...".
+        # Without adcp_version="3.0.0" the harness would default to wholesale and skip the probe.
+        kwargs["adcp_version"] = "3.0.0"
     elif "buying_mode=brief" in spec_lower:
         kwargs["buying_mode"] = "brief"
     elif "buying_mode=wholesale" in spec_lower:

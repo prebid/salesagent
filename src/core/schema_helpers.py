@@ -23,7 +23,7 @@ from pydantic import ValidationError
 from src.core.exceptions import AdCPValidationError
 from src.core.product_conversion import resolve_pre_v3_buying_mode
 from src.core.schemas.product import GetProductsRequest
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import extract_buying_mode_suggestion, format_validation_error
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
@@ -172,7 +172,10 @@ def create_get_products_request(
             refine=refine,
         )
     except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
+        raise AdCPValidationError(
+            format_validation_error(e, context="get_products request"),
+            suggestion=extract_buying_mode_suggestion(e),
+        ) from e
     except ValueError as e:
         raise AdCPValidationError(f"Invalid get_products request: {e}") from e
 

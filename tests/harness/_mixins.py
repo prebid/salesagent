@@ -23,7 +23,6 @@ from src.core.schemas import (
     GetProductsResponse,
     ReportingPeriod,
 )
-from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.tools.products import _get_products_impl
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
@@ -541,14 +540,21 @@ class ProductMixin:
         # but not a GetProductsRequest field.
         identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
 
-        # Strip transport-only kwargs that other dispatchers consume but the IMPL path
-        # would forward into the request constructor where they get rejected.
-        extra.pop("adcp_version", None)
+        # Capture adcp_version so we can forward it to create_get_products_request (the
+        # production helper handles pre-v3 defaulting). Stripping it from extra prevents
+        # it from being forwarded into the raw model constructor where it would be rejected.
+        adcp_version = extra.pop("adcp_version", None)
 
         if brand is None:
             brand = {"domain": "test.com"}
 
         caller_supplied_brief = brief is not _UNSET
+        # Critical: track whether the caller explicitly supplied buying_mode so contract-probe
+        # BDD tests (e.g. T-UC-001-partition brief_mode_missing_brief) can pass `buying_mode="brief"`
+        # without a brief and observe the validator's rejection. Without this distinction the
+        # harness would back-fill `effective_brief="test brief"` and defeat the probe — same
+        # pattern documented in [[reference_bdd_harness_pitfalls]] (pitfall #1).
+        caller_supplied_buying_mode = buying_mode is not None
         # Resolve brief default if the caller didn't supply one.
         effective_brief: str | None
         if caller_supplied_brief:
@@ -556,8 +562,11 @@ class ProductMixin:
         else:
             effective_brief = None  # set after we know the mode
 
-        # Default buying_mode from caller intent if not explicit.
-        if buying_mode is None:
+        # When buying_mode and adcp_version are BOTH unsupplied, fall back to wholesale so the
+        # default-products happy path still works. When adcp_version is supplied, defer to
+        # create_get_products_request so its pre-v3 shim decides. This mirrors the wire transports
+        # which delegate defaulting entirely to the helper.
+        if buying_mode is None and adcp_version is None:
             if refine is not None:
                 buying_mode = "refine"
             elif caller_supplied_brief and effective_brief:
@@ -565,22 +574,28 @@ class ProductMixin:
             else:
                 buying_mode = "wholesale"
 
-        # Fill in a default brief for brief mode when caller didn't supply one.
-        if not caller_supplied_brief and buying_mode == "brief":
+        # Fill in a default brief for brief mode ONLY when neither field was caller-supplied.
+        # If the caller explicitly passed buying_mode="brief" without a brief, leave brief empty
+        # so the validator probes the contract.
+        if not caller_supplied_brief and not caller_supplied_buying_mode and buying_mode == "brief":
             effective_brief = "test brief"
 
-        # In wholesale/refine modes, an empty brief is None (validator-compliant).
-        # If the caller explicitly passed a non-empty brief in those modes, leave it
-        # so the validator rejects — that's the test probing the contract.
+        # Route through the shared helper — same surface MCP/A2A/REST observe. This makes the
+        # impl transport actually probe the production contract (validator + ValidationError →
+        # AdCPValidationError translation with cross-mode suggestion). See
+        # [[reference_bdd_harness_pitfalls]] #4 for the impl ≠ wire-boundary pitfall this closes.
+        from src.core.schema_helpers import create_get_products_request
 
-        req = GetProductsRequestGenerated(
-            brief=effective_brief,
+        req, helper_pre_v3_defaulted = create_get_products_request(
+            brief=effective_brief or "",
             brand=brand,
             filters=filters,
             property_list=property_list,
             context=context,
             buying_mode=buying_mode,
             refine=refine,
-            **extra,
+            adcp_version=adcp_version,
         )
-        return await _get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
+        # Preserve caller-supplied pre_v3_defaulted (legacy tests) but otherwise trust the helper.
+        defaulted = pre_v3_defaulted or helper_pre_v3_defaulted
+        return await _get_products_impl(req, identity, pre_v3_defaulted=defaulted)

@@ -150,6 +150,8 @@ def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestErr
     data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.wire_error_code}
     if exc.details:
         data["details"] = exc.details
+    if exc.suggestion is not None:
+        data["suggestion"] = exc.suggestion
     if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
         return InvalidParamsError(message=str(exc.message), data=data)
     elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):

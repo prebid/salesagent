@@ -139,6 +139,12 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
             )
         elif "missing" in error_type:
             error_details.append(f"  • {field_path}: Required field is missing")
+        elif error_type in ("enum", "literal_error") and input_val is None:
+            # Pydantic enum/literal validation rejects None with "Input should be 'X' or 'Y'",
+            # which obscures the simpler "this field is required" semantic. Re-phrase so the
+            # error message contains the canonical "<field> is required" substring buyer agents
+            # and BDD assertions look for.
+            error_details.append(f"  • {field_path} is required (got None)")
         elif "extra_forbidden" in error_type:
             # For extra_forbidden, show the actual value to help debug what was passed
             if input_val is not None:
@@ -162,3 +168,75 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
     )
 
     return error_msg
+
+
+# Cross-mode buying_mode violation → actionable suggestion lookup.
+# Order matters: more-specific patterns must precede broader ones (the None match
+# would otherwise swallow every "buying_mode must be one of" variant). Each suggestion
+# leads with an action verb so it satisfies both then_error_has_suggestion (structural)
+# and then_error_has_fix_suggestion (actionable verb) BDD steps.
+_BUYING_MODE_SUGGESTIONS: tuple[tuple[str, str], ...] = (
+    (
+        "got None",
+        "Provide buying_mode='brief' with a brief, 'wholesale' for raw inventory, or 'refine' with a refine array.",
+    ),
+    (
+        "buying_mode must be one of",
+        "Use buying_mode='brief', 'wholesale', or 'refine'.",
+    ),
+    (
+        "brief is required when buying_mode is 'brief'",
+        "Provide a brief describing your campaign requirements, or use buying_mode='wholesale' for raw inventory.",
+    ),
+    (
+        "refine must not be provided when buying_mode is 'brief'",
+        "Remove refine, or use buying_mode='refine' to iterate on a previous response.",
+    ),
+    (
+        "brief must not be provided when buying_mode is 'wholesale'",
+        "Remove brief, or use buying_mode='brief' to discover via a brief.",
+    ),
+    (
+        "refine must not be provided when buying_mode is 'wholesale'",
+        "Remove refine, or use buying_mode='refine' to iterate on a previous response.",
+    ),
+    (
+        "brief must not be provided when buying_mode is 'refine'",
+        "Remove brief, or use buying_mode='brief' to discover via a brief.",
+    ),
+    (
+        "refine array is required when buying_mode is 'refine'",
+        "Provide a refine array with at least one entry, or use a different buying_mode.",
+    ),
+)
+
+
+def extract_buying_mode_suggestion(error: ValidationError) -> str | None:
+    """Map a cross-mode buying_mode validator violation to an actionable suggestion.
+
+    Pydantic v2 wraps `raise ValueError("...")` from a model_validator as
+    `"Value error, ..."` in the error message — substring matching tolerates the prefix.
+
+    Also handles Pydantic's library-level Literal/Enum rejection of None on the
+    required ``buying_mode`` field (error type "enum" / "literal_error", input None).
+    That path never reaches the custom validator's "got None" message, so we detect
+    it structurally and return the same suggestion.
+
+    Returns None when no known pattern matches so callers can fall back to a generic
+    suggestion or omit the field entirely.
+    """
+    for err in error.errors():
+        # Library-level enum/literal rejection of None on buying_mode field — fires
+        # BEFORE the model_validator runs, so the custom "got None" message is unreachable.
+        if (
+            err.get("type") in ("enum", "literal_error")
+            and err.get("input") is None
+            and any("buying_mode" in str(part) for part in err.get("loc", ()))
+        ):
+            return _BUYING_MODE_SUGGESTIONS[0][1]
+
+        msg = str(err.get("msg", ""))
+        for pattern, suggestion in _BUYING_MODE_SUGGESTIONS:
+            if pattern in msg:
+                return suggestion
+    return None

@@ -57,10 +57,13 @@ def _get_error_dict(error: Exception) -> dict:
 
     if isinstance(error, AdCPError):
         d = error.to_dict()
-        # AdCPError.to_dict() has: error_code, message, recovery, details
+        # AdCPError.to_dict() has: error_code, message, recovery, details, suggestion (if set)
         # Map to the assertion vocabulary used in feature files
         d["code"] = d.get("error_code", "")
-        if error.details and "suggestion" in error.details:
+        # to_dict() already includes suggestion when error.suggestion is not None (exceptions.py:167-168).
+        # Also fall back to details["suggestion"] for legacy/transport-reconstructed paths that
+        # may have placed the field in details instead of the dedicated attribute.
+        if "suggestion" not in d and error.details and "suggestion" in error.details:
             d["suggestion"] = error.details["suggestion"]
         return d
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
