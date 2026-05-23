@@ -270,6 +270,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/audit_logger.py", "log_security_violation"),
     ("src/core/auth_utils.py", "_lookup_principal"),
     ("src/core/auth_utils.py", "get_principal_from_token"),
+    # FIXME(salesagent-xw7): bootstrap/seed code — migrate to a PrincipalRepository
+    # once one exists. Mirrors the existing ensure_default_tenant_exists entry below;
+    # both run from migrate.py on docker compose up.
+    ("src/core/config_loader.py", "_ensure_default_principal"),
     ("src/core/config_loader.py", "ensure_default_tenant_exists"),
     ("src/core/config_loader.py", "get_default_tenant"),
     ("src/core/config_loader.py", "get_tenant_by_id"),

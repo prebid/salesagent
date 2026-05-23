@@ -22,22 +22,44 @@ from sqlalchemy import select
 from src.core.config_loader import _ensure_default_principal, ensure_default_tenant_exists
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
+from tests.factories import TenantFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
 def clean_tenant_table(integration_db):
-    """Ensure the tenants/principals tables are empty at the start of each test."""
+    """Empty the tenants/principals tables AND bind factory sessions for this test.
+
+    These tests exercise the bootstrap path (config_loader's ensure_default_tenant_exists),
+    not a domain env class — so there's no IntegrationEnv to bind factories. We follow the
+    pattern from tests/admin/conftest.py:42-44 — open a session, bind ALL_FACTORIES to it,
+    yield, then unbind on teardown.
+    """
+    from sqlalchemy.orm import Session as SASession
+
+    from src.core.database.database_session import get_engine
+    from tests.factories import ALL_FACTORIES
+
     with get_db_session() as session:
         session.query(Principal).delete()
         session.query(Tenant).delete()
         session.commit()
-    yield
-    with get_db_session() as session:
-        session.query(Principal).delete()
-        session.query(Tenant).delete()
-        session.commit()
+
+    factory_session = SASession(bind=get_engine())
+    for f in ALL_FACTORIES:
+        f._meta.sqlalchemy_session = factory_session
+
+    try:
+        yield
+    finally:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
+        factory_session.close()
+        with get_db_session() as session:
+            session.query(Principal).delete()
+            session.query(Tenant).delete()
+            session.commit()
 
 
 class TestEnsureDefaultPrincipalFromEnv:
@@ -45,38 +67,19 @@ class TestEnsureDefaultPrincipalFromEnv:
 
     def test_no_env_var_no_principal(self, clean_tenant_table):
         """Without ADCP_AUTH_TOKEN, the helper is a no-op — production-safe default."""
+        TenantFactory(tenant_id="default", subdomain="default")
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ADCP_AUTH_TOKEN", None)
             with get_db_session() as session:
-                # Seed a tenant first so the helper has somewhere to attach to.
-                session.add(
-                    Tenant(
-                        tenant_id="default",
-                        name="Default",
-                        subdomain="default",
-                        ad_server="mock",
-                        is_active=True,
-                    )
-                )
-                session.commit()
                 _ensure_default_principal(session, "default")
                 count = session.scalars(select(Principal).filter_by(tenant_id="default")).all()
                 assert len(count) == 0, "No principal should be seeded without ADCP_AUTH_TOKEN"
 
     def test_with_env_var_seeds_principal(self, clean_tenant_table):
         """With ADCP_AUTH_TOKEN set, the helper creates a Principal with that token."""
+        TenantFactory(tenant_id="default", subdomain="default")
         with patch.dict(os.environ, {"ADCP_AUTH_TOKEN": "story-test-token-A"}):
             with get_db_session() as session:
-                session.add(
-                    Tenant(
-                        tenant_id="default",
-                        name="Default",
-                        subdomain="default",
-                        ad_server="mock",
-                        is_active=True,
-                    )
-                )
-                session.commit()
                 _ensure_default_principal(session, "default")
                 principals = session.scalars(select(Principal).filter_by(tenant_id="default")).all()
                 assert len(principals) == 1
@@ -86,18 +89,9 @@ class TestEnsureDefaultPrincipalFromEnv:
     def test_idempotent_seed(self, clean_tenant_table):
         """Calling twice does not create duplicates — important because
         ensure_default_tenant_exists may run on every docker compose up."""
+        TenantFactory(tenant_id="default", subdomain="default")
         with patch.dict(os.environ, {"ADCP_AUTH_TOKEN": "story-test-token-B"}):
             with get_db_session() as session:
-                session.add(
-                    Tenant(
-                        tenant_id="default",
-                        name="Default",
-                        subdomain="default",
-                        ad_server="mock",
-                        is_active=True,
-                    )
-                )
-                session.commit()
                 _ensure_default_principal(session, "default")
                 _ensure_default_principal(session, "default")
                 _ensure_default_principal(session, "default")
