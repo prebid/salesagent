@@ -125,9 +125,7 @@ class TestEnsureDefaultTenantWiresSeed:
             os.environ.pop("ADCP_AUTH_TOKEN", None)
             ensure_default_tenant_exists()
             with get_db_session() as session:
-                assert (
-                    session.scalars(select(Principal).filter_by(tenant_id="default")).first() is None
-                )
+                assert session.scalars(select(Principal).filter_by(tenant_id="default")).first() is None
 
         # Second boot — env var set, principal seeded on the existing tenant.
         with patch.dict(os.environ, {"ADCP_AUTH_TOKEN": "later-token-D"}):
