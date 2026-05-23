@@ -33,6 +33,7 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.validation_helpers import resolve_enum_value, safe_parse_json_field
+from src.core.version_compat import apply_version_compat
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -886,9 +887,9 @@ async def get_products(
         str | None,
         Field(
             description=(
-                "Client's AdCP version (e.g. '1.0.0', '3.0.0'). Used solely to drive the "
-                "inbound pre-v3 default-to-brief shim — the wrapper does not apply outbound "
-                "version_compat (handler responsibility, parity with A2A)."
+                "Client's AdCP version (e.g. '1.0.0', '3.0.0'). Drives the inbound pre-v3 "
+                "default-to-brief shim AND the outbound version_compat transform at the "
+                "transport boundary (parity with A2A and REST)."
             ),
         ),
     ] = None,
@@ -911,9 +912,9 @@ async def get_products(
         refine: Array of change requests for iterating on a previous get_products response;
             only valid when buying_mode='refine'. List-of-dicts at the MCP boundary; the
             request schema validates each entry's typed shape.
-        adcp_version: Client's AdCP version (e.g. '1.0.0', '3.0.0'). Used solely to drive
-            the inbound pre-v3 default-to-brief shim — the wrapper does not apply outbound
-            version_compat (handler's responsibility, parity with A2A).
+        adcp_version: Client's AdCP version (e.g. '1.0.0', '3.0.0'). Drives the inbound
+            pre-v3 default-to-brief shim AND the outbound version_compat transform at the
+            transport boundary (parity with A2A and REST).
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -943,8 +944,9 @@ async def get_products(
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly
     response = await _get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
 
-    # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
+    # Apply outbound version_compat at transport boundary (parity with A2A line 1453 and REST line 190).
+    structured = apply_version_compat("get_products", response, adcp_version)
+    return ToolResult(content=str(response), structured_content=structured)
 
 
 async def get_products_raw(

@@ -52,18 +52,62 @@ def _parse_request_table(datatable: Any) -> dict[str, Any]:
     return kwargs
 
 
+_PARTITION_KWARGS: dict[str, dict[str, Any]] = {
+    # Happy-path partitions (request proceeds)
+    "brief_mode": {"buying_mode": "brief", "brief": "video ads for sports fans"},
+    "wholesale_mode": {"buying_mode": "wholesale"},
+    "refine_mode": {
+        "buying_mode": "refine",
+        "refine": [{"scope": "request", "ask": "more video"}],
+    },
+    "pre_v3_default": {"adcp_version": "2.5.0"},  # no buying_mode → defaults to brief (with brief unset)
+    # Invalid partitions — must raise VALIDATION_ERROR
+    "missing_buying_mode": {"adcp_version": "3.0.0"},  # v3 client, no buying_mode → schema rejects
+    "unknown_value": {"buying_mode": "not_a_valid_mode"},
+    "brief_mode_missing_brief": {"buying_mode": "brief"},  # brief required by brief mode
+    "brief_mode_with_refine": {
+        "buying_mode": "brief",
+        "brief": "video ads",
+        "refine": [{"scope": "request", "ask": "more video"}],
+    },
+    "wholesale_with_brief": {"buying_mode": "wholesale", "brief": "video ads"},
+    "wholesale_with_refine": {
+        "buying_mode": "wholesale",
+        "refine": [{"scope": "request", "ask": "more video"}],
+    },
+    "refine_mode_missing_refine": {"buying_mode": "refine"},  # refine array required by refine mode
+    "refine_mode_empty_refine": {"buying_mode": "refine", "refine": []},
+    "refine_mode_with_brief": {
+        "buying_mode": "refine",
+        "brief": "video ads",
+        "refine": [{"scope": "request", "ask": "more video"}],
+    },
+}
+
+
 def _parse_invalid_fields(spec: str) -> dict[str, Any]:
-    """Translate the Examples table's `invalid_fields` description into kwargs.
+    """Translate the Examples table's `invalid_fields` or partition prose into kwargs.
 
-    The feature file describes invalid combinations in prose, e.g.:
-      - "no buying_mode field"
-      - "buying_mode=brief, no brief field"
-      - "buying_mode=wholesale, brief present"
-      - "buying_mode=refine, no refine array"
+    Two syntaxes are supported:
 
-    This helper interprets each prose phrase deterministically.
+    (1) Partition syntax (T-UC-001-partition-buying-mode):
+        "buying_mode configuration <partition>"
+        Maps the partition name to kwargs via _PARTITION_KWARGS.
+
+    (2) Field-prose syntax (T-UC-001-ext-d):
+        "no buying_mode field" / "buying_mode=brief, no brief field" /
+        "buying_mode=wholesale, brief present" / "buying_mode=refine, no refine array"
     """
-    spec_lower = spec.lower()
+    spec_lower = spec.lower().strip()
+
+    # (1) Partition syntax — used by T-UC-001-partition-buying-mode scenario outline
+    if spec_lower.startswith("buying_mode configuration "):
+        partition = spec_lower[len("buying_mode configuration ") :].strip()
+        if partition in _PARTITION_KWARGS:
+            return dict(_PARTITION_KWARGS[partition])
+        raise ValueError(f"Unknown buying_mode partition: {partition!r}")
+
+    # (2) Field-prose syntax — used by T-UC-001-ext-d
     kwargs: dict[str, Any] = {}
 
     # buying_mode
@@ -210,9 +254,9 @@ def then_products_no_brief_relevance(ctx: dict) -> None:
     """Wholesale mode does not run the ranker, so brief_relevance is None on every product."""
     resp = ctx["response"]
     for p in resp.products:
-        assert (
-            p.brief_relevance is None
-        ), f"Product {p.product_id} has brief_relevance set in wholesale mode: {p.brief_relevance!r}"
+        assert p.brief_relevance is None, (
+            f"Product {p.product_id} has brief_relevance set in wholesale mode: {p.brief_relevance!r}"
+        )
 
 
 @then('the response should NOT contain "proposals" array')
@@ -247,6 +291,38 @@ def then_refinement_entries_have_status(ctx: dict) -> None:
 
 
 # ── Then steps: cross-mode validation errors ───────────────────────
+
+
+@then(parsers.re(r"the result should be (?P<outcome>(?:request (?:proceeds|defaults).*|error: .*))"))
+def then_uc001_result_should_be(ctx: dict, outcome: str) -> None:
+    """UC-001 outcome dispatcher (partition + boundary scenarios).
+
+    Scoped via regex to UC-001 outcome shapes — does not collide with UC-002's
+    generic dispatcher which handles "success", "account resolution succeeds",
+    and "error <CODE>" (no colon). UC-001 outcomes are partition labels:
+      - "request proceeds ..."   — happy path; assert no error captured
+      - "request defaults ..."   — happy path with pre_v3_defaulted observable
+      - "error: ..."             — assert AdCPError captured
+
+    The semantic suffix ("to brief pipeline", "by policy", etc.) is reporting-
+    only; precise error_code assertions live in the @T-UC-001-ext-d dispatch
+    via `then_operation_fails_with_code`.
+    """
+    from src.core.exceptions import AdCPError
+
+    if outcome.startswith("request proceeds") or outcome.startswith("request defaults"):
+        assert "error" not in ctx, f"Expected partition '{outcome}' to succeed but got error: {ctx.get('error')!r}"
+    elif outcome.startswith("error:"):
+        assert "error" in ctx, f"Expected partition '{outcome}' to fail but got response: {ctx.get('response')!r}"
+        error = ctx["error"]
+        # All UC-001 error partitions raise AdCPError or pydantic ValidationError at the boundary.
+        from pydantic import ValidationError
+
+        assert isinstance(error, AdCPError | ValidationError), (
+            f"Partition '{outcome}' expected AdCPError or ValidationError, got {type(error).__name__}: {error!r}"
+        )
+    else:
+        raise ValueError(f"UC-001 dispatcher got unhandled outcome shape: {outcome!r}")
 
 
 @then(parsers.parse('the operation should fail with error code "{code}"'))
