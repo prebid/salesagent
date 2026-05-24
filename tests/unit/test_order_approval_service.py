@@ -19,9 +19,9 @@ def cleanup_approval_registry():
     # Import here to avoid issues with module loading
     import src.services.order_approval_service as service
 
-    # Clear the registry before the test
-    with service._approval_lock:
-        service._active_approvals.clear()
+    # Clear the registry before the test (ThreadRegistry API)
+    for key in list(service._active_approvals.list_active()):
+        service._active_approvals.remove(key)
 
     yield
 

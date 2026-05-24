@@ -96,7 +96,11 @@ class TestGetAdcpCapabilitiesSchema:
                 features=MediaBuyFeatures(
                     inline_creative_management=True,
                     property_list_filtering=True,
-                    catalog_management=True,
+                    # catalog_management example must match production (False until
+                    # sync_catalogs ships). Schema-construction tests are
+                    # documentation by example; declaring True here while
+                    # production declares False would mislead future readers.
+                    catalog_management=False,
                 ),
                 execution=Execution(
                     targeting=Targeting(
@@ -222,10 +226,9 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
-                # Pass identity with tenant info directly (no auth extraction in _impl)
-                from src.core.resolved_identity import ResolvedIdentity
+                from tests.factories import PrincipalFactory
 
-                identity = ResolvedIdentity(
+                identity = PrincipalFactory.make_identity(
                     principal_id=None,
                     tenant_id="test-tenant-123",
                     tenant=mock_tenant,
@@ -252,6 +255,15 @@ class TestGetAdcpCapabilitiesWithTenant:
                 # Should have features
                 assert response.media_buy.features is not None
                 assert response.media_buy.features.inline_creative_management is True
+
+                # Honesty assertions: capabilities the seller can't actually fulfill
+                # MUST declare False so buyers see the gap at discovery time, not at
+                # task-dispatch time. property_list_filtering: no adapter compiles it
+                # yet — flips True via supports_property_list_filtering().
+                # catalog_management: no sync_catalogs tool ships in this codebase;
+                # admin product CRUD is NOT the spec's buyer-driven catalog sync.
+                assert response.media_buy.features.property_list_filtering is False
+                assert response.media_buy.features.catalog_management is False
 
                 # Should have execution with targeting
                 assert response.media_buy.execution is not None
@@ -292,9 +304,9 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
-                from src.core.resolved_identity import ResolvedIdentity
+                from tests.factories import PrincipalFactory
 
-                identity = ResolvedIdentity(
+                identity = PrincipalFactory.make_identity(
                     principal_id="principal-123",
                     tenant_id="test-tenant-456",
                     tenant=mock_tenant,
@@ -358,11 +370,11 @@ def _make_capabilities_identity(
     tenant: dict | None = None,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity for capabilities tests."""
-    from src.core.resolved_identity import ResolvedIdentity
+    from tests.factories import PrincipalFactory
 
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "name": "Test Publisher", "subdomain": "testpub"}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
@@ -646,7 +658,6 @@ class TestResponseShapeCapabilities:
 
         property_list_filtering is False until an adapter actually compiles
         `targeting_overlay.property_list` into native ad-server targeting.
-        Without a configured adapter (anonymous access here), the field is False.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -659,50 +670,6 @@ class TestResponseShapeCapabilities:
         features = response.media_buy.features
         assert features.inline_creative_management is True
         assert features.property_list_filtering is False
-
-    def test_property_list_filtering_true_when_adapter_supports_it(self):
-        """Adapter-aware: property_list_filtering reflects the configured adapter's class attribute.
-
-        Kevel (B3) sets supports_property_list_filtering=True; adapters that
-        can't compile property_list (Mock/Broadstreet/Xandr/Triton in B4)
-        leave it False. The capability declaration follows the adapter.
-        """
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        # Adapter class with native property_list support
-        kevel_like_adapter = MagicMock()
-        kevel_like_adapter.default_channels = ["display"]
-        kevel_like_adapter.get_targeting_capabilities.return_value = None
-        kevel_like_adapter.__class__ = type(
-            "FakeKevel", (), {"supports_property_list_filtering": True, "adapter_name": "kevel"}
-        )
-
-        identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=kevel_like_adapter)
-
-        with stack:
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        assert response.media_buy.features.property_list_filtering is True
-
-    def test_property_list_filtering_false_when_adapter_does_not_support(self):
-        """An adapter without native property_list compilation must not advertise the capability."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        mock_like_adapter = MagicMock()
-        mock_like_adapter.default_channels = ["display"]
-        mock_like_adapter.get_targeting_capabilities.return_value = None
-        mock_like_adapter.__class__ = type(
-            "FakeMock", (), {"supports_property_list_filtering": False, "adapter_name": "mock"}
-        )
-
-        identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_like_adapter)
-
-        with stack:
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        assert response.media_buy.features.property_list_filtering is False
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""

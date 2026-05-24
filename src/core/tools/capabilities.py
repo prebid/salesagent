@@ -35,6 +35,7 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
 
@@ -156,19 +157,27 @@ def _get_adcp_capabilities_impl(
         advertising_policies=advertising_policies,
     )
 
-    # Build features - be honest about what we actually support.
-    # property_list_filtering is adapter-aware: True only when the tenant's
-    # configured adapter has a working `targeting_overlay.property_list`
-    # compilation path (Kevel via siteId resolver as of B3; other adapters
-    # remain False and raise UNSUPPORTED_FEATURE per B4). Adapters opt in via
-    # the class attribute ``supports_property_list_filtering``.
-    property_list_supported = bool(adapter and getattr(adapter.__class__, "supports_property_list_filtering", False))
+    # Build features - be honest about what we actually support
+    # These should be adapter-dependent in the future
     features = MediaBuyFeatures(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
-        property_list_filtering=property_list_supported,
-        # catalog_management: We have product catalog management
-        catalog_management=True,
+        # property_list_filtering: True iff the bound adapter actually compiles
+        # `targeting_overlay.property_list` into native ad-server targeting.
+        # Today no adapter sets this — capability remains False; create/update
+        # emit per-package UNSUPPORTED_FEATURE advisories on the success envelope
+        # so buyers can see the silent-drop window. Kevel's siteId resolver flips
+        # this True and the other 4 adapters hard-reject — same source of truth
+        # via `supports_property_list_filtering()`.
+        property_list_filtering=supports_property_list_filtering(adapter),
+        # catalog_management: declared False until a sync_catalogs tool ships.
+        # AdCP spec binds this flag to the buyer-driven sync_catalogs task
+        # (SyncCatalogsRequest with account + catalogs[] + delete_missing) —
+        # NOT the internal admin CRUD over the products table. Declaring True
+        # without the tool would let buyers reach the boundary and get
+        # UNSUPPORTED_FEATURE there instead of being warned at capability
+        # discovery. Mirrors the property_list_filtering=False rationale above.
+        catalog_management=False,
     )
 
     # Build targeting capabilities from adapter
@@ -246,10 +255,10 @@ def _get_adcp_capabilities_impl(
     # The runner gates scenarios by specialism, not by `supported_protocols` alone.
     #
     # We declare the specialism even though `pending_creatives_to_start` and
-    # `invalid_transitions` are not yet fully green; the CI storyboard job is
-    # advisory while related gaps are tracked separately, so
-    # those scenario failures don't block merge — and the public declaration
-    # forces prioritization of the remaining gaps instead of hiding them.
+    # `invalid_transitions` are not yet fully green. The CI storyboard job is
+    # advisory (see `.github/workflows/test.yml`), so those scenario failures
+    # don't block merge — and the public declaration forces prioritization of
+    # the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
             major_versions=[MajorVersion(root=3)],

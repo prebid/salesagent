@@ -150,7 +150,7 @@ class TestDeliverySimulatorRestart:
             # Verify simulations were started for all media buys
             active_count = 0
             for media_buy_id in media_buy_ids:
-                if media_buy_id in delivery_simulator._active_simulations:
+                if delivery_simulator._active_simulations.contains(media_buy_id):
                     active_count += 1
 
             # Should have started simulations for all active media buys with webhooks
@@ -209,7 +209,7 @@ class TestDeliverySimulatorRestart:
             delivery_simulator.restart_active_simulations()
 
             # Verify no simulation was started
-            assert media_buy_id not in delivery_simulator._active_simulations
+            assert not delivery_simulator._active_simulations.contains(media_buy_id)
 
         finally:
             # Cleanup

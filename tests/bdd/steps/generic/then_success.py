@@ -11,28 +11,63 @@ from pytest_bdd import parsers, then
 # ── Response status ──────────────────────────────────────────────────
 
 
+# Success collections that prove a status-less response is genuinely
+# "completed" — at least one must be present and a list, not None.
+_STATUSLESS_SUCCESS_ATTRS: tuple[str, ...] = (
+    "formats",  # ListCreativeFormatsResponse
+    "media_buy_deliveries",  # GetMediaBuyDeliveryResponse
+    "aggregated_totals",  # GetMediaBuyDeliveryResponse
+)
+
+
 @then(parsers.parse('the response status should be "{status}"'))
 def then_response_status(ctx: dict, status: str) -> None:
     """Assert the operation completed with expected status.
 
     Works across use cases:
-    - UC-005 (ListCreativeFormatsResponse): no status field, presence = completed
-    - UC-004 (GetMediaBuyDeliveryResponse): has explicit status field
+    - UC-004 (GetMediaBuyDeliveryResponse): has explicit ``status`` field —
+      assert it equals the expected value directly.
+    - UC-005 (ListCreativeFormatsResponse): no ``status`` field. Such
+      response types can only represent the *completed* state, so
+      "completed" is proven by (a) no error recorded for the operation and
+      (b) the schema-required success payload being present. Any requested
+      status other than "completed" against a status-less response fails.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
 
-    # If response has an explicit status field, check it directly
+    # If response has an explicit status field, check it directly.
     if hasattr(resp, "status"):
         actual = resp.status
         assert actual == status, f"Expected status '{status}', got '{actual}'"
         return
 
-    # UC-005 fallback: presence of response with expected fields = completed
-    if status == "completed":
-        return
+    # Status-less response: only the completed/success state is representable.
+    if status != "completed":
+        raise AssertionError(
+            f"Status '{status}' requested but response {type(resp).__name__} "
+            f"has no status field — status-less responses can only be 'completed'"
+        )
 
-    raise AssertionError(f"Unknown status '{status}' — response has no status field")
+    # "completed" must be proven, not assumed from a non-None object.
+    error = ctx.get("error")
+    assert error is None, f"Status 'completed' claimed but the operation recorded an error: {error!r}"
+
+    present = [a for a in _STATUSLESS_SUCCESS_ATTRS if hasattr(resp, a)]
+    assert present, (
+        f"Status-less response {type(resp).__name__} exposes none of the "
+        f"expected success collections {_STATUSLESS_SUCCESS_ATTRS} — cannot "
+        f"prove the operation completed successfully"
+    )
+    for attr in present:
+        value = getattr(resp, attr)
+        assert value is not None, (
+            f"Status 'completed' claimed but response.{attr} is None — the schema-required success payload is missing"
+        )
+        if attr in ("formats", "media_buy_deliveries"):
+            assert isinstance(value, list), (
+                f"Status 'completed' claimed but response.{attr} is {type(value).__name__}, expected a list"
+            )
 
 
 # ── Response contains field ──────────────────────────────────────────

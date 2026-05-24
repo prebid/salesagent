@@ -29,12 +29,13 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     @classmethod
     def make_identity(
         cls,
-        principal_id: str = "test_principal",
+        principal_id: str | None = "test_principal",
         tenant_id: str = "test_tenant",
         protocol: str = "mcp",
         dry_run: bool = False,
         auth_token: str | None = None,
         tenant: dict | None = _UNSET,  # type: ignore[assignment]
+        testing_context: AdCPTestContext | None = None,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
         """Build a ResolvedIdentity without DB persistence.
@@ -42,20 +43,24 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Auto-derives tenant dict via TenantFactory.make_tenant().
         Pass explicit tenant=None for auth-error tests.
         Pass **tenant_overrides for domain fields (approval_mode, etc).
+        Pass testing_context to override the default (e.g. set
+        test_session_id for harness routing).
         """
         resolved_tenant = (
             TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
         )
+        if testing_context is None:
+            testing_context = AdCPTestContext(
+                dry_run=dry_run,
+                mock_time=None,
+                jump_to_event=None,
+                test_session_id=None,
+            )
         return ResolvedIdentity(
             principal_id=principal_id,
             tenant_id=tenant_id,
             tenant=resolved_tenant,
             auth_token=auth_token,
             protocol=protocol,
-            testing_context=AdCPTestContext(
-                dry_run=dry_run,
-                mock_time=None,
-                jump_to_event=None,
-                test_session_id=None,
-            ),
+            testing_context=testing_context,
         )

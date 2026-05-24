@@ -14,6 +14,38 @@ here and the corresponding marker block.
 
 ---
 
+## 2026-05-19 — 18h.10 Phase-2 reconciliation & bead tracking
+
+Every remaining item now has a full-context bead (the doc is no longer the
+only record). Reconciled items were fixed by the Phase-2 wave (run
+`190526_2039`, bdd 0-failed) and need no bead.
+
+| Item | Status | Bead |
+|------|--------|------|
+| C1 + C2 (account not enforced at _impl boundary; +9d5 REST FIXME) | OPEN P1 sec | `salesagent-xpcd` |
+| C3 (cross-principal 200+empty, not 403) | OPEN P1 sec | `salesagent-h25j` |
+| C4 (ValidationError→AdCPError boundary translator) | OPEN P2 broad | `salesagent-l6ev` |
+| C5 (`include_package_daily_breakdown` no-op) | OPEN P2 | `salesagent-kzk0` |
+| C6 (date-range validation in success envelope) | OPEN P3 | `salesagent-t6y9` |
+| C7 (end-only date_range default) | OPEN P3 | `salesagent-losz` |
+| C8 (MCP list_creative_formats missing fmt-id params) | OPEN P2 | `salesagent-95q3` |
+| C10 (description-only spec constraints) | OPEN P3 | `salesagent-o9w4` |
+| C11 (reporting_period echo) | RECONCILED (salesagent-18h.1) | — |
+| B1 (Gherkin `pending_activation`) | OPEN P2 | `salesagent-8c78` |
+| B2 (date_range fake kwarg) | RECONCILED (pilot a56621ea) | — |
+| B3 (resolution/ownership symbolic names) | RECONCILED (exec-uc004) | — |
+| B4 (sampling_method wrong feature) | OPEN P3 (relocate) | `salesagent-uofj` |
+| B5 (webhook_credentials wrong dispatch) | RECONCILED (exec-uc004 f8u4) | — |
+| B6 test half (disclosure enum literals) | RECONCILED (exec-uc005 9z2t) | — |
+| B6 production half (disclosure filter impl) | OPEN P2 | `salesagent-1z7m` |
+| B7 (UC-006 fake AdCPValidationError) | RECONCILED (salesagent-miva) | — |
+| H1, H2 (`_assert_partition_outcome` weak) | RECONCILED (salesagent-6oq) | — |
+| reporting_dimensions breakdowns (was phantom "zk1") | OPEN P2 | `salesagent-z8nf` |
+| creative per-format resilience (one bad fmt nukes all) | OPEN P2 | `salesagent-az8d` (← `w8yn`) |
+| non-UC004/5/6 audit remainder | OPEN | epic `salesagent-pvo2` |
+
+---
+
 ## How to read this
 
 - **Scope** lists the affected scenario tags or selective entries in
@@ -154,7 +186,14 @@ here and the corresponding marker block.
 - **Severity:** P3 (cosmetic)
 - **Origin:** Batch 1 audit
 
-### C11 — `start_date` / `end_date` not echoed in `response.reporting_period`
+### C11 — `start_date` / `end_date` not echoed in `response.reporting_period` — RETIRED (salesagent-18h.1, 2026-05-19)
+- **Status:** RETIRED. The "production ignores buyer start_date" failure was
+  an artefact of the greedy `with {request_params}` step shadowing
+  `when_request_date_range` and mis-parsing the request — not real production
+  behaviour. With correct step routing (greedy step restricted to `\w+=`),
+  production echoes the buyer-supplied `start_date`/`end_date` in
+  `response.reporting_period` and all 4 transport variants pass. The
+  `T-UC-004-daterange` strict-xfail row was removed from `conftest.py`.
 - **Scope:** `T-UC-004-daterange` ("Custom date range used as reporting
   period" — added to strict=True genuine-xfails on 2026-05-08)
 - **Where:** `src/core/tools/media_buy_delivery.py` — when buyer supplies
@@ -190,6 +229,16 @@ here and the corresponding marker block.
   `T-UC-004-filter` selective entry shrinks to empty (remove entirely)
 - **Severity:** P2 (Gherkin error)
 - **Origin:** Batch 2 audit
+- **Update 2026-05-18 (salesagent-18h.1):** status_filter *selection* now
+  uses the persisted `MediaBuy.status` (was date-derived and ignored the
+  column entirely). `rejected`/`canceled` rows now pass and were removed
+  from the `_UC004_FILTER_SELECTIVE` substring set. The `paused`/`completed`
+  rows still xfail because the *response* delivery status (`d.status`) is
+  still computed from flight dates — a buy persisted as `completed` with a
+  current flight window is selected correctly but reported as `active`.
+  Remaining substrings: `{pending_activation, paused, completed}`. Closing
+  the response-status-display gap (re-deriving `d.status` from the persisted
+  column) plus the `pending_activation` Gherkin rewrite empties this entry.
 
 ### B2 — `_dispatch_partition` for `date_range` sends fake `date_range="…"` kwarg
 - **Scope:** `T-UC-004-boundary-date-range` and
@@ -266,22 +315,34 @@ here and the corresponding marker block.
 - **Severity:** P2 (production feature gap)
 - **Origin:** Batch 5 audit
 
-### B7 — UC-006 account_resolution step layer fakes the `AdCPValidationError`
+### B7 — UC-006 account_resolution step layer fakes the `AdCPValidationError` — RECONCILED
 - **Scope:** `T-UC-006-partition-account` (rows `missing_account`,
   `invalid_oneOf_both`) and `T-UC-006-boundary-account` (rows
   `account field absent`, `both account_id and brand`)
-- **Where:** `tests/bdd/steps/generic/_account_resolution.py:24-59` —
-  `validate_account_ref()` raises `AdCPValidationError` in the step layer
-  before production is reached
-- **Fix:** delete the step-layer synthesis blocks; let Pydantic's
-  required-field validation on the wrapper raise naturally, OR reclassify
-  the assertion as a step-layer pre-condition test (which would also
-  require the rows to assert on `AdCPValidationError` not `error_code ==
-  "INVALID_REQUEST"`)
-- **Impact:** 4 xpasses passing for the wrong reason. This is a
-  "fake test" — currently it tests the harness, not production.
-- **Severity:** P2 (test-quality bug — passes mask real coverage)
-- **Origin:** Batch 6 audit
+- **Status:** RECONCILED (salesagent-miva, 18h.10 Phase-2). The step layer
+  no longer synthesizes an `AdCPValidationError`. `when_sync_creative`
+  (`tests/bdd/steps/domain/uc006_sync_creatives.py`) now genuinely
+  dispatches the absent payload to production (`account=None`) and parses
+  the both-keys payload through the real `adcp` `AccountReference` union
+  before dispatch. The rows now genuinely exercise production and fail for
+  the real, named gap below — they are strict=True xfails tied to that gap
+  (`tests/bdd/conftest.py` `_UC006_VALIDATION_XFAIL`), no longer xpassing
+  for the wrong reason.
+- **Underlying production gap (now genuinely exercised):**
+  - `missing_account` / `account field absent`: production performs no
+    required-account schema validation. `enrich_identity_with_account()`
+    returns identity unchanged and `_sync_creatives_impl` succeeds — no
+    `INVALID_REQUEST` is raised.
+  - `invalid_oneOf_both` / `both account_id and brand`: the `adcp`
+    `AccountReference` union raises a Pydantic `ValidationError` at parse
+    time, which production does not translate into
+    `AdCPError(INVALID_REQUEST, suggestion)` — the same C4 gap.
+- **Unblocks:** add a transport-boundary translator that wraps Pydantic
+  `ValidationError` in `AdCPError(INVALID_REQUEST, suggestion=…)` (C4) plus
+  required-account enforcement. The moment those land, these rows xpass and
+  the strict=True markers force their removal.
+- **Severity:** P2 (real production gap, no longer masked by a fake test)
+- **Origin:** Batch 6 audit; reconciled salesagent-miva
 
 ---
 
@@ -328,7 +389,7 @@ that scenario causes a hard suite failure rather than silent xpass.
 
 ## Tally
 
-- **Production gaps:** 10 (C1–C11, with C9 retired by 2026-05-08 cleanup)
+- **Production gaps:** 9 (C1–C11; C9 retired by 2026-05-08 cleanup, C11 retired by salesagent-18h.1 on 2026-05-19)
 - **Test rewrites:** 7 (B1–B7)
 - **Test-helper improvements:** 2 (H1, H2)
 - **Total:** ~19 items

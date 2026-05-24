@@ -311,10 +311,10 @@ class TestCapabilitiesPropertyListFiltering:
     """
 
     def test_capabilities_reports_property_list_filtering(self):
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
+        from tests.factories import PrincipalFactory
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={

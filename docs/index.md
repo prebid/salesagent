@@ -42,6 +42,17 @@ The Prebid Sales Agent is the Prebid.org reference implementation of an AdCP-com
 - **[Contributing](development/contributing.md)** - Development workflows
 - **[Troubleshooting](development/troubleshooting.md)** - Common issues
 
+## Architecture Decision Records (ADRs)
+
+ADRs explain *why* significant technical decisions were made — not just what was
+decided. Each record captures the context, the chosen approach, trade-offs, and
+when to revisit the decision.
+
+- **[decisions/](decisions/)** - Index of all ADRs
+- **[ADR-001](decisions/adr-001-single-source-pre-commit-deps.md)** - uv.lock as single source of truth for pre-commit deps
+- **[ADR-002](decisions/adr-002-solo-maintainer-bypass.md)** - Solo-maintainer branch protection with bypass
+- **[ADR-003](decisions/adr-003-pull-request-target-trust.md)** - pull_request_target trust boundary for CLA and PR-title workflows
+
 ## Documentation Structure
 
 ```

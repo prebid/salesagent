@@ -198,10 +198,25 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+
+    AdCP spec 3.0.7 ``error-handling.mdx`` allows non-fatal errors on the
+    success envelope ("populate only the payload... MUST NOT populate
+    ``adcp_error``"). The ``errors`` field below carries per-package
+    advisories like ``UNSUPPORTED_FEATURE`` for fields the seller persists but
+    cannot yet honor (e.g. ``property_list_filtering=False`` window). Mirrors
+    the pattern used by ``GetProductsResponse``, ``ListCreativeFormatsResponse``,
+    ``SyncAccountsResponse``.
     """
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
+
+    # Non-fatal advisories — see class docstring for the spec basis.
+    errors: list[Error] | None = Field(
+        default=None,
+        description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
+        "field is persisted but won't yet affect targeting). Absent on a fully-honored buy.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -322,6 +337,12 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+
+    Carries an optional ``errors`` field for non-fatal advisories on the
+    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.7 error-handling
+    "non-fatal in payload" rule). Used today for per-package
+    ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
+    not yet compiled by the adapter.
     """
 
     # Override affected_packages to use our extended AffectedPackage type
@@ -332,6 +353,13 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
+
+    # Non-fatal advisories — see class docstring for the spec basis.
+    errors: list[Error] | None = Field(
+        default=None,
+        description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
+        "field is persisted but won't yet affect targeting). Absent when fully honored.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -2339,7 +2367,7 @@ class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """
 
     media_buys: list[GetMediaBuysMediaBuy] = Field(..., description="List of matching media buys")
-    errors: list[Any] | None = Field(default=None, description="Errors encountered during retrieval")
+    errors: list[Error] | None = Field(default=None, description="Errors encountered during retrieval")
     context: ContextObject | None = Field(default=None, description="Application-level context from the request")
 
     def model_dump(self, **kwargs):
