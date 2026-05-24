@@ -107,6 +107,12 @@ class IdempotencyAttemptRepository:
 
         Designed to be called by a periodic cleanup job. Scoped to ``tenant_id``
         so cross-tenant cleanup is impossible from a single repository.
+
+        NOTE: No production caller is wired yet — the ``idempotency_attempts``
+        table will grow unbounded until a periodic cleanup task is added
+        (tracked as a follow-up). TTL on stored rows still applies at the
+        read path (``find_by_key`` filters on ``expires_at``), so replay
+        correctness is unaffected; only storage growth is the concern.
         """
         current = now or datetime.now(UTC)
         stmt = delete(IdempotencyAttempt).where(

@@ -194,7 +194,6 @@ class TestImplReplaysCachedRejection:
         from datetime import UTC, datetime
 
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import (
             CreateMediaBuyError,
             CreateMediaBuyRequest,
@@ -228,12 +227,10 @@ class TestImplReplaysCachedRejection:
                 response_envelope=original_rejection.model_dump(mode="json"),
             )
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=principal_id,
             tenant_id=tenant_id,
-            tenant={"tenant_id": tenant_id},
             testing_context=AdCPTestContext(test_session_id="replay_test"),
-            protocol="mcp",
         )
 
         req = CreateMediaBuyRequest(
@@ -263,7 +260,6 @@ class TestImplReplaysCachedRejection:
         from datetime import UTC, datetime
 
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import (
             CreateMediaBuyError,
             CreateMediaBuyRequest,
@@ -297,12 +293,10 @@ class TestImplReplaysCachedRejection:
                 response_envelope=seeded.model_dump(mode="json"),
             )
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=principal_id,
             tenant_id=tenant_id,
-            tenant={"tenant_id": tenant_id},
             testing_context=AdCPTestContext(dry_run=True, test_session_id="miss_test"),
-            protocol="mcp",
         )
 
         req = CreateMediaBuyRequest(

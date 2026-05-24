@@ -1504,8 +1504,6 @@ def _cache_rejection_envelope(
     if not idempotency_key:
         return
 
-    from sqlalchemy.exc import IntegrityError
-
     from src.core.database.repositories import MediaBuyUoW as _CacheUoW
 
     try:
@@ -1519,13 +1517,20 @@ def _cache_rejection_envelope(
             )
     except IntegrityError:
         logger.info(
-            "Idempotency rejection cache race for key %s — another writer won; replay will work either way",
+            "Idempotency rejection cache race for tenant=%s principal=%s key=%s — another writer won; replay will work either way",
+            tenant_id,
+            principal_id,
             idempotency_key,
         )
     except Exception:
         # Caching is best-effort; a failure here must never block returning the
         # rejection to the buyer. Log and continue.
-        logger.exception("Failed to cache rejection envelope for idempotency_key %s", idempotency_key)
+        logger.exception(
+            "Failed to cache rejection envelope for tenant=%s principal=%s key=%s",
+            tenant_id,
+            principal_id,
+            idempotency_key,
+        )
 
 
 def _cache_and_return_rejection(
