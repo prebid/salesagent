@@ -669,11 +669,15 @@ async def _sync_accounts_impl(
         action_counts[act] = action_counts.get(act, 0) + 1
     audit_logger.log_info(f"sync_accounts completed: {action_counts} (dry_run={dry_run}, principal={principal_id})")
 
-    return SyncAccountsResponse(
-        accounts=results,
-        dry_run=dry_run if dry_run else None,
-        context=req.context,
-    )
+    # AdCP sync-accounts-response schema requires dry_run as boolean (not null) and
+    # rejects null for context. dry_run was previously `dry_run if dry_run else None`,
+    # which serialized `null` when dry_run=False and tripped the storyboard validator's
+    # "/dry_run: must be boolean" check. Always emit the bool value; only include
+    # context when the request supplied one (omitted-vs-null distinction).
+    response_kwargs: dict[str, Any] = {"accounts": results, "dry_run": bool(dry_run)}
+    if req.context is not None:
+        response_kwargs["context"] = req.context
+    return SyncAccountsResponse(**response_kwargs)
 
 
 # ---------------------------------------------------------------------------

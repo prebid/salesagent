@@ -389,11 +389,24 @@ def _ensure_default_storyboard_fixtures(db_session: Any, tenant_id: str) -> None
         product_id="default_display",
         name="Default Display",
         description="Default display product seeded so storyboard get_products scenarios succeed",
-        format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+        # AdCP get-products-response schema requires width/height as integers on
+        # display format_ids; omitting them surfaces as a schema-validation FAIL on
+        # refine_products / inventory_list_targeting / inventory_list_no_match.
+        format_ids=[
+            {
+                "agent_url": "https://creative.adcontextprotocol.org",
+                "id": "display_300x250",
+                "width": 300,
+                "height": 250,
+            }
+        ],
         targeting_template={"geo_countries": ["US"]},
         delivery_type="guaranteed",
         property_tags=["all_inventory"],
-        delivery_measurement={"provider": "publisher"},
+        # AdCP product schema requires delivery_measurement.notes as a string when
+        # delivery_measurement is set; default "" not "provider only" — the storyboard
+        # validator surfaces this as "/products/0/delivery_measurement/notes: must be string".
+        delivery_measurement={"provider": "publisher", "notes": "Publisher-reported delivery metrics"},
     )
     db_session.add(product)
 
