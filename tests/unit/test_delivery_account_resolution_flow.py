@@ -30,7 +30,7 @@ def test_delivery_raw_preserves_account_for_shared_impl(monkeypatch: pytest.Monk
 
     result = media_buy_delivery.get_media_buy_delivery_raw(
         media_buy_ids=["mb-001"],
-        account={"account_id": "acc_001"},
+        account=AccountReference(AccountReference1(account_id="acc_001")),
         identity=identity,
     )
 
@@ -131,5 +131,5 @@ async def test_rest_delivery_route_passes_account_to_raw_path(monkeypatch: pytes
     result = await api_v1.get_media_buy_delivery(body, identity)
 
     assert result == {"ok": True}
-    assert captured["account"] == {"account_id": "acc_001"}
+    assert _account_id(captured["account"]) == "acc_001"
     assert captured["identity"] is identity

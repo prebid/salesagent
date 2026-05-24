@@ -650,7 +650,7 @@ def get_media_buy_delivery_raw(
     reporting_dimensions: ReportingDimensions | None = None,
     attribution_window: AttributionWindow | None = None,
     include_package_daily_breakdown: bool | None = None,
-    account: LibraryAccountReference | dict[str, Any] | None = None,
+    account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
