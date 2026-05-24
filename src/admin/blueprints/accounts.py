@@ -15,6 +15,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.database.models import Account
 from src.core.database.repositories.uow import AccountUoW
+from src.services.protocol_change_webhooks import notify_account_status_changed
 
 logger = logging.getLogger(__name__)
 
@@ -169,11 +170,15 @@ def change_status(tenant_id, account_id):
     if not new_status:
         return jsonify({"success": False, "error": "Status is required."}), 400
 
+    principal_id = None
+    old_status = None
     with AccountUoW(tenant_id) as uow:
         account = uow.accounts.get_by_id(account_id)
         if account is None:
             return jsonify({"success": False, "error": "Account not found."}), 404
 
+        old_status = account.status
+        principal_id = account.principal_id
         allowed = _STATUS_TRANSITIONS.get(account.status, set())
         if new_status not in allowed:
             return (
@@ -188,5 +193,14 @@ def change_status(tenant_id, account_id):
             )
 
         uow.accounts.update_status(account_id, new_status)
+
+    if old_status is not None:
+        notify_account_status_changed(
+            tenant_id=tenant_id,
+            account_id=account_id,
+            from_status=old_status,
+            to_status=new_status,
+            principal_id=principal_id,
+        )
 
     return jsonify({"success": True, "status": new_status})

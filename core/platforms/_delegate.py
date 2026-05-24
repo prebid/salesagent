@@ -42,6 +42,7 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     GetMediaBuysRequest,
     GetProductsRequest,
+    GetSignalsRequest,
     ListCreativeFormatsRequest,
     UpdateMediaBuyRequest,
 )
@@ -54,6 +55,7 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from src.core.tools.products import _get_products_impl
+from src.core.tools.signals import _get_signals_impl
 
 logger = logging.getLogger(__name__)
 
@@ -743,6 +745,15 @@ async def _delegate_list_creatives(req: Any, ctx: RequestContext[Any]) -> dict[s
         context=body.get("context"),
         identity=identity,
     )
+    return _to_wire(response)
+
+
+@translate_adcp_errors
+async def _delegate_get_signals(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
+    """Forward to ``src/core/tools/signals.py:_get_signals_impl``."""
+    identity = _build_identity(ctx)
+    req_model = _coerce_to_request_model(req, GetSignalsRequest)
+    response = await _get_signals_impl(req_model, identity)
     return _to_wire(response)
 
 

@@ -286,3 +286,13 @@ class AccountRepository:
             )
         ).all()
         return list(rows)
+
+    def list_principal_ids_for_account(self, account_id: str) -> list[str]:
+        """List principal IDs with access to an account."""
+        rows = self._session.scalars(
+            select(AgentAccountAccess.principal_id).where(
+                AgentAccountAccess.tenant_id == self._tenant_id,
+                AgentAccountAccess.account_id == account_id,
+            )
+        ).all()
+        return list(rows)

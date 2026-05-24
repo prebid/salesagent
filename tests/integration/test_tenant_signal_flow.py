@@ -68,7 +68,7 @@ class TestTenantSignalsDiscovery:
 
             identity = ResolvedIdentity(
                 tenant_id="sig_disc_t1",
-                principal_id=None,
+                principal_id="buyer_1",
                 tenant={
                     "ad_server": "google_ad_manager",
                     "public_agent_url": "https://disc.example.com/agent",
@@ -109,7 +109,7 @@ class TestTenantSignalsDiscovery:
 
             identity = ResolvedIdentity(
                 tenant_id="sig_disc_t2",
-                principal_id=None,
+                principal_id="buyer_1",
                 tenant={"ad_server": "google_ad_manager"},
                 principal=None,
                 testing_context=None,

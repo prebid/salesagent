@@ -1,0 +1,98 @@
+import json
+import time
+
+import pytest
+from adcp.webhooks import LegacyWebhookHmacOptions, verify_webhook_hmac
+
+from src.core.database.models import PushNotificationConfig
+from src.services import protocol_webhook_service
+from src.services.protocol_webhook_service import ProtocolWebhookService
+
+
+class _Response:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class _Session:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def post(self, url, *, data, headers, timeout):
+        self.calls.append({"url": url, "data": data, "headers": headers, "timeout": timeout})
+        return _Response()
+
+
+@pytest.mark.asyncio
+async def test_protocol_webhook_service_signs_rfc9421_payload_with_exact_body(monkeypatch) -> None:
+    loaded_credential = object()
+    captured = {}
+
+    def fake_load_active_signing_credential(*, tenant_id, signing_mode):
+        captured["load"] = {"tenant_id": tenant_id, "signing_mode": signing_mode}
+        return loaded_credential
+
+    def fake_build_auth_headers(**kwargs):
+        captured["sign"] = kwargs
+        headers = dict(kwargs["base_headers"])
+        headers["Signature"] = "sig1=:signed:"
+        headers["Signature-Input"] = 'sig1=("@method" "@target-uri" "content-digest" "content-type")'
+        headers["Content-Digest"] = "sha-256=:digest:"
+        return headers
+
+    monkeypatch.setattr(protocol_webhook_service, "load_active_signing_credential", fake_load_active_signing_credential)
+    monkeypatch.setattr(protocol_webhook_service, "build_auth_headers", fake_build_auth_headers)
+
+    service = ProtocolWebhookService()
+    session = _Session()
+    service._session = session
+    payload = {"notification_type": "signal.updated", "task_id": "catalog_1"}
+    config = PushNotificationConfig(
+        id="pnc_1",
+        tenant_id="tenant_1",
+        principal_id="agent_1",
+        url="https://example.com/webhooks",
+        signing_mode="rfc9421",
+        is_active=True,
+    )
+
+    ok = await service.send_notification(config, payload, {"task_type": "signal.updated", "tenant_id": "tenant_1"})
+
+    assert ok is True
+    assert captured["load"] == {"tenant_id": "tenant_1", "signing_mode": "rfc9421"}
+    assert captured["sign"]["body"] == session.calls[0]["data"]
+    assert json.loads(session.calls[0]["data"]) == payload
+    assert session.calls[0]["headers"]["Signature"] == "sig1=:signed:"
+    assert session.calls[0]["headers"]["Content-Type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_protocol_webhook_service_legacy_hmac_body_verifies() -> None:
+    service = ProtocolWebhookService()
+    session = _Session()
+    service._session = session
+    secret = "x" * 32
+    payload = {"notification_type": "signal.updated", "task_id": "catalog_1"}
+    config = PushNotificationConfig(
+        id="pnc_1",
+        tenant_id="tenant_1",
+        principal_id="agent_1",
+        url="https://example.com/webhooks",
+        authentication_type="HMAC-SHA256",
+        authentication_token=secret,
+        signing_mode="hmac",
+        is_active=True,
+    )
+
+    ok = await service.send_notification(config, payload, {"task_type": "signal.updated", "tenant_id": "tenant_1"})
+
+    assert ok is True
+    call = session.calls[0]
+    assert json.loads(call["data"]) == payload
+    verify_webhook_hmac(
+        headers=call["headers"],
+        body=call["data"],
+        options=LegacyWebhookHmacOptions(secret=secret.encode(), sender_identity="agent_1", now=time.time()),
+    )

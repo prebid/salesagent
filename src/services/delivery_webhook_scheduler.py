@@ -360,6 +360,7 @@ class DeliveryWebhookScheduler:
                 DBPushNotificationConfig.tenant_id == media_buy.tenant_id,
                 DBPushNotificationConfig.url == webhook_url,
                 DBPushNotificationConfig.is_active,
+                DBPushNotificationConfig.purpose == "async_task",
             )
             push_notification_config = session.scalars(config_stmt).first()
 

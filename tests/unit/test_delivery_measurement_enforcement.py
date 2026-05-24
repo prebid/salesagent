@@ -16,9 +16,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-from pydantic import ValidationError
-
 from src.adapters import get_adapter_default_delivery_measurement
 from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
@@ -104,10 +101,12 @@ class TestDeliveryMeasurementOptional:
         product = _make_schema_product()
         assert product.delivery_measurement is not None
 
-    def test_delivery_measurement_requires_provider(self):
-        """delivery_measurement must have a provider field."""
-        with pytest.raises(ValidationError, match="provider"):
-            _make_schema_product(delivery_measurement={"notes": "no provider"})
+    def test_delivery_measurement_provider_is_optional(self):
+        """delivery_measurement.provider is deprecated and optional in adcp 5.7."""
+        product = _make_schema_product(delivery_measurement={"notes": "no provider"})
+        assert product.delivery_measurement is not None
+        assert product.delivery_measurement.provider is None
+        assert product.delivery_measurement.notes == "no provider"
 
 
 # ---------------------------------------------------------------------------

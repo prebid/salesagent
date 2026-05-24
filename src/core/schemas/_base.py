@@ -37,13 +37,13 @@ from adcp.types.aliases import (
     CreateMediaBuySuccessResponse as AdCPCreateMediaBuySuccess,
 )
 from adcp.types.aliases import Package as AdCPPackage
-from adcp.types.aliases import (
-    UpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
-)
-from adcp.types.aliases import (
-    UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
-)
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
+from adcp.types.generated_poc.media_buy.update_media_buy_response import (
+    UpdateMediaBuyResponse1 as AdCPUpdateMediaBuySuccess,
+)
+from adcp.types.generated_poc.media_buy.update_media_buy_response import (
+    UpdateMediaBuyResponse2 as AdCPUpdateMediaBuyError,
+)
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -74,9 +74,9 @@ from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import PlatformDeployment as LibraryPlatformDeployment
 from adcp.types import Property as LibraryProperty
-from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
 from adcp.types import TargetingOverlay as LibraryTargetingOverlay
+from adcp.types.generated_poc.signals.get_signals_response import Signal as LibrarySignal
 from pydantic import (
     AnyUrl,
     BaseModel,
@@ -186,8 +186,15 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
     """
 
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
+    creative_deadline: datetime | None = None
+    replayed: bool | None = Field(
+        default=None,
+        description="Envelope flag set true when the response is returned from an idempotency replay.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -2019,11 +2026,11 @@ class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    signals: list[Signal] = Field(..., description="Array of available signals")
+    signals: SchemaVariant[list[Signal]] | None = Field(default=None, description="List of matching signals")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
-        count = len(self.signals)
+        count = len(self.signals or [])
         if count == 0:
             return "No signals found matching your criteria."
         elif count == 1:

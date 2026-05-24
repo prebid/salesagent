@@ -2609,36 +2609,37 @@ class TestUpgradeObligations:
         req = _make_request(ext={"custom_field": "value", "custom_num": 42})
         assert req.ext is not None
 
-    def test_account_field_in_success_response(self):
-        """CreateMediaBuySuccess has account field (optional).
+    def test_account_field_removed_from_success_response(self):
+        """CreateMediaBuySuccess no longer has account field.
 
         Covers: UC-002-UPG-07
         """
-        assert "account" in CreateMediaBuySuccess.model_fields
+        assert "account" not in CreateMediaBuySuccess.model_fields
 
         from src.core.schemas import Package as RespPkg
 
-        # Verify account can be set on success
-        resp = CreateMediaBuySuccess(
-            media_buy_id="mb_1",
-            packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
-            account=None,  # Optional
-        )
-        assert resp.account is None
+        with pytest.raises(ValidationError, match="account"):
+            CreateMediaBuySuccess(
+                media_buy_id="mb_1",
+                packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
+                account=None,
+            )
 
-    def test_sandbox_flag_in_success_response(self):
-        """CreateMediaBuySuccess has sandbox field (optional).
+    def test_sandbox_flag_removed_from_success_response(self):
+        """CreateMediaBuySuccess no longer has sandbox field.
 
         Covers: UC-002-UPG-09
         """
-        assert "sandbox" in CreateMediaBuySuccess.model_fields
+        assert "sandbox" not in CreateMediaBuySuccess.model_fields
 
         from src.core.schemas import Package as RespPkg
 
-        resp = CreateMediaBuySuccess(
-            media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)], sandbox=True
-        )
-        assert resp.sandbox is True
+        with pytest.raises(ValidationError, match="sandbox"):
+            CreateMediaBuySuccess(
+                media_buy_id="mb_1",
+                packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
+                sandbox=True,
+            )
 
 
 # ===========================================================================

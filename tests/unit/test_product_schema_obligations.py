@@ -18,7 +18,8 @@ CONFIRMED (57 tests) — Schema fields, required/optional, types, XOR constraint
     channels, required_axe_integrations, required_features, required_geo_targeting,
     signal_targeting, standard_formats_only)
   GetProductsRequest (all fields optional, product_selectors→brand dependency)
-  GetProductsResponse (products required; proposals, property_list_applied optional)
+  GetProductsResponse (products required; proposals, property_list_applied,
+    catalog_applied optional)
   PricingOption XOR (fixed_price XOR floor_price, CPA always fixed)
   Proposal (proposal_id, name, allocations required; allocations sum to 100%)
   Pagination (max_results: min=1, max=100, default=50; has_more + cursor)
@@ -418,14 +419,14 @@ class TestResponseAssembly:
         dumped = resp.model_dump()
         assert dumped.get("property_list_applied") is True
 
-    def test_response_includes_product_selectors_applied(self):
-        """Response includes product_selectors_applied when set.
+    def test_response_includes_catalog_applied(self):
+        """Response includes catalog_applied when set.
 
         Covers: UC-001-MAIN-36
         """
-        resp = GetProductsResponse(products=[], product_selectors_applied=True)
+        resp = GetProductsResponse(products=[], catalog_applied=True)
         dumped = resp.model_dump()
-        assert dumped.get("product_selectors_applied") is True
+        assert dumped.get("catalog_applied") is True
 
 
 # ---------------------------------------------------------------------------

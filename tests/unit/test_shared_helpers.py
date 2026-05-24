@@ -411,8 +411,8 @@ class TestBuildCreateSuccess:
         assert len(result.packages) == 1
         assert result.packages[0].package_id == "custom-p1"
 
-    def test_buyer_ref_no_longer_on_success_response(self):
-        """buyer_ref is no longer on CreateMediaBuySuccess (removed in adcp 3.12)."""
+    def test_buyer_ref_not_populated_on_success_response(self):
+        """Shared helper does not populate optional buyer_ref on CreateMediaBuySuccess."""
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
             request=_make_create_request(),
@@ -420,7 +420,7 @@ class TestBuildCreateSuccess:
             packages=[_make_media_package()],
         )
 
-        assert not hasattr(result, "buyer_ref") or "buyer_ref" not in result.model_fields
+        assert result.buyer_ref is None
 
     def test_result_is_create_media_buy_success_type(self):
         """Return type is CreateMediaBuySuccess."""

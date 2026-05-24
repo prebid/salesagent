@@ -176,7 +176,7 @@ class SignalsAgentRegistry:
                 # Synchronous completion
                 if result.data is None:
                     raise AdCPAdapterError("Completed status but no data in signals response")
-                signals = result.data.signals
+                signals = result.data.signals or []
                 total_duration = time.time() - start_time
                 logger.info(f"[TIMING] Got {len(signals)} signals synchronously in {total_duration:.2f}s total")
                 # Convert Signal objects to dicts for internal use

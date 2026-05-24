@@ -184,6 +184,19 @@ def _upgrade_format_id_in_values(values: Any) -> Any:
             values.pop("format", None)
         except ValueError as e:
             raise ValueError(f"Invalid format_id: {e}")
+
+    assets = values.get("assets")
+    if isinstance(assets, dict):
+        for asset in assets.values():
+            if isinstance(asset, dict) and "asset_type" not in asset:
+                if asset.get("url_type"):
+                    asset["asset_type"] = "url"
+                elif asset.get("duration_ms") is not None:
+                    asset["asset_type"] = "video"
+                elif asset.get("content") is not None:
+                    asset["asset_type"] = "text"
+                elif asset.get("url"):
+                    asset["asset_type"] = "image"
     return values
 
 
@@ -443,6 +456,16 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     internal_status: str | None = Field(
         None, exclude=True, description="Current approval status of the creative (INTERNAL - excluded from responses)"
     )
+    status: Any | None = Field(
+        None,
+        exclude=True,
+        description="Legacy internal approval status accepted for compatibility with existing result construction.",
+    )
+    platform_id: str | None = Field(
+        None,
+        exclude=True,
+        description="Legacy internal platform creative ID accepted for compatibility with existing result construction.",
+    )
     review_feedback: str | None = Field(
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
@@ -458,6 +481,19 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         default_factory=list, description="Validation or processing errors (for 'failed' action)"
     )
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
+    assigned_to: list[Any] | None = Field(default=None, description="Packages this creative was assigned to")
+    assignment_errors: dict[str, str] | None = Field(default=None, description="Assignment errors for this creative")
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def normalize_known_action(cls, value: Any) -> Any:
+        """Store known AdCP creative actions as enums while accepting extension strings."""
+        if isinstance(value, str):
+            try:
+                return CreativeAction(value)
+            except ValueError:
+                return value
+        return value
 
     def model_dump(self, **kwargs):
         """Override to exclude non-AdCP fields for spec compliance.
@@ -537,6 +573,28 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Design decision (salesagent-g3c): error variant never constructed.
     """
 
+    dry_run: bool | None = None
+
+    @field_validator("creatives", mode="after")
+    @classmethod
+    def _coerce_creatives(cls, values: list[Any]) -> list[SyncCreativeResult]:
+        """Hydrate nested creatives into the local extension model.
+
+        adcp 5.7's generated response field points at the library row model.
+        The local row model extends that type with compatibility defaults and
+        enum coercion, so MCP round-trips need to rehydrate nested rows here.
+        """
+        coerced: list[SyncCreativeResult] = []
+        for value in values:
+            if isinstance(value, SyncCreativeResult):
+                coerced.append(value)
+                continue
+            if hasattr(value, "model_dump"):
+                coerced.append(SyncCreativeResult.model_validate(value.model_dump(mode="json", exclude_none=True)))
+            else:
+                coerced.append(SyncCreativeResult.model_validate(value))
+        return coerced
+
     def model_dump(self, **kwargs):
         """Pattern #4 nested serialization — re-serialize each ``SyncCreativeResult``
         through its own ``model_dump()`` so the local ``status`` /
@@ -550,10 +608,14 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
         # Count actions from creatives list
-        created = sum(1 for c in self.creatives if c.action == CreativeAction.created)
-        updated = sum(1 for c in self.creatives if c.action == CreativeAction.updated)
-        deleted = sum(1 for c in self.creatives if c.action == CreativeAction.deleted)
-        failed = sum(1 for c in self.creatives if c.action == CreativeAction.failed)
+        actions = []
+        for creative in self.creatives:
+            action = creative.action
+            actions.append(action.value if hasattr(action, "value") else str(action))
+        created = actions.count(CreativeAction.created.value)
+        updated = actions.count(CreativeAction.updated.value)
+        deleted = actions.count(CreativeAction.deleted.value)
+        failed = actions.count(CreativeAction.failed.value)
 
         parts = []
         if created:

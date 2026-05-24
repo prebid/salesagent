@@ -783,8 +783,8 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (i6k: model attribute assignment)
-    if not creative.creative_id:
-        creative.creative_id = db_creative.creative_id
+    if not getattr(creative, "creative_id", None):
+        cast(Any, creative).creative_id = db_creative.creative_id
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":

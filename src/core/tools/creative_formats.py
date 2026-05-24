@@ -6,7 +6,7 @@ implementation pattern from CLAUDE.md.
 
 import logging
 import time
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from adcp.types import (
     AudioFormatAsset,
@@ -82,9 +82,7 @@ _ASSET_TYPE_TO_CLASS: dict[str, type] = {
 }
 
 
-def _make_asset(
-    asset_id: str, asset_type: str, required: bool
-) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:
+def _make_asset(asset_id: str, asset_type: str, required: bool) -> Any:
     """Build the correct FormatAsset variant for a given asset type string."""
     cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
     return cls(
@@ -187,14 +185,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[
-                            ImageFormatAsset
-                            | VideoFormatAsset
-                            | AudioFormatAsset
-                            | TextFormatAsset
-                            | HtmlFormatAsset
-                            | UrlFormatAsset
-                        ] = []
+                        assets_list: list[Any] = []
                         for asset_id in template.get("required_assets", []):
                             asset_type = _infer_asset_type(asset_id)
                             assets_list.append(_make_asset(asset_id, asset_type, required=True))

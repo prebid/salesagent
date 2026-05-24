@@ -38,7 +38,7 @@ cmd_up() {
     export COMPOSE_PROJECT_NAME="adcp-test-$$"
     dc down -v 2>/dev/null || true
 
-    export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT ADCP_TESTING=true CREATE_SAMPLE_DATA=true
+    export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT ADCP_TESTING=true CREATE_SAMPLE_DATA=true MANAGED_INSTANCE=true
     export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
     export DELIVERY_WEBHOOK_INTERVAL=5
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
@@ -73,6 +73,7 @@ export ADCP_SALES_PORT=$MCP_PORT
 export DATABASE_URL="$DATABASE_URL"
 export ADCP_TESTING=true
 export CREATE_SAMPLE_DATA=true
+export MANAGED_INSTANCE=true
 export DELIVERY_WEBHOOK_INTERVAL=5
 export GEMINI_API_KEY="${GEMINI_API_KEY}"
 export ENCRYPTION_KEY="${ENCRYPTION_KEY}"

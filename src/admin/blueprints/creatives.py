@@ -16,8 +16,10 @@ from adcp.types import (
     CreativeAction,
     McpWebhookPayload,
     SyncCreativeResult,
-    SyncCreativesSuccessResponse,
     TaskType,
+)
+from adcp.types.generated_poc.creative.sync_creatives_response import (
+    SyncCreativesResponse1 as SyncCreativesSuccessResponse,
 )
 from adcp.webhooks import GeneratedTaskStatus
 

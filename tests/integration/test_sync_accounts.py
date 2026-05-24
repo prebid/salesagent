@@ -151,6 +151,83 @@ class TestSyncAccountsUpdate:
         assert len(response.accounts) == 1
         assert _action_value(response.accounts[0].action) == "unchanged"
 
+    @pytest.mark.asyncio
+    async def test_account_notification_configs_roundtrip_and_replace(self, integration_db):
+        with AccountSyncEnv(tenant_id="sync_notifications_t1", principal_id="agent_notifications") as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "notify-acme.com"},
+                        "operator": "example.com",
+                        "billing": "operator",
+                        "notification_configs": [
+                            {
+                                "subscriber_id": "primary",
+                                "url": "https://example.com/primary-webhook",
+                                "event_types": ["product.updated", "signal.updated"],
+                                "active": False,
+                                "authentication": {
+                                    "schemes": ["HMAC-SHA256"],
+                                    "credentials": "shared-secret-with-at-least-32-chars",
+                                },
+                            },
+                            {
+                                "subscriber_id": "audit",
+                                "url": "https://example.com/audit-webhook",
+                                "event_types": ["product.removed"],
+                                "active": False,
+                                "authentication": {
+                                    "schemes": ["HMAC-SHA256"],
+                                    "credentials": "another-shared-secret-with-32-chars",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+            created = await env.call_impl_async(req=req)
+            created_account = created.accounts[0].model_dump(mode="json", exclude_none=True)
+
+            omitted = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[
+                        {
+                            "brand": {"domain": "notify-acme.com"},
+                            "operator": "example.com",
+                            "billing": "operator",
+                        }
+                    ],
+                )
+            )
+            omitted_account = omitted.accounts[0].model_dump(mode="json", exclude_none=True)
+
+            from src.core.tools.accounts import _list_accounts_impl
+
+            listed = _list_accounts_impl(identity=env.identity)
+            listed_account = listed.accounts[0].model_dump(mode="json", exclude_none=True)
+
+            removed = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[
+                        {
+                            "brand": {"domain": "notify-acme.com"},
+                            "operator": "example.com",
+                            "billing": "operator",
+                            "notification_configs": [],
+                        }
+                    ],
+                )
+            )
+            removed_account = removed.accounts[0].model_dump(mode="json", exclude_none=True)
+
+        assert [config["subscriber_id"] for config in created_account["notification_configs"]] == ["audit", "primary"]
+        assert "authentication" not in created_account["notification_configs"][0]
+        assert omitted_account["notification_configs"] == created_account["notification_configs"]
+        assert listed_account["notification_configs"] == created_account["notification_configs"]
+        assert "notification_configs" not in removed_account
+
 
 class TestSyncAccountsAuth:
     """BR-RULE-055: sync_accounts requires valid authentication."""

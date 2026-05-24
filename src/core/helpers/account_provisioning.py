@@ -40,6 +40,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
 from src.core.exceptions import AdCPError
 from src.core.resolved_identity import ResolvedIdentity
+from src.services.protocol_change_webhooks import notify_account_status_changed
 
 logger = logging.getLogger(__name__)
 
@@ -232,9 +233,17 @@ def resolve_account_advertiser(
             _set_account_advertiser_mapping(
                 account, new_advertiser_id, advertiser_name=name, source="auto:create_media_buy"
             )
+            old_status = account.status
             account.status = "active"
             account.updated_at = datetime.now(UTC)
             session.commit()
+            notify_account_status_changed(
+                tenant_id=tenant_id,
+                account_id=account.account_id,
+                from_status=old_status,
+                to_status="active",
+                principal_id=account.principal_id,
+            )
             return new_advertiser_id
 
     return None

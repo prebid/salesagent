@@ -549,10 +549,11 @@ class TestCreateMediaBuyValidation:
         with pytest.raises(ValidationError, match="buyer_campaign_ref"):
             _make_request(buyer_campaign_ref="camp-ref-123")
 
-    def test_ext_fields_roundtrip(self):
-        """UC-002-V06: ext fields preserved through create flow.
+    def test_ext_field_accepted_on_request_only(self):
+        """UC-002-V06: ext fields are accepted on create request.
 
-        Spec: CONFIRMED -- create-media-buy-request.json and response both have ext field
+        Spec: adcp 5.7 keeps ext on create-media-buy-request, but not on the
+        CreateMediaBuySuccess response variant.
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-request.json
         Priority: P0
         Type: unit
@@ -562,14 +563,9 @@ class TestCreateMediaBuyValidation:
         req = _make_request(ext={"custom_key": "custom_value"})
         assert req.ext is not None
 
-        # ext must survive in CreateMediaBuySuccess too
-        resp = _make_success(
-            media_buy_id="mb_1",
-            ext={"custom_key": "custom_value"},
-        )
-        dumped = resp.model_dump()
-        assert dumped.get("ext") is not None
-        assert dumped["ext"]["custom_key"] == "custom_value"
+        assert "ext" not in CreateMediaBuySuccess.model_fields
+        with pytest.raises(ValidationError, match="ext"):
+            _make_success(media_buy_id="mb_1", ext={"custom_key": "custom_value"})
 
     def test_account_accepted_at_boundary(self):
         """UC-002-V07: account field accepted by schema (AccountReference).
@@ -4308,10 +4304,11 @@ class TestBRRule018AtomicResponse:
 class TestBRRule043ContextEcho:
     """BR-RULE-043: context object echoed back in responses."""
 
-    def test_create_echoes_context(self):
-        """BR-043-01: context from request appears in response.
+    def test_create_request_accepts_context(self):
+        """BR-043-01: context is accepted on create request.
 
-        Spec: CONFIRMED -- context.json: "echoed unchanged in responses"; present in request and response schemas
+        Spec: adcp 5.7 keeps context on create-media-buy-request and error
+        responses, but not on the CreateMediaBuySuccess response variant.
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/context.json
         Priority: P1
         Type: unit
@@ -4324,14 +4321,10 @@ class TestBRRule043ContextEcho:
         req = _make_request(context=context_obj)
         assert req.context is not None
 
-        # Success response echoes context
-        resp = _make_success(
-            media_buy_id="mb_1",
-            context=context_obj,
-        )
-        dumped = resp.model_dump()
-        assert dumped.get("context") is not None
-        assert dumped["context"]["conversation_id"] == "conv_123"
+        # Success response no longer carries context in adcp 5.7.
+        assert "context" not in CreateMediaBuySuccess.model_fields
+        with pytest.raises(ValidationError, match="context"):
+            _make_success(media_buy_id="mb_1", context=context_obj)
 
         # Error response also echoes context
         from adcp.types import Error

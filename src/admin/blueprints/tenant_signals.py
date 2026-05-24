@@ -47,6 +47,7 @@ from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.signal_usage import SignalUsageRepository
 from src.core.database.repositories.springserve_inventory import SpringServeInventoryRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
+from src.services.protocol_change_webhooks import notify_signal_catalog_changes
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,21 @@ _ADAPTER_LABELS = {
     "springserve": "SpringServe",
     "mock": "Mock",
 }
+
+
+def _notify_signal_catalog_changes(
+    tenant_id: str,
+    *,
+    action: str,
+    signal_ids: list[str],
+    data: dict[str, Any] | None = None,
+) -> None:
+    notify_signal_catalog_changes(
+        tenant_id=tenant_id,
+        action=action,
+        signal_ids=signal_ids,
+        data=data or {},
+    )
 
 
 def _parse_csv(raw: str | None) -> list[str]:
@@ -525,6 +541,7 @@ def bulk_create(tenant_id: str):
 
         session.commit()
 
+    _notify_signal_catalog_changes(tenant_id, action="created", signal_ids=created)
     return jsonify({"created": len(created), "skipped": skipped, "signal_ids": created})
 
 
@@ -589,6 +606,7 @@ def composite_signal(tenant_id: str):
             signal = TenantSignal(tenant_id=tenant_id, **parsed)
             repo.add(signal)
             session.commit()
+        _notify_signal_catalog_changes(tenant_id, action="created", signal_ids=[parsed["signal_id"]])
         flash(f"Composite signal {parsed['signal_id']!r} created.", "success")
         return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
 
@@ -787,6 +805,7 @@ def edit_signal(tenant_id: str, signal_id: str):
         for field, value in parsed.items():
             setattr(signal, field, value)
         session.commit()
+    _notify_signal_catalog_changes(tenant_id, action="updated", signal_ids=[signal_id])
     flash(f"Signal {signal_id!r} updated.", "success")
     return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
 
@@ -880,6 +899,12 @@ def bulk_update(tenant_id: str):
         updated, skipped = _apply_bulk_update(repo, signal_ids, op_name, value)
         session.commit()
 
+    _notify_signal_catalog_changes(
+        tenant_id,
+        action="updated",
+        signal_ids=updated,
+        data={"operation": op_name},
+    )
     return jsonify({"updated": len(updated), "skipped": skipped, "signal_ids": updated})
 
 
@@ -952,6 +977,7 @@ def bulk_delete(tenant_id: str):
             )
         session.commit()
 
+    _notify_signal_catalog_changes(tenant_id, action="deleted", signal_ids=deleted)
     return jsonify({"deleted": len(deleted), "not_found": not_found, "signal_ids": deleted})
 
 
@@ -973,6 +999,12 @@ def rename_signal(tenant_id: str, signal_id: str):
             return jsonify({"error": "signal not found"}), 404
         signal.name = new_name
         session.commit()
+    _notify_signal_catalog_changes(
+        tenant_id,
+        action="updated",
+        signal_ids=[signal_id],
+        data={"name": new_name},
+    )
     return jsonify({"ok": True, "signal_id": signal_id, "name": new_name})
 
 
@@ -1005,6 +1037,7 @@ def delete_signal(tenant_id: str, signal_id: str):
         repo.delete(signal)
         session.commit()
         flash(f"Signal {signal_id!r} deleted.", "success")
+    _notify_signal_catalog_changes(tenant_id, action="deleted", signal_ids=[signal_id])
     return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
 
 

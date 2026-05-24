@@ -7,12 +7,16 @@ beads: salesagent-x79
 """
 
 import uuid
+from typing import Any
 
-from adcp.types import Account as LibraryAccountDomain
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
-from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
+from adcp.types.base import AdCPBaseModel
+from adcp.types.generated_poc.account.list_accounts_response import Account as LibraryAccountDomain
+from adcp.types.generated_poc.account.sync_accounts_response import (
+    SyncAccountsResponse1 as LibrarySyncAccountsSuccess,
+)
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
@@ -75,6 +79,30 @@ class SyncAccountsRequest(LibrarySyncAccountsRequest):
 # ---------------------------------------------------------------------------
 
 
+class SyncResponseAccount(AdCPBaseModel):
+    """One per-account result row in the sync_accounts response.
+
+    adcp 5.7 collapses the generated sync_accounts response to a loose
+    protocol envelope, so there is no longer a generated row model to extend.
+    Keep the row shape explicit locally because SalesAgent still emits the
+    historical ``accounts[]`` envelope and the SDK preserves it as extra data.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    brand: Any
+    operator: str
+    action: str
+    status: str
+    account_id: str | None = None
+    name: str | None = None
+    billing: str | None = None
+    sandbox: bool | None = None
+    errors: list[Any] | None = None
+    setup: Any | None = None
+    notification_configs: list[Any] | None = None
+
+
 class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsResponse):
     """Extends library ListAccountsResponse.
 
@@ -100,6 +128,10 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    accounts: list[SyncResponseAccount]
+    dry_run: bool | None = None
+    context: Any | None = None
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

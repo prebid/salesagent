@@ -118,6 +118,23 @@ class TestTagsColumn:
         assert signal is not None
         assert signal.tags == []
 
+    def test_legacy_dotted_signal_id_resolves_by_wire_safe_id(self, integration_db):
+        from src.core.database.repositories.tenant_signal import TenantSignalRepository
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalTagsEnv() as env:
+            tenant = TenantFactory(tenant_id="tag_t3")
+            TenantSignalFactory(tenant=tenant, signal_id="audience.sports_fans")
+            session = env.get_session()
+            repo = TenantSignalRepository(session, "tag_t3")
+
+            signal = repo.get_by_id("audience_sports_fans")
+            signals = repo.list_by_ids(["audience_sports_fans"])
+
+        assert signal is not None
+        assert signal.signal_id == "audience.sports_fans"
+        assert [row.signal_id for row in signals] == ["audience.sports_fans"]
+
 
 class TestAdcpProjectionIncludesTags:
     """``_tenant_signal_to_adcp`` projects tags to the wire ``Signal``."""
@@ -154,6 +171,22 @@ class TestAdcpProjectionIncludesTags:
             ).model_dump(mode="json")
         # Either omitted entirely or rendered as None — both signal "no tags".
         assert wire.get("tags") in (None, [])
+
+    def test_legacy_dotted_signal_id_projects_wire_safe_id(self, integration_db):
+        from src.core.tools.signals import _tenant_signal_to_adcp
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalTagsEnv():
+            tenant = TenantFactory(tenant_id="adcp_tag_t3", ad_server="google_ad_manager")
+            signal = TenantSignalFactory(tenant=tenant, signal_id="audience.sports_fans", tags=[])
+            wire = _tenant_signal_to_adcp(
+                signal,
+                ad_server=tenant.ad_server,
+                agent_url=tenant.public_agent_url,
+            ).model_dump(mode="json")
+
+        assert wire["signal_id"]["id"] == "audience_sports_fans"
+        assert wire["signal_agent_segment_id"] == "audience_sports_fans"
 
 
 class TestApplyBulkUpdate:

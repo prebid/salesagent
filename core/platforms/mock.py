@@ -30,6 +30,8 @@ from adcp.decisioning.capabilities import (
     Adcp,
     IdempotencySupported,
     MediaBuy,
+    Signals,
+    SignalsFeatures,
     SupportedProtocol,
 )
 
@@ -39,6 +41,7 @@ from core.platforms._delegate import (
     _delegate_get_media_buy_delivery,
     _delegate_get_media_buys,
     _delegate_get_products,
+    _delegate_get_signals,
     _delegate_list_creative_formats,
     _delegate_list_creatives,
     _delegate_provide_performance_feedback,
@@ -61,14 +64,15 @@ class MockSellerPlatform(DecisioningPlatform):
     Idempotent on every mutating method."""
 
     capabilities = DecisioningCapabilities(
-        specialisms=["sales-non-guaranteed"],
+        specialisms=["sales-non-guaranteed", "signal-owned"],
         adcp=Adcp(
             major_versions=[3],
             idempotency=IdempotencySupported(supported=True, replay_ttl_seconds=86400),
         ),
         account=CapabilitiesAccount(supported_billing=["operator"]),
         media_buy=MediaBuy(supported_pricing_models=["cpm"]),
-        supported_protocols=[SupportedProtocol.media_buy],
+        signals=Signals(discovery_modes=["brief", "wholesale"], features=SignalsFeatures(catalog_signals=True)),
+        supported_protocols=[SupportedProtocol.media_buy, SupportedProtocol.signals],
     )
     accounts = SalesagentAccountStore()
 
@@ -164,6 +168,15 @@ class MockSellerPlatform(DecisioningPlatform):
         ctx: RequestContext[Any],
     ) -> dict[str, Any]:
         return await _delegate_provide_performance_feedback(req, ctx)
+
+    # ─────────────────────────── get_signals ────────────────────────
+
+    async def get_signals(
+        self,
+        req: Any,
+        ctx: RequestContext[Any],
+    ) -> dict[str, Any]:
+        return await _delegate_get_signals(req, ctx)
 
     # ─────────────────────────── sync_accounts / list_accounts ──────
     # Account dispatch lives on ``accounts`` (the AccountStore), not on

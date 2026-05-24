@@ -120,6 +120,24 @@ class TestAccountRepositoryAccessMethods:
             session.flush()
             assert repo.has_access("agent_grant", "acc_grant")
 
+    def test_list_principal_ids_for_account(self, integration_db):
+        from src.core.database.repositories.account import AccountRepository
+        from tests.factories import AccountFactory, AgentAccountAccessFactory, PrincipalFactory, TenantFactory
+
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="repo_acc_t2")
+            p1 = PrincipalFactory(tenant=tenant, principal_id="agent_1")
+            p2 = PrincipalFactory(tenant=tenant, principal_id="agent_2")
+            account = AccountFactory(tenant=tenant, account_id="acc_shared")
+            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=p1, account=account)
+            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=p2, account=account)
+            session = env.get_session()
+            repo = AccountRepository(session, "repo_acc_t2")
+
+            principal_ids = repo.list_principal_ids_for_account("acc_shared")
+
+        assert set(principal_ids) == {"agent_1", "agent_2"}
+
 
 class TestAccountUoW:
     """AccountUoW session lifecycle."""

@@ -1701,17 +1701,11 @@ def _build_idempotency_hit_result(
         except ValueError:
             adcp_status = MediaBuyStatus.pending_start
 
-        # AdCP L1/security idempotency rule 4: the cached-response replay MUST
-        # inject ``replayed: true`` on the outgoing protocol envelope so buyer
-        # agents can suppress side effects (notifications, downstream calls,
-        # memory writes) on retry. ``CreateMediaBuyResponse1`` has
-        # ``extra='allow'``, so the field round-trips through the wire.
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
                 media_buy_id=existing.media_buy_id,
                 packages=response_packages,
                 status=adcp_status,
-                context=context,
                 replayed=True,
             ),
             status=AdcpTaskStatus.completed.value,
@@ -1913,65 +1907,6 @@ async def _create_media_buy_impl(
             request_data=req,
             request_metadata=workflow_metadata,
         )
-
-        # Register push notification config if provided (MCP/A2A protocol support)
-        # Skip for dry_run mode (no database writes)
-        if push_notification_config:
-            from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-            from src.core.database.repositories import MediaBuyUoW
-
-            logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
-
-            # Extract config details
-            url = push_notification_config.get("url")
-            authentication = push_notification_config.get("authentication", {})
-
-            if url:
-                # Extract authentication details (A2A format: schemes + credentials)
-                schemes = authentication.get("schemes", []) if authentication else []
-                auth_type = schemes[0] if schemes else None
-                credentials = authentication.get("credentials") if authentication else None
-
-                # Generate config ID
-                config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
-
-                # Save to database
-                with MediaBuyUoW(tenant["tenant_id"]) as pnc_uow:
-                    # FIXME(salesagent-9f2): push notification config should use a repository
-                    assert pnc_uow.session is not None
-                    db = pnc_uow.session
-                    # Check if config already exists
-                    from sqlalchemy import select
-
-                    stmt = select(DBPushNotificationConfig).filter_by(
-                        id=config_id, tenant_id=tenant["tenant_id"], principal_id=principal_id
-                    )
-                    existing_config = db.scalars(stmt).first()
-
-                    if existing_config:
-                        # Update existing
-                        existing_config.url = url
-                        existing_config.authentication_type = auth_type
-                        existing_config.authentication_token = credentials
-                        # updated_at automatically updated via onupdate=func.now()
-                        existing_config.is_active = True
-                    else:
-                        # Create new
-                        new_config = DBPushNotificationConfig(
-                            id=config_id,
-                            tenant_id=tenant["tenant_id"],
-                            principal_id=principal_id,
-                            url=url,
-                            authentication_type=auth_type,
-                            authentication_token=credentials,
-                            is_active=True,
-                        )
-                        db.add(new_config)
-
-                    # UoW auto-commits on clean exit
-                    logger.info(
-                        f"[MCP/A2A] Push notification config {'updated' if existing_config else 'created'}: {config_id}"
-                    )
 
     try:
         # Validate input parameters
@@ -2927,7 +2862,6 @@ async def _create_media_buy_impl(
                     packages=pending_packages,
                     status=buy_status,
                     workflow_step_id=step.step_id,
-                    context=req.context,
                 ),
                 status=AdcpTaskStatus.completed.value,
             )
@@ -3123,7 +3057,6 @@ async def _create_media_buy_impl(
                     packages=response_packages,
                     status=buy_status,
                     workflow_step_id=step.step_id,
-                    context=req.context,
                 ),
                 status=AdcpTaskStatus.completed.value,
             )
@@ -3462,7 +3395,6 @@ async def _create_media_buy_impl(
             simulated_response = CreateMediaBuySuccess(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
                 packages=simulated_packages,
-                context=req.context,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -4127,20 +4059,13 @@ async def _create_media_buy_impl(
         # Surface the DB-derived MediaBuyStatus on the wire so buyers see the correct
         # blocker (pending_creatives vs pending_start) on the create_media_buy reply
         # itself, matching what /get_media_buy will report later.
-        # Overbook warnings (#152) ride on response.ext per AdCP extension
-        # convention. Other Success construction sites (idempotency hit,
-        # simulated, deferred-for-approval) don't surface warnings yet —
-        # follow-up.
-        ext_payload: dict[str, Any] = {}
         if overbook_warnings:
-            ext_payload["warnings"] = overbook_warnings
+            logger.info("[OVERBOOK] Warnings detected but CreateMediaBuySuccess has no extension field in AdCP 5.7")
         adcp_response = CreateMediaBuySuccess(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
             status=MediaBuyStatus(media_buy_status),
             creative_deadline=response.creative_deadline,
-            context=req.context,
-            ext=ext_payload if ext_payload else None,
         )
 
         # Log activity

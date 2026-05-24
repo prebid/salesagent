@@ -40,6 +40,7 @@ class TenantContext(BaseModel):
     name: str = ""
     subdomain: str = ""
     virtual_host: str | None = None
+    public_agent_url: str | None = None
     ad_server: str | None = None
     enable_axe_signals: bool = True
     authorized_emails: list[str] = []
@@ -101,6 +102,7 @@ class TenantContext(BaseModel):
             name=tenant.name or "",
             subdomain=tenant.subdomain or "",
             virtual_host=tenant.virtual_host,
+            public_agent_url=tenant.public_agent_url,
             ad_server=tenant.ad_server,
             enable_axe_signals=tenant.enable_axe_signals if tenant.enable_axe_signals is not None else True,
             authorized_emails=safe_json_loads(tenant.authorized_emails, []),

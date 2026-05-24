@@ -105,7 +105,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
     from adcp.types import ImageFormatAsset, VideoFormatAsset
 
     if asset_type == "video":
-        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(
+        asset_item: Any = VideoFormatAsset(
             item_type="individual",
             asset_id="primary",
             asset_type="video",
@@ -118,7 +118,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
             asset_type="image",
             required=True,
         )
-    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]
+    assets: list[Any] = [asset_item]
     # Use Format (our extended class) instead of AdcpFormat to include is_standard field
     # Explicitly pass None for optional internal fields to satisfy mypy
     return Format(

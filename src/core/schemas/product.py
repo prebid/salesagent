@@ -85,22 +85,14 @@ class ProductFilters(LibraryFilters):
 class GetProductsRequest(LibraryGetProductsRequest):
     """Extends library GetProductsRequest with live-spec cache precondition fields.
 
-    The installed adcp 5.6.0 library is behind the published JSON schema for
-    conditional wholesale feed reads, so bind these fields locally until the
-    library catches up. All inherited fields remain library-owned.
+    The installed adcp 5.7.0 library exposes the wholesale/pricing cache
+    preconditions; ``if_catalog_version`` remains a compatibility shim for
+    earlier v3.1 schema revisions.
     """
 
     if_catalog_version: str | None = Field(
         None,
         description=("Deprecated catalog_version token accepted for compatibility with earlier v3.1 schema revisions."),
-    )
-    if_wholesale_feed_version: str | None = Field(
-        None,
-        description="Opaque wholesale_feed_version token from a prior wholesale get_products response.",
-    )
-    if_pricing_version: str | None = Field(
-        None,
-        description="Opaque pricing_version token from a prior get_products response.",
     )
 
 
@@ -112,13 +104,20 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
     """
 
+    model_config = ConfigDict(
+        extra=get_pydantic_extra_mode(),
+        use_enum_values=True,
+        validate_default=True,
+    )
+
     def __str__(self) -> str:
         """Return human-readable message for protocol layer.
 
         Used by both MCP (for display) and A2A (for task messages).
         Provides conversational text without adding non-spec fields to the schema.
         """
-        count = len(self.products)
+        products = self.products or []
+        count = len(products)
 
         # Base message
         if count == 0:
@@ -133,7 +132,7 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
         from src.core.helpers.pricing_helpers import pricing_option_has_rate
 
         if count > 0 and all(
-            all(not pricing_option_has_rate(po) for po in p.pricing_options) for p in self.products if p.pricing_options
+            all(not pricing_option_has_rate(po) for po in p.pricing_options) for p in products if p.pricing_options
         ):
             return f"{base_msg} Please connect through an authorized buying agent for pricing data."
 

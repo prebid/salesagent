@@ -118,13 +118,11 @@ class TestSchemaMatchesLibrary:
         )
 
         # GetProductsRequest extends the library only for published JSON schema
-        # fields that adcp 5.6.0 does not expose yet.
+        # fields that adcp 5.7.0 does not expose yet.
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
         get_products_extensions = {
             "if_catalog_version",
-            "if_wholesale_feed_version",
-            "if_pricing_version",
         }
         assert lib_fields == local_fields - get_products_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
@@ -1669,10 +1667,10 @@ class TestAdCPContract:
         assert "include_assignments" in adcp_response, "Field with default should be present"
         assert adcp_response["include_assignments"] is True, "Default value should match"
 
-        # Verify all spec fields are present (per adcp v4.4.0 library schema —
-        # adds account, adcp_major_version, include_pricing on top of v3.10).
+        # Verify all spec fields are present (per adcp v5.7.0 library schema).
         spec_fields = {
             "account",
+            "adcp_version",
             "adcp_major_version",
             "context",
             "ext",
@@ -1681,10 +1679,13 @@ class TestAdCPContract:
             "include_assignments",
             "include_items",
             "include_pricing",
+            "include_purged",
             "include_snapshot",
             "include_variables",
+            "include_webhook_activity",
             "pagination",
             "sort",
+            "webhook_activity_limit",
         }
         assert set(adcp_response.keys()) == spec_fields, f"Fields should match spec: {set(adcp_response.keys())}"
 
@@ -1945,9 +1946,8 @@ class TestAdCPContract:
         assert empty_adcp_response["products"] == [], "Empty products list should be empty array"
         # Verify __str__() provides appropriate empty message
         assert str(empty_response) == "No products matched your requirements."
-        # Allow 2 or 3 fields (status is optional and may not be present, message removed)
-        assert len(empty_adcp_response) >= 2 and len(empty_adcp_response) <= 3, (
-            f"GetProductsResponse should have 2-3 fields (status optional), got {len(empty_adcp_response)}"
+        assert {"products", "errors", "status", "replayed", "cache_scope"} <= set(empty_adcp_response), (
+            f"GetProductsResponse missing expected default fields: {empty_adcp_response}"
         )
 
     def test_list_creative_formats_response_adcp_compliance(self):
@@ -2584,12 +2584,11 @@ class TestAdCPContract:
         status = TaskStatus.from_operation_state("unknown_operation")
         assert status == TaskStatus.UNKNOWN
 
-        # Test that response schemas no longer have status field (moved to protocol envelope)
-        # Per AdCP PR #113, status is handled at transport layer via ProtocolEnvelope
+        # AdCP 5.7 response schemas include status as the canonical task state.
         response = GetProductsResponse(products=[])
 
         data = response.model_dump()
-        assert "status" not in data  # Status field removed from domain models
+        assert data["status"] == "completed"
 
     def test_package_excludes_internal_fields(self):
         """Test that Package model_dump excludes internal fields from AdCP responses.
@@ -2648,7 +2647,7 @@ class TestAdCPContract:
         )
 
         # Verify asap is accepted (library wraps in StartTiming)
-        if hasattr(request.start_time, "root"):  # noqa: rootmodel
+        if hasattr(request.start_time, "root"):
             assert request.start_time.root == "asap"
         else:
             assert request.start_time.root == "asap"
@@ -2692,7 +2691,7 @@ class TestAdCPContract:
         )
 
         # Verify datetime is still accepted (library wraps in StartTiming)
-        if hasattr(request.start_time, "root"):  # noqa: rootmodel
+        if hasattr(request.start_time, "root"):
             assert isinstance(request.start_time.root, datetime)
             assert request.start_time.root == start_date
         else:
@@ -2800,7 +2799,7 @@ class TestAdCPContract:
         assert request.brand.domain == "nike.com"
         # brand_id is wrapped in a BrandId RootModel
         brand_id = request.brand.brand_id
-        brand_id_val = brand_id.root if hasattr(brand_id, "root") else brand_id  # noqa: rootmodel
+        brand_id_val = brand_id.root if hasattr(brand_id, "root") else brand_id
         assert brand_id_val == "brand_nike_001"
 
     def test_get_signals_response_adcp_compliance(self):

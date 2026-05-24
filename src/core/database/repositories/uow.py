@@ -39,6 +39,7 @@ from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.push_notification import PushNotificationConfigRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -232,13 +233,29 @@ class AccountUoW(BaseUoW):
     """
 
     accounts: AccountRepository | None
+    push_notifications: PushNotificationConfigRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.accounts = AccountRepository(self._session, self._tenant_id)
+        self.push_notifications = PushNotificationConfigRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.accounts = None
+        self.push_notifications = None
+
+
+class PushNotificationUoW(BaseUoW):
+    """Unit of Work for protocol push-notification registrations."""
+
+    push_notifications: PushNotificationConfigRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.push_notifications = PushNotificationConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.push_notifications = None
 
 
 class CreativeUoW(BaseUoW):

@@ -48,6 +48,8 @@ from adcp.decisioning.capabilities import (
     Adcp,
     IdempotencySupported,
     MediaBuy,
+    Signals,
+    SignalsFeatures,
     SupportedProtocol,
 )
 from adcp.server import (
@@ -103,6 +105,7 @@ AUTH_OPTIONAL_TOOLS = frozenset(
     {
         "get_adcp_capabilities",
         "get_products",
+        "get_signals",
         "list_creative_formats",
     }
 )
@@ -329,7 +332,7 @@ def build_router() -> LazyPlatformRouter:
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
 
     capabilities = DecisioningCapabilities(
-        specialisms=["sales-non-guaranteed"],
+        specialisms=["sales-non-guaranteed", "signal-owned"],
         adcp=Adcp(
             major_versions=sorted(SUPPORTED_MAJOR_VERSIONS),
             idempotency=IdempotencySupported(supported=True, replay_ttl_seconds=IDEMPOTENCY_REPLAY_TTL_SECONDS),
@@ -354,7 +357,8 @@ def build_router() -> LazyPlatformRouter:
             # wired``). Declare when we wire that plug.
             features=Features(inline_creative_management=True),
         ),
-        supported_protocols=[SupportedProtocol.media_buy],
+        signals=Signals(discovery_modes=["brief", "wholesale"], features=SignalsFeatures(catalog_signals=True)),
+        supported_protocols=[SupportedProtocol.media_buy, SupportedProtocol.signals],
     )
     # ProposalManager is wired per-tenant. Today every active tenant
     # gets the same SalesAgentProposalManager — get_products subsumed

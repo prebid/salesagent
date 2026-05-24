@@ -638,17 +638,37 @@ class ContextManager(DatabaseManager):
             tenant_id = context.tenant_id
             principal_id = context.principal_id
 
-            # Find registered webhooks for this principal
-            # NOTE: PushNotificationConfig doesn't have object_type/object_id columns
-            # Those are in ObjectWorkflowMapping which we already have via 'mappings'
-            webhook_stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id,
-                principal_id=principal_id,
+            # Workflow callbacks are request-scoped. Durable catalog-change
+            # subscriptions live in push_notification_configs with a separate
+            # purpose and must not fan out task-status updates.
+            from uuid import uuid4
+
+            cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
+            url = cfg_dict.get("url")
+            if not url:
+                logger.debug("No push notification URL present for step %s", step.step_id)
+                return
+
+            authentication = cfg_dict.get("authentication") or {}
+            schemes = authentication.get("schemes") or []
+            auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
+            auth_token = authentication.get("credentials")
+
+            context_obj = getattr(step, "context", None)
+            derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
+            derived_principal_id = getattr(context_obj, "principal_id", None)
+
+            push_notification_config = PushNotificationConfig(
+                id=cfg_dict.get("id") or f"pnc_{uuid4().hex[:16]}",
+                tenant_id=derived_tenant_id,
+                principal_id=derived_principal_id,
+                url=url,
+                authentication_type=auth_type,
+                authentication_token=auth_token,
+                purpose="async_task",
                 is_active=True,
             )
-            webhooks = session.scalars(webhook_stmt).all()
-
-            logger.debug("Found %d active webhook configs for principal %s", len(webhooks), principal_id)
+            service = get_protocol_webhook_service()
 
             # Send notifications for each mapping (media buy, creative, etc.)
             for mapping in mappings:
@@ -659,137 +679,103 @@ class ContextManager(DatabaseManager):
                     mapping.action,
                 )
 
-                for _webhook_config in webhooks:
-                    # build push notification config from step request data
-                    from uuid import uuid4
+                logger.debug(
+                    "Sending webhook to %s for %s %s",
+                    push_notification_config.url,
+                    mapping.object_type,
+                    mapping.object_id,
+                )
 
-                    cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
-                    url = cfg_dict.get("url")
-                    if not url:
-                        logger.warning("No push notification URL present; skipping webhook")
-                        continue
+                # Build webhook payload based on protocol type. Source of
+                # truth is ``step.request_data["protocol"]`` —
+                # ``create_workflow_step`` merges the caller's
+                # ``request_metadata={"protocol": ...}`` into
+                # ``request_data`` at persist time (see line 182).
+                # ``_create_media_buy_impl`` writes ``identity.protocol``
+                # there, which now carries the actual inbound transport
+                # via :class:`TransportDetectMiddleware`. Defaults to
+                # ``"mcp"`` only when the step pre-dates the middleware
+                # (legacy data) or was created outside an HTTP request
+                # (admin / lifespan paths). See #202.
+                raw_task_type = step.tool_name or mapping.action or ""
+                task_type_enum = _coerce_task_type(raw_task_type)
+                protocol = (step.request_data or {}).get("protocol", "mcp")
+                try:
+                    status_enum = GeneratedTaskStatus(new_status)
+                except ValueError:
+                    status_enum = GeneratedTaskStatus.unknown
 
-                    authentication = cfg_dict.get("authentication") or {}
-                    schemes = authentication.get("schemes") or []
-                    auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
-                    auth_token = authentication.get("credentials")
-
-                    # Derive principal/tenant from the step context if available
-                    context_obj = getattr(step, "context", None)
-                    derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
-                    derived_principal_id = getattr(context_obj, "principal_id", None)
-
-                    push_notification_config = PushNotificationConfig(
-                        id=cfg_dict.get("id") or f"pnc_{uuid4().hex[:16]}",
-                        tenant_id=derived_tenant_id,
-                        principal_id=derived_principal_id,
-                        url=url,
-                        authentication_type=auth_type,
-                        authentication_token=auth_token,
-                        is_active=True,
+                payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
+                if protocol == "a2a":
+                    payload = create_a2a_webhook_payload(
+                        task_id=step.step_id,
+                        status=status_enum,
+                        context_id=step.context_id,
+                        result=step.response_data or {},
                     )
-
-                    service = get_protocol_webhook_service()
-
-                    logger.debug(
-                        "Sending webhook to %s for %s %s",
-                        push_notification_config.url,
-                        mapping.object_type,
-                        mapping.object_id,
+                elif task_type_enum is not None:
+                    # adcp 5.0+: create_mcp_webhook_payload returns McpWebhookPayload directly
+                    # and requires task_type to be a closed TaskType enum value
+                    # (was a free-form ``domain`` string pre-5.0).
+                    payload = create_mcp_webhook_payload(
+                        step.step_id,
+                        status_enum,
+                        task_type_enum,
+                        result=step.response_data,
                     )
+                else:
+                    # Non-enum tool_name (internal review action, custom step,
+                    # etc.) — MCP webhook spec doesn't model these. Skip the
+                    # webhook rather than fail at validation. The buyer-facing
+                    # state still updates via the DB; the webhook is best-effort.
+                    logger.info(
+                        "Skipping MCP webhook for step %s: tool_name=%r is not a TaskType enum member.",
+                        step.step_id,
+                        raw_task_type,
+                    )
+                    continue
 
-                    # Build webhook payload based on protocol type. Source of
-                    # truth is ``step.request_data["protocol"]`` —
-                    # ``create_workflow_step`` merges the caller's
-                    # ``request_metadata={"protocol": ...}`` into
-                    # ``request_data`` at persist time (see line 182).
-                    # ``_create_media_buy_impl`` writes ``identity.protocol``
-                    # there, which now carries the actual inbound transport
-                    # via :class:`TransportDetectMiddleware`. Defaults to
-                    # ``"mcp"`` only when the step pre-dates the middleware
-                    # (legacy data) or was created outside an HTTP request
-                    # (admin / lifespan paths). See #202.
-                    raw_task_type = step.tool_name or mapping.action or ""
-                    task_type_enum = _coerce_task_type(raw_task_type)
-                    protocol = (step.request_data or {}).get("protocol", "mcp")
+                metadata: dict[str, Any] = {
+                    "task_type": raw_task_type or "unknown",
+                    "tenant_id": derived_tenant_id,
+                    "principal_id": derived_principal_id,
+                }
+
+                try:
+                    # If we're already in an event loop, schedule the send; otherwise run it directly
                     try:
-                        status_enum = GeneratedTaskStatus(new_status)
-                    except ValueError:
-                        status_enum = GeneratedTaskStatus.unknown
-
-                    payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
-                    if protocol == "a2a":
-                        payload = create_a2a_webhook_payload(
-                            task_id=step.step_id,
-                            status=status_enum,
-                            context_id=step.context_id,
-                            result=step.response_data or {},
-                        )
-                    elif task_type_enum is not None:
-                        # adcp 5.0+: create_mcp_webhook_payload returns McpWebhookPayload directly
-                        # and requires task_type to be a closed TaskType enum value
-                        # (was a free-form ``domain`` string pre-5.0).
-                        payload = create_mcp_webhook_payload(
-                            step.step_id,
-                            status_enum,
-                            task_type_enum,
-                            result=step.response_data,
-                        )
-                    else:
-                        # Non-enum tool_name (internal review action, custom step,
-                        # etc.) — MCP webhook spec doesn't model these. Skip the
-                        # webhook rather than fail at validation. The buyer-facing
-                        # state still updates via the DB; the webhook is best-effort.
-                        logger.info(
-                            "Skipping MCP webhook for step %s: tool_name=%r is not a TaskType enum member.",
-                            step.step_id,
-                            raw_task_type,
-                        )
-                        continue
-
-                    metadata: dict[str, Any] = {
-                        "task_type": raw_task_type or "unknown",
-                        "tenant_id": derived_tenant_id,
-                        "principal_id": derived_principal_id,
-                    }
-
-                    try:
-                        # If we're already in an event loop, schedule the send; otherwise run it directly
-                        try:
-                            loop = asyncio.get_running_loop()
-                            task = loop.create_task(
-                                service.send_notification(
-                                    push_notification_config=push_notification_config,
-                                    payload=payload,
-                                    metadata=metadata,
-                                )
+                        loop = asyncio.get_running_loop()
+                        task = loop.create_task(
+                            service.send_notification(
+                                push_notification_config=push_notification_config,
+                                payload=payload,
+                                metadata=metadata,
                             )
+                        )
 
-                            def _log_task_result(
-                                t: asyncio.Task, config_url: str = push_notification_config.url
-                            ) -> None:
-                                try:
-                                    t.result()
-                                    logger.debug("Webhook sent successfully for %s", config_url)
-                                except Exception as exc:
-                                    logger.error("Webhook failed for %s: %s", config_url, exc)
+                        def _log_task_result(t: asyncio.Task, config_url: str = push_notification_config.url) -> None:
+                            try:
+                                t.result()
+                                logger.debug("Webhook sent successfully for %s", config_url)
+                            except Exception as exc:
+                                logger.error("Webhook failed for %s: %s", config_url, exc)
 
-                            task.add_done_callback(_log_task_result)
-                        except RuntimeError:
-                            # No running loop; safe to run synchronously
-                            asyncio.run(
-                                service.send_notification(
-                                    push_notification_config=push_notification_config,
-                                    payload=payload,
-                                    metadata=metadata,
-                                )
+                        task.add_done_callback(_log_task_result)
+                    except RuntimeError:
+                        # No running loop; safe to run synchronously
+                        asyncio.run(
+                            service.send_notification(
+                                push_notification_config=push_notification_config,
+                                payload=payload,
+                                metadata=metadata,
                             )
-                            logger.debug("Webhook sent successfully for %s", push_notification_config.url)
+                        )
+                        logger.debug("Webhook sent successfully for %s", push_notification_config.url)
 
-                    except requests.exceptions.Timeout:
-                        logger.error("Webhook timeout for %s", push_notification_config.url)
-                    except requests.exceptions.RequestException as e:
-                        logger.error("Webhook failed for %s: %s", push_notification_config.url, e)
+                except requests.exceptions.Timeout:
+                    logger.error("Webhook timeout for %s", push_notification_config.url)
+                except requests.exceptions.RequestException as e:
+                    logger.error("Webhook failed for %s: %s", push_notification_config.url, e)
 
         except Exception:
             logger.exception("Error sending push notifications")

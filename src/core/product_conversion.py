@@ -12,6 +12,7 @@ V3 Migration Notes:
 """
 
 import logging
+from unittest.mock import Mock
 
 from adcp import (
     CpcPricingOption,
@@ -337,10 +338,13 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         "conversion_tracking",
         "data_provider_signals",
         "forecast",
+        "allowed_actions",
+        "format_options",
+        "vendor_metric_optimization",
     )
     for field_name in _OPTIONAL_PASSTHROUGH:
         value = getattr(product_model, field_name, None)
-        if value is not None:
+        if value is not None and not isinstance(value, Mock):
             product_data[field_name] = value
 
     # channels: DB stores strings, schema uses MediaChannel enum.

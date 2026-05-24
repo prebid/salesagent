@@ -106,6 +106,7 @@ from src.core.database.repositories.adapter_config import AdapterConfigRepositor
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.domain_config import get_tenant_url
+from src.services.protocol_change_webhooks import notify_account_status_changed
 from src.services.recent_buyers_service import compute_recent_buyers
 from src.services.targeting_values import build_gam_inventory_discovery, sync_targeting_values_for_key
 
@@ -1704,6 +1705,7 @@ def upsert_account(tenant_id: str):
 
         # Update path — preserve account_id, refresh advertiser mapping +
         # status, and let the caller bump display fields if they want.
+        old_status = existing.status
         if req.gam_advertiser_id:
             _set_account_advertiser(existing, req.gam_advertiser_id, req.gam_advertiser_name)
             if existing.status == "pending_provision":
@@ -1723,6 +1725,14 @@ def upsert_account(tenant_id: str):
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
         session.refresh(existing)
         invalidate_status_cache(tenant_id)
+        if old_status != existing.status:
+            notify_account_status_changed(
+                tenant_id=tenant_id,
+                account_id=existing.account_id,
+                from_status=old_status,
+                to_status=existing.status,
+                principal_id=existing.principal_id,
+            )
         return jsonify(_account_to_detail(existing).model_dump(mode="json"))
 
 

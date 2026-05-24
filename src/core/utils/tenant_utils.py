@@ -37,6 +37,7 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "name": tenant.name,
         "subdomain": tenant.subdomain,
         "virtual_host": tenant.virtual_host,
+        "public_agent_url": tenant.public_agent_url,
         "ad_server": tenant.ad_server,
         "enable_axe_signals": tenant.enable_axe_signals,
         "authorized_emails": safe_json_loads(tenant.authorized_emails, []),

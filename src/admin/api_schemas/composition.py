@@ -271,7 +271,13 @@ class TenantSignalCreate(BaseModel):
 
     model_config = _config()
 
-    signal_id: str = Field(..., min_length=1, max_length=200)
+    signal_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        description="Stable AdCP signal_id. Use only letters, numbers, underscores, and hyphens.",
+    )
     name: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
     value_type: _SIGNAL_VALUE_TYPE

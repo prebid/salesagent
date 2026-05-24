@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import TenantSignal
+from src.core.signal_ids import adcp_safe_signal_id
 
 
 class TenantSignalRepository:
@@ -31,12 +32,19 @@ class TenantSignalRepository:
         return self._tenant_id
 
     def get_by_id(self, signal_id: str) -> TenantSignal | None:
-        return self._session.scalars(
+        signal = self._session.scalars(
             select(TenantSignal).where(
                 TenantSignal.tenant_id == self._tenant_id,
                 TenantSignal.signal_id == signal_id,
             )
         ).first()
+        if signal is not None:
+            return signal
+
+        return next(
+            (row for row in self.list_all() if adcp_safe_signal_id(row.signal_id) == signal_id),
+            None,
+        )
 
     def list_by_ids(self, signal_ids: list[str]) -> list[TenantSignal]:
         if not signal_ids:
@@ -45,7 +53,21 @@ class TenantSignalRepository:
             TenantSignal.tenant_id == self._tenant_id,
             TenantSignal.signal_id.in_(signal_ids),
         )
-        return list(self._session.scalars(stmt).all())
+        rows = list(self._session.scalars(stmt).all())
+        found_ids = {row.signal_id for row in rows}
+        missing_ids = set(signal_ids) - found_ids
+        if not missing_ids:
+            return rows
+
+        for row in self.list_all():
+            if row.signal_id in found_ids:
+                continue
+            safe_id = adcp_safe_signal_id(row.signal_id)
+            if safe_id in missing_ids:
+                rows.append(row)
+                found_ids.add(row.signal_id)
+                missing_ids.remove(safe_id)
+        return rows
 
     def list_all(self, updated_since: datetime | None = None) -> list[TenantSignal]:
         stmt = select(TenantSignal).where(TenantSignal.tenant_id == self._tenant_id)

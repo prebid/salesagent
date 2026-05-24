@@ -4,14 +4,32 @@ This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
 """
 
+import hashlib
+import json
 import logging
+import re
 import time
 import uuid
+from typing import Any
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 
 logger = logging.getLogger(__name__)
 
+_SIGNAL_SPEC_STOPWORDS = {
+    "adult",
+    "adults",
+    "audience",
+    "for",
+    "interested",
+    "people",
+    "targeting",
+    "the",
+    "users",
+    "with",
+}
+
+from adcp.types import PaginationResponse
 from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
 from adcp.types.generated_poc.signals.get_signals_response import Range
 
@@ -25,6 +43,7 @@ from src.core.schemas import (
     Signal,
     SignalDeployment,
 )
+from src.core.signal_ids import adcp_safe_signal_id
 from src.core.testing_hooks import AdCPTestContext
 
 
@@ -59,17 +78,11 @@ def _tenant_signal_to_adcp(
     if ts.range_min is not None or ts.range_max is not None:
         range_obj = Range(min=ts.range_min, max=ts.range_max)
 
-    # AdCP's ``signal_id.id`` restricts characters to ``[a-zA-Z0-9_-]+``.
-    # Operators tend to want hierarchical identifiers like
-    # ``audience.sports_fans``; sanitize ``.`` to ``_`` for the wire and use
-    # the same shape for ``signal_agent_segment_id`` so a storefront round-
-    # trips the same identifier through activation.
-    wire_id = ts.signal_id.replace(".", "_")
-
     # AdCP validates ``signal_id.agent_url`` as a URL; the sample signals
     # use the public salesagent host. Fall back to the same when the tenant
     # hasn't set ``public_agent_url`` so projection doesn't fail validation.
     resolved_agent_url = agent_url or "https://salesagent.adcontextprotocol.org/signals"
+    wire_id = adcp_safe_signal_id(ts.signal_id)
 
     signal_kwargs: dict = {
         "signal_id": {
@@ -79,7 +92,7 @@ def _tenant_signal_to_adcp(
         },
         "signal_agent_segment_id": wire_id,
         "name": ts.name,
-        "description": ts.description or "",
+        "description": ts.description or f"{ts.name} signal",
         # Operator-declared signals are the publisher's first-party data
         # by default. Distinguishing marketplace / custom variants would
         # warrant a column on TenantSignal — keep the default simple.
@@ -132,31 +145,105 @@ def _load_tenant_signals(
         return [_tenant_signal_to_adcp(ts, ad_server=ad_server, agent_url=agent_url) for ts in rows]
 
 
-async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
-    """Shared implementation for get_signals (used by both MCP and A2A).
+def _dump_model(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
+    if isinstance(value, dict):
+        return value
+    return {}
 
-    Args:
-        req: Request containing query parameters for signal discovery
-        identity: Resolved identity from transport boundary
 
-    Returns:
-        GetSignalsResponse with matching signals
-    """
-    # Principal ID available via identity.principal_id if needed
-    _ = identity.principal_id if identity else None
+def _signal_id_matches(requested: Any, signal: Signal) -> bool:
+    requested_dump = _dump_model(requested)
+    actual_dump = _dump_model(signal.signal_id)
+    if not requested_dump or not actual_dump:
+        return False
+    if requested_dump.get("id") != actual_dump.get("id"):
+        return False
+    for discriminator in ("source", "agent_url", "data_provider_domain"):
+        if requested_dump.get(discriminator) and requested_dump.get(discriminator) != actual_dump.get(discriminator):
+            return False
+    return True
 
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    assert identity is not None, "identity is required for signals"
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
 
-    # Mock implementation - in production, this would query from a signal provider
-    # or the ad server's available audience segments
-    signals = []
+def _signal_matches_destination(signal: Signal, requested_destinations: list[Any] | None) -> bool:
+    if not requested_destinations:
+        return True
+    requested = {_dump_model(dest).get("platform") for dest in requested_destinations}
+    requested.discard(None)
+    if not requested:
+        return True
+    return any(deployment.platform in requested for deployment in signal.deployments if deployment.type == "platform")
 
-    # Sample signals for demonstration using local types (extend AdCP library types)
-    sample_signals = [
+
+def _signal_matches_spec(signal: Signal, signal_spec: str | None) -> bool:
+    """Loose natural-language matching for discovery prompts."""
+    if not signal_spec:
+        return True
+
+    spec_lower = signal_spec.lower()
+    searchable_text = " ".join(
+        [
+            signal.name,
+            signal.description,
+            signal.signal_type.value,
+            signal.data_provider,
+        ]
+    ).lower()
+    if spec_lower in searchable_text:
+        return True
+
+    spec_tokens = _signal_search_tokens(spec_lower)
+    if not spec_tokens:
+        return False
+    signal_tokens = _signal_search_tokens(searchable_text)
+    return bool(spec_tokens & signal_tokens)
+
+
+def _signal_search_tokens(value: str) -> set[str]:
+    tokens = {token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 1}
+    normalized = {_normalize_signal_token(token) for token in tokens}
+    return {token for token in normalized if token not in _SIGNAL_SPEC_STOPWORDS}
+
+
+def _normalize_signal_token(token: str) -> str:
+    if token in {"autos", "automotive", "cars", "ev", "evs", "vehicle", "vehicles"}:
+        return "auto"
+    if token.endswith("s") and len(token) > 4:
+        return token[:-1]
+    return token
+
+
+def _pagination_window(total: int, cursor: str | None, limit: int | None) -> tuple[int, int, PaginationResponse | None]:
+    if limit is None:
+        return 0, total, None
+    try:
+        offset = int(cursor or "0")
+    except ValueError:
+        offset = 0
+    offset = max(offset, 0)
+    next_offset = offset + limit
+    has_more = next_offset < total
+    return (
+        offset,
+        next_offset,
+        PaginationResponse(has_more=has_more, cursor=str(next_offset) if has_more else None, total_count=total),
+    )
+
+
+def _signal_feed_version(signals: list[Signal]) -> str:
+    """Return an opaque version token for the projected wholesale feed."""
+    payload = [
+        signal.model_dump(mode="json", exclude_none=True) if hasattr(signal, "model_dump") else signal
+        for signal in signals
+    ]
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return f"sigfeed_{digest[:24]}"
+
+
+def _sample_signals() -> list[Signal]:
+    """Return the built-in demo signals included in the public feed."""
+    return [
         Signal(
             signal_id={
                 "source": "agent",
@@ -249,36 +336,87 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
         ),
     ]
 
-    # Merge operator-declared signals from tenant_signals. This is the
-    # publisher's first-party adapter capability map (custom KVs, audience
-    # segments, weather signals, …) projected onto AdCP Signal shape so the
-    # storefront sees the same vocabulary it would from any signals agent.
-    # adapter_config stays operator-side; the wire response carries
-    # value_type / categories / range only.
+
+def _build_signal_feed(
+    tenant_id: str,
+    *,
+    ad_server: str | None,
+    agent_url: str | None,
+) -> list[Signal]:
+    signals = _sample_signals()
+    signals.extend(_load_tenant_signals(tenant_id, ad_server=ad_server, agent_url=agent_url))
+    return signals
+
+
+def _validate_signal_discovery_request(req: GetSignalsRequest) -> None:
+    discovery_mode = getattr(req.discovery_mode, "value", req.discovery_mode)
+    if discovery_mode not in (None, "brief", "wholesale"):
+        raise AdCPValidationError(
+            "get_signals supports discovery_mode='brief' and discovery_mode='wholesale'",
+            details={"supported_discovery_modes": ["brief", "wholesale"]},
+        )
+    if discovery_mode == "wholesale" and (req.signal_spec is not None or req.signal_ids is not None):
+        raise AdCPValidationError(
+            "get_signals discovery_mode='wholesale' does not accept signal_spec or signal_ids",
+            details={"discovery_mode": "wholesale"},
+        )
+    if discovery_mode != "wholesale" and (
+        req.if_wholesale_feed_version is not None or req.if_pricing_version is not None
+    ):
+        raise AdCPValidationError(
+            "get_signals version preconditions require discovery_mode='wholesale'",
+            details={"discovery_mode": discovery_mode or "brief"},
+        )
+    if req.if_pricing_version is not None and req.if_wholesale_feed_version is None:
+        raise AdCPValidationError(
+            "if_pricing_version must be sent with if_wholesale_feed_version",
+            details={"field": "if_pricing_version"},
+        )
+
+
+async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
+    """Shared implementation for get_signals (used by both MCP and A2A).
+
+    Args:
+        req: Request containing query parameters for signal discovery
+        identity: Resolved identity from transport boundary
+
+    Returns:
+        GetSignalsResponse with matching signals
+    """
+    _validate_signal_discovery_request(req)
+
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    assert identity is not None, "identity is required for signals"
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
+
+    signals = []
     tenant_ad_server = tenant.get("ad_server") if isinstance(tenant, dict) else getattr(tenant, "ad_server", None)
     tenant_agent_url = (
         tenant.get("public_agent_url") if isinstance(tenant, dict) else getattr(tenant, "public_agent_url", None)
     )
     assert identity.tenant_id is not None  # resolved by transport wrapper
-    sample_signals.extend(
-        _load_tenant_signals(
-            identity.tenant_id,
-            ad_server=tenant_ad_server,
-            agent_url=tenant_agent_url,
-        )
+    feed_signals = _build_signal_feed(
+        identity.tenant_id,
+        ad_server=tenant_ad_server,
+        agent_url=tenant_agent_url,
     )
+    discovery_mode = getattr(req.discovery_mode, "value", req.discovery_mode) or "brief"
+    cache_scope = "public"
 
     # Filter based on request parameters using AdCP-compliant fields
-    for signal in sample_signals:
+    for signal in feed_signals:
+        if req.signal_ids and not any(_signal_id_matches(signal_id, signal) for signal_id in req.signal_ids):
+            continue
+
+        if not _signal_matches_destination(signal, req.destinations):
+            continue
+
         # Apply signal_spec filter (natural language description matching)
-        if req.signal_spec:
-            spec_lower = req.signal_spec.lower()
-            if (
-                spec_lower not in signal.name.lower()
-                and spec_lower not in signal.description.lower()
-                and spec_lower not in signal.signal_type.value.lower()
-            ):
-                continue
+        if not _signal_matches_spec(signal, req.signal_spec):
+            continue
 
         # Apply filters if provided
         if req.filters:
@@ -308,13 +446,55 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
 
         signals.append(signal)
 
-    # Apply max_results limit (AdCP-compliant field name)
-    if req.max_results:
-        signals = signals[: req.max_results]
+    wholesale_feed_version = _signal_feed_version(signals)
+    pricing_version = wholesale_feed_version
+    if (
+        discovery_mode == "wholesale"
+        and req.if_wholesale_feed_version == wholesale_feed_version
+        and (req.if_pricing_version is None or req.if_pricing_version == pricing_version)
+    ):
+        return GetSignalsResponse(
+            signals=None,
+            errors=None,
+            context=req.context,
+            wholesale_feed_version=wholesale_feed_version,
+            pricing_version=pricing_version,
+            cache_scope=cache_scope,
+            unchanged=True,
+        )
+
+    # Apply pagination first-class when provided. ``max_results`` remains
+    # supported for callers using the older flat field.
+    limit = req.__dict__.get("max_results")
+    cursor = None
+    if req.pagination is not None:
+        limit = req.pagination.max_results or limit
+        cursor = req.pagination.cursor
+    start, end, pagination = _pagination_window(len(signals), cursor, limit)
+    signals = signals[start:end]
 
     # Signals are already constructed as local types (extending library types),
     # so no conversion needed — pass directly to response.
-    return GetSignalsResponse(signals=signals, errors=None, context=req.context)
+    response_kwargs: dict[str, Any] = {
+        "signals": signals,
+        "errors": None,
+        "pagination": pagination,
+        "context": req.context,
+    }
+    if discovery_mode == "wholesale":
+        response_kwargs.update(
+            {
+                "wholesale_feed_version": wholesale_feed_version,
+                "pricing_version": pricing_version,
+                "cache_scope": cache_scope,
+            }
+        )
+    return GetSignalsResponse(**response_kwargs)
+
+
+def current_signal_feed_version(tenant_id: str, *, ad_server: str | None = None, agent_url: str | None = None) -> str:
+    """Return the current public signal wholesale-feed version for webhook payloads."""
+    return _signal_feed_version(_build_signal_feed(tenant_id, ad_server=ad_server, agent_url=agent_url))
 
 
 async def _activate_signal_impl(

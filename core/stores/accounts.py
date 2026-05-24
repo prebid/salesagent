@@ -181,6 +181,24 @@ class SalesagentAccountStore:
         so the impl's existing model contract is preserved.
         """
         req = self._coerce_sync_accounts_payload(refs)
+        return await self._sync_accounts(req, ctx)
+
+    async def upsert_request(
+        self,
+        params: Any,
+        ctx: Any | None = None,
+    ) -> Any:
+        """Forward the full ``sync_accounts`` request when the SDK supplies it.
+
+        The SDK's stock AccountStore dispatch projects the request down to
+        ``accounts[]`` before calling :meth:`upsert`. SalesAgent needs the
+        request-level ``push_notification_config`` so buyer-registered
+        webhooks can be persisted for later account/catalog changes.
+        """
+        req = self._coerce_sync_accounts_payload(params)
+        return await self._sync_accounts(req, ctx)
+
+    async def _sync_accounts(self, req: SyncAccountsRequest, ctx: Any | None) -> Any:
         identity = self._identity_from_ctx(ctx)
         try:
             return await _sync_accounts_impl(req=req, identity=identity)

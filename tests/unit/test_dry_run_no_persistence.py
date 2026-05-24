@@ -58,7 +58,6 @@ class TestCreateMediaBuyDryRunResponseStructure:
             buyer_ref="test-buyer-ref",
             media_buy_id=simulated_media_buy_id,
             packages=cast(list[Any], simulated_packages),
-            context=None,
         )
 
         # Verify response structure
