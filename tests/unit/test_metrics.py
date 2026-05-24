@@ -48,41 +48,44 @@ def test_ai_review_counter_increments():
 
 
 def test_ai_review_duration_observes():
-    """Test that AI review duration histogram records observations."""
+    """AI review duration histogram records observations (no tenant_id label —
+    histograms are aggregated to bound cardinality)."""
     from src.core.metrics import ai_review_duration
 
-    # Observe duration
-    ai_review_duration.labels(tenant_id="test_tenant").observe(2.5)
+    # Observe duration (no labels — histogram is unlabeled)
+    ai_review_duration.observe(2.5)
 
     # Verify observation was recorded (check sum)
-    metric = ai_review_duration.labels(tenant_id="test_tenant")
-    assert metric._sum.get() >= 2.5
+    assert ai_review_duration._sum.get() >= 2.5
 
 
 def test_ai_review_confidence_observes():
-    """Test that AI review confidence histogram records observations."""
+    """AI review confidence histogram records observations, labeled only by
+    the bounded ``decision`` enum (no tenant_id)."""
     from src.core.metrics import ai_review_confidence
 
     # Observe confidence score
-    ai_review_confidence.labels(tenant_id="test_tenant", decision="approved").observe(0.95)
+    ai_review_confidence.labels(decision="approved").observe(0.95)
 
     # Verify observation was recorded
-    metric = ai_review_confidence.labels(tenant_id="test_tenant", decision="approved")
+    metric = ai_review_confidence.labels(decision="approved")
     assert metric._sum.get() >= 0.95
 
 
 def test_ai_review_errors_increments():
-    """Test that AI review error counter increments correctly."""
-    from src.core.metrics import ai_review_errors
+    """AI review error counter increments via the bounded recording helper.
 
-    # Get initial value
-    initial_value = ai_review_errors.labels(tenant_id="test_tenant", error_type="ValueError")._value.get()
+    ``error_type`` is the categorized enum value (e.g. ``ValueError`` ->
+    ``validation``), never the raw exception class name.
+    """
+    from src.core.metrics import ai_review_errors, record_ai_review_error
 
-    # Increment error counter
-    ai_review_errors.labels(tenant_id="test_tenant", error_type="ValueError").inc()
+    # ValueError categorizes to "validation"
+    initial_value = ai_review_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
 
-    # Verify increment
-    new_value = ai_review_errors.labels(tenant_id="test_tenant", error_type="ValueError")._value.get()
+    record_ai_review_error(tenant_id="test_tenant", error=ValueError("bad input"))
+
+    new_value = ai_review_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
     assert new_value == initial_value + 1
 
 
@@ -122,26 +125,28 @@ def test_webhook_delivery_counter():
 
 
 def test_webhook_delivery_duration():
-    """Test that webhook delivery duration histogram records observations."""
+    """Webhook delivery duration histogram records observations, labeled only
+    by the bounded ``event_type`` (no tenant_id)."""
     from src.core.metrics import webhook_delivery_duration
 
     # Observe duration
-    webhook_delivery_duration.labels(tenant_id="test_tenant", event_type="creative_approved").observe(0.5)
+    webhook_delivery_duration.labels(event_type="creative_approved").observe(0.5)
 
     # Verify observation was recorded
-    metric = webhook_delivery_duration.labels(tenant_id="test_tenant", event_type="creative_approved")
+    metric = webhook_delivery_duration.labels(event_type="creative_approved")
     assert metric._sum.get() >= 0.5
 
 
 def test_webhook_delivery_attempts():
-    """Test that webhook delivery attempts histogram records observations."""
+    """Webhook delivery attempts histogram records observations, labeled only
+    by the bounded ``event_type`` (no tenant_id)."""
     from src.core.metrics import webhook_delivery_attempts
 
     # Observe attempts
-    webhook_delivery_attempts.labels(tenant_id="test_tenant", event_type="creative_approved").observe(3)
+    webhook_delivery_attempts.labels(event_type="creative_approved").observe(3)
 
     # Verify observation was recorded
-    metric = webhook_delivery_attempts.labels(tenant_id="test_tenant", event_type="creative_approved")
+    metric = webhook_delivery_attempts.labels(event_type="creative_approved")
     assert metric._sum.get() >= 3
 
 

@@ -9,8 +9,6 @@ Covers: UC-002-MAIN-14b
 Covers: UC-003-MAIN-14
 """
 
-from datetime import UTC, datetime, timedelta
-
 import pytest
 
 from src.core.database.database_session import get_db_session
@@ -22,12 +20,13 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import (
     add_targeting_test_product,
+    future_iso_date_range,
     seed_media_buy_with_package,
     seed_targeting_test_tenant,
 )
@@ -37,19 +36,12 @@ pytestmark = pytest.mark.requires_db
 TENANT_ID = "test_property_targeting_allowed"
 
 
-def _future_dates() -> tuple[str, str]:
-    tomorrow = datetime.now(UTC) + timedelta(days=1)
-    end = tomorrow + timedelta(days=30)
-    return tomorrow.strftime("%Y-%m-%dT00:00:00Z"), end.strftime("%Y-%m-%dT23:59:59Z")
-
-
 def _make_identity() -> ResolvedIdentity:
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id="test_adv",
         tenant_id=TENANT_ID,
-        tenant={"tenant_id": TENANT_ID},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_property_targeting"),
         protocol="mcp",
+        dry_run=True,
     )
 
 
@@ -96,10 +88,10 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
     to the spec-compliant two-layer envelope. The previous raw ValueError shape was caught
     by an inner (ValueError, PermissionError) catchall and re-emitted via Pattern A
     (Error(code=...) construction in _impl) — anti-pattern that the error-emission
-    architecture work eliminates. Once the wider error-emission migration lands, this raise propagates
+    architecture work eliminates. After PR #1306 / PR #1307 land, this raise propagates
     cleanly through the narrowed except AdCPError boundary.
     """
-    start, end = _future_dates()
+    start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
         packages=[
@@ -134,7 +126,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
 @pytest.mark.requires_db
 async def test_create_accepts_property_list_when_product_allows(property_targeting_tenant):
     """Product with property_targeting_allowed=True passes the validation."""
-    start, end = _future_dates()
+    start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
         packages=[
@@ -156,16 +148,22 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    # Either succeeds outright, or fails on something else — but not on property_targeting_allowed.
-    if isinstance(response, CreateMediaBuyError):
-        for error in response.errors:
-            assert "property_targeting_allowed" not in error.message
+    # The validation rule must not fire for an allowing product. Separate
+    # assertion gates the success branch — without it the compound
+    # ``isinstance(...) or all(...)`` short-circuits on success and runs zero
+    # checks, leaving the happy-path proof vacuous. If the response IS an
+    # error variant, accept any failure cause that isn't the property_targeting
+    # rule itself (test stays decoupled from unrelated downstream errors).
+    assert not isinstance(
+        response, CreateMediaBuyError
+    ), f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
+    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
 @pytest.mark.requires_db
 async def test_create_accepts_collection_list_without_property_list(property_targeting_tenant):
     """collection_list alone never triggers the property_list check."""
-    start, end = _future_dates()
+    start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
         packages=[
@@ -187,9 +185,15 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    if isinstance(response, CreateMediaBuyError):
-        for error in response.errors:
-            assert "property_targeting_allowed" not in error.message
+    # Mirror the line-157 split for the sister test — the compound
+    # ``isinstance(...) or all(...)`` short-circuits on success, leaving the
+    # happy-path proof vacuous. Separate ``not isinstance`` gates the success
+    # branch with a real check; the follow-up ``all(...)`` ensures the
+    # property_list rule still doesn't fire if an unrelated error did appear.
+    assert not isinstance(
+        response, CreateMediaBuyError
+    ), f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
+    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
 # ---------------------------------------------------------------------------
@@ -232,12 +236,17 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
         ],
     )
 
-    response = _update_media_buy_impl(req=request, identity=_make_identity())
+    # PR #1276 round-5: validation site raises AdCPValidationError (matches
+    # create-time path exactly). Boundary translator turns it into the
+    # spec-compliant two-layer envelope at the transport edge.
+    with pytest.raises(AdCPValidationError) as excinfo:
+        _update_media_buy_impl(req=request, identity=_make_identity())
 
-    # Response shape varies by error path; check the error is about property_targeting_allowed
-    response_dict = response.model_dump() if hasattr(response, "model_dump") else response
-    errors_text = str(response_dict)
-    assert "property_targeting_allowed" in errors_text or "VALIDATION_ERROR" in errors_text
+    exc = excinfo.value
+    assert exc.error_code == "VALIDATION_ERROR"
+    assert exc.field == "packages[].targeting_overlay.property_list"
+    assert "property_targeting_allowed" in exc.message
+    assert exc.details is not None and "violations" in exc.details
 
 
 @pytest.mark.requires_db

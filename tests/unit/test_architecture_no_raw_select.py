@@ -300,7 +300,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl"),
     ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),
     ("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"),
-    ("src/core/tools/media_buy_update.py", "_update_media_buy_impl"),
     # ── Routes ──
     ("src/routes/health.py", "debug_db_state"),
     ("src/routes/health.py", "debug_root_logic"),
