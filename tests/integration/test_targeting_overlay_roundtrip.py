@@ -219,7 +219,7 @@ def test_collection_list_roundtrips_through_postgres(roundtrip_tenant):
 def test_both_lists_coexist_in_single_package(roundtrip_tenant):
     """A package can carry property_list AND collection_list — both round-trip.
 
-    Per AdCP 3.0.6 ``core/targeting.json``, ``property_list`` and
+    Per AdCP 3.0.0 ``core/targeting.json``, ``property_list`` and
     ``collection_list`` are independent fields; a buyer may set either or
     both. This test ensures nothing in the SerDes path silently drops the
     second list when the first is present (e.g. an ordering-sensitive

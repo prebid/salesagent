@@ -1,8 +1,9 @@
 """Unit tests for GAM AXE segment targeting translation.
 
-Tests that axe_include_segment and axe_exclude_segment fields from AdCP 3.0.3
-are correctly translated to GAM custom targeting key-value pairs using
-three separate custom targeting keys per AdCP spec.
+Tests that axe_include_segment and axe_exclude_segment fields (AdCP pre-3.0;
+deprecated in 3.0.x in favor of TMP provider fields) are correctly translated
+to GAM custom targeting key-value pairs using three separate custom targeting
+keys per AdCP spec.
 """
 
 from unittest.mock import MagicMock, patch
