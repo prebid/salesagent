@@ -1986,7 +1986,7 @@ class AdCPRequestHandler(RequestHandler):
                 reporting_dimensions=req.reporting_dimensions,
                 attribution_window=req.attribution_window,
                 include_package_daily_breakdown=req.include_package_daily_breakdown,
-                account=params.get("account"),
+                account=req.account,
                 context=params.get("context"),
                 identity=identity,
             )

@@ -93,6 +93,12 @@ def _get_media_buy_delivery_impl(
     if identity is None:
         raise AdCPValidationError("Context is required", recovery="correctable")
 
+    if isinstance(req, GetMediaBuyDeliveryRequest) and req.account is not None:
+        from src.core.transport_helpers import enrich_identity_with_account
+
+        identity = enrich_identity_with_account(identity, req.account)
+        assert identity is not None
+
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()
 
@@ -615,12 +621,6 @@ async def get_media_buy_delivery(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Handle account resolution at boundary (same as sync_creatives pattern)
-    if account is not None and identity is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
-        identity = enrich_identity_with_account(identity, account)
-
     # Create AdCP-compliant request object
     try:
         req = GetMediaBuyDeliveryRequest(
@@ -631,6 +631,7 @@ async def get_media_buy_delivery(
             reporting_dimensions=reporting_dimensions,
             attribution_window=attribution_window,
             include_package_daily_breakdown=include_package_daily_breakdown,
+            account=account,
             context=cast(ContextObject | None, context),
         )
 
@@ -649,7 +650,7 @@ def get_media_buy_delivery_raw(
     reporting_dimensions: ReportingDimensions | None = None,
     attribution_window: AttributionWindow | None = None,
     include_package_daily_breakdown: bool | None = None,
-    account: LibraryAccountReference | None = None,
+    account: LibraryAccountReference | dict[str, Any] | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -677,12 +678,6 @@ def get_media_buy_delivery_raw(
 
         identity = resolve_identity_from_context(ctx)
 
-    # Handle account resolution at boundary (same as sync_creatives pattern)
-    if account is not None and identity is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
-        identity = enrich_identity_with_account(identity, account)
-
     # Create request object
     req = GetMediaBuyDeliveryRequest(
         media_buy_ids=media_buy_ids,
@@ -692,6 +687,7 @@ def get_media_buy_delivery_raw(
         reporting_dimensions=reporting_dimensions,
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
+        account=account,
         context=cast(ContextObject | None, context),
     )
 
