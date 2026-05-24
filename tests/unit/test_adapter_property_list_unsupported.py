@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import PropertyListReference
@@ -174,12 +174,45 @@ class TestBroadstreetAdapterRejectsPropertyList:
     def test_class_default_unsupported(self):
         assert BroadstreetAdapter.supports_property_list_filtering is False
 
+    def test_create_media_buy_returns_unsupported_envelope(self):
+        # dry_run=True bypasses Broadstreet's network_id/api_key config requirement
+        adapter = BroadstreetAdapter(config={}, principal=_principal(), dry_run=True, tenant_id="t_broadstreet")
+        result = adapter.create_media_buy(
+            request=_request(),
+            packages=[_package_with_property_list()],
+            start_time=datetime(2026, 1, 1, tzinfo=UTC),
+            end_time=datetime(2026, 1, 31, tzinfo=UTC),
+        )
+
+        assert isinstance(result, CreateMediaBuyError)
+        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
+        assert "broadstreet" in result.errors[0].message.lower()
+
 
 class TestXandrAdapterRejectsPropertyList:
     """Xandr adapter is stubbed → preventive UNSUPPORTED_FEATURE raise."""
 
     def test_class_default_unsupported(self):
         assert XandrAdapter.supports_property_list_filtering is False
+
+    def test_create_media_buy_returns_unsupported_envelope(self):
+        # XandrAdapter is currently abstract (4 unimplemented methods); the property_list
+        # check runs at the create_media_buy entry point BEFORE any abstract method is
+        # invoked, so the rejection envelope is observable even before concrete subclasses
+        # land. The __abstractmethods__ patch matches the pattern in
+        # tests/unit/test_adapter_packages_fix.py.
+        with patch.multiple("src.adapters.xandr.XandrAdapter", __abstractmethods__=set()):
+            adapter = XandrAdapter(config={}, principal=_principal(), tenant_id="t_xandr")
+            result = adapter.create_media_buy(
+                request=_request(),
+                packages=[_package_with_property_list()],
+                start_time=datetime(2026, 1, 1, tzinfo=UTC),
+                end_time=datetime(2026, 1, 31, tzinfo=UTC),
+            )
+
+        assert isinstance(result, CreateMediaBuyError)
+        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
+        assert "xandr" in result.errors[0].message.lower()
 
 
 class TestTritonAdapterRejectsPropertyList:
@@ -193,3 +226,17 @@ class TestTritonAdapterRejectsPropertyList:
 
     def test_class_default_unsupported(self):
         assert TritonDigital.supports_property_list_filtering is False
+
+    def test_create_media_buy_returns_unsupported_envelope(self):
+        # dry_run=True bypasses Triton's auth_token config requirement
+        adapter = TritonDigital(config={}, principal=_principal(), dry_run=True, tenant_id="t_triton")
+        result = adapter.create_media_buy(
+            request=_request(),
+            packages=[_package_with_property_list()],
+            start_time=datetime(2026, 1, 1, tzinfo=UTC),
+            end_time=datetime(2026, 1, 31, tzinfo=UTC),
+        )
+
+        assert isinstance(result, CreateMediaBuyError)
+        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
+        assert "triton" in result.errors[0].message.lower()
