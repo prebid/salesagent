@@ -9,8 +9,8 @@ beads: salesagent-2rq
 import pytest
 from adcp.types import (
     AccountReference,
-    AccountReferenceById as AccountReference1,
-    AccountReferenceByNaturalKey as AccountReference2,
+    AccountReferenceById,
+    AccountReferenceByNaturalKey,
 )
 from adcp.types import BrandReference
 
@@ -53,7 +53,7 @@ class TestAccountResolutionErrorCodes:
             env.get_session()  # commit factory data
 
             identity = _make_identity(tenant.tenant_id)
-            ref = AccountReference(root=AccountReference1(account_id="nonexistent_acc"))
+            ref = AccountReference(root=AccountReferenceById(account_id="nonexistent_acc"))
 
             with AccountUoW(tenant.tenant_id) as uow:
                 with pytest.raises(AdCPAccountNotFoundError) as exc_info:
@@ -73,7 +73,7 @@ class TestAccountResolutionErrorCodes:
 
             identity = _make_identity(tenant.tenant_id)
             ref = AccountReference(
-                root=AccountReference2(
+                root=AccountReferenceByNaturalKey(
                     brand=BrandReference(domain="nonexistent.com"),
                     operator="nobody.com",
                 )

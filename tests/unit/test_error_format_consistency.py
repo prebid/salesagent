@@ -557,7 +557,7 @@ class TestMCPRecoveryInErrorResponses:
         [
             ("AdCPError", "internal error", "INTERNAL_ERROR", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPAuthenticationError", "bad token", "AUTH_REQUIRED", "terminal"),
+            ("AdCPAuthenticationError", "bad token", "AUTH_TOKEN_INVALID", "terminal"),
             ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
             ("AdCPNotFoundError", "gone", "NOT_FOUND", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
@@ -727,7 +727,8 @@ class TestErrorCodeVocabularyConsistency:
         # SDK standard codes used by our exception classes
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
-        "AUTH_REQUIRED",  # SDK standard: authentication + authorisation
+        "AUTH_TOKEN_INVALID",  # AdCP spec: invalid/missing auth token (AdCPAuthenticationError)
+        "AUTH_REQUIRED",  # SDK standard: authorisation (AdCPAuthorizationError)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
         "ACCOUNT_AMBIGUOUS",  # adcp-req: Natural key matches multiple accounts (BR-RULE-080)

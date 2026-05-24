@@ -25,7 +25,8 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 
 ERROR_CODE_MAPPING: dict[str, str] = {
     # Authentication / authorisation
-    "AUTH_TOKEN_INVALID": "AUTH_REQUIRED",
+    # AUTH_TOKEN_INVALID is not mapped — it passes through directly as the
+    # spec error code for invalid/missing tokens (per AdCP BDD feature files).
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
     "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
     "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
@@ -195,20 +196,24 @@ class AdCPValidationError(AdCPError):
 
 
 class AdCPAuthenticationError(AdCPError):
-    """Missing or invalid authentication credentials (401)."""
+    """Missing or invalid authentication credentials (401).
+
+    Default error_code is AUTH_TOKEN_INVALID per AdCP spec.
+    Mapped to AUTH_REQUIRED on the wire via ERROR_CODE_MAPPING.
+    """
 
     status_code = 401
-    error_code = "AUTH_REQUIRED"
+    error_code = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
-    """No authentication context present (401, AUTH_REQUIRED).
+    """No authentication context present (401, AUTH_TOKEN_INVALID).
 
-    Raised when the request contains no auth token at all -- distinct from
-    AUTH_TOKEN_INVALID (token present but bad).
+    Raised when the request contains no auth token at all.
+    Uses same error_code as parent (AUTH_TOKEN_INVALID) per spec.
     """
 
-    error_code = "AUTH_REQUIRED"
+    error_code = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthorizationError(AdCPError):

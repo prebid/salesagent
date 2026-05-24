@@ -365,10 +365,10 @@ def given_valid_create_request_with_table(ctx: dict, datatable: list[list[str]])
                 account_id = value.split('"')[1]
                 from adcp.types import (
                     AccountReference,
-                    AccountReferenceById as AccountReference1,
+                    AccountReferenceById,
                 )
 
-                kwargs["account"] = AccountReference(root=AccountReference1(account_id=account_id))
+                kwargs["account"] = AccountReference(root=AccountReferenceById(account_id=account_id))
             else:
                 raise ValueError(f"Unrecognized account format: '{value}'. Expected format: account_id \"acc-001\"")
         elif field == "proposal_id":

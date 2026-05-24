@@ -414,7 +414,7 @@ def _check_billing_policy(
     if billing_val not in supported:
         return [
             Error(
-                code="UNSUPPORTED_FEATURE",
+                code="BILLING_NOT_SUPPORTED",
                 message=f"Billing model '{billing_val}' is not supported by this seller. "
                 f"Supported models: {', '.join(supported)}.",
                 suggestion=f"Use one of the supported billing models: {', '.join(supported)}.",
