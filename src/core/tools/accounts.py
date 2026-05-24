@@ -688,6 +688,15 @@ async def sync_accounts(
     ] = None,
     dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
+    idempotency_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional client-supplied key for safe retries. Retrying with the same key "
+                "must not double-apply the sync. When omitted, the server generates one."
+            ),
+        ),
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
     """Sync accounts by natural key (MCP tool).
@@ -700,6 +709,9 @@ async def sync_accounts(
         delete_missing: Deactivate accounts not in the list.
         dry_run: Preview changes without persisting.
         context: Application-level context per AdCP spec.
+        idempotency_key: Optional client-supplied key for safe retries
+            (AdCP spec requires this on the wire). When omitted, the server
+            generates a UUID so internal callers don't have to mint one.
         ctx: FastMCP context for authentication.
 
     Returns:
@@ -710,7 +722,7 @@ async def sync_accounts(
         delete_missing=delete_missing,
         dry_run=dry_run,
         context=context,
-        idempotency_key=str(uuid.uuid4()),
+        idempotency_key=idempotency_key or str(uuid.uuid4()),
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)

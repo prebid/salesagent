@@ -1829,6 +1829,8 @@ class AdCPRequestHandler(RequestHandler):
 
         Authentication is REQUIRED per BR-RULE-055.
         """
+        import uuid
+
         from src.core.schemas.account import SyncAccountsRequest
 
         request = SyncAccountsRequest(
@@ -1836,6 +1838,7 @@ class AdCPRequestHandler(RequestHandler):
             delete_missing=parameters.get("delete_missing", False),
             dry_run=parameters.get("dry_run", False),
             context=parameters.get("context"),
+            idempotency_key=parameters.get("idempotency_key") or str(uuid.uuid4()),
         )
         return await core_sync_accounts_tool(req=request, identity=identity)
 

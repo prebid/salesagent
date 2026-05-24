@@ -154,6 +154,7 @@ class SyncAccountsBody(BaseModel):
     dry_run: bool = False
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
+    idempotency_key: str | None = None
     adcp_version: str = "1.0.0"
 
 
