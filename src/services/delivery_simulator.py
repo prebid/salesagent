@@ -22,6 +22,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
+from src.core.thread_registry import ThreadRegistry
 from src.services.webhook_delivery_service import webhook_delivery_service
 
 logger = logging.getLogger(__name__)
@@ -37,12 +38,28 @@ class DeliverySimulator:
 
     def __init__(self):
         """Initialize the delivery simulator."""
-        self._active_simulations: dict[str, threading.Thread] = {}
+        # ThreadRegistry reaps dead simulation threads on every read. When a
+        # dead thread is reaped, the registered callback drops the parallel
+        # _stop_signals entry in lockstep (dual-dict cleanup). The callback is
+        # lock-free (dict.pop is atomic under the GIL) so it cannot deadlock
+        # against self._lock — see ThreadRegistry.add_reap_callback docstring.
+        self._active_simulations = ThreadRegistry()
         self._stop_signals: dict[str, threading.Event] = {}
-        self._lock = threading.Lock()  # Protect shared state
+        self._lock = threading.Lock()  # Protect _stop_signals iteration
+        self._active_simulations.add_reap_callback(self._on_simulation_reaped)
 
         # Register graceful shutdown
         atexit.register(self._shutdown)
+
+    def _on_simulation_reaped(self, media_buy_id: str) -> None:
+        """Drop the parallel _stop_signals entry when a dead sim is reaped.
+
+        Lock-free: ``dict.pop`` is atomic under the GIL. MUST NOT acquire
+        ``self._lock`` — the reap path is registry-lock → here, while
+        accessors take self._lock → registry; acquiring self._lock here
+        would risk an ABBA deadlock.
+        """
+        self._stop_signals.pop(media_buy_id, None)
 
     def restart_active_simulations(self):
         """Restart delivery simulations for active media buys.
@@ -80,8 +97,9 @@ class DeliverySimulator:
 
                 restarted_count = 0
                 for media_buy, _webhook_config in results:
-                    # Check if simulation is already running
-                    if media_buy.media_buy_id in self._active_simulations:
+                    # Check if simulation is already running (reaps dead
+                    # entries on read — closes the prior missing-reap gap).
+                    if self._active_simulations.contains(media_buy.media_buy_id):
                         continue
 
                     # Extract product IDs from the media buy packages
@@ -178,39 +196,42 @@ class DeliverySimulator:
             time_acceleration: How many real seconds = 1 simulated second (default: 3600 = 1 sec = 1 hour)
             update_interval_seconds: How often to fire webhooks in real time (default: 1 second)
         """
+        # Atomically reserve the slot via _stop_signals under self._lock.
+        # Concurrent callers for the same media_buy_id serialize here: the
+        # first inserts the stop signal, the second sees it and returns. We
+        # never call into the registry while holding self._lock — the
+        # registry has its own lock and the reap callback re-enters
+        # _stop_signals (ABBA avoidance).
         with self._lock:
-            # Don't start if already running
-            if media_buy_id in self._active_simulations:
+            if media_buy_id in self._stop_signals:
                 logger.warning(f"Delivery simulation already running for {media_buy_id}")
                 return
-
-            # Create stop signal
             stop_signal = threading.Event()
             self._stop_signals[media_buy_id] = stop_signal
 
-            # Start simulation thread
-            thread = threading.Thread(
-                target=self._run_simulation,
-                args=(
-                    media_buy_id,
-                    tenant_id,
-                    principal_id,
-                    start_time,
-                    end_time,
-                    total_budget,
-                    time_acceleration,
-                    update_interval_seconds,
-                    stop_signal,
-                ),
-                daemon=True,
-            )
-            self._active_simulations[media_buy_id] = thread
-            thread.start()
+        # Start simulation thread (registry has its own lock)
+        thread = threading.Thread(
+            target=self._run_simulation,
+            args=(
+                media_buy_id,
+                tenant_id,
+                principal_id,
+                start_time,
+                end_time,
+                total_budget,
+                time_acceleration,
+                update_interval_seconds,
+                stop_signal,
+            ),
+            daemon=True,
+        )
+        self._active_simulations.add(media_buy_id, thread)
+        thread.start()
 
-            logger.info(
-                f"✅ Started delivery simulation for {media_buy_id} "
-                f"(acceleration: {time_acceleration}x, interval: {update_interval_seconds}s)"
-            )
+        logger.info(
+            f"✅ Started delivery simulation for {media_buy_id} "
+            f"(acceleration: {time_acceleration}x, interval: {update_interval_seconds}s)"
+        )
 
     def stop_simulation(self, media_buy_id: str):
         """Stop delivery simulation for a media buy.
@@ -345,12 +366,12 @@ class DeliverySimulator:
         except Exception as e:
             logger.error(f"❌ Error in delivery simulation for {media_buy_id}: {e}", exc_info=True)
         finally:
-            # Thread-safe cleanup
+            # Thread-safe cleanup. Drop the registry entry first (its own
+            # lock); then drop the parallel _stop_signals entry under
+            # self._lock. Never nest the two locks.
+            self._active_simulations.remove(media_buy_id)
             with self._lock:
-                if media_buy_id in self._active_simulations:
-                    del self._active_simulations[media_buy_id]
-                if media_buy_id in self._stop_signals:
-                    del self._stop_signals[media_buy_id]
+                self._stop_signals.pop(media_buy_id, None)
 
             # Reset webhook sequence number
             webhook_delivery_service.reset_sequence(media_buy_id)

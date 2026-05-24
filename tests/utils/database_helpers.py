@@ -45,6 +45,17 @@ def get_utc_now():
     return datetime.now(UTC)
 
 
+def future_iso_date_range(days_ahead: int = 1, duration_days: int = 30) -> tuple[str, str]:
+    """Return (start, end) ISO 8601 timestamps for tests that need future dates.
+
+    Targets the ``YYYY-MM-DDTHH:MM:SSZ`` shape AdCP request validators accept.
+    Starts at ``days_ahead`` from now and runs ``duration_days``.
+    """
+    start = datetime.now(UTC) + timedelta(days=days_ahead)
+    end = start + timedelta(days=duration_days)
+    return start.strftime("%Y-%m-%dT00:00:00Z"), end.strftime("%Y-%m-%dT23:59:59Z")
+
+
 def create_tenant_with_timestamps(
     tenant_id: str, name: str, subdomain: str, billing_plan: str = "test", **kwargs: Any
 ) -> Tenant:

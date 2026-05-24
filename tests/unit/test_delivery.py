@@ -63,19 +63,18 @@ def _make_identity(
     tenant_id: str = "test_tenant",
     testing_context: AdCPTestContext | None = None,
 ) -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id},
-        protocol="mcp",
-        testing_context=testing_context
-        or AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
-    )
+    """Build a test ResolvedIdentity via the canonical factory.
+
+    Delegates to PrincipalFactory.make_identity (the single source of truth
+    per tests/CLAUDE.md) instead of constructing ResolvedIdentity inline.
+    A custom testing_context override is applied on top when provided.
+    """
+    from tests.factories import PrincipalFactory
+
+    identity = PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id)
+    if testing_context is not None:
+        identity = identity.model_copy(update={"testing_context": testing_context})
+    return identity
 
 
 def _make_mock_media_buy(
@@ -90,6 +89,7 @@ def _make_mock_media_buy(
     end_time=None,
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
+    status: str = "active",
 ) -> MagicMock:
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
@@ -99,6 +99,7 @@ def _make_mock_media_buy(
     buy.end_date = end_date or date(2025, 12, 31)
     buy.start_time = start_time
     buy.end_time = end_time
+    buy.status = status  # generic "active" is date-refined by _get_target_media_buys
     buy.buyer_ref = None
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
@@ -711,8 +712,8 @@ class TestDeliveryStatusFilter:
         assert result[0][0] == "mb_done"
 
     def test_status_filter_paused(self):
-        """UC-004-FILT-03: filter by status paused is accepted but returns no buys
-        because current status is derived from dates (ready/active/completed only).
+        """UC-004-FILT-03: filter by status paused returns no buys when the
+        only buy is persisted "active" and inside its flight window.
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
         CONFIRMED: status_filter accepts media-buy-status enum including 'paused'.

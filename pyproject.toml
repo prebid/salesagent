@@ -1,7 +1,7 @@
 [project]
 name = "adcp-sales-agent"
 version = "1.7.0"
-description = "Add your description here"
+description = "Prebid Sales Agent — AdCP-compliant MCP/A2A/REST server for ad inventory orchestration."
 readme = "README.md"
 requires-python = ">=3.12"
 
@@ -59,6 +59,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "asgi-lifespan>=2.1.0",
     "factory-boy>=3.3.0",
     "mocker>=1.1.1",
     "mypy>=1.18.2",
@@ -84,8 +85,16 @@ ui-tests = [
     "allure-pytest==2.13.5",
 ]
 
+[project.urls]
+Homepage = "https://github.com/prebid/salesagent"
+Repository = "https://github.com/prebid/salesagent"
+Issues = "https://github.com/prebid/salesagent/issues"
+Documentation = "https://github.com/prebid/salesagent/tree/main/docs"
+Changelog = "https://github.com/prebid/salesagent/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
+    "asgi-lifespan>=2.1.0",
     "factory-boy>=3.3.0",
     "mocker>=1.1.1",
     "mypy>=1.18.2",

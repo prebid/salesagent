@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check PR title follows Conventional Commits
-        uses: amannn/action-semantic-pull-request@v5
+        uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825 # v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -27,6 +27,7 @@ jobs:
             build
             style
             revert
+            security
           # Require a scope? (e.g., feat(api): ...)
           requireScope: false
           # Disallow scopes that don't match a given regex
@@ -49,6 +50,7 @@ jobs:
             - build: Build system changes
             - style: Code style changes
             - revert: Reverts a previous commit
+            - security: Security fixes or hardening
 
             Example: "feat: Add user authentication"
           # For work-in-progress PRs, allow wip/WIP prefix

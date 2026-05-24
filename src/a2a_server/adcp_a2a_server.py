@@ -1484,6 +1484,17 @@ class AdCPRequestHandler(RequestHandler):
             params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
             # buyer_ref removed in adcp 3.12
 
+            # push_notification_config is an A2A *transport-layer* parameter
+            # (injected by _handle_explicit_skill from the SendMessageConfiguration).
+            # It is forwarded to core_create_media_buy_tool as a SEPARATE argument
+            # below — exactly like create_media_buy_raw / the MCP wrapper, which
+            # never fold it into CreateMediaBuyRequest. Validating it as part of
+            # the request body would apply the adcp Authentication.credentials
+            # MinLen(32) constraint to the whole create_media_buy, so a short
+            # webhook credential would (incorrectly) divert the request away from
+            # the manual-approval gate (gh-#1299).
+            push_notification_config = params.pop("push_notification_config", None)
+
             # Coerce string brand shorthand to BrandReference dict (A2A may send "acme.com")
             if isinstance(params.get("brand"), str):
                 params["brand"] = {"domain": params["brand"]}
@@ -1526,7 +1537,7 @@ class AdCPRequestHandler(RequestHandler):
                 packages=params["packages"],  # Required — validated above
                 start_time=params.get("start_time"),
                 end_time=params.get("end_time"),
-                push_notification_config=params.get("push_notification_config"),
+                push_notification_config=push_notification_config,
                 reporting_webhook=params.get("reporting_webhook"),
                 context=params.get("context"),
                 identity=identity,
@@ -1959,14 +1970,23 @@ class AdCPRequestHandler(RequestHandler):
 
             req = GetMediaBuyDeliveryRequest.model_validate(params)
 
-            # Call core function with validated fields (all optional per AdCP spec)
+            # Call core function with validated fields (all optional per AdCP spec).
+            # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
+            # transport boundary completeness): reporting_dimensions,
+            # attribution_window, include_package_daily_breakdown and account
+            # were previously dropped, silently discarding the buyer's
+            # requested attribution window (gh-#1299 follow-up).
             # Pass raw values for fields where _raw handles its own type coercion
-            # (e.g., status_filter str→MediaBuyStatus, date str→date)
+            # (e.g., status_filter str→MediaBuyStatus, date str→date).
             response = core_get_media_buy_delivery_tool(
                 media_buy_ids=req.media_buy_ids,
                 status_filter=params.get("status_filter"),
                 start_date=params.get("start_date"),
                 end_date=params.get("end_date"),
+                reporting_dimensions=req.reporting_dimensions,
+                attribution_window=req.attribution_window,
+                include_package_daily_breakdown=req.include_package_daily_breakdown,
+                account=params.get("account"),
                 context=params.get("context"),
                 identity=identity,
             )

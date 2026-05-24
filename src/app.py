@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastmcp.utilities.lifespan import combine_lifespans
 
+from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 
 logger = logging.getLogger(__name__)
@@ -52,20 +53,16 @@ async def app_lifespan(app: FastAPI):
     logger.info("FastAPI application starting up")
     yield
     logger.info("FastAPI application shutting down")
-    # Close long-lived HTTP sessions / connection pools so the worker's
-    # file descriptors are released before process exit. The webhook
-    # service's ``requests.Session`` has a ``close()`` method that was
-    # never wired here — that's leak triage item #3 from the production
-    # OOM-cycle investigation. Adding more shutdown hooks below as
-    # we close out items #4-#6.
-    try:
-        from src.services.protocol_webhook_service import _webhook_service
-
-        if _webhook_service is not None:
-            await _webhook_service.close()
-    except Exception:
-        # Shutdown errors must not mask the actual yielded exit.
-        logger.exception("Error closing protocol_webhook_service on shutdown")
+    # Service-agnostic shutdown: every service that needs teardown
+    # self-registers an async close callback via
+    # ``src.core.lifecycle.register_shutdown`` at first construction. This
+    # lifespan only drains the registry — it never references a concrete
+    # service. Releases long-lived HTTP sessions / connection pools (e.g.
+    # the webhook service's ``requests.Session``) before process exit; that
+    # is leak triage item #3 from the production OOM-cycle investigation
+    # (GH #1264). Per-callback errors are logged and swallowed inside
+    # ``run_all_shutdown_callbacks`` so they cannot mask the yielded exit.
+    await run_all_shutdown_callbacks()
 
 
 # Build the MCP sub-application.

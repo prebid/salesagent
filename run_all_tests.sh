@@ -47,11 +47,10 @@ collect_reports() {
     for name in unit integration e2e admin bdd ui; do
         [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
     done
-    # Explicit return 0 — without this, the function inherits the exit
-    # code of the last ``[ -f X ] && cp X Y`` test, which is 1 when the
-    # final file (ui.json) is missing in quick mode. Under ``set -e``
-    # that propagates to the caller and the script exits before reaching
-    # the security audit + summary block.
+    # Explicit return 0 — without this, the function inherits the exit code
+    # of the last ``[ -f X ] && cp X Y`` test, which is 1 when the final
+    # file (ui.json) is missing in quick mode. Under ``set -e`` that would
+    # propagate to the caller and the script would exit before the summary.
     return 0
 }
 
@@ -59,18 +58,18 @@ collect_reports() {
 if [ "$MODE" = "quick" ]; then
     validate_imports
     echo -e "${BLUE}Running unit + integration via tox...${NC}"
-    set +e
-    # Write to file then cat — avoids two known issues:
-    # - ``| tee X`` hangs after tox exits because of a tox-uv fd leak
-    # - ``> >(tee X) 2>&1`` returns a stale process-substitution exit code
-    #   that makes the script appear to fail under ``set -eo pipefail``
-    #   even when tox itself returned 0.
-    tox -e unit,integration -p > "$RESULTS_DIR/tox.log" 2>&1
-    TOX_RC=$?
-    set -e
-    cat "$RESULTS_DIR/tox.log"
+    # Disable BOTH errexit and pipefail around the tox call:
+    # - errexit so a non-zero tox exit doesn't kill the script before the summary
+    # - pipefail so the async ``>(tee ...)`` subshell's exit code can't poison ``$?``
+    # Capture tox's own exit code via PIPESTATUS[0] (robust to both interpretations).
+    set +eo pipefail
+    # Redirect to file + stdout via process substitution to avoid tox-uv fd leak
+    # that causes pipes (| tee) to hang after tox exits.
+    tox -e unit,integration -p > >(tee "$RESULTS_DIR/tox.log") 2>&1
+    TOX_RC=${PIPESTATUS[0]}
+    set -eo pipefail
     collect_reports
-    if [ "$TOX_RC" -ne 0 ]; then FAILURES="tox"; fi
+    [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
 
 # --- CI mode (Docker + all suites) ---
 elif [ "$MODE" = "ci" ]; then
@@ -82,29 +81,35 @@ elif [ "$MODE" = "ci" ]; then
     # Start Docker stack (writes .test-stack.env)
     ./scripts/test-stack.sh up
     source .test-stack.env
-    trap './scripts/test-stack.sh down 2>/dev/null || true' EXIT
+
+    # Pinned reference creative agent (salesagent-kczg): the authoritative run
+    # must NOT silently hit the live public agent (its catalog drifts). This
+    # mirrors the CI `creative` matrix group exactly — the commit pin is
+    # single-sourced in scripts/creative-agent-stack.sh. Idempotent (reuses a
+    # healthy stack across runs); torn down with the Docker stack on EXIT.
+    ./scripts/creative-agent-stack.sh up
+    export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
+    trap './scripts/creative-agent-stack.sh down 2>/dev/null || true; ./scripts/test-stack.sh down 2>/dev/null || true' EXIT
 
     if [ -n "$PYTEST_TARGET" ]; then
-        # Targeted test run
+        # Targeted test run — see "set +eo pipefail / PIPESTATUS[0]" rationale in quick mode.
         echo -e "${BLUE}Running targeted: $PYTEST_TARGET $PYTEST_ARGS${NC}"
-        set +e
+        set +eo pipefail
         uv run pytest "$PYTEST_TARGET" \
             -m "not requires_server and not skip_ci" \
             --json-report --json-report-file="$RESULTS_DIR/targeted.json" --json-report-indent=2 \
-            -q --tb=line $PYTEST_ARGS > "$RESULTS_DIR/targeted.log" 2>&1
-        TOX_RC=$?
-        set -e
-        cat "$RESULTS_DIR/targeted.log"
-        if [ "$TOX_RC" -ne 0 ]; then FAILURES="targeted"; fi
+            -q --tb=line $PYTEST_ARGS > >(tee "$RESULTS_DIR/targeted.log") 2>&1
+        TOX_RC=${PIPESTATUS[0]}
+        set -eo pipefail
+        [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
     else
         echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
-        set +e
-        tox -p -o > "$RESULTS_DIR/tox.log" 2>&1
-        TOX_RC=$?
-        set -e
-        cat "$RESULTS_DIR/tox.log"
+        set +eo pipefail
+        tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
+        TOX_RC=${PIPESTATUS[0]}
+        set -eo pipefail
         collect_reports
-        if [ "$TOX_RC" -ne 0 ]; then FAILURES="tox"; fi
+        [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
 
         # Coverage combine runs separately — tox -p hangs when the coverage
         # env fails (e.g. missing .coverage.e2e from HTTP-only e2e tests).
@@ -120,12 +125,14 @@ else
 fi
 
 # --- Security audit ---
+# Ignored-vulnerabilities list + uv-secure invocation are single-sourced in
+# scripts/security-audit.sh (same script is called by .github/workflows/test.yml,
+# so CI and local cannot drift).
 echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
-IGNORED_VULNS="GHSA-7gcm-g887-7qv7,GHSA-5239-wwwm-4pmq"
-if uvx uv-secure --no-check-uv-tool --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
+if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
     echo -e "${GREEN}Security audit passed${NC}"
 else
-    echo -e "${RED}Security audit FAILED — run: uvx uv-secure --ignore-vulns $IGNORED_VULNS${NC}"
+    echo -e "${RED}Security audit FAILED — run: ./scripts/security-audit.sh${NC}"
     FAILURES="${FAILURES:+$FAILURES }security"
 fi
 

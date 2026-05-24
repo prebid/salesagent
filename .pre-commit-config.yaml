@@ -1,3 +1,20 @@
+# Hook revisions (rev:) are SHA-pinned, not tag-pinned.
+#
+# WHY SHA PINS: Git tags are mutable — a maintainer (or attacker who has
+# compromised an upstream account) can move a tag to a different commit
+# without changing the tag name. If we use rev: v6.0.0, a tag rewrite
+# silently changes what code runs on every developer's machine and in CI.
+# Commit SHAs are immutable: once a commit is published, its SHA never
+# changes. This is a supply-chain security requirement (issue #1234, D1).
+#
+# HOW TO UPDATE: Run `pre-commit autoupdate --freeze` to advance all hooks
+# to their latest versions while keeping the SHA-pinned format.
+# Each frozen rev shows the tag it corresponds to as: # frozen: <tag>
+#
+# Per ADR-001: Python hooks use `language: system` or `entry: uv run ...`
+# so they resolve dependencies from uv.lock, not from additional_dependencies.
+# This prevents version drift between what CI runs and what pre-commit runs.
+
 repos:
   - repo: local
     hooks:
@@ -260,7 +277,7 @@ repos:
         pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -273,21 +290,27 @@ repos:
       - id: debug-statements
 
   - repo: https://github.com/psf/black
-    rev: 25.1.0
+    rev: 87928e6d6761a4a6d22250e1fee5601b3998086e  # frozen: 26.5.1
     hooks:
       - id: black
         language_version: python3
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.10
+    rev: 0c7b6c989466a93942def1f84baf36ddfcd60c83  # frozen: v0.15.14
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
 
   # Type checking with mypy - ENFORCED (0 errors in src/)
   # After achieving 100% compliance, mypy is now mandatory for all commits
+  #
+  # FIXME(#1234-pr2): This hook still uses mirrors-mypy + additional_dependencies,
+  # which violates ADR-001 (uv.lock as single source of truth). Migration to
+  # language: system / entry: uv run mypy is PR 2 scope — it requires deleting
+  # [project.optional-dependencies].dev and wiring the pydantic.mypy plugin.
+  # Until then, adcp pin here must be kept in sync with uv.lock manually.
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
+    rev: d2823d321df3af8f878f7ee3414dc94d037145b9  # frozen: v2.1.0
     hooks:
       - id: mypy
         args: [--config-file=mypy.ini]
@@ -303,3 +326,13 @@ repos:
           - alembic
         files: '^src/'
         exclude: '^src/adapters/google_ad_manager_original\.py$'
+
+  # Per D35 — secret detection. Top-OSS norm (24,400+ stars; CNCF, sigstore, Apache).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 2ca41cc1372d1e939a6a879f18cdc19fc1cac1ce  # frozen: v8.30.0
+    hooks:
+      - id: gitleaks
+        # Scans staged files at commit time. .gitleaks.toml at repo root can
+        # add allowlist entries for test fixtures or custom patterns.
+        # TODO(#1234-pr3): add gitleaks as a CI job in security.yml to close
+        # the SKIP=gitleaks bypass gap (pre-commit hook can be bypassed locally).
