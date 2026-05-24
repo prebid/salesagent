@@ -19,9 +19,20 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 
-from src.core.config_loader import _ensure_default_principal, ensure_default_tenant_exists
+from src.core.config_loader import (
+    _ensure_default_principal,
+    _ensure_default_storyboard_fixtures,
+    ensure_default_tenant_exists,
+)
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Principal, Tenant
+from src.core.database.models import (
+    CurrencyLimit,
+    PricingOption,
+    Principal,
+    Product,
+    PropertyTag,
+    Tenant,
+)
 from tests.factories import TenantFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -42,6 +53,10 @@ def clean_tenant_table(integration_db):
     from tests.factories import ALL_FACTORIES
 
     with get_db_session() as session:
+        session.query(PricingOption).delete()
+        session.query(Product).delete()
+        session.query(PropertyTag).delete()
+        session.query(CurrencyLimit).delete()
         session.query(Principal).delete()
         session.query(Tenant).delete()
         session.commit()
@@ -57,6 +72,10 @@ def clean_tenant_table(integration_db):
             f._meta.sqlalchemy_session = None
         factory_session.close()
         with get_db_session() as session:
+            session.query(PricingOption).delete()
+            session.query(Product).delete()
+            session.query(PropertyTag).delete()
+            session.query(CurrencyLimit).delete()
             session.query(Principal).delete()
             session.query(Tenant).delete()
             session.commit()
@@ -128,3 +147,112 @@ class TestEnsureDefaultTenantWiresSeed:
                 principal = session.scalars(select(Principal).filter_by(tenant_id="default")).first()
                 assert principal is not None
                 assert principal.access_token == "later-token-D"
+
+
+class TestEnsureDefaultStoryboardFixtures:
+    """The storyboard-fixtures seed creates the CurrencyLimit/PropertyTag/Product/
+    PricingOption chain so storyboard get_products scenarios find at least one
+    product to return.
+
+    Without these fixtures, refine_products / inventory_list_targeting /
+    inventory_list_no_match all fail the storyboard validator's
+    ``field_present: products[0].product_id`` check because get_products returns
+    an empty list.
+    """
+
+    def test_no_env_var_no_fixtures(self, clean_tenant_table):
+        """Without ADCP_AUTH_TOKEN, the helper is a no-op — production-safe.
+
+        Product is the cleanest assertion target: TenantFactory auto-creates a
+        USD CurrencyLimit via RelatedFactory (tests/factories/core.py:56-60), so
+        we can't assert CurrencyLimit absence here. PropertyTag is similarly
+        outside our seed contract. The helper's job is to seed *products*
+        (with their dependency chain); the production-safe gate is that no
+        products are created without the env var.
+        """
+        TenantFactory(tenant_id="default", subdomain="default")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ADCP_AUTH_TOKEN", None)
+            with get_db_session() as session:
+                _ensure_default_storyboard_fixtures(session, "default")
+                assert session.scalars(select(Product).filter_by(tenant_id="default")).all() == []
+                assert session.scalars(select(PricingOption).filter_by(tenant_id="default")).all() == []
+
+    def test_with_env_var_seeds_full_chain(self, clean_tenant_table):
+        """With ADCP_AUTH_TOKEN, the helper creates CurrencyLimit + PropertyTag +
+        Product + PricingOption — the full chain a storyboard get_products call needs."""
+        TenantFactory(tenant_id="default", subdomain="default")
+        with patch.dict(os.environ, {"ADCP_AUTH_TOKEN": "fixtures-token-E"}):
+            with get_db_session() as session:
+                _ensure_default_storyboard_fixtures(session, "default")
+
+                currencies = session.scalars(select(CurrencyLimit).filter_by(tenant_id="default")).all()
+                assert len(currencies) == 1
+                assert currencies[0].currency_code == "USD"
+
+                tags = session.scalars(select(PropertyTag).filter_by(tenant_id="default")).all()
+                assert len(tags) == 1
+                assert tags[0].tag_id == "all_inventory"
+
+                products = session.scalars(select(Product).filter_by(tenant_id="default")).all()
+                assert len(products) == 1
+                assert products[0].product_id == "default_display"
+                # Storyboard validator checks field_present at products[0].product_id —
+                # the value must be a non-empty string for the field_present check to pass.
+                assert isinstance(products[0].product_id, str) and products[0].product_id
+
+                pricing = session.scalars(
+                    select(PricingOption).filter_by(tenant_id="default", product_id="default_display")
+                ).all()
+                assert len(pricing) == 1
+                assert pricing[0].pricing_model == "cpm"
+                assert pricing[0].currency == "USD"
+
+    def test_idempotent_seed(self, clean_tenant_table):
+        """Repeated calls do not create duplicates — docker compose up runs may
+        invoke this multiple times across restarts."""
+        TenantFactory(tenant_id="default", subdomain="default")
+        with patch.dict(os.environ, {"ADCP_AUTH_TOKEN": "fixtures-token-F"}):
+            with get_db_session() as session:
+                _ensure_default_storyboard_fixtures(session, "default")
+                _ensure_default_storyboard_fixtures(session, "default")
+                _ensure_default_storyboard_fixtures(session, "default")
+
+                assert len(session.scalars(select(CurrencyLimit).filter_by(tenant_id="default")).all()) == 1
+                assert len(session.scalars(select(PropertyTag).filter_by(tenant_id="default")).all()) == 1
+                assert len(session.scalars(select(Product).filter_by(tenant_id="default")).all()) == 1
+                assert (
+                    len(
+                        session.scalars(
+                            select(PricingOption).filter_by(tenant_id="default", product_id="default_display")
+                        ).all()
+                    )
+                    == 1
+                )
+
+    def test_ensure_default_tenant_wires_fixtures_on_create(self, clean_tenant_table):
+        """The public ensure_default_tenant_exists wires the fixture seed into the
+        create-new-tenant path so a fresh docker compose up has products available."""
+        with patch.dict(os.environ, {"ADCP_AUTH_TOKEN": "wired-token-G"}):
+            ensure_default_tenant_exists()
+            with get_db_session() as session:
+                product = session.scalars(select(Product).filter_by(tenant_id="default")).first()
+                assert product is not None
+                assert product.product_id == "default_display"
+
+    def test_ensure_default_tenant_wires_fixtures_on_existing(self, clean_tenant_table):
+        """The existing-tenant path also seeds fixtures so prior boots without
+        env var get backfilled on a later boot with it set."""
+        # First boot: tenant created, no env var, no fixtures.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ADCP_AUTH_TOKEN", None)
+            ensure_default_tenant_exists()
+            with get_db_session() as session:
+                assert session.scalars(select(Product).filter_by(tenant_id="default")).first() is None
+
+        # Second boot: env var set, fixtures seeded.
+        with patch.dict(os.environ, {"ADCP_AUTH_TOKEN": "backfill-token-H"}):
+            ensure_default_tenant_exists()
+            with get_db_session() as session:
+                product = session.scalars(select(Product).filter_by(tenant_id="default")).first()
+                assert product is not None

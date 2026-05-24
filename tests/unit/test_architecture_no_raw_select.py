@@ -274,6 +274,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     # once one exists. Mirrors the existing ensure_default_tenant_exists entry below;
     # both run from migrate.py on docker compose up.
     ("src/core/config_loader.py", "_ensure_default_principal"),
+    # FIXME(salesagent-xw7): same bootstrap rationale — seeds storyboard-fixtures
+    # (CurrencyLimit + PropertyTag + Product + PricingOption) so docker compose up
+    # leaves the default tenant ready for AdCP compliance scenarios.
+    ("src/core/config_loader.py", "_ensure_default_storyboard_fixtures"),
     ("src/core/config_loader.py", "ensure_default_tenant_exists"),
     ("src/core/config_loader.py", "get_default_tenant"),
     ("src/core/config_loader.py", "get_tenant_by_id"),

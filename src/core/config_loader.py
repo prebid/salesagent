@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Principal, Tenant
+from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +320,98 @@ def _ensure_default_principal(db_session: Any, tenant_id: str) -> None:
     logger.info("Seeded default principal for tenant %s (token len=%d)", tenant_id, len(token))
 
 
+def _ensure_default_storyboard_fixtures(db_session: Any, tenant_id: str) -> None:
+    """Seed the dependency chain a storyboard `get_products` call needs.
+
+    The storyboard runner (``@adcp/sdk`` compliance scenarios) hits
+    ``get_products`` against the default tenant and asserts that products are
+    present with ``product_id`` populated. The default tenant ships with the
+    tenant row + principal row only; without at least one Product the
+    storyboard scenarios ``refine_products``, ``inventory_list_targeting``,
+    and ``inventory_list_no_match`` all fail at the
+    ``field_present: products[0].product_id`` validation.
+
+    Per CLAUDE.md tenant-setup dependency order, products require:
+
+    1. ``CurrencyLimit`` (USD) — budget validation looks this up
+    2. ``PropertyTag`` (``all_inventory``) — products reference it via
+       ``property_tags=["all_inventory"]`` (the by_tag selector path)
+    3. ``Product`` — at least one
+    4. ``PricingOption`` — at least one per product
+
+    Each step is idempotent so repeated ``docker compose up`` runs are safe.
+    Gated on ``ADCP_AUTH_TOKEN`` (matches ``_ensure_default_principal``) so
+    production deployments without that env var are unaffected.
+    """
+    if not os.environ.get("ADCP_AUTH_TOKEN"):
+        return
+
+    # Step 1: CurrencyLimit for USD (idempotent)
+    existing_currency = db_session.scalars(
+        select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code="USD")
+    ).first()
+    if not existing_currency:
+        db_session.add(
+            CurrencyLimit(
+                tenant_id=tenant_id,
+                currency_code="USD",
+                min_package_budget=None,
+                max_daily_package_spend=None,
+            )
+        )
+
+    # Step 2: PropertyTag for "all_inventory" (idempotent)
+    existing_tag = db_session.scalars(
+        select(PropertyTag).filter_by(tenant_id=tenant_id, tag_id="all_inventory")
+    ).first()
+    if not existing_tag:
+        db_session.add(
+            PropertyTag(
+                tenant_id=tenant_id,
+                tag_id="all_inventory",
+                name="All Inventory",
+                description="Catch-all tag covering the publisher's full property set",
+            )
+        )
+
+    # Step 3: Product (idempotent — guard on product_id)
+    existing_product = db_session.scalars(
+        select(Product).filter_by(tenant_id=tenant_id, product_id="default_display")
+    ).first()
+    if existing_product:
+        db_session.commit()
+        return
+
+    from decimal import Decimal
+
+    product = Product(
+        tenant_id=tenant_id,
+        product_id="default_display",
+        name="Default Display",
+        description="Default display product seeded so storyboard get_products scenarios succeed",
+        format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+        targeting_template={"geo_countries": ["US"]},
+        delivery_type="guaranteed",
+        property_tags=["all_inventory"],
+        delivery_measurement={"provider": "publisher"},
+    )
+    db_session.add(product)
+
+    # Step 4: PricingOption (CPM, fixed, $10)
+    db_session.add(
+        PricingOption(
+            tenant_id=tenant_id,
+            product_id="default_display",
+            pricing_model="cpm",
+            rate=Decimal("10.00"),
+            currency="USD",
+            is_fixed=True,
+        )
+    )
+    db_session.commit()
+    logger.info("Seeded default storyboard fixtures (product + pricing) for tenant %s", tenant_id)
+
+
 def ensure_default_tenant_exists() -> dict[str, Any] | None:
     """Ensure a default tenant exists for single-tenant deployments.
 
@@ -348,6 +440,7 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
                 # Even when the tenant already exists, ensure a principal is seeded
                 # (idempotent) so storyboard CI works on subsequent docker compose runs.
                 _ensure_default_principal(db_session, existing.tenant_id)
+                _ensure_default_storyboard_fixtures(db_session, existing.tenant_id)
                 from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
                 return serialize_tenant_to_dict(existing)
@@ -385,6 +478,7 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
             logger.info(f"Created default tenant: {default_tenant.name} (id: {default_tenant.tenant_id})")
 
             _ensure_default_principal(db_session, default_tenant.tenant_id)
+            _ensure_default_storyboard_fixtures(db_session, default_tenant.tenant_id)
 
             from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
