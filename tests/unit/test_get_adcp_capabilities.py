@@ -671,6 +671,40 @@ class TestResponseShapeCapabilities:
         assert features.inline_creative_management is True
         assert features.property_list_filtering is False
 
+    def test_adapter_with_property_list_support_advertises_capability(self):
+        """Adapter that sets supports_property_list_filtering=True flips the
+        ``MediaBuyFeatures.property_list_filtering`` wire flag to True.
+
+        Kevel (B3) is the first adapter to set the class attribute True; the
+        capability wire must reflect that so buyers can discover it. Without this
+        test the True path is silent — only the False path (other 4 adapters from B4)
+        is covered by existing tests.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        # Build an adapter whose CLASS has supports_property_list_filtering=True
+        # (the supports_property_list_filtering() helper inspects the class attribute,
+        # not the instance, so the test needs a real class with the attribute set).
+        supporting_adapter_class = type(
+            "_SupportingAdapter",
+            (object,),
+            {
+                "supports_property_list_filtering": True,
+                "default_channels": [],
+            },
+        )
+        mock_adapter = supporting_adapter_class()
+        mock_adapter.get_targeting_capabilities = MagicMock(return_value=None)
+
+        identity = _make_capabilities_identity()
+        stack = _patch_capabilities_deps(adapter=mock_adapter)
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy is not None
+        assert response.media_buy.features.property_list_filtering is True
+
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""
         from src.core.tools.capabilities import _get_adcp_capabilities_impl

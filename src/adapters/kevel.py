@@ -281,6 +281,16 @@ class Kevel(AdServerAdapter):
             dry_run_prefix=False,
         )
 
+        # Honest-declaration gate: reject property_list early if any package carries
+        # an identifier type Kevel can't compile (ios_bundle, rss_url, etc.).
+        # The base helper dispatches to KevelAdapter._check_property_list_supported,
+        # which inspects identifier types via the live site resolver. Without this
+        # call the per-type validation at line 71+ is dead code — buyers sending
+        # unsupported identifiers would silently get them dropped instead of an
+        # UNSUPPORTED_FEATURE envelope.
+        if err := self._reject_property_list_if_unsupported(packages):
+            return err
+
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
         for package in packages:

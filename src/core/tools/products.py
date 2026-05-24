@@ -461,6 +461,7 @@ async def _get_products_impl(
     # Enrich products with dynamic pricing from cached performance metrics
     # Updates pricing_options with price_guidance (floor, recommended) and estimated_exposures
     try:
+        from src.core.database.repositories.uow import ProductUoW
         from src.services.dynamic_pricing_service import DynamicPricingService
 
         # Extract country from request if available (future enhancement: parse from targeting)
@@ -909,12 +910,13 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
     Returns:
         List of Product objects with full pricing options
     """
-    from src.core.database.repositories.uow import ProductUoW
 
     if tenant_id is None:
         from src.core.config_loader import get_current_tenant
 
         tenant_id = get_current_tenant()["tenant_id"]
+
+    from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant_id) as uow:
         assert uow.products is not None
