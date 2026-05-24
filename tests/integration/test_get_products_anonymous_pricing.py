@@ -67,6 +67,27 @@ class TestAnonymousPricingSuppression:
         assert result.products[0].pricing_options == []
 
     @pytest.mark.asyncio
+    async def test_anonymous_wholesale_request_products_have_empty_pricing_options(self, integration_db):
+        """Open-instance anonymous wholesale discovery still suppresses pricing options."""
+        with ProductEnv(tenant_id="anon-pricing-wholesale", principal_id=None) as env:
+            tenant = TenantFactory(
+                tenant_id="anon-pricing-wholesale",
+                subdomain="anon-pricing-wholesale",
+                brand_manifest_policy="public",
+                is_embedded=False,
+            )
+            p = ProductFactory(tenant=tenant, product_id="priced_product")
+            PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("15.00"))
+
+            env._identity = _lazy_identity("anon-pricing-wholesale", principal_id=None)
+
+            result = await env.call_impl(buying_mode="wholesale", brief=None, brand=None)
+
+        assert len(result.products) == 1
+        assert result.products[0].product_id == "priced_product"
+        assert result.products[0].pricing_options == []
+
+    @pytest.mark.asyncio
     async def test_anonymous_request_product_count_unchanged(self, integration_db):
         """Anonymous pricing suppression does not reduce the product count.
 

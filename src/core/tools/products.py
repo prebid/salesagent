@@ -158,6 +158,25 @@ def convert_product_models_to_resolved(
     return products
 
 
+def _tenant_is_embedded(tenant: Any) -> bool:
+    if tenant is None:
+        return False
+    tenant_get = getattr(tenant, "get", None)
+    if callable(tenant_get):
+        return bool(tenant_get("is_embedded", False))
+    return bool(getattr(tenant, "is_embedded", False))
+
+
+def _should_suppress_pricing_for_request(
+    req: GetProductsRequestGenerated,
+    identity: ResolvedIdentity,
+) -> bool:
+    if identity.is_authenticated:
+        return False
+    buying_mode = getattr(req.buying_mode, "value", req.buying_mode)
+    return buying_mode != "wholesale" or not _tenant_is_embedded(identity.tenant)
+
+
 async def _get_products_impl(
     req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:
@@ -739,7 +758,7 @@ async def _get_products_impl(
 
     # Filter pricing data for anonymous users
     # Do this BEFORE serialization to avoid reconstruction issues
-    if principal_id is None:  # Anonymous user
+    if _should_suppress_pricing_for_request(req, identity):
         # Remove pricing data from products for anonymous users
         # Set to empty list to hide pricing (will be excluded during serialization).
         # ResolvedProduct is frozen so we mutate the wire LibraryProduct directly.

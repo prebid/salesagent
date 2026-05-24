@@ -752,14 +752,26 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 **Business Rule:** BR-RULE-003 (INV-3)
 **Priority:** P0
 
-#### Scenario: Anonymous -- pricing suppression on all products
+#### Scenario: Anonymous -- pricing suppression on open-instance and brief discovery
 **Obligation ID** UC-001-ALT-ANONYMOUS-DISCOVERY-05
 **Layer** schema
 **Given** the request is anonymous
+**And** the request is not embedded wholesale discovery
 **When** the system processes the response
 **Then** every product has `pricing_options` set to an empty array `[]`
 **And** no pricing information is exposed
 **Business Rule:** BR-RULE-004 (INV-1)
+**Priority:** P0
+
+#### Scenario: Embedded wholesale -- pricing retained for storefront catalog sync
+**Obligation ID** UC-001-ALT-ANONYMOUS-DISCOVERY-05A
+**Layer** behavioral
+**Given** the request is anonymous
+**And** the tenant is embedded
+**And** `buying_mode` is `wholesale`
+**When** the system processes the response
+**Then** products retain their full `pricing_options` arrays
+**Business Rule:** BR-RULE-004 (INV-1A)
 **Priority:** P0
 
 #### Scenario: Authenticated -- pricing retained

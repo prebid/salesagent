@@ -78,12 +78,16 @@ Then the product is included in results
 ### BR-RULE-004: Anonymous Pricing Suppression
 **Obligation ID** BR-RULE-004-01
 **Layer** behavioral
-**Invariant:** Anonymous requests have `pricing_options` set to empty array on every product.
+**Invariant:** Anonymous open-instance requests have `pricing_options` set to empty array on every product. Embedded wholesale discovery retains pricing for storefront catalog synchronization.
 **Scenario:**
 ```gherkin
 Given a product with 3 pricing options
-When an anonymous user requests products
+When an anonymous user requests products in brief mode
 Then the product has pricing_options = []
+
+Given an embedded tenant product with 3 pricing options
+When an anonymous storefront requests products in wholesale mode
+Then the product has all 3 pricing options
 
 Given a product with 3 pricing options
 When an authenticated user requests products

@@ -437,11 +437,14 @@ Then product is suppressed
 ### anonymous_pricing: Anonymous Pricing Suppression
 **Obligation ID** CONSTR-ANONYMOUS-PRICING-01
 **Layer** behavioral
-**Requirement:** Authenticated = full pricing. Anonymous = pricing_options=[].
+**Requirement:** Authenticated = full pricing. Anonymous open-instance and brief-mode discovery = pricing_options=[]. Anonymous embedded wholesale discovery = full pricing for storefront catalog synchronization.
 **Scenario:**
 ```gherkin
-Given anonymous request
+Given anonymous brief request
 Then every product has pricing_options=[]
+
+Given anonymous wholesale request for an embedded tenant
+Then every product retains pricing_options
 ```
 **Priority:** P1
 **Affected by 3.6:** No

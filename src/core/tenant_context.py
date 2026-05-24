@@ -61,6 +61,7 @@ class TenantContext(BaseModel):
     brand_manifest_policy: str = "require_auth"
     advertising_policy: dict[str, Any] | None = None
     product_ranking_prompt: str | None = None
+    is_embedded: bool = False
 
     # --- Dict-like access for backward compatibility ---
 
@@ -123,6 +124,7 @@ class TenantContext(BaseModel):
             brand_manifest_policy=tenant.brand_manifest_policy or "require_auth",
             advertising_policy=safe_json_loads(tenant.advertising_policy, None),
             product_ranking_prompt=tenant.product_ranking_prompt,
+            is_embedded=bool(getattr(tenant, "is_embedded", False)),
         )
 
     @classmethod
