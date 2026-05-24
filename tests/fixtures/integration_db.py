@@ -114,7 +114,7 @@ def _import_all_models() -> None:
 def make_integration_db(
     *,
     json_serializer: bool = False,
-) -> Generator[str, None, None]:
+) -> Generator[str]:
     """Context manager that provides an isolated PostgreSQL database.
 
     Yields the unique database name (e.g. ``test_a3f8d92c``).

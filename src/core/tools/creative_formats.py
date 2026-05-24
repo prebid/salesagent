@@ -6,7 +6,7 @@ implementation pattern from CLAUDE.md.
 
 import logging
 import time
-from typing import Any, TypeVar
+from typing import Any
 
 from adcp.types import (
     AudioFormatAsset,
@@ -19,15 +19,12 @@ from adcp.types import (
 from adcp.types import Format as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
 
-# TypeVar for Format to preserve subclass type through backward compatibility function
-FormatT = TypeVar("FormatT", bound=AdcpFormat)
-
 from src.core.exceptions import AdCPAuthenticationError
 
 logger = logging.getLogger(__name__)
 
 
-def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
+def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> FormatT:
     """Pass-through function for backward compatibility.
 
     Note: adcp 3.2.0 removed the deprecated `assets_required` field from Format.

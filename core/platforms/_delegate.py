@@ -27,7 +27,7 @@ import asyncio
 import functools
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any
 
 from adcp.decisioning import AdcpError, RequestContext
 from adcp.server import current_transport
@@ -382,10 +382,7 @@ def _translate_validation_error(exc: ValidationError) -> AdcpError:
     )
 
 
-_DelegateFn = TypeVar("_DelegateFn", bound=Callable[..., Awaitable[Any]])
-
-
-def translate_adcp_errors(fn: _DelegateFn) -> _DelegateFn:
+def translate_adcp_errors[DelegateFn: Callable[..., Awaitable[Any]]](fn: DelegateFn) -> DelegateFn:
     """Decorator that translates structured rejections raised by a delegate
     into the framework's wire-shaped :class:`AdcpError`.
 

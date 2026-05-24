@@ -220,7 +220,7 @@ def get_scoped_session():
 
 
 @contextmanager
-def get_db_session() -> Generator[Session, None, None]:
+def get_db_session() -> Generator[Session]:
     """
     Context manager for database sessions with automatic cleanup and retry logic.
 

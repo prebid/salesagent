@@ -58,7 +58,7 @@ pytest_plugins = [
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Generator[None, None, None]:
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Generator[None]:
     """Auto-xfail scenarios that fail due to genuinely missing step definitions.
 
     Only StepDefinitionNotFoundError and NotImplementedError are converted to
@@ -572,7 +572,7 @@ def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
+def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None]:
     """Provide the appropriate harness for each BDD scenario.
 
     - UC-005 → CreativeFormatsEnv

@@ -21,11 +21,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any, Generic, TypeVar
+from typing import Annotated, Any
 
 from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field
-
-T = TypeVar("T")
 
 
 def _empty_string_to_none(value: Any) -> Any:
@@ -59,7 +57,7 @@ class Link(_APIModel):
     href: str
 
 
-class PaginatedResponse(_APIModel, Generic[T]):
+class PaginatedResponse[T](_APIModel):
     """v4 paginated envelope.
 
     FreeWheel uses two field-naming conventions across the v4 surface:

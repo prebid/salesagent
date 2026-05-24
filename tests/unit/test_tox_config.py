@@ -52,6 +52,10 @@ class TestToxEnvironments:
         """A coverage combine environment exists."""
         assert tox_config.has_section("testenv:coverage"), "Missing [testenv:coverage] in tox.ini"
 
+    def test_base_environment_uses_python_313(self, tox_config):
+        """tox must not fall back to the tox tool's Python interpreter."""
+        assert tox_config.get("testenv", "base_python", fallback="") == "python3.13"
+
     def test_coverage_depends_on_all_suites(self, tox_config):
         """Coverage env must depend on all 5 test suites."""
         section = "testenv:coverage"

@@ -3,7 +3,7 @@ name = "adcp-sales-agent"
 version = "1.7.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 
 dependencies = [
     "a2wsgi>=1.10.0",
@@ -136,7 +136,7 @@ dev = [
 
 [tool.black]
 line-length = 120
-target-version = ['py311']
+target-version = ['py313']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -157,7 +157,7 @@ extend-exclude = '''
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py313"
 exclude = [
     ".eggs",
     ".git",

@@ -32,7 +32,7 @@ import logging
 import os
 import threading
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any
 
 from adcp.decisioning import AdcpError
 from adcp.exceptions import IdempotencyConflictError
@@ -40,10 +40,8 @@ from adcp.server.idempotency import IdempotencyStore, MemoryBackend, PgBackend
 
 logger = logging.getLogger(__name__)
 
-_F = TypeVar("_F", bound=Callable[..., Awaitable[Any]])
 
-
-def translate_idempotency_conflict(handler: _F) -> _F:
+def translate_idempotency_conflict[F: Callable[..., Awaitable[Any]]](handler: F) -> F:
     """Decorator: translate framework :class:`IdempotencyConflictError` to a
     wire-shaped :class:`AdcpError` with code ``IDEMPOTENCY_CONFLICT`` and
     ``recovery="correctable"``.

@@ -47,8 +47,9 @@ from adcp.types.generated_poc.media_buy.update_media_buy_response import (
 
 from src.core.config import get_pydantic_extra_mode
 
-# For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
-LibraryPackage: TypeAlias = AdCPPackage
+# For backward compatibility, alias AdCPPackage as LibraryPackage. This stays
+# as TypeAlias because LibraryPackage is used as a base class below.
+LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040
 # Simple types that match library exactly
 # V3: Structured geo targeting types
 from adcp.types import ActivateSignalRequest as LibraryActivateSignalRequest
@@ -2236,8 +2237,8 @@ PROPERTY_ERROR_MESSAGES = {
 # the property-specific shape.
 from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
 
-PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific identifier
-Property: TypeAlias = LibraryProperty
+PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # noqa: UP040  # Property-specific identifier
+Property: TypeAlias = LibraryProperty  # noqa: UP040
 
 
 class PropertyTagMetadata(SalesAgentBaseModel):
