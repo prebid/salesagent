@@ -295,9 +295,9 @@ Target users based on local weather conditions for maximum relevance.</div>
                     {% endfor %}
                 {% endif %}
             </select>
-            <button type="button" class="btn btn-primary" onclick="openInventoryProfileCreator()" style="white-space: nowrap;">
+            <a href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id) }}" target="_blank" rel="noopener" class="btn btn-primary" style="white-space: nowrap; text-decoration: none;">
                 <i class="fas fa-plus"></i> Create New
-            </button>
+            </a>
         </div>
 
         <!-- Profile preview (shown when profile selected) -->

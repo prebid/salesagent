@@ -82,7 +82,7 @@
             {% if _computed_public_agent_url %}
             <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <code id="public-agent-url-display" style="flex: 1; padding: 0.5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.9rem;">{{ _computed_public_agent_url }}</code>
-                <button type="button" class="btn btn-sm btn-secondary" onclick="copyAgentUrlToClipboard()">Copy</button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="copyAgentUrlToClipboard(this)">Copy</button>
             </div>
             <small style="color: #6b7280;">
                 {% if embedded_view -%}

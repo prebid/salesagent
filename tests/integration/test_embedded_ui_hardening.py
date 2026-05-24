@@ -282,6 +282,13 @@ class TestPublisherPartnershipsEditableOnEmbedded:
         assert "<h2>Publisher partnerships</h2>" in body
         assert "Your agent URL" in body
 
+    def test_agent_url_copy_control_passes_button_for_feedback(self, embedded_client, embedded_tenant_id):
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/publishers/")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert 'id="public-agent-url-display"' in body
+        assert 'onclick="copyAgentUrlToClipboard(this)"' in body
+
     def test_embedded_renders_edit_controls(self, embedded_client, embedded_tenant_id):
         """Add-Publisher / Refresh-All controls are rendered on embedded."""
         resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/publishers/")

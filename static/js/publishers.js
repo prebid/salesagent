@@ -30,10 +30,21 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function copyAgentUrlToClipboard() {
+function copyAgentUrlToClipboard(button) {
     const el = document.getElementById('public-agent-url-display');
     if (!el) return;
-    navigator.clipboard.writeText(el.textContent.trim()).catch(() => {
+    const showCopied = () => {
+        if (!button) return;
+        const defaultLabel = button.dataset.defaultLabel || button.textContent;
+        button.dataset.defaultLabel = defaultLabel;
+        clearTimeout(button._copyResetTimer);
+        button.textContent = 'Copied!';
+        button._copyResetTimer = setTimeout(() => {
+            button.textContent = button.dataset.defaultLabel;
+        }, 2000);
+    };
+
+    navigator.clipboard.writeText(el.textContent.trim()).then(showCopied).catch(() => {
         // Fallback: select the text so the user can manually copy.
         const range = document.createRange();
         range.selectNode(el);
