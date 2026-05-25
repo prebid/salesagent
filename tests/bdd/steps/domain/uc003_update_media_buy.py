@@ -769,14 +769,35 @@ def then_response_has_media_buy_id(ctx: dict) -> None:
 
 @then("the response should contain buyer_ref")
 def then_response_has_buyer_ref(ctx: dict) -> None:
-    """No-op: buyer_ref removed from response in adcp 3.12."""
-    assert ctx.get("response") is not None or ctx.get("error") is not None
+    """Assert buyer_ref is absent from response (removed in adcp 3.12).
+
+    The feature file predates the adcp 3.12 spec change that removed buyer_ref
+    from UpdateMediaBuySuccess. This step confirms the response was received
+    AND that buyer_ref is correctly absent from the serialized payload.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a success response in ctx"
+    data = resp.model_dump(exclude_none=True) if hasattr(resp, "model_dump") else resp
+    assert "buyer_ref" not in data, (
+        f"buyer_ref was removed in adcp 3.12 but still appears in response: {data.get('buyer_ref')!r}"
+    )
 
 
 @then(parsers.parse('the response should contain buyer_ref "{buyer_ref}"'))
 def then_response_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """No-op: buyer_ref removed from response in adcp 3.12."""
-    assert ctx.get("response") is not None or ctx.get("error") is not None
+    """Assert buyer_ref is absent from response (removed in adcp 3.12).
+
+    The feature file predates the adcp 3.12 spec change that removed buyer_ref
+    from UpdateMediaBuySuccess. This step confirms the response was received
+    AND that buyer_ref is correctly absent from the serialized payload.
+    The buyer_ref parameter is accepted for step-text compatibility but not checked.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a success response in ctx"
+    data = resp.model_dump(exclude_none=True) if hasattr(resp, "model_dump") else resp
+    assert "buyer_ref" not in data, (
+        f"buyer_ref was removed in adcp 3.12 but still appears in response: {data.get('buyer_ref')!r}"
+    )
 
 
 @then("the response should contain implementation_date that is null")
@@ -991,21 +1012,33 @@ def then_response_has_errors_array(ctx: dict) -> None:
 
     For error responses, ctx["error"] is set and ctx["response"] is deleted
     by _promote_update_errors. This step checks the raw error response stored
-    in ctx["error_response"] or inspects ctx["error"] as proof that errors exist.
+    in ctx["error_response"] and validates that each error has the required
+    AdCP Error structure (code + message fields).
     """
+    from src.core.schemas._base import UpdateMediaBuyError
+
     error_resp = ctx.get("error_response")
     if error_resp is not None:
-        if hasattr(error_resp, "errors"):
-            assert error_resp.errors is not None and len(error_resp.errors) > 0, (
-                f"Error response has empty/None errors: {error_resp}"
-            )
-            return
+        assert isinstance(error_resp, UpdateMediaBuyError), (
+            f"Expected error_response to be UpdateMediaBuyError, got {type(error_resp).__name__}"
+        )
+        assert error_resp.errors is not None and len(error_resp.errors) >= 1, (
+            f"Error response has empty/None errors: {error_resp}"
+        )
+        # Validate AdCP Error structure: each error must have code and message
+        for i, err in enumerate(error_resp.errors):
+            assert err.code, f"errors[{i}] missing required 'code' field: {err!r}"
+            assert err.message, f"errors[{i}] missing required 'message' field: {err!r}"
+        return
     # Fallback: _promote_update_errors sets ctx["error"] from errors[0]
     error = ctx.get("error")
     assert error is not None, (
         "Expected response to contain 'errors' array but no error found — "
         "neither ctx['error_response'] nor ctx['error'] is set"
     )
+    # Validate the promoted error has AdCP Error structure
+    assert error.code, f"Promoted error missing required 'code' field: {error!r}"
+    assert error.message, f"Promoted error missing required 'message' field: {error!r}"
 
 
 @then(parsers.parse('the response should NOT contain "{field_name}" field'))
