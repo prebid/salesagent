@@ -1,7 +1,7 @@
 """Prometheus metrics for monitoring AI review and webhook operations.
 
 Label cardinality is deliberately bounded to keep memory flat for a
-long-running multi-tenant process (see salesagent-x2h.10.1):
+long-running multi-tenant process:
 
 - **Histograms** never label by ``tenant_id``. Each series allocates a full
   bucket array, so a per-tenant label makes memory grow linearly with the
@@ -18,6 +18,12 @@ Call sites must record AI-review metrics through :func:`record_ai_review` and
 """
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
+
+from src.core.exceptions import (
+    AdCPRateLimitError,
+    AdCPServiceUnavailableError,
+    AdCPValidationError,
+)
 
 # ---------------------------------------------------------------------------
 # Bounded label vocabularies
@@ -50,12 +56,6 @@ def categorize_error(error: BaseException) -> str:
     """
     # Timeouts first: a TimeoutError may also subclass OSError, and project
     # AdCP errors that mean "service unavailable" are timeout-ish operationally.
-    from src.core.exceptions import (
-        AdCPRateLimitError,
-        AdCPServiceUnavailableError,
-        AdCPValidationError,
-    )
-
     if isinstance(error, TimeoutError | AdCPServiceUnavailableError | AdCPRateLimitError):
         return "timeout"
     if isinstance(error, ValueError | TypeError | KeyError | AdCPValidationError):

@@ -32,6 +32,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
+from src.core.lifecycle import register_shutdown
 
 logger = logging.getLogger(__name__)
 
@@ -538,12 +539,10 @@ def get_protocol_webhook_service() -> ProtocolWebhookService:
     On first construction, self-registers ``close`` with the shutdown
     registry so the long-lived ``requests.Session`` connection pool is
     released on FastAPI lifespan shutdown — the service owns its own
-    lifecycle (salesagent-x2h.6; PR #1264 fix #3).
+    lifecycle.
     """
     global _webhook_service
     if _webhook_service is None:
-        from src.core.lifecycle import register_shutdown
-
         _webhook_service = ProtocolWebhookService()
         register_shutdown(_webhook_service.close)
     return _webhook_service

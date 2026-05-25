@@ -52,28 +52,14 @@ SCHEMA_TO_MODEL_MAP = {
     # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
-# get-products schema drift — tracked in #1308.
-# The live AdCP `/schemas/latest/media-buy/get-products-request.json` carries
-# fields the pinned adcp library does not yet model on `GetProductsRequest`:
-# the `adcp_major_version` envelope plus `if_catalog_version` and `if_pricing_version`.
-# Only the parametrizations below that genuinely fail today are xfailed (strict=True);
-# the same parametrize set is used by other tests in this file that still pass on
-# get-products and therefore is NOT swapped in for them.
-_GET_PRODUCTS_SCHEMA_DRIFT_REASON = (
-    "get-products schema drift: pinned adcp library does not model "
-    "adcp_major_version / if_catalog_version / if_pricing_version — tracked in #1308"
-)
+# get-products schema drift — tracked in #1308. The live AdCP schema carries
+# the `adcp_major_version` envelope plus `if_catalog_version`/`if_pricing_version`;
+# the pinned adcp library does not model them yet. Coverage:
+#   - adcp_major_version → excluded via _VERSION_FIELDS
+#   - if_catalog_version, if_pricing_version → excluded via KNOWN_SCHEMA_LIBRARY_MISMATCHES
+# Tests now pass; remove the prior strict-xfail wrapper.
 SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
-    pytest.param(
-        schema_ref,
-        model_class,
-        marks=(
-            pytest.mark.xfail(strict=True, reason=_GET_PRODUCTS_SCHEMA_DRIFT_REASON)
-            if "get-products-request" in schema_ref
-            else ()
-        ),
-    )
-    for schema_ref, model_class in SCHEMA_TO_MODEL_MAP.items()
+    pytest.param(schema_ref, model_class) for schema_ref, model_class in SCHEMA_TO_MODEL_MAP.items()
 ]
 
 # Version metadata fields present in AdCP JSON schemas that models don't declare explicitly.
@@ -87,6 +73,9 @@ _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "/schemas/latest/media-buy/get-products-request.json": {
         "fields",  # Schema defines field selection, library doesn't have it yet
+        "if_catalog_version",  # Schema defines catalog-version pre-flight, library doesn't have it yet
+        "if_pricing_version",  # Schema defines pricing-version pre-flight, library doesn't have it yet
+        "if_wholesale_feed_version",  # Schema defines wholesale feed version pre-flight, library doesn't have it yet
         "preferred_delivery_types",  # Schema defines delivery type preferences, library doesn't have it yet
         "refine",  # Schema defines refinement array, library doesn't have it yet
         "required_policies",  # Schema defines policy IDs, library doesn't have it yet
@@ -100,9 +89,11 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "/schemas/latest/media-buy/get-media-buy-delivery-request.json": {
         "account",  # Schema says 'account' (object), library uses 'account_id' (string)
         "reporting_dimensions",  # Schema defines it, library doesn't have it yet
+        "time_granularity",  # Schema defines per-window slice granularity, library doesn't have it yet
+        "include_window_breakdown",  # Schema defines windowed pull breakdown, library doesn't have it yet
     },
     "/schemas/latest/media-buy/sync-creatives-request.json": {
-        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "account_id",  # Schema defines 'account_id' (string); library/local model uses 'account' (AccountReference object). Tracked under #1247.
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
     "/schemas/latest/media-buy/list-creatives-request.json": {

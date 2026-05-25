@@ -106,7 +106,8 @@ cmd_up() {
         export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT
         export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
         dc down -v 2>/dev/null || true
-        if dc up -d --build 2>&1 | tee /tmp/dc-up-$$.log; then
+        dc build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -10
+        if dc up -d 2>&1 | tee /tmp/dc-up-$$.log; then
             up_ok=true; rm -f /tmp/dc-up-$$.log; break
         fi
         if grep -qiE "port is already allocated|address already in use|bind.*failed" /tmp/dc-up-$$.log; then

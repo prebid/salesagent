@@ -30,7 +30,6 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 # ---------------------------------------------------------------------------
@@ -47,12 +46,14 @@ def _make_identity(
     dry_run: bool = False,
 ) -> ResolvedIdentity:
     """Create a ResolvedIdentity for tests."""
-    return ResolvedIdentity(
+    from tests.factories import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "name": "Test"},
         protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=dry_run),
+        dry_run=dry_run,
     )
 
 
@@ -554,9 +555,7 @@ def test_package_not_found_returns_error(standard_mocks):
     identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_pkg_nf",
-        packages=[
-            {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "seg_1"}]}}
-        ],
+        packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
     )
     result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1416,7 +1415,9 @@ class TestUC003UploadInlineCreatives:
             MagicMock(creative_id="c2", action="created", errors=None),
         ]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response) as mock_sync:
+        with patch(
+            "src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response
+        ) as mock_sync:
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_inline",
@@ -1464,7 +1465,7 @@ class TestUC003UploadInlineCreatives:
             MagicMock(creative_id="c3", action="created", errors=None),
         ]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
+        with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_additive",
@@ -1510,7 +1511,7 @@ class TestUC003UploadInlineCreatives:
         failed_creative.errors = [mock_error]
         mock_sync_response.creatives = [failed_creative]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
+        with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_sync_fail",
@@ -1700,7 +1701,7 @@ class TestUC003UpdateTargetingOverlay:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_targeting",
-            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1709,30 +1710,29 @@ class TestUC003UpdateTargetingOverlay:
         stored = mock_pkg.package_config["targeting_overlay"]
         assert stored is not None
 
-    def test_targeting_overlay_not_validated(self, standard_mocks):
-        """Targeting overlay persisted without validation (gap G36).
+    def test_targeting_overlay_validated_at_boundary(self, standard_mocks):
+        """Targeting overlay rejects unknown fields at the request boundary now that
+        AdCPPackageUpdate.targeting_overlay uses local Targeting (extra="forbid")
+        instead of library TargetingOverlay (extra="allow"). Closes gap G36.
 
         Covers: UC-003-ALT-UPDATE-TARGETING-OVERLAY-02
         """
+        from pydantic import ValidationError
+
         _setup_db_session(standard_mocks)
 
-        mock_pkg = MagicMock()
-        mock_pkg.package_config = {}
-        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
-
-        identity = _make_identity()
-        # Invalid targeting data - should still be persisted
-        req = UpdateMediaBuyRequest(
-            media_buy_id="mb_no_validate",
-            packages=[
-                {"package_id": "pkg_1", "targeting_overlay": {"unknown_field": "value", "conflicting_geo": True}}
-            ],
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuySuccess)
-        # Even invalid targeting is persisted directly
-        assert mock_pkg.package_config["targeting_overlay"] is not None
+        # Bogus field names should now be caught at the boundary in dev/CI.
+        with pytest.raises(ValidationError) as exc:
+            UpdateMediaBuyRequest(
+                media_buy_id="mb_validate",
+                packages=[
+                    {
+                        "package_id": "pkg_1",
+                        "targeting_overlay": {"unknown_field": "value"},
+                    }
+                ],
+            )
+        assert "unknown_field" in str(exc.value)
 
     def test_targeting_update_no_adapter_call(self, standard_mocks):
         """Targeting changes are database-only; no adapter call.
@@ -1748,12 +1748,200 @@ class TestUC003UpdateTargetingOverlay:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_target_no_adapter",
-            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
         standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
+
+    def test_property_list_update_rejected_when_product_disallows(self, standard_mocks):
+        """Update with property_list against a product where property_targeting_allowed=False
+        raises AdCPValidationError before persistence — same wire shape as create-time rule.
+
+        PR #1276 round-5 switched this site from return-envelope to raise per
+        reviewer feedback (avoids growing the model_dump _impl allowlist). The
+        boundary translator turns the raise into the spec-compliant two-layer
+        envelope.
+
+        Covers: UC-003-MAIN-14
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        _setup_db_session(standard_mocks)
+
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {"product_id": "prod_strict"}
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        # uow.products.get_by_id returns a product that disallows property targeting.
+        # Set product_id explicitly so the violation message contains the literal
+        # ID rather than a MagicMock repr (the shared helper formats it into the message).
+        mock_product = MagicMock()
+        mock_product.product_id = "prod_strict"
+        mock_product.property_targeting_allowed = False
+        standard_mocks["uow_instance"].products.get_by_id.return_value = mock_product
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_pta_reject",
+            packages=[
+                {
+                    "package_id": "pkg_1",
+                    "targeting_overlay": {
+                        "property_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "v1",
+                        },
+                    },
+                }
+            ],
+        )
+        with pytest.raises(AdCPValidationError) as excinfo:
+            _update_media_buy_impl(req=req, identity=identity)
+
+        # Persistence must NOT have happened — package_config still untouched.
+        assert "targeting_overlay" not in mock_pkg.package_config
+        # Error mirrors create's shape exactly: same code, same field, same details.
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.field == "packages[].targeting_overlay.property_list"
+        assert "prod_strict" in exc.message
+        assert "property_targeting_allowed" in exc.message
+        assert exc.details is not None
+        assert "violations" in exc.details
+
+        # Reviewer-flagged P1 fence: the outer try/except wrapper added in
+        # round-5-follow-up marks the workflow step failed BEFORE re-raising,
+        # which fires the buyer-facing push notification at
+        # context_manager.update_workflow_step:330-332. Without this fence,
+        # the step would orphan in `in_progress` and the buyer's poller would
+        # hang forever. Asserting here so any future raise added to
+        # _update_media_buy_impl that escapes the wrapper gets caught.
+        # Round-7: the wrapper now calls ``fail_workflow_step_for_exception``
+        # which threads a two-layer envelope into response_data so async
+        # webhook subscribers see the same wire shape as the synchronous
+        # caller. Asserting on the new method's call args here so any future
+        # regression to ``update_workflow_step(..., error_message=...)`` (no
+        # response_data) gets caught — that would silently lose the
+        # structured payload on the webhook path.
+        fail_calls = standard_mocks["ctx_mgr_instance"].fail_workflow_step_for_exception.call_args_list
+        assert (
+            len(fail_calls) == 1
+        ), f"Expected exactly one fail_workflow_step_for_exception call on raise, got {len(fail_calls)}"
+        fail_call = fail_calls[0]
+        # Positional args: (step_id, exception)
+        assert fail_call.args[0] == standard_mocks["step"].step_id
+        raised_exc = fail_call.args[1]
+        assert isinstance(raised_exc, AdCPValidationError)
+        assert "property_targeting_allowed" in raised_exc.message
+
+    def test_collection_list_update_skips_property_targeting_check(self, standard_mocks):
+        """Update with only collection_list does not trigger the property_list-specific
+        property_targeting_allowed check — that gate is property_list-only.
+
+        Covers: UC-003-MAIN-14
+        """
+        _setup_db_session(standard_mocks)
+
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {"product_id": "prod_strict"}
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_coll_only",
+            packages=[
+                {
+                    "package_id": "pkg_1",
+                    "targeting_overlay": {
+                        "collection_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "c_v1",
+                        },
+                    },
+                }
+            ],
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        # Targeting persisted; no property_list rejection
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert mock_pkg.package_config["targeting_overlay"] is not None
+
+    def test_property_list_update_replaces_existing_not_merge(self, standard_mocks):
+        """Update with a NEW property_list.list_id replaces the prior one (not merged).
+
+        UC-003-MAIN-13's obligation reads "the response reflects the new
+        list_id values (replacement, not merge)." Starts from a package whose
+        persisted targeting_overlay already carries property_list.list_id="A",
+        applies an update with list_id="B", and asserts:
+          * the persisted targeting_overlay.property_list.list_id is "B"
+          * "A" does not survive (not merged, not kept as a fallback)
+
+        Covers: UC-003-MAIN-13
+        """
+        _setup_db_session(standard_mocks)
+
+        # Pre-existing package state — already has list_id="A" persisted.
+        # The MediaPackage.package_config dict is what update_media_buy mutates
+        # in place via flag_modified; that mutation is what we read back here.
+        existing_overlay = {
+            "property_list": {
+                "agent_url": "https://gov.example",
+                "list_id": "A",
+            },
+        }
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {
+            "product_id": "prod_open",
+            "targeting_overlay": dict(existing_overlay),  # copy so test isn't aliased
+        }
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        # Product allows property targeting so the validation guard doesn't fire
+        # (this test is about the replace semantic, not the allow/deny gate).
+        mock_product = MagicMock()
+        mock_product.product_id = "prod_open"
+        mock_product.property_targeting_allowed = True
+        standard_mocks["uow_instance"].products.get_by_id.return_value = mock_product
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_pl_swap",
+            packages=[
+                {
+                    "package_id": "pkg_1",
+                    "targeting_overlay": {
+                        "property_list": {
+                            "agent_url": "https://gov.example",
+                            "list_id": "B",
+                        },
+                    },
+                }
+            ],
+        )
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        # Update succeeded.
+        assert isinstance(result, UpdateMediaBuySuccess)
+
+        # Persisted targeting_overlay reflects the swap, not a merge.
+        # update_media_buy stores Targeting models in package_config; legacy
+        # rows pre-3.0 may still surface as dicts via the rehydrate fallback.
+        # Read both shapes to keep this test robust as the migration completes.
+        persisted = mock_pkg.package_config["targeting_overlay"]
+        if hasattr(persisted, "model_dump"):
+            persisted_pl = persisted.property_list
+            persisted_list_id = persisted_pl.list_id if persisted_pl is not None else None
+        else:
+            persisted_list_id = persisted["property_list"]["list_id"]
+        assert (
+            persisted_list_id == "B"
+        ), f"replacement semantic broken — persisted list_id={persisted_list_id!r}, expected 'B'"
+        # The original "A" must not survive on list_id specifically (don't
+        # substring-match the whole overlay repr — 'AnyUrl' contains 'A' too).
+        assert persisted_list_id != "A", "original list_id was not replaced"
 
 
 # ---------------------------------------------------------------------------
@@ -2285,7 +2473,7 @@ class TestUC003ExtK:
         failed.errors = [mock_err]
         mock_sync_response.creatives = [failed]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
+        with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_sync_err",
@@ -2326,7 +2514,7 @@ class TestUC003ExtK:
         failed.errors = [mock_err]
         mock_sync_response.creatives = [failed]
 
-        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
+        with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_no_modify",
@@ -2374,7 +2562,7 @@ class TestUC003ExtL:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_wrong_pkg",
-            packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo": {"include": ["US"]}}}],
+            packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2393,9 +2581,7 @@ class TestUC003ExtL:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_no_pkg_exist",
-            packages=[
-                {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "s1"}]}}
-            ],
+            packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 

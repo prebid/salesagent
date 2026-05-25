@@ -67,12 +67,14 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
+    Error,
     GetMediaBuysMediaBuy,
     GetMediaBuysPackage,
     GetMediaBuysRequest,
     GetMediaBuysResponse,
     Snapshot,
     SnapshotUnavailableReason,
+    Targeting,
 )
 from src.core.validation_helpers import format_validation_error
 
@@ -106,14 +108,14 @@ def _get_media_buys_impl(
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "PRINCIPAL_ID_MISSING", "message": "Principal ID not found in context"}],
+            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
         )
 
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "PRINCIPAL_NOT_FOUND", "message": f"Principal {principal_id} not found"}],
+            errors=[Error(code="AUTH_REQUIRED", message=f"Principal {principal_id} not found")],
         )
 
     tenant = identity.tenant
@@ -161,6 +163,11 @@ def _get_media_buys_impl(
 
     # Build response
     response_media_buys = []
+    # Accumulate non-fatal targeting-rehydration failures here; one row per
+    # affected (media_buy_id, package_id). Surfaced on the response so the
+    # buyer can reconcile out-of-band — beats silently coercing to
+    # targeting_overlay=None which is indistinguishable from "no targeting".
+    hydration_errors: list[Error] = []
     for buy in target_media_buys:
         status = _compute_status(buy, today)
 
@@ -182,6 +189,55 @@ def _get_media_buys_impl(
             if include_snapshot and snapshot is None:
                 snapshot_unavailable = unavailable_reason or SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
 
+            # Materialize targeting_overlay from package_config so callers can verify
+            # what was persisted. Tolerates the legacy "targeting" key for data written
+            # before the targeting_overlay rename (see media_buy_create.py:638-642).
+            # A single corrupted package_config row must not crash the whole tenant's
+            # get_media_buys response — log the bad row, surface a non-fatal
+            # TARGETING_REHYDRATION_FAILED on the response's errors channel, and
+            # set this package's targeting_overlay=None so the rest of the buy
+            # still renders.
+            #
+            # Narrow ``except`` to ``TypeError`` only: production
+            # ``extra="ignore"`` already absorbs unknown-field drift, so
+            # ``ValidationError`` here would only fire in dev/CI and we want
+            # that canary to surface forgotten field declarations as a hard
+            # test failure (CLAUDE.md "No Quiet Failures"). ``TypeError``
+            # covers the real-corruption case (non-dict input from a bad row).
+            targeting_raw = pkg_config.get("targeting_overlay") or pkg_config.get("targeting")
+            targeting_overlay: Targeting | None
+            if not targeting_raw:
+                targeting_overlay = None
+            else:
+                try:
+                    targeting_overlay = Targeting(**targeting_raw)
+                except TypeError as exc:
+                    logger.warning(
+                        "Failed to rehydrate targeting_overlay for media_buy=%s package=%s; "
+                        "returning targeting_overlay=None for this package. Error: %s",
+                        buy.media_buy_id,
+                        pkg_id,
+                        exc,
+                    )
+                    # Use the spec-standard ``INTERNAL_ERROR`` code (data-integrity
+                    # is a seller-side issue; buyer can't fix). The specific
+                    # ``TARGETING_REHYDRATION_FAILED`` shape lives in the message
+                    # so callers can grep/route on it without us adding a
+                    # non-standard wire code.
+                    hydration_errors.append(
+                        Error(
+                            code="INTERNAL_ERROR",
+                            message=(
+                                f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
+                                f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "
+                                f"could not be rehydrated; returning "
+                                f"targeting_overlay=None for this package."
+                            ),
+                            field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
+                        )
+                    )
+                    targeting_overlay = None
+
             response_packages.append(
                 GetMediaBuysPackage(
                     package_id=pkg_id,
@@ -191,6 +247,7 @@ def _get_media_buys_impl(
                     start_time=pkg_config.get("start_time"),
                     end_time=pkg_config.get("end_time"),
                     paused=pkg_config.get("paused"),
+                    targeting_overlay=targeting_overlay,
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
                     snapshot_unavailable_reason=snapshot_unavailable if include_snapshot else None,
@@ -217,6 +274,7 @@ def _get_media_buys_impl(
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
         context=req.context,
+        errors=hydration_errors or None,
     )
 
 

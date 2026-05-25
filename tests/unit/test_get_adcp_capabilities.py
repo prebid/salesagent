@@ -11,7 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import GetAdcpCapabilitiesResponse
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedProtocol,
 )
 
@@ -30,7 +31,7 @@ class TestGetAdcpCapabilitiesSchema:
 
     def test_response_requires_supported_protocols(self):
         """Test that response requires supported_protocols field."""
-        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (  # TODO: no stable alias in adcp.types
+        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
             Idempotency,
             MajorVersion,
@@ -48,7 +49,7 @@ class TestGetAdcpCapabilitiesSchema:
 
     def test_valid_minimal_response(self):
         """Test creating a valid minimal response."""
-        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (  # TODO: no stable alias in adcp.types
+        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
             Idempotency,
             MajorVersion,
@@ -69,8 +70,8 @@ class TestGetAdcpCapabilitiesSchema:
 
     def test_response_with_media_buy_capabilities(self):
         """Test creating response with media_buy capabilities."""
-        from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures  # TODO: no stable alias in adcp.types
-        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (  # TODO: no stable alias in adcp.types
+        from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
+        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
             Execution,
             Idempotency,
@@ -95,7 +96,11 @@ class TestGetAdcpCapabilitiesSchema:
                 features=MediaBuyFeatures(
                     inline_creative_management=True,
                     property_list_filtering=True,
-                    catalog_management=True,
+                    # catalog_management example must match production (False until
+                    # sync_catalogs ships). Schema-construction tests are
+                    # documentation by example; declaring True here while
+                    # production declares False would mislead future readers.
+                    catalog_management=False,
                 ),
                 execution=Execution(
                     targeting=Targeting(
@@ -169,6 +174,10 @@ class TestGetAdcpCapabilitiesImpl:
         # actually dedupes against idx_media_buys_idempotency_key.
         assert response.adcp.idempotency.supported is True
         assert response.adcp.idempotency.replay_ttl_seconds == 86400
+        # Specialism declaration activates storyboard scenarios bundled under
+        # sales-non-guaranteed (inventory_list_*, delivery_reporting, etc.).
+        assert response.specialisms is not None
+        assert AdcpSpecialism.sales_non_guaranteed in response.specialisms
 
     def test_impl_returns_valid_adcp_response(self):
         """Test that impl response can be serialized to valid JSON."""
@@ -186,6 +195,8 @@ class TestGetAdcpCapabilitiesImpl:
         assert "adcp" in data
         assert "supported_protocols" in data
         assert data["supported_protocols"] == ["media_buy"]
+        assert "specialisms" in data
+        assert data["specialisms"] == ["sales-non-guaranteed"]
 
 
 class TestGetAdcpCapabilitiesWithTenant:
@@ -215,10 +226,9 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
-                # Pass identity with tenant info directly (no auth extraction in _impl)
-                from src.core.resolved_identity import ResolvedIdentity
+                from tests.factories import PrincipalFactory
 
-                identity = ResolvedIdentity(
+                identity = PrincipalFactory.make_identity(
                     principal_id=None,
                     tenant_id="test-tenant-123",
                     tenant=mock_tenant,
@@ -233,6 +243,9 @@ class TestGetAdcpCapabilitiesWithTenant:
                 # Full response must also declare idempotency support consistently.
                 assert response.adcp.idempotency.supported is True
                 assert response.adcp.idempotency.replay_ttl_seconds == 86400
+                # Specialism declaration must be consistent across minimal and full paths.
+                assert response.specialisms is not None
+                assert AdcpSpecialism.sales_non_guaranteed in response.specialisms
 
                 # Should have media_buy capabilities with portfolio
                 assert response.media_buy is not None
@@ -242,6 +255,15 @@ class TestGetAdcpCapabilitiesWithTenant:
                 # Should have features
                 assert response.media_buy.features is not None
                 assert response.media_buy.features.inline_creative_management is True
+
+                # Honesty assertions: capabilities the seller can't actually fulfill
+                # MUST declare False so buyers see the gap at discovery time, not at
+                # task-dispatch time. property_list_filtering: no adapter compiles it
+                # yet — flips True via supports_property_list_filtering().
+                # catalog_management: no sync_catalogs tool ships in this codebase;
+                # admin product CRUD is NOT the spec's buyer-driven catalog sync.
+                assert response.media_buy.features.property_list_filtering is False
+                assert response.media_buy.features.catalog_management is False
 
                 # Should have execution with targeting
                 assert response.media_buy.execution is not None
@@ -282,9 +304,9 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
-                from src.core.resolved_identity import ResolvedIdentity
+                from tests.factories import PrincipalFactory
 
-                identity = ResolvedIdentity(
+                identity = PrincipalFactory.make_identity(
                     principal_id="principal-123",
                     tenant_id="test-tenant-456",
                     tenant=mock_tenant,
@@ -348,11 +370,11 @@ def _make_capabilities_identity(
     tenant: dict | None = None,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity for capabilities tests."""
-    from src.core.resolved_identity import ResolvedIdentity
+    from tests.factories import PrincipalFactory
 
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "name": "Test Publisher", "subdomain": "testpub"}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
@@ -401,7 +423,7 @@ class TestChannelMapping:
 
     def test_channel_aliases_video_maps_to_olv(self):
         """Video channel alias maps to MediaChannel.olv in response."""
-        from adcp.types import MediaChannel
+        from adcp.types.generated_poc.enums.channels import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -421,7 +443,7 @@ class TestChannelMapping:
 
     def test_channel_aliases_audio_maps_to_streaming_audio(self):
         """Audio channel alias maps to MediaChannel.streaming_audio in response."""
-        from adcp.types import MediaChannel
+        from adcp.types.generated_poc.enums.channels import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -440,7 +462,7 @@ class TestChannelMapping:
 
     def test_unknown_channel_names_gracefully_ignored(self):
         """Unknown channel names are silently ignored (not in CHANNEL_MAPPING)."""
-        from adcp.types import MediaChannel
+        from adcp.types.generated_poc.enums.channels import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -461,7 +483,7 @@ class TestChannelMapping:
 
     def test_no_adapter_channels_defaults_to_display(self):
         """When adapter has no default_channels, defaults to display."""
-        from adcp.types import MediaChannel
+        from adcp.types.generated_poc.enums.channels import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -482,7 +504,7 @@ class TestGracefulDegradation:
 
     def test_adapter_exception_falls_back_to_display(self):
         """Adapter exception during channel detection falls back to display channel."""
-        from adcp.types import MediaChannel
+        from adcp.types.generated_poc.enums.channels import MediaChannel
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -632,7 +654,11 @@ class TestResponseShapeCapabilities:
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
-        """Features defaults: inline_creative_management=True, property_list_filtering=True."""
+        """Features defaults: inline_creative_management=True, property_list_filtering=False.
+
+        property_list_filtering is False until an adapter actually compiles
+        `targeting_overlay.property_list` into native ad-server targeting.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(principal_id=None)
@@ -643,7 +669,7 @@ class TestResponseShapeCapabilities:
 
         features = response.media_buy.features
         assert features.inline_creative_management is True
-        assert features.property_list_filtering is True
+        assert features.property_list_filtering is False
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""

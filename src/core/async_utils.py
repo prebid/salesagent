@@ -8,8 +8,8 @@ WebSocket broadcasts, and other side effects.
 
 ``pin_task`` is the single source of truth for the strong-ref pin pattern.
 It was previously duplicated as ``_pending_webhook_tasks`` in
-``context_manager.py`` and ``_pending_tasks`` in ``activity_feed.py``
-(PR #1264 + follow-up). Consolidated here per the CLAUDE.md DRY invariant.
+``context_manager.py`` and ``_pending_tasks`` in ``activity_feed.py``.
+Consolidated here per the CLAUDE.md DRY invariant.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from collections.abc import Callable
 
 # Module-level strong references to in-flight fire-and-forget asyncio tasks.
 # This is the ONLY pinned-task set in the codebase — do not reintroduce
-# per-module copies (grep-enforced by salesagent-x2h.2 acceptance criteria).
+# per-module copies.
 _pinned_tasks: set[asyncio.Task] = set()
 
 
