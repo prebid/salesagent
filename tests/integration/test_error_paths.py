@@ -206,38 +206,27 @@ class TestCreateMediaBuyErrorPaths:
         past_start = datetime.now(UTC) - timedelta(days=1)  # In the past!
         past_end = past_start + timedelta(days=7)
 
-        # This should return error response for past start time
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            context={"trace_id": "past-start"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=past_start.isoformat(),
-            end_time=past_end.isoformat(),
-            identity=identity,
-        )
+        # Typed AdCPValidationError now propagates past the boundary catch.
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                context={"trace_id": "past-start"},
+                packages=[
+                    create_test_package_request_dict(
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                start_time=past_start.isoformat(),
+                end_time=past_end.isoformat(),
+                identity=identity,
+            )
 
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        # Verify error details
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "VALIDATION_ERROR"
-        # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
-        assert response.context.trace_id == "past-start"
-        assert "past" in error.message.lower() or "start" in error.message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "past" in exc.message.lower() or "start" in exc.message.lower()
 
     async def test_end_time_before_start_returns_validation_error(self, test_tenant_with_principal):
         """Test that end_time before start_time returns Error response."""
@@ -250,33 +239,26 @@ class TestCreateMediaBuyErrorPaths:
         start = datetime.now(UTC) + timedelta(days=7)
         end = start - timedelta(days=1)  # Before start!
 
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=start.isoformat(),
-            end_time=end.isoformat(),
-            identity=identity,
-        )
+        # Typed AdCPValidationError now propagates past the boundary catch.
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                packages=[
+                    create_test_package_request_dict(
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                start_time=start.isoformat(),
+                end_time=end.isoformat(),
+                identity=identity,
+            )
 
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "VALIDATION_ERROR"
-        assert "end" in error.message.lower() or "after" in error.message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "end" in exc.message.lower() or "after" in exc.message.lower()
 
     async def test_negative_budget_raises_tool_error(self, test_tenant_with_principal):
         """Test that negative budget raises a validation error during Pydantic validation.
@@ -326,27 +308,21 @@ class TestCreateMediaBuyErrorPaths:
         future_start = datetime.now(UTC) + timedelta(days=1)
         future_end = future_start + timedelta(days=7)
 
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            packages=[],  # Empty packages!
-            start_time=future_start.isoformat(),
-            end_time=future_end.isoformat(),
-            identity=identity,
-        )
+        # Typed AdCPValidationError now propagates past the boundary catch.
+        # Empty packages -> budget=0.0 -> "Budget must be positive" validator.
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                packages=[],  # Empty packages!
+                start_time=future_start.isoformat(),
+                end_time=future_end.isoformat(),
+                identity=identity,
+            )
 
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        # Should be validation error or similar
-        assert error.code in ["VALIDATION_ERROR", "invalid_request"]
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "budget" in exc.message.lower() or "package" in exc.message.lower()
 
 
 @pytest.mark.integration
@@ -559,9 +535,9 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             body = response.json()
-            assert body["adcp_error"]["recovery"] == "transient", (
-                "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
-            )
+            assert (
+                body["adcp_error"]["recovery"] == "transient"
+            ), "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
             assert body["errors"][0]["recovery"] == "transient"
 
     def test_to_dict_serialization_roundtrip(self):
@@ -585,6 +561,6 @@ class TestRecoveryFieldInErrorResponses:
             # Simulate JSON roundtrip (what happens in real HTTP response)
             json_str = json.dumps(d)
             deserialized = json.loads(json_str)
-            assert deserialized["recovery"] == expected_recovery, (
-                f"{type(exc).__name__}: recovery lost in JSON roundtrip"
-            )
+            assert (
+                deserialized["recovery"] == expected_recovery
+            ), f"{type(exc).__name__}: recovery lost in JSON roundtrip"

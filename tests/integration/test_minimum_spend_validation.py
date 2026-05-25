@@ -57,6 +57,7 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -333,7 +334,7 @@ class TestMinimumSpendValidation:
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)
 
-        # Should fail validation and return errors in response
+        # Should fail validation and raise typed AdCPValidationError that propagates past _impl boundary.
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
             packages=[
@@ -346,13 +347,14 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await _create_media_buy_impl(req=req, identity=identity)
 
-        # Verify validation failed
-        assert response.errors is not None and len(response.errors) > 0
-        error_msg = response.errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        error_msg = exc.message.lower()
         assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "1000" in response.errors[0].message
+        assert "1000" in exc.message
         assert "usd" in error_msg
 
     async def test_product_override_enforced(self, setup_test_data):
@@ -369,7 +371,7 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # Try to create media buy below product override ($5000)
-        # Should fail validation and return errors in response
+        # Should fail validation and raise typed AdCPValidationError past _impl boundary.
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
             packages=[
@@ -382,13 +384,14 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await _create_media_buy_impl(req=req, identity=identity)
 
-        # Verify validation failed
-        assert response.errors is not None and len(response.errors) > 0
-        error_msg = response.errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        error_msg = exc.message.lower()
         assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "5000" in response.errors[0].message
+        assert "5000" in exc.message
         assert "usd" in error_msg
 
     async def test_lower_override_allows_smaller_spend(self, setup_test_data):
@@ -483,8 +486,6 @@ class TestMinimumSpendValidation:
             end_time=end_time.isoformat(),
         )
         # Pre-adapter validation raises AdCPValidationError for excessive impressions/budget
-        from src.core.exceptions import AdCPValidationError
-
         with pytest.raises(AdCPValidationError, match="PERCENTAGE_UNITS_BOUGHT_TOO_HIGH|VALUE_TOO_LARGE"):
             await _create_media_buy_impl(req=req, identity=identity)
 
@@ -502,7 +503,7 @@ class TestMinimumSpendValidation:
         end_time = start_time + timedelta(days=7)
 
         # $800 should fail (below $1000 USD minimum)
-        # Should fail validation and return errors in response
+        # Should fail validation and raise typed AdCPValidationError past _impl boundary.
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
             packages=[
@@ -515,13 +516,14 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await _create_media_buy_impl(req=req, identity=identity)
 
-        # Verify validation failed with USD minimum
-        assert response.errors is not None and len(response.errors) > 0
-        error_msg = response.errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        error_msg = exc.message.lower()
         assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "1000" in response.errors[0].message  # USD minimum is $1000
+        assert "1000" in exc.message  # USD minimum is $1000
         assert "usd" in error_msg
 
     async def test_no_minimum_when_not_set(self, setup_test_data):
