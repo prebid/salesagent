@@ -15,7 +15,7 @@ framework primitives shipped in [`adcp>=4.3`](https://github.com/adcontextprotoc
 | `src/adapters/__init__.py` `ADAPTER_REGISTRY` dict   | `adcp.decisioning.PlatformRouter`                 |
 | `src/core/auth.py` + `resolved_identity.py`          | `core/stores/accounts.py` AccountStore impl       |
 | Custom webhook delivery + retry                      | `adcp.webhook_supervisor_pg.PgWebhookDeliverySupervisor` |
-| `tests/bdd/`, structural guards for transport boundary | `adcp.server.TestControllerStore` + storyboards |
+| `tests/bdd/`, structural guards for transport boundary | active `tests/unit/`, `tests/integration/`, and `tests/e2e/` coverage |
 
 The framework's typed handler signatures *are* the transport boundary — no
 guard tests required. The `tenant_router.py` docstring upstream literally
@@ -43,16 +43,14 @@ core/
 │   ├── media_buy.py     # MediaBuyStore (targeting_overlay echo)
 │   ├── tenants.py       # tenant lookup for the router
 │   └── audit.py         # AuditSink over audit_logs table
-├── management_api.py    # FastAPI: tenant/principal/token CRUD (replaces /admin)
-└── tests/
-    └── storyboards/     # media_buy_seller storyboard + pytest harness
+└── management_api.py    # FastAPI: tenant/principal/token CRUD (replaces /admin)
 ```
 
 ## Milestones
 
 - **M1 — first runnable.** `MockSellerPlatform` answers `get_products` end-to-end.
-  Subdomain routing works. `media_buy_seller` storyboard reaches at least the
-  `get_products` step against the existing `tenants`/`products` rows.
+  Subdomain routing works. `get_products` dispatch is covered by the active
+  unit test suite.
 - **M2 — full mock seller.** Pass the entire `media_buy_seller` storyboard
   (9 steps) including `create_media_buy`, `sync_creatives`, delivery polling.
 - **M3 — port GAM adapter.** Subclass `DecisioningPlatform` with the

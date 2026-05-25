@@ -4,8 +4,7 @@ Defines the dispatch transports (IMPL, MCP) and a frozen result
 container that separates transport-specific envelope from shared payload.
 
 A2A is no longer dispatched in-process — the framework's
-``adcp.server.serve(transport="a2a")`` owns that surface, exercised
-end-to-end by storyboards in ``core/tests/storyboards/``.
+``adcp.server.serve(transport="a2a")`` owns that surface.
 
 REST is no longer a transport — the legacy FastAPI app was deleted in
 the kill-nginx cutover. Tools are now reachable only through MCP and

@@ -1,4 +1,4 @@
-"""End-to-end M1 test: get_products dispatched via the framework's PlatformHandler.
+"""Unit test: get_products dispatched via the framework's PlatformHandler.
 
 After the platform-delegation refactor (#37) the dispatch path is:
 
@@ -23,69 +23,28 @@ are tested upstream against the impl directly.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from adcp.decisioning.serve import create_adcp_server_from_platform
 from adcp.server.base import ToolContext
-from adcp.types import GetProductsRequest, GetProductsResponse, Product
+from adcp.types import GetProductsRequest
 
 from core.platforms.mock import MockSellerPlatform
+from tests.helpers.core_platform import make_active_tenant_session, make_get_products_response
 
 
-def _impl_response_with_one_product(product_id: str = "demo-product") -> GetProductsResponse:
-    return GetProductsResponse(
-        products=[
-            Product.model_validate(
-                {
-                    "product_id": product_id,
-                    "name": "Demo Product",
-                    "description": "A demo product",
-                    "delivery_type": "non_guaranteed",
-                    "publisher_properties": [{"publisher_domain": "example.com", "selection_type": "all"}],
-                    "format_ids": [
-                        {
-                            "agent_url": "https://creative.adcontextprotocol.org/",
-                            "id": "display_300x250",
-                        }
-                    ],
-                    "pricing_options": [
-                        {
-                            "pricing_option_id": "po-cpm-default",
-                            "pricing_model": "cpm",
-                            "floor_price": 1.0,
-                            "currency": "USD",
-                        }
-                    ],
-                    "reporting_capabilities": {
-                        "available_metrics": ["impressions", "spend"],
-                        "available_reporting_frequencies": ["daily"],
-                        "date_range_support": "date_range",
-                        "supports_webhooks": False,
-                        "expected_delay_minutes": 60,
-                        "timezone": "UTC",
-                    },
-                    "delivery_measurement": {"provider": "publisher"},
-                }
-            )
-        ],
-        errors=None,
-        context=None,
-    )
+def _impl_response_with_one_product(product_id: str = "demo-product"):
+    return make_get_products_response(product_id, name="Demo Product", description="A demo product")
 
 
 @pytest.fixture
 def mocked_pipeline():
     """Mock the AccountStore session AND the upstream _get_products_impl."""
-    session = MagicMock()
-    session.__enter__.return_value = session
-    session.__exit__.return_value = False
-    session.scalars.return_value.first.return_value = MagicMock(is_active=True)
-
     impl_mock = AsyncMock(return_value=_impl_response_with_one_product())
 
     with (
-        patch("core.stores.accounts.get_db_session", return_value=session),
+        patch("core.stores.accounts.get_db_session", return_value=make_active_tenant_session()),
         patch("core.platforms._delegate._get_products_impl", new=impl_mock),
         patch(
             "core.platforms._delegate.get_tenant_by_id",

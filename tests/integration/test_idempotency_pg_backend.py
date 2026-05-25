@@ -10,6 +10,7 @@ Verifies:
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import psycopg2
@@ -18,7 +19,7 @@ from adcp.server.idempotency import IdempotencyStore, MemoryBackend, PgBackend
 
 import core.idempotency as idem
 
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(autouse=True)
@@ -43,14 +44,16 @@ def test_memory_backend_when_no_database_url(monkeypatch):
     assert isinstance(store.backend, MemoryBackend)
 
 
-def test_pg_backend_when_database_url_set(monkeypatch):
-    if not os.environ.get("DATABASE_URL"):
-        pytest.skip("requires DATABASE_URL (Docker stack or agent-db)")
+@pytest.mark.requires_db
+def test_pg_backend_when_database_url_set(monkeypatch, integration_db):
     monkeypatch.setenv("CORE_IDEMPOTENCY_BACKEND", "pg")
     store = idem.get_idempotency_store()
     assert isinstance(store.backend, PgBackend)
 
-    # adcp_idempotency table should be bootstrapped after the first call.
+    # The pool and schema are bootstrapped lazily on first async backend use.
+    assert asyncio.run(store.backend.get("scope", "missing-key")) is None
+
+    # adcp_idempotency table should exist after the first backend call.
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     try:
         cur = conn.cursor()

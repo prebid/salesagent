@@ -188,10 +188,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Apply xfail markers to scenarios with unimplemented production features.
 
     Also skips @a2a-tagged scenarios — the legacy a2a_server was removed in #10.
-    A2A is now served by core/ via ``adcp.server.serve(transport="a2a")`` and
-    exercised end-to-end by storyboards in ``core/tests/storyboards/``.
+    A2A is now served by core/ via ``adcp.server.serve(transport="a2a")``.
     """
-    skip_a2a = pytest.mark.skip(reason="A2A covered by core/ storyboards (legacy a2a_server removed)")
+    skip_a2a = pytest.mark.skip(reason="Legacy in-process A2A path removed; use framework-level A2A coverage")
 
     for item in items:
         marker_names = {m.name for m in item.iter_markers()}
@@ -510,8 +509,7 @@ def ctx(request: pytest.FixtureRequest) -> dict:
     an empty ctx (When steps handle dispatch explicitly).
 
     @a2a-tagged scenarios are skipped at collection — A2A is owned by
-    core/ via ``serve(transport="a2a")`` and exercised end-to-end by
-    storyboards in ``core/tests/storyboards/``.
+    core/ via ``serve(transport="a2a")``.
     """
     d: dict = {}
     if hasattr(request, "param"):

@@ -25,62 +25,20 @@ import pytest
 from adcp.testing import make_request_context
 
 from core.platforms.mock import MockSellerPlatform
+from tests.helpers.core_platform import make_active_tenant_session, make_get_products_response
 
 
 def _make_get_products_response(product_id: str = "prod1"):
     """Build a real GetProductsResponse Pydantic so we exercise
     .model_dump() projection like the production path."""
-    from adcp.types import GetProductsResponse, Product
-
-    return GetProductsResponse(
-        products=[
-            Product.model_validate(
-                {
-                    "product_id": product_id,
-                    "name": "Test Product",
-                    "description": "A product for testing",
-                    "delivery_type": "non_guaranteed",
-                    "publisher_properties": [{"publisher_domain": "example.com", "selection_type": "all"}],
-                    "format_ids": [
-                        {
-                            "agent_url": "https://creative.adcontextprotocol.org/",
-                            "id": "display_300x250",
-                        }
-                    ],
-                    "pricing_options": [
-                        {
-                            "pricing_option_id": "po-cpm-default",
-                            "pricing_model": "cpm",
-                            "floor_price": 1.0,
-                            "currency": "USD",
-                        }
-                    ],
-                    "reporting_capabilities": {
-                        "available_metrics": ["impressions", "spend"],
-                        "available_reporting_frequencies": ["daily"],
-                        "date_range_support": "date_range",
-                        "supports_webhooks": False,
-                        "expected_delay_minutes": 60,
-                        "timezone": "UTC",
-                    },
-                    "delivery_measurement": {"provider": "publisher"},
-                }
-            )
-        ],
-        errors=None,
-        context=None,
-    )
+    return make_get_products_response(product_id)
 
 
 @pytest.fixture
 def active_tenant_session():
     """AccountStore needs a live DB session for the active-tenant
     existence check during ``platform.accounts.resolve``."""
-    session = MagicMock()
-    session.__enter__.return_value = session
-    session.__exit__.return_value = False
-    session.scalars.return_value.first.return_value = MagicMock(is_active=True)
-    return session
+    return make_active_tenant_session()
 
 
 def test_get_products_delegates_to_impl_and_projects_to_wire(active_tenant_session):
