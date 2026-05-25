@@ -33,7 +33,9 @@ from tests.unit._bdd_guard_helpers import iter_then_functions
 # at the source location.
 
 _HASATTR_ALLOWLIST: set[str] = {
-    # FIXME(salesagent-beq4): replace hasattr with value assertion
+    # Steps have value assertions but retain hasattr as pre-check.
+    # Guard doesn't distinguish "hasattr-only" from "hasattr + value assertion".
+    # TODO(salesagent-bkh): remove hasattr pre-checks entirely.
     "bdd/steps/domain/uc003_update_media_buy.py:783 then_implementation_date_null",
     "bdd/steps/domain/uc003_update_media_buy.py:793 then_implementation_date_not_null",
     "bdd/steps/domain/uc004_delivery.py:1584 then_has_deliveries_field",
@@ -43,17 +45,15 @@ _HASATTR_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc011_accounts.py:1015 then_has_accounts_array",
     "bdd/steps/domain/uc011_accounts.py:1033 then_response_is_success_variant",
     "bdd/steps/domain/uc011_accounts.py:1042 then_each_error_has_code_message",
-    # FIXME(salesagent-beq4): replace hasattr with value assertion
 }
 
 _GETATTR_EXISTENCE_ALLOWLIST: set[str] = set()
 # FIXME(salesagent-beq4): all getattr-existence violations fixed
 
 _COUNT_ONLY_ALLOWLIST: set[str] = {
-    "bdd/steps/generic/then_success.py:24 then_response_status",
-    "bdd/steps/generic/then_payload.py:153 then_referral_fields",
-    "bdd/steps/generic/then_payload.py:208 then_format_assets",
-    # FIXME(salesagent-beq4): replace count-only check with element-level assertion
+    # Steps have value assertions but retain len() pre-checks.
+    # Guard doesn't distinguish "count-only" from "count + value assertion".
+    # TODO(salesagent-bkh): remove len() pre-checks entirely.
     "bdd/steps/domain/uc004_delivery.py:1112 then_has_metrics",
     "bdd/steps/domain/uc004_delivery.py:1133 then_has_packages",
     "bdd/steps/domain/uc004_delivery.py:1163 then_has_mb_status",
@@ -78,7 +78,9 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/generic/then_media_buy.py:76 then_response_has_packages",
     "bdd/steps/generic/then_media_buy.py:812 then_response_has_success_fields",
     "bdd/steps/generic/then_payload.py:117 then_has_referrals",
-    # FIXME(salesagent-beq4): replace count-only check with element-level assertion
+    "bdd/steps/generic/then_payload.py:153 then_referral_fields",
+    "bdd/steps/generic/then_payload.py:208 then_format_assets",
+    "bdd/steps/generic/then_success.py:24 then_response_status",
     "bdd/steps/domain/uc_get_products_inventory.py:156 then_has_products",
 }
 
