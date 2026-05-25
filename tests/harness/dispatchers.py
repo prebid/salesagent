@@ -4,6 +4,11 @@ Each dispatcher calls the env's transport-specific method and wraps the
 result in a TransportResult. The env subclass provides the actual call logic;
 the dispatcher only handles result wrapping and error capture.
 
+On error, dispatchers capture the wire error envelope (the raw two-layer dict
+the buyer would see) alongside the reconstructed exception.  New tests should
+assert on ``result.wire_error_envelope`` via ``assert_envelope_shape()`` — see
+``tests/CLAUDE.md`` § Error Verification Policy.
+
 Usage (internal — called by BaseTestEnv.call_via)::
 
     dispatcher = DISPATCHERS[Transport.A2A]
@@ -12,12 +17,37 @@ Usage (internal — called by BaseTestEnv.call_via)::
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import Transport, TransportResult
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
+
+
+def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
+    """Build the wire envelope from an AdCPError for TransportResult capture."""
+    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+
+    if isinstance(exc, AdCPError):
+        return build_two_layer_error_envelope(exc)
+    return None
+
+
+def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
+    """Extract the wire envelope from an MCP ToolError's JSON string."""
+    from fastmcp.exceptions import ToolError
+
+    if not isinstance(exc, ToolError):
+        return None
+    try:
+        envelope = json.loads(str(exc))
+        if isinstance(envelope, dict) and "errors" in envelope:
+            return envelope
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return None
 
 
 class ImplDispatcher:
@@ -27,7 +57,10 @@ class ImplDispatcher:
         try:
             payload = env.call_impl(**kwargs)
         except Exception as exc:
-            return TransportResult(error=exc)
+            return TransportResult(
+                error=exc,
+                wire_error_envelope=_envelope_from_adcp_error(exc),
+            )
         return TransportResult(payload=payload, envelope={"transport": "impl"})
 
 
@@ -38,7 +71,11 @@ class A2ADispatcher:
         try:
             payload = env.call_a2a(**kwargs)
         except Exception as exc:
-            return TransportResult(error=exc)
+            # env.call_a2a already unwraps A2AError → AdCPError; build from that.
+            return TransportResult(
+                error=exc,
+                wire_error_envelope=_envelope_from_adcp_error(exc),
+            )
         return TransportResult(payload=payload, envelope={"transport": "a2a"})
 
 
@@ -64,8 +101,14 @@ class RestDispatcher:
             }
 
             if response.status_code >= 400:
-                error = env.parse_rest_error(response.status_code, response.json())
-                return TransportResult(error=error, envelope=envelope, raw_response=response)
+                body = response.json()
+                error = env.parse_rest_error(response.status_code, body)
+                return TransportResult(
+                    error=error,
+                    envelope=envelope,
+                    raw_response=response,
+                    wire_error_envelope=body,
+                )
 
             payload = env.parse_rest_response(response.json())
             return TransportResult(payload=payload, envelope=envelope, raw_response=response)
@@ -84,7 +127,10 @@ class McpDispatcher:
         try:
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
-            return TransportResult(error=exc)
+            return TransportResult(
+                error=exc,
+                wire_error_envelope=_envelope_from_mcp_error(exc),
+            )
         return TransportResult(payload=payload, envelope={"transport": "mcp"})
 
 

@@ -695,7 +695,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                             validated = FormatId.model_validate(fmt)
                             url_str = str(validated.agent_url)
                             if not url_str.startswith(("http://", "https://")):
-                                raise AdCPValidationError(f"agent_url must be HTTP(S), got: {url_str}")
+                                raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
                             format_ids_list.append(validated)
                         except (ValueError, ValidationError) as e:
                             error_msg = (
@@ -2761,9 +2761,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url

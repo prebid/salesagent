@@ -59,29 +59,16 @@ PATTERN_A_PER_FILE_CAP: dict[str, int] = {
     "src/core/tools/signals.py": 3,
 }
 
-# Anchor scan paths to the repo root so the guard works regardless of CWD
-# (CI runs from the repo root; agents/IDEs may launch pytest from a subdir).
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-SCAN_DIRS = [_REPO_ROOT / "src/core/tools", _REPO_ROOT / "src/adapters"]
-
-
-def _rel(path: Path) -> str:
-    """Return path relative to repo root for stable allowlist keys."""
-    return str(path.relative_to(_REPO_ROOT))
+from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
+from tests.unit._ast_helpers import rel as _rel
 
 
 def _count_pattern_a_sites(filepath: Path) -> list[int]:
     """Return line numbers of ``Error(code=...)`` literals in the file."""
-    # Shared alias collector lives in ``tests/unit/_ast_helpers`` so multiple
-    # guards target the same Error-import surface without cross-importing
-    # from each other's test modules.
     from tests.unit._ast_helpers import collect_error_aliases
 
-    if not filepath.exists():
-        return []
-    try:
-        tree = ast.parse(filepath.read_text(), filename=str(filepath))
-    except SyntaxError:
+    tree = safe_parse(filepath)
+    if tree is None:
         return []
 
     aliases = collect_error_aliases(tree)
@@ -124,7 +111,7 @@ class TestNoErrorConstructionInImpl:
         """Stale-cap detection: if a file in the cap dict no longer exists, the cap is stale."""
         from tests.unit._per_file_cap_guard import assert_capped_files_still_exist
 
-        assert_capped_files_still_exist(PATTERN_A_PER_FILE_CAP, "PATTERN_A_PER_FILE_CAP", repo_root=_REPO_ROOT)
+        assert_capped_files_still_exist(PATTERN_A_PER_FILE_CAP, "PATTERN_A_PER_FILE_CAP", repo_root=REPO_ROOT)
 
     def test_caps_only_shrink(self):
         """Sites in capped files must equal the cap exactly (or be below it).
@@ -134,4 +121,4 @@ class TestNoErrorConstructionInImpl:
         """
         from tests.unit._per_file_cap_guard import assert_caps_only_shrink
 
-        assert_caps_only_shrink(PATTERN_A_PER_FILE_CAP, _count_pattern_a_sites, repo_root=_REPO_ROOT)
+        assert_caps_only_shrink(PATTERN_A_PER_FILE_CAP, _count_pattern_a_sites, repo_root=REPO_ROOT)

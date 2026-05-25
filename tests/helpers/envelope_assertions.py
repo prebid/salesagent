@@ -6,9 +6,6 @@ Single helper for the wire shape every transport boundary must emit::
         "adcp_error": {"code": "...", "message": "...", "recovery": "..."},
         "errors":     [{"code": "...", "message": "...", "recovery": "..."}],
         "context":    {...},   # optional
-        # A2A only:
-        "error_code": "...",   # backward-compat top-level mirror
-        "recovery":   "...",   # backward-compat top-level mirror
     }
 
 Replaces the per-boundary helpers (``_assert_two_layer_envelope``,
@@ -28,7 +25,6 @@ def assert_envelope_shape(
     *,
     recovery: str | None = None,
     message_substr: str | None = None,
-    check_backward_compat: bool = False,
     check_mcp_tool_error: bool = False,
 ) -> None:
     """Assert the AdCP spec two-layer error envelope shape.
@@ -46,10 +42,6 @@ def assert_envelope_shape(
         message_substr: If provided, must appear in ``errors[0].message``.
                 ``adcp_error.message`` is allowed to differ (it carries the
                 envelope-level summary).
-        check_backward_compat: If ``True``, additionally assert the top-level
-                backward-compat keys ``error_code`` and ``recovery`` that A2A
-                surfaces alongside the spec envelope. Off by default because
-                REST + MCP envelopes don't carry them.
         check_mcp_tool_error: If ``True``, additionally assert that ``target``
                 is an ``AdCPToolError`` instance before reading its envelope.
                 MCP-boundary call sites use this to pin the exception type as
@@ -83,10 +75,3 @@ def assert_envelope_shape(
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")
         assert message_substr in actual, f"errors[0].message={actual!r} does not contain {message_substr!r}"
-
-    if check_backward_compat:
-        assert body.get("error_code") == code, f"top-level error_code={body.get('error_code')!r}, expected {code!r}"
-        if recovery is not None:
-            assert body.get("recovery") == recovery, (
-                f"top-level recovery={body.get('recovery')!r}, expected {recovery!r}"
-            )

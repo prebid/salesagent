@@ -335,60 +335,43 @@ class ContextManager(DatabaseManager):
             session.close()
 
     def fail_workflow_step_for_exception(self, step_id: str, exc: Exception) -> None:
-        """Mark a workflow step failed with BOTH ``error_message`` AND structured ``response_data``.
+        """Mark a workflow step failed with the spec two-layer envelope as ``response_data``.
 
         The webhook delivery path at ``_send_push_notifications`` emits
-        ``step.response_data`` (not ``error_message``) to push notification
-        subscribers. Without structured payload, async subscribers receive
-        ``status=failed`` with an empty body — they don't see the error
-        code, field path, or recovery classification the synchronous caller
-        gets via the spec-compliant payload. This helper builds a one-element
-        ``errors[]`` payload (same shape as the SDK's ``adcp_error()`` helper)
-        from the exception so async and sync paths are at parity.
+        ``step.response_data`` to push notification subscribers. Without
+        structured payload, async subscribers receive ``status=failed`` with
+        an empty body. This helper builds the full two-layer envelope
+        (``adcp_error`` + ``errors[]``) via ``build_two_layer_error_envelope``
+        so async and sync paths see the same wire shape.
 
-        Uses ``wire_error_code`` so internal-only codes (``NOT_FOUND``,
-        ``INTERNAL_ERROR``, etc.) get translated to ``STANDARD_ERROR_CODES``
-        before reaching the webhook subscriber — same translation the
-        synchronous transport boundaries apply.
+        Untyped exceptions are normalized to ``AdCPError`` via
+        ``normalize_to_adcp_error``. Wire-code enforcement ensures webhook
+        subscribers only see codes in ``STANDARD_ERROR_CODES``.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
         hiccup during audit doesn't replace the original exception that the
-        caller is about to re-raise. Python's bare ``raise`` would otherwise
-        pick up the new exception fired here and the buyer would see an
-        unrelated DB error instead of the actual ``AdCPError``.
+        caller is about to re-raise.
         """
         from adcp.server.helpers import STANDARD_ERROR_CODES
-        from adcp.server.helpers import adcp_error as _sdk_adcp_error
+
+        from src.core.exceptions import normalize_to_adcp_error
 
         try:
-            if isinstance(exc, AdCPError):
-                source: AdCPError = exc
-            else:
-                # Untyped exception — base ``AdCPError`` defaults to
-                # ``INTERNAL_ERROR`` which is in ``INTERNAL_CODES`` (never
-                # leaves the server).
-                source = AdCPError(str(exc) or type(exc).__name__)
+            source = normalize_to_adcp_error(exc)
 
             # Defensive wire-code enforcement: webhook subscribers must only
-            # see codes in ``STANDARD_ERROR_CODES``. ``wire_error_code``
-            # applies the explicit ``ERROR_CODE_MAPPING`` translation; if any
-            # source code still falls outside the standard set after that,
-            # fall back to ``SERVICE_UNAVAILABLE`` so async subscribers never
-            # receive an internal-only code that the synchronous boundary
-            # would have rejected.
+            # see codes in ``STANDARD_ERROR_CODES``. If the wire code falls
+            # outside the standard set, override with SERVICE_UNAVAILABLE
+            # so async subscribers never receive an internal-only code.
             wire_code = source.wire_error_code
             if wire_code not in STANDARD_ERROR_CODES:
-                wire_code = "SERVICE_UNAVAILABLE"
+                source = AdCPError(
+                    source.message or str(source),
+                    recovery="terminal",
+                )
+                source.error_code = "SERVICE_UNAVAILABLE"
 
-            payload = _sdk_adcp_error(
-                wire_code,
-                source.message or str(source),
-                recovery=source.recovery,
-                field=source.field,
-                suggestion=source.suggestion,
-                details=source.details,
-            )
-            response_data = {"errors": payload["errors"]}
+            response_data = build_two_layer_error_envelope(source)
             error_message = source.message or str(source)
 
             self.update_workflow_step(
@@ -404,49 +387,6 @@ class ContextManager(DatabaseManager):
                 "Failed to audit workflow_step %s after exception — original exception will still re-raise",
                 step_id,
             )
-
-    def fail_step(
-        self,
-        step_id: str,
-        *,
-        exc: AdCPError,
-        error_message: str | None = None,
-    ) -> None:
-        """Persist a failed-workflow envelope and trigger push notifications.
-
-        Single ingress for failed-workflow persistence: the wire response from
-        the boundary translator and the persisted ``workflow_step.response_data``
-        are byte-identical by construction because both call
-        ``build_two_layer_error_envelope(exc)``.
-
-        .. note::
-            FIXME(substrate-without-caller): This method currently has zero
-            production callers — production failed-workflow persistence still
-            flows through ``src/services/order_approval_service.py`` (the
-            ``_mark_approval_failed`` path) and the GAM background polling
-            handler. Wiring at least one production site is tracked
-            separately because the most natural caller is in the same
-            function being refactored on another in-flight branch (the
-            SyncJob ordering + ``_mark_approval_failed`` rework). Until that
-            sibling branch lands, the "byte-identical by construction"
-            guarantee above is enforced only by the unit tests in
-            ``test_context_manager_fail_step.py`` — not by any production
-            ingress.
-
-        Args:
-            step_id: Workflow step ID to update.
-            exc: The AdCPError subclass raised by the ``_impl`` function.
-            error_message: Optional override for ``workflow_step.error_message``.
-                Defaults to ``exc.message`` so the human-readable text is
-                preserved without forcing callers to repeat it.
-        """
-        envelope = build_two_layer_error_envelope(exc)
-        self.update_workflow_step(
-            step_id,
-            status="failed",
-            response_data=envelope,
-            error_message=error_message or exc.message,
-        )
 
     def mark_human_needed(
         self,

@@ -138,17 +138,13 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
 
     error_str = str(exc)
 
-    # New shape: single-arg JSON envelope `{"adcp_error": {...}, "errors": [...]}`.
+    # New shape: single-arg JSON envelope — delegate to shared helper.
     try:
         envelope = json.loads(error_str)
-        if isinstance(envelope, dict) and isinstance(envelope.get("errors"), list) and envelope["errors"]:
-            err = envelope["errors"][0]
-            return _adcp_error_from_code(
-                str(err.get("code", "INTERNAL_ERROR")),
-                str(err.get("message", "")),
-                err.get("recovery"),
-                err.get("details"),
-            )
+        if isinstance(envelope, dict):
+            reconstructed = _envelope_to_adcp_error(envelope)
+            if reconstructed is not None:
+                return reconstructed
     except (json.JSONDecodeError, TypeError):
         pass
 
@@ -214,17 +210,6 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
             recovery = errors[0].get("recovery", recovery)
             details = details or errors[0].get("details")
     if not error_code:
-        # DEPRECATED legacy flat shape: top-level error_code key. Production
-        # envelopes never set this — they use the two-layer adcp_error/errors[]
-        # shape handled above. Only retained because the test-only helper
-        # _adcp_to_a2a_error (src/a2a_server/adcp_a2a_server.py) still emits
-        # top-level error_code for backward compat with this harness unwrapper.
-        # FIXME(adcp-pr2): remove this branch when _adcp_to_a2a_error is deleted
-        # (tracked alongside the per-boundary wrapper consolidation in #7).
-        error_code = envelope.get("error_code")
-        recovery = recovery or envelope.get("recovery")
-        details = details or envelope.get("details")
-    if not error_code:
         return None
     return _adcp_error_from_code(error_code, message, recovery, details)
 
@@ -232,12 +217,12 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     """Translate a2a A2AError back to the corresponding AdCPError.
 
-    The A2A handler wraps AdCPError → A2AError (via _adcp_to_a2a_error).
-    The ``data`` field now carries the full two-layer envelope plus
-    backward-compat ``error_code`` / ``recovery`` top-level keys. This
-    unwrapper checks the envelope first, then falls back to legacy keys.
+    The A2A dispatcher wraps AdCPError into a failed Task whose artifact
+    carries the two-layer envelope. If the exception is a JSON-RPC-level
+    A2AError (e.g., from the dispatcher's own catch-all), the ``data``
+    field carries the envelope.
 
-    If the exception is not a A2AError or lacks enough info, returns it unchanged.
+    If the exception is not an A2AError or lacks enough info, returns it unchanged.
     """
     from a2a.types import InternalError, InvalidParamsError, InvalidRequestError
     from a2a.utils.errors import A2AError

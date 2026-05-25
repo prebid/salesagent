@@ -9,6 +9,26 @@ quietly break a sibling guard.
 from __future__ import annotations
 
 import ast
+from pathlib import Path
+
+# Repo root anchored to this file's location — guards work regardless of CWD.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCAN_DIRS = [REPO_ROOT / "src/core/tools", REPO_ROOT / "src/adapters"]
+
+
+def rel(path: Path) -> str:
+    """Return path relative to repo root for stable allowlist keys."""
+    return str(path.relative_to(REPO_ROOT))
+
+
+def safe_parse(filepath: Path) -> ast.Module | None:
+    """Parse a Python file, returning None if it doesn't exist or has a SyntaxError."""
+    if not filepath.exists():
+        return None
+    try:
+        return ast.parse(filepath.read_text(), filename=str(filepath))
+    except SyntaxError:
+        return None
 
 
 def collect_error_aliases(tree: ast.AST) -> set[str]:

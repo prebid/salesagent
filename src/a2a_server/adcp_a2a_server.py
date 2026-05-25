@@ -61,12 +61,10 @@ from src.core.database.models import PushNotificationConfig as DBPushNotificatio
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
-    AdCPAuthorizationError,
-    AdCPBudgetExhaustedError,
-    AdCPConflictError,
     AdCPError,
     AdCPValidationError,
     build_two_layer_error_envelope,
+    normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
@@ -139,38 +137,6 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
     s = struct_pb2.Struct()
     s.update(d)
     return s
-
-
-def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
-    """Translate AdCPError to an A2A SDK error type preserving semantics.
-
-    NOTE: currently unused by production code paths. ``_handle_explicit_skill``
-    now re-raises ``AdCPError`` directly so the boundary's exception handler
-    builds the wire envelope. This helper is retained for boundary-translation
-    tests and is the documented API any future direct-translation call site
-    must use to stay byte-identical with the live boundary.
-
-    The A2A error ``data`` field carries the full spec-compliant two-layer
-    envelope (``adcp_error`` + ``errors[]`` + optional ``context``) so the
-    storyboard runner can read either layer. ``error_code`` and ``recovery``
-    are also surfaced at top-level for backward compatibility with the test
-    harness unwrapper. Non-standard codes are translated to
-    STANDARD_ERROR_CODES via ``exc.wire_error_code`` inside the envelope.
-    """
-    envelope = build_two_layer_error_envelope(exc)
-    data: dict[str, Any] = {
-        **envelope,
-        "error_code": exc.wire_error_code,
-        "recovery": exc.recovery,
-    }
-    if exc.details:
-        data["details"] = exc.details
-    if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
-        return InvalidParamsError(message=str(exc.message), data=data)
-    elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
-        return InvalidRequestError(message=str(exc.message), data=data)
-    else:
-        return InternalError(message=str(exc.message), data=data)
 
 
 # ADCP Discovery Skills: Skills that don't require authentication
@@ -1506,26 +1472,19 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (already properly formatted)
             raise
         except (AdCPError, ValueError, PermissionError) as e:
-            # Normalize ValueError/PermissionError to typed AdCPError so audit
-            # logging and propagation are uniform across all three exception
-            # types. Previously only the AdCPError branch called
-            # `_log_a2a_operation`; the wrapped-from-ValueError/PermissionError
-            # paths silently skipped audit and the activity feed. The outer
-            # dispatcher's `except AdCPError` branch wraps the resulting typed
-            # exception into a failed Task with the two-layer envelope.
-            if isinstance(e, ValueError) and not isinstance(e, AdCPError):
-                normalized: AdCPError = AdCPValidationError(str(e))
-                cause: BaseException | None = e
-            elif isinstance(e, PermissionError):
-                normalized = AdCPAuthorizationError(str(e))
-                cause = e
-            else:
-                # Already an AdCPError — propagate as-is.
-                normalized = e
-                cause = None
+            # Normalize ValueError/PermissionError to typed AdCPError via the
+            # shared normalize_to_adcp_error() helper — same mapping the MCP
+            # and REST boundaries apply. The outer dispatcher's `except
+            # AdCPError` branch wraps the result into a failed Task with the
+            # two-layer envelope.
+            normalized = normalize_to_adcp_error(e)
 
             logger.error(
-                f"{type(e).__name__} in skill handler {skill_name}: {normalized.error_code} - {normalized.message}"
+                "%s in skill handler %s: %s - %s",
+                type(e).__name__,
+                skill_name,
+                normalized.error_code,
+                normalized.message,
             )
             # Defensive about identity shape — test fixtures sometimes pass a
             # string or partially-built identity instead of ResolvedIdentity.
@@ -1539,8 +1498,8 @@ class AdCPRequestHandler(RequestHandler):
                     error=normalized.message,
                 )
 
-            if cause is not None:
-                raise normalized from cause
+            if normalized is not e:
+                raise normalized from e
             raise
         # Untyped exceptions fall through to the dispatcher's `except Exception`
         # at the call site, which routes them through `_build_failed_skill_result`

@@ -104,7 +104,7 @@ class TestAdCPReferenceImplementation:
             "Tracked as follow-up; fixes belong in a dedicated E2E hygiene PR, "
             "not PR #1306's error-emission architecture scope."
         ),
-        strict=False,
+        strict=True,
     )
     async def test_complete_campaign_lifecycle_with_webhooks(
         self, docker_services_e2e, live_server, test_auth_token, webhook_server

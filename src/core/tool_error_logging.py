@@ -17,11 +17,10 @@ from fastmcp.server import Context as FastMCPContext
 
 from src.core.exceptions import (
     ERROR_CODE_MAPPING,
-    AdCPAuthorizationError,
     AdCPError,
-    AdCPValidationError,
     RecoveryHint,
     build_two_layer_error_envelope,
+    normalize_to_adcp_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,16 +222,15 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
     if isinstance(error, ToolError):
         # Includes AdCPToolError — already in wire shape.
         raise error
-    if isinstance(error, AdCPError):
-        envelope = build_two_layer_error_envelope(error)
-        raise AdCPToolError(envelope, status_code=error.status_code) from error
-    if isinstance(error, ValueError):
-        synthetic: AdCPError = AdCPValidationError(str(error))
-        raise AdCPToolError(build_two_layer_error_envelope(synthetic), status_code=synthetic.status_code) from error
-    if isinstance(error, PermissionError):
-        synthetic = AdCPAuthorizationError(str(error))
-        raise AdCPToolError(build_two_layer_error_envelope(synthetic), status_code=synthetic.status_code) from error
-    raise error
+    # Normalize untyped exceptions (ValueError, PermissionError) to typed
+    # AdCPError via the shared normalize_to_adcp_error() helper — same
+    # mapping the A2A and REST boundaries apply.
+    typed = normalize_to_adcp_error(error)
+    if typed is not error:
+        # Wrapping happened — chain for traceback fidelity.
+        raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
+    # Already an AdCPError — no wrapping needed.
+    raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
 
 
 def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, kwargs: dict) -> NoReturn:

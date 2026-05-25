@@ -122,10 +122,7 @@ class TestBoundaryTranslatorsUseEnvelope:
         """``AdCPRequestHandler._build_error_envelope`` must call build_two_layer_error_envelope().
 
         This is the production A2A path — called from ``on_message_send`` whenever
-        an AdCPError reaches the dispatcher. The standalone ``_adcp_to_a2a_error``
-        helper at module scope is intentionally NOT pinned here because it has no
-        production callers (verified by grep); pinning unreachable code would be
-        a false positive of safety.
+        an AdCPError reaches the dispatcher.
         """
         path, fn = "src/a2a_server/adcp_a2a_server.py", "AdCPRequestHandler._build_error_envelope"
         assert _function_calls_builder(path, fn), (
