@@ -1979,21 +1979,17 @@ async def _create_media_buy_impl(
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
                         raise AdCPValidationError(error_msg)
 
-    except (AdCPError, ValueError, PermissionError) as e:
-        # Update workflow step as failed (only if step exists - not created in dry_run mode)
+    except (ValueError, PermissionError) as e:
+        # Safety net for the two remaining internal ValueError sites (L272 session arg,
+        # L1581 defensive type check) plus any PermissionError that escapes the auth
+        # layer. Typed AdCPError raises propagate past this catch and are translated
+        # to the spec two-layer wire envelope at the transport boundary.
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
 
-        # Use the typed error's wire code when the caught exception is an AdCPError
-        # subclass (post-migration: validation/not-found/adapter raise typed). Fall back
-        # to VALIDATION_ERROR for bare ValueError/PermissionError (safety-net path for
-        # any boundary-facing raise site not yet migrated).
-        wire_code = e.error_code if isinstance(e, AdCPError) else "VALIDATION_ERROR"
-
-        # Return error response with failed status
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code=wire_code, message=str(e), details=None)],
+                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,

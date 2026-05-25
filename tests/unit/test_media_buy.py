@@ -409,12 +409,13 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            with pytest.raises(AdCPNotFoundError) as excinfo:
+                await _create_media_buy_impl(req, identity=identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        assert any("not found" in e.message.lower() for e in result.response.errors)
+        exc = excinfo.value
+        assert exc.error_code == "NOT_FOUND"
+        assert "prod_missing" in exc.message
+        assert "not found" in exc.message.lower()
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_exceeded(self):
@@ -484,12 +485,12 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        assert any("daily" in e.message.lower() for e in result.response.errors)
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "daily" in exc.message.lower()
 
     def test_pricing_option_xor_both_rejected(self):
         """UC-002-V03 / BR-RULE-006: both fixed_price and floor_price rejected.
@@ -918,9 +919,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_gen"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-        ):
+        with (patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -1283,12 +1282,14 @@ class TestCreateMediaBuyIdempotency:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            # Without idempotency_key, the function proceeds past the check.
+            # It will fail at product validation (no products in mock DB) and the
+            # typed AdCPNotFoundError now propagates past the narrowed boundary
+            # catch. The point of this test is that find_by_idempotency_key was
+            # never called — capture the propagation so we can still assert that.
+            with pytest.raises(AdCPNotFoundError):
+                await _create_media_buy_impl(req, identity=identity)
 
-        # Without idempotency_key, the function proceeds past the check.
-        # It will fail at product validation (no products in mock DB) — that's fine.
-        # The point is that find_by_idempotency_key was never called.
-        assert isinstance(result, CreateMediaBuyResult)
         mock_uow.media_buys.find_by_idempotency_key.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1345,12 +1346,15 @@ class TestCreateMediaBuyIdempotency:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            # Idempotency probe miss → flow continues into product validation,
+            # which fails with typed AdCPNotFoundError (no products in mock DB).
+            # The typed error now propagates past the narrowed boundary catch.
+            # Capture it so we can still assert the idempotency probe ran.
+            with pytest.raises(AdCPNotFoundError):
+                await _create_media_buy_impl(req, identity=identity)
 
         # Idempotency check ran but found nothing — proceeded to normal flow
         mock_idem_repo.find_by_idempotency_key.assert_called_once_with("new-key-never-seen", "test_principal")
-        # Result is an error because product validation fails (expected)
-        assert isinstance(result, CreateMediaBuyResult)
 
 
 class TestCreateMediaBuyAdapterInteraction:

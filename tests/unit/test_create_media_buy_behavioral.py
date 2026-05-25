@@ -261,16 +261,13 @@ class TestProductNotFound:
         existing_product = _mock_product("prod_exists")
 
         with _PatchContext(products=[existing_product]) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPNotFoundError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        errors = result.response.errors
-        assert len(errors) == 1
-        assert errors[0].code == "NOT_FOUND"
-        assert "prod_missing" in errors[0].message
-        assert "not found" in errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "NOT_FOUND"
+        assert "prod_missing" in exc.message
+        assert "not found" in exc.message.lower()
 
 
 class TestMaxDailySpendExceeded:
@@ -300,15 +297,12 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        errors = result.response.errors
-        assert len(errors) == 1
-        assert errors[0].code == "VALIDATION_ERROR"
-        assert "daily" in errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "daily" in exc.message.lower()
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_within_cap_passes_validation(self):
@@ -380,12 +374,12 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        assert "daily" in result.response.errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "daily" in exc.message.lower()
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_no_cap_configured(self):
@@ -1827,10 +1821,13 @@ class TestProposalBasedObligations:
         with _PatchContext(products=[]) as pc:
             # No products in DB -> products not found
             pc.db_session.scalars.return_value.all.return_value = []
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPNotFoundError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert any("not found" in e.message.lower() for e in result.response.errors)
+        exc = excinfo.value
+        assert exc.error_code == "NOT_FOUND"
+        assert "not found" in exc.message.lower()
+        assert "nonexistent_product" in exc.message
 
 
 class TestCrossCuttingObligations:
@@ -1939,10 +1936,12 @@ class TestExtensionObligations:
         cl = _mock_currency_limit()
 
         with _PatchContext(products=[product], currency_limit=cl, adapter_config=adapter_config) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        error_msg = result.response.errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        error_msg = exc.message.lower()
         assert "not supported" in error_msg
         assert "gam" in error_msg
 
@@ -2189,10 +2188,12 @@ class TestExtensionObligations:
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
         with _PatchContext() as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert any("budget" in e.message.lower() for e in result.response.errors)
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "budget" in exc.message.lower()
 
     def test_proposal_currency_mismatch_error_code(self):
         """CURRENCY_MISMATCH error code exists for proposal currency mismatch.
@@ -2221,10 +2222,16 @@ class TestExtensionObligations:
         product.pricing_options = []  # No pricing options
 
         with _PatchContext(products=[product]) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Should fail since pricing_option_id can't be resolved
-        assert isinstance(result.response, CreateMediaBuyError)
+        # Pricing-error sites in _validate_pricing_model_selection tag the error
+        # via details={"error_code": "PRICING_ERROR"} while the wire code stays
+        # VALIDATION_ERROR — verify both layers so we don't regress either one.
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.details == {"error_code": "PRICING_ERROR"}
+        assert "pricing_options" in exc.message
 
     @pytest.mark.asyncio
     async def test_creative_ids_not_in_database(self):
@@ -2286,13 +2293,16 @@ class TestPostconditionObligations:
             ]
         )
 
+        # Default _PatchContext mocks one product with id "prod_1"; req asks
+        # for "nonexistent_prod" so the validation block hits the not-found
+        # branch and raises AdCPNotFoundError, which now propagates past the
+        # narrowed boundary catch.
         with _PatchContext() as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPNotFoundError):
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Validation failure -> error response, no DB records created
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        # UoW session.add should NOT have been called (no records created)
+        # Postcondition: the typed raise happens BEFORE any session.add() —
+        # no MediaBuy/Package rows are inserted on the failure path.
         pc.db_session.add.assert_not_called()
 
     @pytest.mark.asyncio
@@ -2316,12 +2326,16 @@ class TestPostconditionObligations:
 
         with _PatchContext(products=[]) as pc:
             pc.db_session.scalars.return_value.all.return_value = []
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPNotFoundError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        error_msg = result.response.errors[0].message
-        # Message should identify which product was not found
-        assert "nonexistent_prod" in error_msg
+        exc = excinfo.value
+        # Recovery guidance lives on the typed exception itself: the
+        # exception's message must identify the unknown product so the buyer
+        # knows exactly what to correct on retry, and the typed error_code
+        # ("NOT_FOUND") gives the buyer a machine-readable classification.
+        assert "nonexistent_prod" in exc.message
+        assert exc.error_code == "NOT_FOUND"
 
 
 class TestUpgradeObligations:
