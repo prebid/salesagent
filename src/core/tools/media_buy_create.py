@@ -1979,21 +1979,16 @@ async def _create_media_buy_impl(
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
                         raise AdCPValidationError(error_msg)
 
-    except (ValueError, PermissionError) as e:
-        # Safety net for the two remaining internal ValueError sites (L272 session arg,
-        # L1581 defensive type check) plus any PermissionError that escapes the auth
-        # layer. Typed AdCPError raises propagate past this catch and are translated
-        # to the spec two-layer wire envelope at the transport boundary.
+    except (AdCPError, ValueError, PermissionError) as e:
+        # Audit-update then re-raise. Mirrors media_buy_update.py:1441 — typed AdCPError
+        # propagates to the transport boundary which translates to the spec two-layer
+        # wire envelope; ValueError/PermissionError propagate so the A2A boundary
+        # wrappers translate them to AdCPValidationError / AdCPAuthorizationError with
+        # correct wire codes (the prior "return CreateMediaBuyResult(VALIDATION_ERROR)"
+        # path silently mis-tagged PermissionError as VALIDATION_ERROR).
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
-
-        return CreateMediaBuyResult(
-            response=CreateMediaBuyError(
-                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
-                context=req.context,
-            ),
-            status=AdcpTaskStatus.failed.value,
-        )
+        raise
 
     # Type narrowing: in non-dry_run mode, step and persistent_ctx are guaranteed to exist
     # In dry_run mode, they may be None (database operations are skipped)
