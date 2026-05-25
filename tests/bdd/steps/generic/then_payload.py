@@ -12,7 +12,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 from pytest_bdd import parsers, then
+
+from src.core.exceptions import AdCPError
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -129,17 +133,13 @@ def then_format_assets(ctx: dict) -> None:
     formats_with_assets = [f for f in formats if hasattr(f, "assets") and f.assets]
     for f in formats_with_assets:
         for a in f.assets:
-            # Assets are typed (Assets, Assets5=video, etc.) — check the asset_id value, not just presence
-            asset_id = getattr(a, "asset_id", None)
-            assert asset_id is not None and str(asset_id), (
-                f"Asset in format '{_fmt_name(f)}' has empty/missing asset_id"
-            )
+            # Assets are typed (Assets, Assets81=video, etc.) — check the asset_id or type attribute
+            assert hasattr(a, "asset_id"), f"Asset in format '{_fmt_name(f)}' missing asset_id"
     # Check renders have dimensions
     formats_with_renders = [f for f in formats if hasattr(f, "renders") and f.renders]
     for f in formats_with_renders:
         for r in f.renders:
-            dimensions = getattr(r, "dimensions", None)
-            assert dimensions is not None, f"Render in format '{_fmt_name(f)}' has None dimensions"
+            assert hasattr(r, "dimensions"), f"Render in format '{_fmt_name(f)}' missing dimensions"
 
 
 # ── Sorting assertions ──────────────────────────────────────────────
@@ -200,47 +200,179 @@ def then_three_returned(ctx: dict, a: str, b: str, c: str) -> None:
 
 
 # ── Partition/boundary test outcomes ──────────────────────────────────
-# These verify that production code either:
-#   - returned a valid response (expected="valid")
-#   - raised an error (expected="invalid")
+# These verify that production code, when exercised on a specific named
+# dimension/boundary (the captured <field>), produced the scenario's
+# expected outcome:
+#   - expected="valid":   a schema-valid success response of the operation
+#                          under test, with its required success collection
+#                          present and correctly typed (not a junk shell).
+#   - expected="invalid"/ a genuine validation/AdCP rejection (not an
+#     "error":             arbitrary exception, not a bare truthy "error").
 #
 # Two regex steps cover all partition ("filtering should result in") and
-# boundary ("handling should be") scenarios. The captured field name is
-# unused — the When step already applied the filter; the Then step only
-# checks accept/reject outcome.
+# boundary ("handling should be") scenarios.
+#
+# The step text names <field> as the dimension under test. The When steps
+# (out of this module's scope) record only ctx["response"]/ctx["error"],
+# so the field cannot be matched against a recorded per-field outcome.
+# Instead the step asserts the field is a *known* dimension of the
+# operation under test — an empty or unrecognized field means a misnamed
+# scenario and must fail loudly rather than pass on an unrelated outcome.
+
+# Known partition/boundary dimensions across UC-004 (delivery) and UC-005
+# (creative formats). A field outside this set is a scenario authoring
+# error — the step must reject it instead of silently passing.
+_KNOWN_PARTITION_FIELDS: frozenset[str] = frozenset(
+    {
+        # UC-005 — list_creative_formats filters
+        "format_ids",
+        "asset_types",
+        "dimension",
+        "responsive",
+        "name search",
+        "wcag",
+        "disclosure",
+        "disclosure_positions",
+        "output_format_ids",
+        "input_format_ids",
+        "creative agent type",
+        "creative agent asset type",
+        # UC-004 — get_media_buy_delivery filters
+        "account",
+        "attribution_window",
+        "reporting_dimensions",
+        "daily breakdown",
+        "status",
+        "date",
+        "date range",
+        "sampling",
+        "sampling method",
+        "credentials",
+    }
+)
+
+# Per-response-type success collections. A "valid" outcome must carry a
+# present, correctly-typed instance of one of these — proving the response
+# is a real result of the operation, not an empty/degenerate shell.
+_SUCCESS_COLLECTION_ATTRS: tuple[str, ...] = (
+    "formats",  # ListCreativeFormatsResponse
+    "media_buy_deliveries",  # GetMediaBuyDeliveryResponse
+    "aggregated_totals",  # GetMediaBuyDeliveryResponse
+)
 
 
-def _assert_partition_outcome(ctx: dict, expected: str) -> None:
-    """Assert partition/boundary test outcome against real production results.
+def _is_real_rejection(err: Any) -> bool:
+    """True iff *err* is a genuine validation/AdCP rejection with a message.
 
-    "valid" means production code accepted the input (response exists, no error).
-    "invalid" means production code rejected the input (error raised).
-
-    This is intentionally a binary accept/reject gate — it tests whether the
-    production code correctly classifies an input as valid or invalid. Content
-    verification (what the response contains) belongs in separate Then steps
-    that follow this one in the scenario (e.g., then_only_image_assets, then_all_formats).
+    An arbitrary ``RuntimeError`` (e.g. a crash, a harness wiring bug) is
+    NOT a valid "the input was rejected" outcome — it must fail the step.
     """
+    if isinstance(err, AdCPError):
+        return bool(getattr(err, "message", "") or str(err))
+    if isinstance(err, PydanticValidationError):
+        return err.error_count() > 0
+    return False
+
+
+def _assert_schema_valid_success(resp: Any) -> None:
+    """Assert *resp* is a schema-valid success response of the operation.
+
+    The response must be a Pydantic model, must not carry a non-empty
+    ``errors`` list, and must expose at least one known success collection
+    that is present and a ``list`` / structured object (not ``None``).
+    """
+    assert isinstance(resp, BaseModel), (
+        f"Expected a schema-valid response model for a 'valid' outcome, got {type(resp).__name__}: {resp!r}"
+    )
+    embedded_errors = getattr(resp, "errors", None)
+    assert not embedded_errors, f"'valid' outcome but response embeds errors: {embedded_errors}"
+
+    present = [a for a in _SUCCESS_COLLECTION_ATTRS if hasattr(resp, a)]
+    assert present, (
+        f"Response {type(resp).__name__} exposes none of the expected "
+        f"success collections {_SUCCESS_COLLECTION_ATTRS} — not a recognized "
+        f"result of the operation under test"
+    )
+    for attr in present:
+        value = getattr(resp, attr)
+        assert value is not None, (
+            f"'valid' outcome but response.{attr} is None — likely a production bug (degenerate success shell)"
+        )
+        if attr in ("formats", "media_buy_deliveries"):
+            assert isinstance(value, list), (
+                f"'valid' outcome but response.{attr} is {type(value).__name__}, expected a list"
+            )
+
+
+def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
+    """Assert the <field> partition/boundary produced <expected>.
+
+    "valid"  → production accepted the input: a schema-valid success
+               response of the operation, no error recorded.
+    "invalid"/"error" → production rejected the input with a genuine
+               validation/AdCP error (not an arbitrary exception).
+
+    The captured ``field`` must name a known dimension of the operation
+    under test; an empty/unknown field, or a context with neither a
+    response nor an error, fails the step loudly (it would otherwise pass
+    vacuously on an unrelated outcome).
+    """
+    normalized_field = (field or "").strip()
+    assert normalized_field, "Step captured an empty <field> — misnamed scenario"
+    assert normalized_field in _KNOWN_PARTITION_FIELDS, (
+        f"'{normalized_field}' is not a known partition/boundary dimension "
+        f"— the step text claims filtering/handling acted on this field but "
+        f"it is unrecognized (misnamed scenario or untracked dimension)"
+    )
+
+    has_response = "response" in ctx and ctx.get("response") is not None
+    has_error = "error" in ctx and ctx.get("error") is not None
+    assert has_response or has_error, (
+        f"Neither a response nor an error was recorded for the "
+        f"'{normalized_field}' {expected} scenario — the operation was "
+        f"never exercised; cannot verify the outcome"
+    )
+
     if expected == "valid":
-        assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"
-        assert "response" in ctx, "Expected response but none found"
-        # Verify the response is non-degenerate (not an empty shell)
-        resp = ctx["response"]
-        if hasattr(resp, "formats"):
-            assert resp.formats is not None, "Response has formats=None — likely a production bug"
-    elif expected == "invalid":
-        assert "error" in ctx, "Expected error but operation succeeded"
+        assert not has_error, (
+            f"Expected the '{normalized_field}' input to be accepted but production raised: {ctx.get('error')!r}"
+        )
+        _assert_schema_valid_success(ctx["response"])
+    elif expected in ("invalid", "error"):
+        assert has_error, (
+            f"Expected production to reject the '{normalized_field}' input "
+            f"but it succeeded with: {ctx.get('response')!r}"
+        )
+        err = ctx["error"]
+        assert _is_real_rejection(err), (
+            f"Expected a genuine validation/AdCP rejection for the "
+            f"'{normalized_field}' input, got "
+            f"{type(err).__name__}: {err!r}"
+        )
     else:
-        raise AssertionError(f"Unexpected outcome value: {expected}")
+        raise AssertionError(
+            f"Unexpected outcome word '{expected}' for field '{normalized_field}' — expected one of valid/invalid/error"
+        )
 
 
 @then(parsers.re(r"the (?P<field>.+) filtering should result in (?P<expected>\w+)"))
 def then_partition_filtering_result(ctx: dict, field: str, expected: str) -> None:
-    """Generic partition test: any '<field> filtering should result in <expected>'."""
-    _assert_partition_outcome(ctx, expected)
+    """Generic partition test: '<field> filtering should result in <expected>'.
+
+    Verifies the named ``field`` is a real dimension of the operation and
+    that the recorded outcome genuinely matches ``expected`` (schema-valid
+    success xor genuine rejection) — not merely that some response or some
+    error exists.
+    """
+    _assert_partition_outcome(ctx, field, expected)
 
 
 @then(parsers.re(r"the (?P<field>.+) handling should be (?P<expected>\w+)"))
 def then_boundary_handling_result(ctx: dict, field: str, expected: str) -> None:
-    """Generic boundary test: any '<field> handling should be <expected>'."""
-    _assert_partition_outcome(ctx, expected)
+    """Generic boundary test: '<field> handling should be <expected>'.
+
+    Same contract as :func:`then_partition_filtering_result`, scoped to the
+    named boundary ``field``. An unexercised or misnamed field fails loudly
+    instead of passing on an unrelated generic outcome.
+    """
+    _assert_partition_outcome(ctx, field, expected)

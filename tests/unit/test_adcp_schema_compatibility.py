@@ -58,6 +58,7 @@ class TestADCPSchemaCompatibility:
         # Simulate signal data as returned by adcp library (all required fields)
         # adcp 3.9: pricing_options replaces the old pricing field
         adcp_signal_data = {
+            "signal_id": {"source": "catalog", "data_provider_domain": "optable.co", "id": "segment_123"},
             "signal_agent_segment_id": "segment_123",
             "name": "Automotive Enthusiasts",
             "description": "Users interested in automotive content",
@@ -145,6 +146,11 @@ class TestADCPSchemaCompatibility:
         # adcp 3.9: pricing_options replaces the old pricing field
         original_data = {
             "signal_agent_segment_id": "roundtrip_seg",
+            "signal_id": {
+                "id": "roundtrip_seg",
+                "source": "agent",
+                "agent_url": "https://salesagent.adcontextprotocol.org",
+            },
             "name": "Roundtrip Signal",
             "description": "Test signal for roundtrip",
             "signal_type": "marketplace",  # Must be one of: marketplace, custom, owned

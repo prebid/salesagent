@@ -71,6 +71,10 @@ class TestSchemaFieldMapping:
             "material_submission",  # Material submission config from adcp 3.12 spec
             "measurement_readiness",  # Measurement readiness from adcp 3.12 spec
             "trusted_match",  # Trusted match config from adcp 3.12 spec
+            # AdCP 4.3+ fields - inherited from library Product, not yet stored in database
+            "measurement_terms",  # Measurement terms from adcp 4.3 spec
+            "cancellation_policy",  # Cancellation policy from adcp 4.3 spec
+            "performance_standards",  # Performance standards from adcp 4.3 spec
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)

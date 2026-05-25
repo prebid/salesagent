@@ -52,10 +52,13 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     # Parse JSON account setup
     config = json.loads(account_setup)
 
-    # Check for invalid oneOf: both account_id and brand present
+    # Invalid oneOf: both account_id and brand present. Keep the raw payload so
+    # the When step can dispatch it to production unchanged — production must be
+    # the thing under test, not a test-side synthesized error.
     if "account_id" in config and "brand" in config:
         ctx["account_ref"] = None
         ctx["account_invalid_both"] = True
+        ctx["account_raw_both"] = config
         return
 
     if "account_id" in config:
@@ -167,15 +170,41 @@ def when_sync_creative(ctx: dict) -> None:
     The wrappers call enrich_identity_with_account() → resolve_account(),
     exercising the full account resolution chain across all transports.
 
-    Pre-resolution validation (missing/invalid account_ref) is handled via
-    the shared validate_account_ref() helper.
+    The absent / invalid-oneOf cases are NOT short-circuited with a test-side
+    synthesized error. Instead they are dispatched to production unchanged so
+    the scenario genuinely exercises whether production performs schema-level
+    INVALID_REQUEST validation for the account field (it does not — see the
+    strict xfail in tests/bdd/conftest.py _UC006_VALIDATION_XFAIL).
     """
-    from tests.bdd.steps.generic._account_resolution import validate_account_ref
+    if ctx.get("account_absent"):
+        # No account field at all. Production's enrich_identity_with_account()
+        # returns identity unchanged (no required-field validation), so this
+        # genuinely reaches _sync_creatives_impl and succeeds — there is no
+        # INVALID_REQUEST. dispatch with account=None to exercise that path.
+        dispatch_request(ctx, account=None, creatives=[])
+        return
 
-    account_ref = validate_account_ref(ctx)
-    if account_ref is None:
-        return  # ctx["error"] already set
+    if ctx.get("account_invalid_both"):
+        # Both account_id and brand present. Every transport boundary parses the
+        # request body's account field into the adcp library AccountReference
+        # before reaching the wrapper. That union has no variant accepting both
+        # keys, so parsing raises a Pydantic ValidationError — which production
+        # does NOT translate into AdCPError(INVALID_REQUEST, suggestion). Mirror
+        # the boundary parse here so the scenario observes the genuine library
+        # validation behaviour rather than a test-synthesized error.
+        from adcp.types import AccountReference as LibraryAccountReference
+        from pydantic import ValidationError
 
+        try:
+            account_ref = LibraryAccountReference.model_validate(ctx["account_raw_both"])
+        except ValidationError as exc:
+            ctx["error"] = exc
+            return
+        dispatch_request(ctx, account=account_ref, creatives=[])
+        return
+
+    account_ref = ctx.get("account_ref")
+    assert account_ref is not None, "account reference was not set up by the Given step"
     dispatch_request(ctx, account=account_ref, creatives=[])
 
 
@@ -209,15 +238,28 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))
 def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
-    """Assert error has the expected error_code and includes a suggestion."""
+    """Assert error has the expected error_code and includes a suggestion.
+
+    Production code stores the suggestion in ``error.details["suggestion"]``.
+    The MCP boundary serializes ``{"details": error.details, ...}`` into a JSON
+    metadata bundle, so after the round-trip ``error.details`` becomes
+    ``{"details": {"suggestion": ...}, "suggestion": ...}``. Accept both shapes
+    so the assertion is transport-agnostic.
+    """
     from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
-    if isinstance(error, AdCPError):
-        assert error.error_code == error_code, f"Expected error code '{error_code}', got '{error.error_code}'"
-        assert error.details, f"Expected details with suggestion on {error_code} error"
-        assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-    else:
+    if not isinstance(error, AdCPError):
         raise AssertionError(f"Expected AdCPError with code {error_code}, got {type(error).__name__}: {error}")
+
+    assert error.error_code == error_code, f"Expected error code '{error_code}', got '{error.error_code}'"
+    assert error.details, f"Expected details with suggestion on {error_code} error"
+
+    suggestion = error.details.get("suggestion")
+    if suggestion is None:
+        nested = error.details.get("details")
+        if isinstance(nested, dict):
+            suggestion = nested.get("suggestion")
+    assert suggestion, f"Expected 'suggestion' in error details: {error.details}"

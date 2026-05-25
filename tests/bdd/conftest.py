@@ -109,9 +109,16 @@ def pytest_configure(config: pytest.Config) -> None:
 # Each xfail has a FIXME pointing to the work needed.
 
 _XFAIL_TAGS: dict[str, str] = {
-    # FIXME(beads-dul): disclosure_positions filter not implemented in production
-    # Note: violated/nofield pass vacuously (field rejected at schema level)
-    "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
+    # FIXME(beads-dul): disclosure_positions filter not implemented in
+    # _list_creative_formats_impl. The adcp library request carries a
+    # disclosure_positions field but creative_formats.py applies no
+    # disclosure filter, so "holds" (asserts a specific format is the only
+    # match) genuinely fails on every transport. violated/nofield are
+    # reconciled separately (salesagent-9z2t): they fail on impl/a2a/rest
+    # for the same reason and pass vacuously on MCP (the MCP wrapper has no
+    # disclosure_positions param → ToolError → empty result satisfies the
+    # absence assertion).
+    "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented in _list_creative_formats_impl",
     # FIXME(beads-dul): sandbox mode not implemented in harness
     # Note: sandbox-production passes vacuously (sandbox=None by default)
     "T-UC-005-sandbox-happy": "sandbox mode not implemented",
@@ -143,24 +150,36 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
 }
 
-# FIXME(beads-dul): Selective xfail for parametrized scenarios where only
-# some examples exercise unimplemented features. Each entry: (tag, node_id
-# substrings that should xfail, reason).
+# Selective xfail for parametrized scenarios where only some examples
+# exercise an unimplemented feature. Each entry: (tag, node_id substrings
+# that should xfail, reason). strict=True — these MUST fail until the gap
+# closes.
+#
+# salesagent-9z2t: the disclosure_positions When-step now builds a valid
+# request (the earlier "all_positions"/"no_matching_formats" partitions
+# used stale enum literals — corner/inline/before/after — which no longer
+# exist in DisclosurePosition, so the request never built and the row
+# passed vacuously under a blanket strict=False marker). With a real
+# request the only genuine, transport-independent failure is the
+# duplicate-positions example: production does not reject duplicate
+# disclosure_positions values (no dedup/validation), so a scenario that
+# expects rejection fails on every transport. All other partition/boundary
+# disclosure rows now pass on impl/a2a/rest (a "valid" outcome only
+# requires a schema-valid success; the missing filter is a no-op, not a
+# rejection) and are reconciled per-transport for MCP via
+# _MCP_SELECTIVE_XFAIL.
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-005-partition-disclosure",
-        {"single_position", "multiple_positions_all_match", "all_positions", "no_matching_formats"},
-        "disclosure_positions filter not implemented",
+        {"duplicate_positions"},
+        "production does not reject duplicate disclosure_positions values "
+        "(no dedup/validation in _list_creative_formats_impl)",
     ),
     (
         "T-UC-005-boundary-disclosure",
-        {"single position", "all 8 positions", "format has no"},
-        "disclosure_positions filter not implemented",
-    ),
-    (
-        "T-UC-005-boundary-asset-types",
-        {"brief", "catalog"},
-        "brief/catalog asset types not in adcp enum",
+        {"duplicate positions"},
+        "production does not reject duplicate disclosure_positions values "
+        "(no dedup/validation in _list_creative_formats_impl)",
     ),
 ]
 
@@ -199,14 +218,47 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
         "MCP wrapper does not accept input_format_ids",
         True,
     ),
-    # Invariant scenarios — "holds" genuinely fails (asserts presence);
-    # "violated"/"nofield" pass vacuously (asserts absence → empty list satisfies)
+    # disclosure_positions (salesagent-9z2t): the MCP list_creative_formats
+    # wrapper signature has no disclosure_positions parameter, so any MCP
+    # call that sends one is rejected by FastMCP tool validation
+    # (ToolError "unexpected keyword argument"). The When-step records that
+    # as ctx["error"], so every example that actually SENDS the param
+    # genuinely fails the strengthened assertion (a "valid" outcome must
+    # have no error; an "invalid" outcome must be a real AdCP/validation
+    # rejection, not a transport ToolError). Examples that send no param —
+    # "omitted" — and the schema-invalid examples (unknown_position /
+    # empty_array, rejected by Pydantic before the MCP boundary) still pass.
+    (
+        "T-UC-005-partition-disclosure",
+        {
+            "single_position",
+            "multiple_positions_all_match",
+            "all_positions",
+            "no_matching_formats",
+            "duplicate_positions",
+        },
+        "MCP wrapper does not accept disclosure_positions",
+        True,
+    ),
+    (
+        "T-UC-005-boundary-disclosure",
+        {"single position", "all 8 positions", "format has no", "duplicate positions"},
+        "MCP wrapper does not accept disclosure_positions",
+        True,
+    ),
+    # Invariant scenarios — only "holds" carries a marker. "holds" asserts
+    # a specific format is the unique match, so the MCP wrapper dropping the
+    # filter param genuinely fails it (strict=True, tied to the named
+    # wrapper gap). "violated"/"nofield" assert a format is *absent*; the
+    # MCP wrapper rejecting the param yields an empty/errored result that
+    # trivially satisfies absence, so they pass vacuously. A strict=False
+    # marker there would only ever XPASS — it documents nothing the
+    # strict=True "holds" markers don't already pin to the same gap — so it
+    # is removed (salesagent-9z2t/7xc2). The genuine guardrail is the
+    # "holds" rows: when the wrapper gains the param they flip XPASS and
+    # force the marker out.
     ("T-UC-005-inv-049-9-holds", set(), "MCP wrapper does not accept output_format_ids", True),
-    ("T-UC-005-inv-049-9-violated", set(), "MCP wrapper does not accept output_format_ids (vacuous pass)", False),
-    ("T-UC-005-inv-049-9-nofield", set(), "MCP wrapper does not accept output_format_ids (vacuous pass)", False),
     ("T-UC-005-inv-049-10-holds", set(), "MCP wrapper does not accept input_format_ids", True),
-    ("T-UC-005-inv-049-10-violated", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
-    ("T-UC-005-inv-049-10-nofield", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
 ]
 
 # REST xfails: REST endpoint drops all filter params (build_rest_body returns {}).
@@ -214,6 +266,12 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
 # pass coincidentally because unfiltered results include the expected format.
 _REST_XFAIL_TAGS: set[str] = {
     # Invariant filter scenarios where REST unfiltered results break assertions
+    # disclosure_positions (salesagent-9z2t): REST drops all filter params,
+    # so the seeded non-matching format leaks into the unfiltered result and
+    # the "should not be returned" / edge-exclusion assertions fail. (holds
+    # is covered transport-wide by _XFAIL_TAGS.)
+    "T-UC-005-inv-049-8-violated",
+    "T-UC-005-inv-049-8-nofield",
     "T-UC-005-inv-049-1-holds",  # type filter
     "T-UC-005-inv-049-1-violated",
     "T-UC-005-inv-049-2-holds",  # format_ids filter
@@ -270,23 +328,36 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
                     break
 
-        # --- UC-005: disclosure/asset scenarios with partial impl ---
-        # FIXME(beads-dul): disclosure_positions and brief/catalog asset types
-        # partially implemented — some transport variants pass, others fail.
-        # Must run BEFORE selective xfails (which use strict=True) to avoid
-        # XPASS failures on transport variants that now pass.
-        _UC005_PARTIAL_TAGS = {
-            "T-UC-005-partition-disclosure",
-            "T-UC-005-boundary-disclosure",
-            "T-UC-005-boundary-asset-types",
+        # --- UC-005: disclosure_positions filter not implemented in _impl ---
+        # salesagent-9z2t reconciliation. The earlier blanket
+        # _UC005_PARTIAL_TAGS strict=False masked two distinct realities:
+        #   1. a broken When-step (stale enum literals) that never built a
+        #      valid request — now fixed in when_request.py, so the rows
+        #      genuinely exercise the feature; and
+        #   2. a genuine production gap — _list_creative_formats_impl
+        #      applies no disclosure_positions filter.
+        # inv-049-8 "violated"/"nofield" assert a seeded format is excluded.
+        # With the filter absent it leaks into the result, so they fail on
+        # impl and a2a (full filter pipeline). REST is handled by
+        # _REST_XFAIL_TAGS (drops all params) and MCP by
+        # _MCP_SELECTIVE_XFAIL (wrapper rejects the param → vacuous pass),
+        # so this strict=True only targets impl/a2a.
+        _UC005_DISCLOSURE_IMPL_GAP = {
             "T-UC-005-inv-049-8-violated",
             "T-UC-005-inv-049-8-nofield",
         }
-        if marker_names & _UC005_PARTIAL_TAGS:
-            item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
-            # Skip selective xfails for these — the strict=False above covers them
-        else:
-            # Selective xfail for parametrized scenarios
+        if (marker_names & _UC005_DISCLOSURE_IMPL_GAP) and not is_mcp and not is_rest:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="disclosure_positions filter not implemented in _list_creative_formats_impl",
+                    strict=True,
+                )
+            )
+
+        # Selective xfail for parametrized scenarios. MCP already handled
+        # above (its disclosure rows live in _MCP_SELECTIVE_XFAIL); applying
+        # the transport-wide entry again would double-mark, so skip MCP here.
+        if not is_mcp:
             for tag, substrings, reason in _SELECTIVE_XFAIL:
                 if tag in marker_names:
                     if any(s in item.nodeid for s in substrings):
@@ -327,17 +398,37 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # --- UC-006: INVALID_REQUEST validation xfails (production not implemented) ---
+        # --- UC-006: INVALID_REQUEST validation xfails ---
+        # B7 reconciled (salesagent-miva, 18h.10 Phase-2): the step layer no
+        # longer synthesizes an AdCPValidationError — when_sync_creative now
+        # genuinely dispatches the absent/both-account payloads to production
+        # (see tests/bdd/steps/domain/uc006_sync_creatives.py). With that, the
+        # rows genuinely fail for a real, named production gap:
+        #   - missing_account / account field absent: production performs no
+        #     required-account schema validation. enrich_identity_with_account()
+        #     returns identity unchanged, _sync_creatives_impl succeeds — no
+        #     INVALID_REQUEST is ever raised.
+        #   - invalid_oneOf_both / both account_id and brand: the adcp library
+        #     AccountReference union raises a Pydantic ValidationError at parse
+        #     time, which production does not translate into
+        #     AdCPError(INVALID_REQUEST, suggestion) — same C4 gap as UC-004.
+        # strict=True forces marker removal the moment a transport-boundary
+        # translator + required-account validation lands. See
+        # docs/test-debt-bdd-strict-markers.md items B7 and C4.
         _UC006_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
             (
                 "T-UC-006-partition-account",
                 {"missing_account", "invalid_oneOf_both"},
-                "INVALID_REQUEST validation not implemented (schema-level)",
+                "production performs no required-account validation and does not "
+                "translate Pydantic ValidationError into AdCPError(INVALID_REQUEST, "
+                "suggestion). See docs/test-debt-bdd-strict-markers.md items B7 and C4.",
             ),
             (
                 "T-UC-006-boundary-account",
                 {"account field absent", "both account_id and brand"},
-                "INVALID_REQUEST validation not implemented (schema-level)",
+                "production performs no required-account validation and does not "
+                "translate Pydantic ValidationError into AdCPError(INVALID_REQUEST, "
+                "suggestion). See docs/test-debt-bdd-strict-markers.md items B7 and C4.",
             ),
         ]
         if any(t.startswith("T-UC-006") for t in marker_names):
@@ -400,27 +491,52 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                 break
 
-        # UC-004 status filter: "active" works, other values may not
+        # UC-004 reporting_dimensions breakdowns (by_geo, by_device_type, by_audience):
+        # PackageDelivery model only declares by_placement. The optional fields
+        # by_geo, by_device_type, by_audience and their *_truncated siblings are not
+        # on the model, and media_buy_delivery._impl only branches on req.reporting_dimensions.placement.
+        # Tracked by salesagent-zk1: feat: implement reporting_dimensions breakdowns
+        # (geo, device_type, audience) per BR-RULE-091.
+        _UC004_DIM_XFAIL_TAGS: dict[str, tuple[str, bool]] = {
+            "T-UC-004-dim-supported": (
+                "by_device_type breakdown not implemented — see salesagent-zk1: "
+                "feat: implement reporting_dimensions breakdowns (geo, device_type, audience) per BR-RULE-091",
+                True,
+            ),
+            "T-UC-004-dim-truncated": (
+                "by_geo breakdown + truncation flag not implemented — see salesagent-zk1: "
+                "feat: implement reporting_dimensions breakdowns (geo, device_type, audience) per BR-RULE-091",
+                True,
+            ),
+            "T-UC-004-dim-complete": (
+                "by_device_type breakdown + truncation flag not implemented — see salesagent-zk1: "
+                "feat: implement reporting_dimensions breakdowns (geo, device_type, audience) per BR-RULE-091",
+                True,
+            ),
+            "T-UC-004-dim-multi": (
+                "by_geo and by_device_type breakdowns not implemented — see salesagent-zk1: "
+                "feat: implement reporting_dimensions breakdowns (geo, device_type, audience) per BR-RULE-091",
+                True,
+            ),
+        }
+        for tag, (reason, strict) in _UC004_DIM_XFAIL_TAGS.items():
+            if tag in marker_names:
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
+                break
+
+        # UC-004 status filter: selection by persisted status now works
+        # (salesagent-18h.1). The remaining xfails are unrelated:
+        #   - pending_activation: invalid MediaBuyStatus enum value in the
+        #     Gherkin Examples table (debt-doc B1, separate test rewrite)
+        #   - paused/completed: the *response* delivery status is still
+        #     date-derived, so then_only_status sees "active" for a buy
+        #     persisted as paused/completed even though it is selected
+        #     correctly (response-status-display gap — see debt-doc B1).
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
             (
                 "T-UC-004-filter",
-                {"pending_activation", "rejected", "canceled", "paused", "completed"},
-                "status_filter for non-active statuses not mapped in _impl",
-            ),
-            (
-                "T-UC-004-filter-default",
-                set(),  # all examples
-                "default status_filter=active not applied when no explicit IDs",
-            ),
-            (
-                "T-UC-004-filter-empty",
-                set(),
-                "status_filter empty result not returned as empty array",
-            ),
-            (
-                "T-UC-004-filter-array",
-                set(),
-                "status_filter with array not correctly applied",
+                {"pending_activation", "paused", "completed"},
+                "response delivery status still date-derived (selection fixed in salesagent-18h.1)",
             ),
         ]
         if any(t.startswith("T-UC-004-filter") for t in marker_names):
@@ -430,52 +546,364 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
 
-        # UC-004 date range: custom dates partially work
-        _UC004_DATE_SELECTIVE: list[tuple[str, set[str], str]] = [
-            ("T-UC-004-daterange", set(), "custom date range partially applied"),
-            ("T-UC-004-daterange-start-only", set(), "start-only date range partially applied"),
-            ("T-UC-004-daterange-end-only", set(), "end-only date range not applied"),
+        # UC-004 daterange-end-only: moved to _UC004_GENUINE_XFAIL_ROWS below
+        # as strict=True (salesagent-losz / debt C7 — end-only date_range defaults
+        # to today-30d instead of MediaBuy.created_at). The previous
+        # _UC004_DATE_SELECTIVE block was the last vacuous-tolerance state on
+        # daterange and has been retired.
+
+        # Per-row strict xfails for the partition/boundary scenarios whose
+        # blanket markers were removed. Each entry corresponds to a row in
+        # the Examples table that genuinely xfails because of a real
+        # production gap. strict=True ensures we are forced to remove the
+        # marker the moment the gap is closed (e.g., when ValidationError
+        # gets translated into AdCPError(INVALID_REQUEST) at the transport
+        # boundary, the partition tests will start xpassing → fail-strict
+        # → marker removal). Tracked centrally in
+        # docs/test-debt-bdd-strict-markers.md.
+        _UC004_GENUINE_XFAIL_ROWS: list[tuple[str, set[str], str]] = [
+            (
+                "T-UC-004-partition-reporting-dims",
+                {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
+                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-partition-attribution",
+                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
+                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-reporting-dims",
+                {"geo with geo_level=metro but no system"},
+                "AdCP spec defines metro/postal_area system requirement only in field description; no validator. See docs/test-debt-bdd-strict-markers.md item C10.",
+            ),
+            (
+                "T-UC-004-boundary-attribution",
+                {"unit=campaign with interval=2"},
+                "AdCP Duration spec defines 'interval=1 when unit=campaign' only in description; no validator. Same gap as T-UC-004-attr-campaign-invalid. See docs/test-debt-bdd-strict-markers.md item C10.",
+            ),
+            # reporting-dims / attribution boundary invalid-rows: Pydantic DOES
+            # reject these (missing geo_level / limit>=1 / enum), but the
+            # error is not normalized to AdCPError(INVALID_REQUEST) at the
+            # transport boundary — a2a wraps ValidationError in a bare
+            # RuntimeError, rest returns a 422 detail dict — so the BDD
+            # outcome assertion (expects AdCPError/ValidationError) fails.
+            # Same C4 transport-boundary error-normalization gap. These rows
+            # were previously covered by the blanket _UC004_BOUNDARY_TAGS
+            # strict=False, which 18h.10 Phase-2 (salesagent-04zf et al.)
+            # emptied; restored here as PRECISE strict=True tied to the real
+            # gap (no vacuous blanket). Forces marker removal when the
+            # transport-boundary error translator lands.
+            # Transport-scoped: impl genuinely PASSES these (production raises
+            # a bare ValidationError the outcome assertion accepts as a real
+            # rejection). Only a2a (RuntimeError-wrap) / mcp / rest (422 detail)
+            # fail the AdCPError/ValidationError type check — so xfail only
+            # those three, never impl.
+            (
+                "T-UC-004-boundary-reporting-dims",
+                {
+                    "a2a-geo without geo_level",
+                    "mcp-geo without geo_level",
+                    "rest-geo without geo_level",
+                    "a2a-limit=0 (below minimum)",
+                    "mcp-limit=0 (below minimum)",
+                    "rest-limit=0 (below minimum)",
+                    "a2a-limit negative",
+                    "mcp-limit negative",
+                    "rest-limit negative",
+                },
+                "Pydantic rejects (missing geo_level / limit>=1) but error not normalized to "
+                "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
+                "(a2a RuntimeError-wrap, rest 422 detail). impl passes. "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-attribution",
+                {
+                    "a2a-interval=0 (below minimum)",
+                    "mcp-interval=0 (below minimum)",
+                    "rest-interval=0 (below minimum)",
+                    "a2a-unit=weeks (not in enum)",
+                    "mcp-unit=weeks (not in enum)",
+                    "rest-unit=weeks (not in enum)",
+                    "a2a-model=last_click (not in enum)",
+                    "mcp-model=last_click (not in enum)",
+                    "rest-model=last_click (not in enum)",
+                },
+                "Pydantic rejects (interval>=1 / unit enum / model enum) but error not normalized to "
+                "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
+                "(a2a RuntimeError-wrap, rest 422 detail). impl passes. "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # C11 retired (salesagent-18h.1): the "production ignores buyer
+            # start_date" failure was an artefact of the greedy with-params
+            # step shadowing when_request_date_range and mis-parsing the
+            # request. With correct step routing, production echoes the
+            # buyer-supplied start_date/end_date in response.reporting_period,
+            # so T-UC-004-daterange now genuinely passes (no strict xfail).
+            #
+            # date-range partition/boundary (salesagent-04zf, 18h.10 Phase-2):
+            # when_partition/boundary_date_range now translate the descriptor
+            # into real start_date/end_date (previously the axis name was sent
+            # as a literal request field and rejected by extra=forbid, so the
+            # blanket _UC004_{PARTITION,BOUNDARY}_TAGS strict=False masked a
+            # broken step). With real wiring: the "valid" rows
+            # (start_before_end / dates_omitted) genuinely PASS on all 4
+            # transports (no marker). Only the "invalid" rows genuinely fail —
+            # production does not reject start>=end (same real gap as
+            # T-UC-004-daterange-invalid / -equal). strict=True forces marker
+            # removal the moment start>=end validation lands. See
+            # docs/test-debt-bdd-strict-markers.md item C4.
+            (
+                "T-UC-004-partition-date-range",
+                {"start_after_end", "start_equals_end"},
+                "production does not validate start_date>=end_date (same gap as "
+                "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-date-range",
+                {"start_date after end_date", "start_date equals end_date"},
+                "production does not validate start_date>=end_date (same gap as "
+                "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # end-only date_range default (salesagent-losz / debt C7, Gap G40):
+            # when only end_date is provided, the spec says start_date defaults
+            # to MediaBuy.created_at but production sets start = today-30d
+            # (src/core/tools/media_buy_delivery.py:162-165). The scenario's
+            # Then-step asserts the exact creation-date (2025-12-01), so the
+            # row genuinely fails today — upgraded from the former vacuous
+            # strict=False in _UC004_DATE_SELECTIVE to strict=True here.
+            (
+                "T-UC-004-daterange-end-only",
+                set(),
+                "production defaults start_date to today-30d when only end_date is given; "
+                "spec says default to MediaBuy.created_at. See docs/test-debt-bdd-strict-markers.md item C7.",
+            ),
+            # ---- 18h.10 Phase-2: 7 more UC-004 fields reconciled ----
+            # Each field's when_partition/boundary_<field> now translates the
+            # Gherkin descriptor into the real request kwargs/setup it
+            # represents (mirroring the typed when_request_* steps) instead of
+            # routing the axis name through _dispatch_partition. With real
+            # wiring the "valid" descriptors genuinely PASS (no marker); only
+            # the descriptors below genuinely fail for a real, named
+            # production gap, so they carry strict=True (forces marker removal
+            # the moment the gap closes). See docs/test-debt-bdd-strict-markers.md.
+            #
+            # daily-breakdown (salesagent-1pl): include_package_daily_breakdown
+            # is a real bool field; production lax-coerces non-boolean strings
+            # ("yes"/"true" → True) instead of raising INVALID_REQUEST.
+            (
+                "T-UC-004-partition-daily-breakdown",
+                {"non_boolean"},
+                "production lax-coerces non-boolean strings to bool (no strict-bool "
+                "validation, no AdCPError(INVALID_REQUEST)). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-daily-breakdown",
+                {"string 'true' (non-boolean type)"},
+                "production lax-coerces non-boolean strings to bool (no strict-bool "
+                "validation). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # account (salesagent-8n9): only the omitted/(field absent) rows
+            # pass on every transport. The other rows fail transport-asym-
+            # metrically — a2a/mcp/rest never parse/resolve AccountReference
+            # at the boundary (resolve_account does account_ref.root on a raw
+            # dict → RuntimeError); the invalid-account rows raise Pydantic
+            # ValidationError instead of AdCPError(INVALID_REQUEST/
+            # ACCOUNT_NOT_FOUND). Substrings are transport-prefixed so only
+            # the genuinely-failing rows are marked (impl valid rows pass).
+            (
+                "T-UC-004-partition-account",
+                {
+                    "impl-invalid_oneOf_both",
+                    "impl-account_not_found",
+                    "impl-empty_object",
+                    "a2a-explicit_account_id",
+                    "a2a-natural_key",
+                    "a2a-invalid_oneOf_both",
+                    "a2a-account_not_found",
+                    "a2a-empty_object",
+                    "mcp-explicit_account_id",
+                    "mcp-natural_key",
+                    "mcp-invalid_oneOf_both",
+                    "mcp-account_not_found",
+                    "mcp-empty_object",
+                    "rest-explicit_account_id",
+                    "rest-natural_key",
+                    "rest-invalid_oneOf_both",
+                    "rest-empty_object",
+                },
+                "a2a/mcp/rest do not parse/resolve AccountReference at the transport "
+                "boundary; invalid-account rows raise ValidationError not AdCPError. "
+                "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
+            ),
+            (
+                "T-UC-004-boundary-account",
+                {
+                    "impl-account_id present + not found",
+                    "a2a-account_id present + account exists",
+                    "a2a-brand + operator present",
+                    "a2a-both account_id and brand/operator",
+                    "a2a-account_id present + not found",
+                    "a2a-empty object {}",
+                    "mcp-account_id present + account exists",
+                    "mcp-brand + operator present",
+                    "mcp-both account_id and brand/operator",
+                    # mcp-account_id present + not found genuinely passes
+                    # (ValidationError satisfies 'invalid') — NOT marked.
+                    "mcp-empty object {}",
+                    "rest-account_id present + account exists",
+                    "rest-brand + operator present",
+                },
+                "a2a/mcp/rest do not parse/resolve AccountReference at the transport "
+                "boundary; invalid-account rows raise ValidationError not AdCPError. "
+                "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
+            ),
+            # sampling (salesagent-03q): sampling_method is NOT a
+            # GetMediaBuyDeliveryRequest field — the artifact-sampling feature
+            # is entirely unimplemented. Only (omitted)/not_provided genuinely
+            # pass; rest silently drops the unknown param so its named-method
+            # rows accidentally "pass" (must NOT be marked). impl/a2a/mcp
+            # named-method + every unknown_value/systematic row fails.
+            (
+                "T-UC-004-partition-sampling",
+                {
+                    "impl-random-random",
+                    "impl-stratified",
+                    "impl-recent",
+                    "impl-failures_only",
+                    "impl-unknown_value-systematic",
+                    "a2a-random-random",
+                    "a2a-stratified",
+                    "a2a-recent",
+                    "a2a-failures_only",
+                    "a2a-unknown_value-systematic",
+                    "mcp-random-random",
+                    "mcp-stratified",
+                    "mcp-recent",
+                    "mcp-failures_only",
+                    "mcp-unknown_value-systematic",
+                    "rest-unknown_value-systematic",
+                },
+                "sampling_method is unimplemented in get_media_buy_delivery (no schema "
+                "field); ValidationError not AdCPError (rest silently drops it). "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-sampling",
+                {
+                    "impl-random (first enum value)",
+                    "impl-failures_only (last enum value)",
+                    "a2a-random (first enum value)",
+                    "a2a-failures_only (last enum value)",
+                    "a2a-Unknown string not in enum",
+                    "mcp-random (first enum value)",
+                    "mcp-failures_only (last enum value)",
+                    "mcp-Unknown string not in enum",
+                    "rest-Unknown string not in enum",
+                },
+                "sampling_method is unimplemented in get_media_buy_delivery (no schema "
+                "field); ValidationError not AdCPError (rest silently drops it). "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # resolution (salesagent-lghk): all valid resolution modes pass on
+            # all transports; the empty-array reject passes on impl/mcp/rest
+            # (Pydantic ValidationError satisfies 'invalid'). Only a2a fails —
+            # the A2A boundary wraps the min_length ValidationError in a bare
+            # RuntimeError instead of AdCPError(INVALID_REQUEST).
+            (
+                "T-UC-004-partition-resolution",
+                {"a2a-empty_array"},
+                "A2A wraps the empty-array Pydantic ValidationError in a bare RuntimeError "
+                "(not AdCPError). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-resolution",
+                {"a2a-empty array (schema reject)"},
+                "A2A wraps the empty-array Pydantic ValidationError in a bare RuntimeError "
+                "(not AdCPError). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # ownership (salesagent-lzf3): owner-matches rows pass on all
+            # transports. owner-mismatch is the C3 security gap — cross-
+            # principal access returns 200+empty instead of MEDIA_BUY_NOT_FOUND.
+            (
+                "T-UC-004-partition-ownership",
+                {"owner_mismatch"},
+                "cross-principal access returns 200+empty instead of "
+                "AdCPError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
+            ),
+            (
+                "T-UC-004-boundary-ownership",
+                {"principal differs from owner"},
+                "cross-principal access returns 200+empty instead of "
+                "AdCPError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
+            ),
+            # status-filter (salesagent-6vu): all valid single statuses +
+            # arrays + (field absent) pass. pending_activation rows fail
+            # (Gherkin uses a non-spec MediaBuyStatus — item B1); empty-array /
+            # unknown-value "failed" rows raise ValidationError not
+            # AdCPError(INVALID_REQUEST) — item C4.
+            # partition: single_pending / unknown_value(failed) / empty_array
+            # fail on all 4 transports, so plain substrings are exact.
+            (
+                "T-UC-004-partition-status-filter",
+                {"single_pending", "empty_array", "unknown_value"},
+                "single_pending: Gherkin 'pending_activation' is not a valid AdCP "
+                "MediaBuyStatus (item B1). empty_array/unknown_value: ValidationError "
+                "not AdCPError(INVALID_REQUEST) (item C4). See docs/test-debt-bdd-strict-markers.md.",
+            ),
+            # boundary: pending_activation fails everywhere; the 'failed' /
+            # '[] (empty array...)' rows pass on impl/rest (ValidationError
+            # satisfies 'invalid') but fail on a2a/mcp — transport-prefixed
+            # substrings so only the genuinely-failing rows are marked.
+            (
+                "T-UC-004-boundary-status-filter",
+                {
+                    "impl-pending_activation (first enum value)",
+                    "a2a-pending_activation (first enum value)",
+                    "a2a-failed (not in AdCP enum",
+                    "a2a-[] (empty array, violates minItems)",
+                    "mcp-pending_activation (first enum value)",
+                    "mcp-failed (not in AdCP enum",
+                    "rest-pending_activation (first enum value)",
+                },
+                "pending_activation: Gherkin value not a valid AdCP MediaBuyStatus "
+                "(item B1). failed/[]: ValidationError not AdCPError on a2a/mcp (item C4). "
+                "See docs/test-debt-bdd-strict-markers.md.",
+            ),
+            # credentials (salesagent-f8u4): FULLY reconciled — the When step
+            # now validates the real AdCP reporting_webhook Authentication
+            # model (scheme enum + credentials min_length=32). All 40 rows
+            # genuinely PASS on all transports; NO strict=True entry needed
+            # (same shape as the reconciled date-range valid rows).
         ]
-        if any(t.startswith("T-UC-004-daterange") for t in marker_names):
-            for tag, substrings, reason in _UC004_DATE_SELECTIVE:
-                if tag in marker_names:
-                    if not substrings or any(s in nodeid for s in substrings):
-                        item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-                    break
+        for tag, substrings, reason in _UC004_GENUINE_XFAIL_ROWS:
+            if tag in marker_names and (not substrings or any(s in nodeid for s in substrings)):
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                break
 
         # UC-004 boundary scenarios: strict=False because some examples pass.
         # Invalid boundary values SHOULD fail validation but production doesn't validate.
         # Valid boundary values pass through fine.
-        _UC004_BOUNDARY_TAGS = {
-            "T-UC-004-boundary-reporting-dims",
-            "T-UC-004-boundary-attribution",
-            "T-UC-004-boundary-daily-breakdown",
-            "T-UC-004-boundary-account",
-            "T-UC-004-boundary-sampling",
-            "T-UC-004-boundary-status-filter",
-            "T-UC-004-boundary-date-range",
-            "T-UC-004-boundary-resolution",
-            "T-UC-004-boundary-ownership",
-            "T-UC-004-boundary-credentials",
-        }
+        # 18h.10 Phase-2 (salesagent-6vu/1pl/8n9/03q/lghk/lzf3/f8u4): all
+        # seven remaining UC-004 boundary fields reconciled. Their When steps
+        # now translate the descriptor into real request kwargs/setup; valid
+        # rows pass with no marker; genuinely-failing rows carry a strict=True
+        # entry in _UC004_GENUINE_XFAIL_ROWS (credentials fully passes — no
+        # entry). The blanket strict=False set is now empty for UC-004
+        # boundary; kept as a documented anchor for future fields.
+        _UC004_BOUNDARY_TAGS: set[str] = set()
         if marker_names & _UC004_BOUNDARY_TAGS:
             item.add_marker(pytest.mark.xfail(reason="boundary validation partially implemented", strict=False))
 
         # UC-004 partition scenarios: adcp 3.10 changed schema validation behavior.
         # Partition tests exercise valid/invalid value ranges per field.
         # strict=False: some partition values pass, others fail depending on schema version.
-        _UC004_PARTITION_TAGS = {
-            "T-UC-004-partition-reporting-dims",
-            "T-UC-004-partition-attribution",
-            "T-UC-004-partition-daily-breakdown",
-            "T-UC-004-partition-account",
-            "T-UC-004-partition-sampling",
-            "T-UC-004-partition-status-filter",
-            "T-UC-004-partition-date-range",
-            "T-UC-004-partition-resolution",
-            "T-UC-004-partition-ownership",
-            "T-UC-004-partition-credentials",
-        }
+        # 18h.10 Phase-2 (salesagent-6vu/1pl/8n9/03q/lghk/lzf3/f8u4): all
+        # seven remaining UC-004 partition fields reconciled (see the boundary
+        # note above). The blanket strict=False set is now empty for UC-004
+        # partition; kept as a documented anchor for future fields.
+        _UC004_PARTITION_TAGS: set[str] = set()
         if marker_names & _UC004_PARTITION_TAGS:
             item.add_marker(
                 pytest.mark.xfail(reason="partition validation behavior varies with adcp schema version", strict=False)
@@ -616,9 +1044,22 @@ def _detect_uc011_harness(marker_names: set[str]) -> str:
 
 
 def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
-    """Detect which delivery harness a UC-004 scenario needs."""
+    """Detect which delivery harness a UC-004 scenario needs.
+
+    The ``circuit-breaker`` env wraps :class:`WebhookDeliveryService`, the
+    real production code path, which emits ``X-ADCP-Signature`` /
+    ``Authorization: Bearer`` headers and implements proper retry/backoff
+    timing. Scenarios that exercise webhook authentication or retry/backoff
+    MUST go through this env — ``WebhookEnv`` routes through the legacy
+    ``deliver_webhook_with_retry`` function which emits the wrong header
+    name (``X-Webhook-Signature``) and has different retry timing.
+    """
     marker_names = {m.name for m in request.node.iter_markers()}
     if "webhook-reliability" in marker_names:
+        return "circuit-breaker"
+    # Auth-scheme scenarios (HMAC, Bearer) verify production-emitted headers
+    # and must use the real WebhookDeliveryService path, not WebhookEnv.
+    if "T-UC-004-webhook-hmac" in marker_names or "T-UC-004-webhook-bearer" in marker_names:
         return "circuit-breaker"
     if "webhook" in marker_names:
         return "webhook"
@@ -729,12 +1170,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx[f"db_principal_{env._principal_id}"] = principal
                 yield
         elif harness_type == "webhook":
+            request.getfixturevalue("integration_db")
             from tests.harness.delivery_webhook import WebhookEnv
 
             with WebhookEnv() as env:
                 ctx["env"] = env
                 yield
         elif harness_type == "circuit-breaker":
+            request.getfixturevalue("integration_db")
             from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 
             with CircuitBreakerEnv() as env:

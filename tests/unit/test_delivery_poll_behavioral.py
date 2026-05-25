@@ -141,7 +141,7 @@ class TestValidStatusValuesAccepted:
         "status_input",
         [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.paused,
             MediaBuyStatus.completed,
         ],
@@ -755,7 +755,7 @@ class TestMissingPrincipalIdReturnsError:
 
         response = _get_media_buy_delivery_impl(req, identity)
         assert response.errors is not None
-        assert any(e.code == "principal_id_missing" for e in response.errors)
+        assert any(e.code == "AUTH_REQUIRED" for e in response.errors)
 
     def test_empty_string_principal_id_returns_error_response(self):
         from src.core.resolved_identity import ResolvedIdentity
@@ -769,7 +769,7 @@ class TestMissingPrincipalIdReturnsError:
 
         response = _get_media_buy_delivery_impl(req, identity)
         assert response.errors is not None
-        assert any(e.code == "principal_id_missing" for e in response.errors)
+        assert any(e.code == "AUTH_REQUIRED" for e in response.errors)
 
 
 class TestMissingTenantRaisesAuthError:

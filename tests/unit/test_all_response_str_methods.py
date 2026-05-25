@@ -190,7 +190,7 @@ class TestResponseStrMethods:
         from adcp import Error
 
         resp = ActivateSignalResponse(
-            signal_id="sig_123", errors=[Error(code="ACTIVATION_FAILED", message="Could not activate signal")]
+            signal_id="sig_123", errors=[Error(code="SERVICE_UNAVAILABLE", message="Could not activate signal")]
         )
         assert str(resp) == "Signal sig_123 activation encountered 1 error(s)."
 

@@ -18,7 +18,9 @@ from adcp.types import (
 from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
+from adcp.types import ReportingFrequency as LibraryReportingFrequency
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import ByGeoItem as LibraryByGeoItem
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
@@ -82,6 +84,29 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
         description="Include daily_breakdown arrays within each package (salesagent extension, not in adcp spec)",
     )
 
+    # --- AdCP spec fields the adcp Python library lags on (gh-#1299) ---
+    # Defined in /schemas/latest/media-buy/get-media-buy-delivery-request.json but
+    # not yet in the adcp library's GetMediaBuyDeliveryRequest. Declared here so
+    # spec-compliant clients are accepted (Pattern #1: extend library type).
+    time_granularity: LibraryReportingFrequency | None = Field(
+        None,
+        description=(
+            "Per-window slice granularity for the pull, using the same vocabulary "
+            "as reporting_webhook.reporting_frequency. When set, the seller returns "
+            "per-window delivery slices over the date range. Capability-scoped: the "
+            "value MUST be one of the seller's declared "
+            "reporting_capabilities.windowed_pull_granularities."
+        ),
+    )
+    include_window_breakdown: bool = Field(
+        default=False,
+        description=(
+            "When true, the response includes media_buy_deliveries[].windows[] — "
+            "per-window delivery slices over the date range at the requested "
+            "time_granularity. Ignored when time_granularity is omitted."
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Delivery data models
@@ -124,6 +149,18 @@ class PlacementBreakdown(SalesAgentBaseModel):
     clicks: float | None = Field(None, ge=0, description="Placement clicks")
 
 
+class GeoBreakdown(LibraryByGeoItem):
+    """Geographic delivery breakdown entry (extends library ByGeoItem).
+
+    Library provides geo_level, system, geo_code, geo_name plus the full
+    DeliveryMetrics surface. For metro/postal_area levels the ``system``
+    field carries the classification system the seller used (BR-RULE-091
+    INV-5, e.g. 'nielsen_dma', 'us_zip').
+    """
+
+    pass  # All fields inherited from library ByGeoItem
+
+
 class PackageDelivery(SalesAgentBaseModel):
     """Metrics broken down by package.
 
@@ -156,6 +193,11 @@ class PackageDelivery(SalesAgentBaseModel):
         None,
         description="Placement-level delivery breakdown (populated when reporting_dimensions includes 'placement')",
     )
+    by_geo: list[GeoBreakdown] | None = Field(
+        None,
+        description="Geographic delivery breakdown (populated when reporting_dimensions includes 'geo'). "
+        "For metro/postal_area levels each entry declares the classification 'system' used.",
+    )
 
 
 class DailyBreakdown(SalesAgentBaseModel):
@@ -182,11 +224,11 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
     """
 
     media_buy_id: str = Field(description="Publisher's media buy identifier")
-    # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_activation``
+    # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_start``
     # where salesagent uses ``ready``. Align naming to spec when updating
     # _compute_media_buy_status and all status references.
     status: Literal["ready", "active", "paused", "completed", "failed", "reporting_delayed"] = Field(
-        description="Current media buy status. 'ready' means scheduled to go live at flight start date (spec: pending_activation)."
+        description="Current media buy status. 'ready' means scheduled to go live at flight start date (spec: pending_start)."
     )
     expected_availability: str | None = Field(
         default=None,

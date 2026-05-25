@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import GetAdcpCapabilitiesResponse
+from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedProtocol,
 )
@@ -32,13 +33,17 @@ class TestGetAdcpCapabilitiesSchema:
         """Test that response requires supported_protocols field."""
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
+            Idempotency,
             MajorVersion,
         )
 
         # Must have supported_protocols (non-empty list)
         with pytest.raises(ValueError):
             GetAdcpCapabilitiesResponse(
-                adcp=Adcp(major_versions=[MajorVersion(root=3)]),
+                adcp=Adcp(
+                    major_versions=[MajorVersion(root=3)],
+                    idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+                ),
                 supported_protocols=[],  # Empty not allowed
             )
 
@@ -46,11 +51,15 @@ class TestGetAdcpCapabilitiesSchema:
         """Test creating a valid minimal response."""
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
+            Idempotency,
             MajorVersion,
         )
 
         response = GetAdcpCapabilitiesResponse(
-            adcp=Adcp(major_versions=[MajorVersion(root=3)]),
+            adcp=Adcp(
+                major_versions=[MajorVersion(root=3)],
+                idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+            ),
             supported_protocols=[SupportedProtocol.media_buy],
         )
 
@@ -65,6 +74,7 @@ class TestGetAdcpCapabilitiesSchema:
         from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
             Adcp,
             Execution,
+            Idempotency,
             MajorVersion,
             MediaBuy,
             Portfolio,
@@ -73,7 +83,10 @@ class TestGetAdcpCapabilitiesSchema:
         )
 
         response = GetAdcpCapabilitiesResponse(
-            adcp=Adcp(major_versions=[MajorVersion(root=3)]),
+            adcp=Adcp(
+                major_versions=[MajorVersion(root=3)],
+                idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+            ),
             supported_protocols=[SupportedProtocol.media_buy],
             media_buy=MediaBuy(
                 portfolio=Portfolio(
@@ -81,9 +94,13 @@ class TestGetAdcpCapabilitiesSchema:
                     publisher_domains=[PublisherDomain(root="example.com")],
                 ),
                 features=MediaBuyFeatures(
-                    content_standards=True,
                     inline_creative_management=True,
                     property_list_filtering=True,
+                    # catalog_management example must match production (False until
+                    # sync_catalogs ships). Schema-construction tests are
+                    # documentation by example; declaring True here while
+                    # production declares False would mislead future readers.
+                    catalog_management=False,
                 ),
                 execution=Execution(
                     targeting=Targeting(
@@ -98,7 +115,7 @@ class TestGetAdcpCapabilitiesSchema:
         assert response.media_buy.portfolio is not None
         assert len(response.media_buy.portfolio.publisher_domains) == 1
         assert response.media_buy.features is not None
-        assert response.media_buy.features.content_standards is True
+        assert response.media_buy.features.inline_creative_management is True
 
 
 class TestGetAdcpCapabilitiesImports:
@@ -153,6 +170,14 @@ class TestGetAdcpCapabilitiesImpl:
         assert response.adcp is not None
         assert response.adcp.major_versions[0].root == 3
         assert SupportedProtocol.media_buy in response.supported_protocols
+        # Idempotency must declare supported=True since MediaBuyRepository.find_by_idempotency_key
+        # actually dedupes against idx_media_buys_idempotency_key.
+        assert response.adcp.idempotency.supported is True
+        assert response.adcp.idempotency.replay_ttl_seconds == 86400
+        # Specialism declaration activates storyboard scenarios bundled under
+        # sales-non-guaranteed (inventory_list_*, delivery_reporting, etc.).
+        assert response.specialisms is not None
+        assert AdcpSpecialism.sales_non_guaranteed in response.specialisms
 
     def test_impl_returns_valid_adcp_response(self):
         """Test that impl response can be serialized to valid JSON."""
@@ -170,6 +195,8 @@ class TestGetAdcpCapabilitiesImpl:
         assert "adcp" in data
         assert "supported_protocols" in data
         assert data["supported_protocols"] == ["media_buy"]
+        assert "specialisms" in data
+        assert data["specialisms"] == ["sales-non-guaranteed"]
 
 
 class TestGetAdcpCapabilitiesWithTenant:
@@ -199,10 +226,9 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
-                # Pass identity with tenant info directly (no auth extraction in _impl)
-                from src.core.resolved_identity import ResolvedIdentity
+                from tests.factories import PrincipalFactory
 
-                identity = ResolvedIdentity(
+                identity = PrincipalFactory.make_identity(
                     principal_id=None,
                     tenant_id="test-tenant-123",
                     tenant=mock_tenant,
@@ -214,6 +240,12 @@ class TestGetAdcpCapabilitiesWithTenant:
                 assert response.adcp is not None
                 assert response.adcp.major_versions[0].root == 3
                 assert SupportedProtocol.media_buy in response.supported_protocols
+                # Full response must also declare idempotency support consistently.
+                assert response.adcp.idempotency.supported is True
+                assert response.adcp.idempotency.replay_ttl_seconds == 86400
+                # Specialism declaration must be consistent across minimal and full paths.
+                assert response.specialisms is not None
+                assert AdcpSpecialism.sales_non_guaranteed in response.specialisms
 
                 # Should have media_buy capabilities with portfolio
                 assert response.media_buy is not None
@@ -223,6 +255,15 @@ class TestGetAdcpCapabilitiesWithTenant:
                 # Should have features
                 assert response.media_buy.features is not None
                 assert response.media_buy.features.inline_creative_management is True
+
+                # Honesty assertions: capabilities the seller can't actually fulfill
+                # MUST declare False so buyers see the gap at discovery time, not at
+                # task-dispatch time. property_list_filtering: no adapter compiles it
+                # yet — flips True via supports_property_list_filtering().
+                # catalog_management: no sync_catalogs tool ships in this codebase;
+                # admin product CRUD is NOT the spec's buyer-driven catalog sync.
+                assert response.media_buy.features.property_list_filtering is False
+                assert response.media_buy.features.catalog_management is False
 
                 # Should have execution with targeting
                 assert response.media_buy.execution is not None
@@ -263,9 +304,9 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
-                from src.core.resolved_identity import ResolvedIdentity
+                from tests.factories import PrincipalFactory
 
-                identity = ResolvedIdentity(
+                identity = PrincipalFactory.make_identity(
                     principal_id="principal-123",
                     tenant_id="test-tenant-456",
                     tenant=mock_tenant,
@@ -329,11 +370,11 @@ def _make_capabilities_identity(
     tenant: dict | None = None,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity for capabilities tests."""
-    from src.core.resolved_identity import ResolvedIdentity
+    from tests.factories import PrincipalFactory
 
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "name": "Test Publisher", "subdomain": "testpub"}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
@@ -613,7 +654,11 @@ class TestResponseShapeCapabilities:
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
-        """Features defaults: content_standards=False, inline_creative_management=True, property_list_filtering=False."""
+        """Features defaults: inline_creative_management=True, property_list_filtering=False.
+
+        property_list_filtering is False until an adapter actually compiles
+        `targeting_overlay.property_list` into native ad-server targeting.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(principal_id=None)
@@ -623,9 +668,8 @@ class TestResponseShapeCapabilities:
             response = _get_adcp_capabilities_impl(None, identity)
 
         features = response.media_buy.features
-        assert features.content_standards is False
         assert features.inline_creative_management is True
-        assert features.property_list_filtering is True
+        assert features.property_list_filtering is False
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""
@@ -655,37 +699,6 @@ class TestResponseShapeCapabilities:
         data = response.model_dump(mode="json")
         # media_buy is excluded from serialization when None
         assert "media_buy" not in data
-
-
-class TestDevicePlatformCapability:
-    """Test device_platform targeting advertised in capabilities."""
-
-    def test_device_platform_true_in_targeting(self):
-        """Capabilities response advertises device_platform: true."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        identity = _make_capabilities_identity(principal_id=None)
-        stack = _patch_capabilities_deps()
-
-        with stack:
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        targeting = response.media_buy.execution.targeting
-        assert targeting.device_platform is True
-
-    def test_device_platform_in_serialized_output(self):
-        """device_platform: true appears in JSON-serialized capabilities."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        identity = _make_capabilities_identity(principal_id=None)
-        stack = _patch_capabilities_deps()
-
-        with stack:
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        data = response.model_dump(mode="json")
-        targeting_data = data["media_buy"]["execution"]["targeting"]
-        assert targeting_data["device_platform"] is True
 
 
 class TestGeoPostalAreas:

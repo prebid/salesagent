@@ -14,12 +14,16 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
 
-# Global registry of running sync threads
-_active_syncs: dict[str, threading.Thread] = {}
-_sync_lock = threading.Lock()
+# Global registry of running sync threads. ThreadRegistry reaps dead threads
+# on every read — defensive against KeyboardInterrupt/SystemExit/signal-killed
+# workers whose finally block in _run_sync_thread didn't run, which would
+# otherwise pin captured DB sessions, GAM clients, and result payloads (leak
+# triage #5 from the production OOM-cycle).
+_active_syncs = ThreadRegistry()
 
 
 def start_inventory_sync_background(
@@ -122,8 +126,7 @@ def start_inventory_sync_background(
         name=f"sync-{sync_id}",
     )
 
-    with _sync_lock:
-        _active_syncs[sync_id] = thread
+    _active_syncs.add(sync_id, thread)
 
     thread.start()
     logger.info(f"Started background sync thread: {sync_id}")
@@ -478,8 +481,7 @@ def _run_sync_thread(
 
     finally:
         # Remove from active syncs
-        with _sync_lock:
-            _active_syncs.pop(sync_id, None)
+        _active_syncs.remove(sync_id)
 
 
 def _update_sync_progress(sync_id: str, progress_data: dict[str, Any]):
@@ -533,12 +535,20 @@ def _mark_sync_failed(sync_id: str, error_message: str):
 
 
 def get_active_syncs() -> list[str]:
-    """Get list of sync IDs currently running in background threads."""
-    with _sync_lock:
-        return list(_active_syncs.keys())
+    """Get list of sync IDs currently running in background threads.
+
+    Reaps dead threads on read so the returned list reflects live state
+    even if the worker's ``finally`` block didn't fire (e.g. abnormal
+    exit). See :class:`src.core.thread_registry.ThreadRegistry`.
+    """
+    return _active_syncs.list_active()
 
 
 def is_sync_running(sync_id: str) -> bool:
-    """Check if a sync is currently running in a background thread."""
-    with _sync_lock:
-        return sync_id in _active_syncs
+    """Check if a sync is currently running in a background thread.
+
+    Reaps dead threads on read — a sync_id with a dead thread is no
+    longer running, so this returns False (and the registry entry is
+    pruned as a side effect).
+    """
+    return _active_syncs.contains(sync_id)

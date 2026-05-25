@@ -159,21 +159,29 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
     if isinstance(error, ToolError):
         raise
     elif isinstance(error, AdCPError):
-        # Include details as JSON 4th arg so the MCP round-trip preserves them.
-        # The lowlevel server does str(exception) which produces a tuple string:
-        # "('CODE', 'message', 'recovery', '{\"suggestion\": \"...\"}')"
-        # The test harness unwrapper parses this back into a full AdCPError.
+        # Pack details, field, and suggestion into a single JSON blob so the
+        # MCP round-trip preserves them.  The lowlevel server does
+        # str(exception) which produces a tuple string; the test harness
+        # unwrapper parses this back into a full AdCPError.
         import json
 
+        extra: dict[str, Any] = {}
+        if error.details:
+            extra["details"] = error.details
+        if error.field:
+            extra["field"] = error.field
+        if error.suggestion:
+            extra["suggestion"] = error.suggestion
         try:
-            details_json = json.dumps(error.details) if error.details else None
+            extra_json = json.dumps(extra) if extra else None
         except (TypeError, ValueError):
-            details_json = None
-        raise ToolError(error.error_code, error.message, error.recovery, details_json) from error
+            extra_json = None
+        # Translate non-standard codes to STANDARD_ERROR_CODES at the MCP boundary.
+        raise ToolError(error.wire_error_code, error.message, error.recovery, extra_json) from error
     elif isinstance(error, ValueError):
         raise ToolError("VALIDATION_ERROR", str(error)) from error
     elif isinstance(error, PermissionError):
-        raise ToolError("AUTHORIZATION_ERROR", str(error)) from error
+        raise ToolError("AUTH_REQUIRED", str(error)) from error
     else:
         raise
 

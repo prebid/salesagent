@@ -210,6 +210,7 @@ class _PatchContext:
         mock_uow.session = self.db_session
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []  # no duplicate buyer_refs
+        mock_media_buys.get_packages.return_value = []
         mock_uow.media_buys = mock_media_buys
 
         self._p_uow = patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow)
@@ -268,7 +269,7 @@ class TestProductNotFound:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "validation_error"
+        assert errors[0].code == "VALIDATION_ERROR"
         assert "prod_missing" in errors[0].message
         assert "not found" in errors[0].message.lower()
 
@@ -307,7 +308,7 @@ class TestMaxDailySpendExceeded:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "validation_error"
+        assert errors[0].code == "VALIDATION_ERROR"
         assert "daily" in errors[0].message.lower()
 
     @pytest.mark.asyncio
@@ -576,10 +577,10 @@ class TestCreativeUploadFailure:
 
         with _PatchContext(products=[product]) as pc:
             # Override the scalars chain to handle multiple .all() and .first() calls.
-            # .all() call 1 (products query at line 1464) -> [product]
-            # .all() call 2 (creatives query at line 2954) -> [mock_creative]
-            # .first() calls: currency_limit (1554), adapter_config=None (1569),
-            #   package_record=None (2919), product_format_check=None (2986)
+            # .all() call 1 (products query) -> [product]
+            # .all() call 2 (creatives query) -> [mock_creative]
+            # platform_order_id persistence uses media_buys.get_packages() (not scalars)
+            # .first() calls: currency_limit, adapter_config=None, package_record=None, etc.
             all_results = iter([[product], [mock_creative]])
             first_results = iter([_mock_currency_limit(), None, None, None, None, None])
             scalars_mock = MagicMock()
@@ -888,8 +889,9 @@ class TestCreativeIdsNotFound:
 
         with _PatchContext(products=[product]) as pc:
             # Override the scalars chain to handle multiple .all() and .first() calls.
-            # .all() call 1 (products query at line 1464) -> [product]
-            # .all() call 2 (creatives query at line 2954) -> [mock_creative] (only 1 of 3)
+            # .all() call 1 (products query) -> [product]
+            # .all() call 2 (creatives query) -> [mock_creative] (only 1 of 3)
+            # platform_order_id persistence uses media_buys.get_packages() (not scalars)
             # .first() returns currency_limit then None for subsequent calls
             all_results = iter([[product], [mock_creative]])
             first_results = iter([_mock_currency_limit(), None, None, None, None, None])
@@ -915,7 +917,7 @@ class TestCreativeIdsNotFound:
                 with pytest.raises(AdCPNotFoundError) as exc_info:
                     await _create_media_buy_impl(req=req, identity=pc.identity)
 
-                assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
+                assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
                 assert "creative_missing_1" in str(exc_info.value)
                 assert "creative_missing_2" in str(exc_info.value)
 
@@ -941,9 +943,9 @@ class TestCreativeIdsNotFound:
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
             with pytest.raises(AdCPNotFoundError) as exc_info:
-                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVES_NOT_FOUND"})
+                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVE_REJECTED"})
 
-            assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
+            assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 
@@ -1744,8 +1746,8 @@ class TestInlineCreativeObligations:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=8),
         )
-        # Unapproved creatives -> pending_activation (waiting for creative approval)
-        assert status == "pending_activation"
+        # Unapproved creatives -> pending_creatives (waiting for creative approval)
+        assert status == "pending_creatives"
 
 
 class TestProposalBasedObligations:
@@ -1855,7 +1857,7 @@ class TestCrossCuttingObligations:
         # Error response has no media_buy_id
         from src.core.schemas import Error
 
-        error = CreateMediaBuyError(errors=[Error(code="validation_error", message="test error")])
+        error = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="test error")])
         error_result = CreateMediaBuyResult(response=error, status="failed")
 
         assert isinstance(error_result.response, CreateMediaBuyError)
@@ -2105,7 +2107,7 @@ class TestExtensionObligations:
                 # Adapter returns error
                 from src.core.schemas import Error
 
-                adapter_error = CreateMediaBuyError(errors=[Error(code="adapter_error", message="GAM API error")])
+                adapter_error = CreateMediaBuyError(errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")])
                 mock_exec.return_value = adapter_error
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -2235,9 +2237,9 @@ class TestExtensionObligations:
         # This is covered by TestCreativeIdsNotFound above.
         # Verify the error code pattern.
         error = AdCPNotFoundError(
-            "Creative IDs not found: creative_missing", details={"error_code": "CREATIVES_NOT_FOUND"}
+            "Creative IDs not found: creative_missing", details={"error_code": "CREATIVE_REJECTED"}
         )
-        assert error.details["error_code"] == "CREATIVES_NOT_FOUND"
+        assert error.details["error_code"] == "CREATIVE_REJECTED"
 
     def test_creative_upload_failed_error_code(self):
         """CREATIVE_UPLOAD_FAILED error code is used for upload failures.

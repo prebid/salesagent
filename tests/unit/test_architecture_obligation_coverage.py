@@ -43,6 +43,7 @@ _UNIT_ENTITY_FILES = [
     "test_quiet_failure_propagation.py",
     "test_get_products_impl_coverage.py",
     "test_creative_formats_behavioral.py",
+    "test_get_media_buys.py",
 ]
 
 # Integration behavioral test files (non-v3) that carry canonical Covers: tags

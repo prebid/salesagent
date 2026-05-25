@@ -18,7 +18,10 @@ Testing:
 - This avoids timeouts in CI when external creative agents are unreachable
 """
 
+import copy
+import logging
 import os
+import typing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -28,10 +31,120 @@ from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPEr
 from adcp.types import AssetContentType as AssetType
 from adcp.types.generated_poc.core.error import Error as AdCPResponseError
 from adcp.types.generated_poc.core.format import Assets
+from pydantic import ValidationError
 from yarl import URL
 
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import Format, FormatId, url
+
+
+def _known_asset_types() -> frozenset[str]:
+    """Asset-type Literals adcp's closed discriminated union models.
+
+    Derived dynamically from the adcp schema (not hardcoded) so the tolerant
+    ingestion stays correct across adcp version bumps — what counts as
+    "additive" is always "not in the union the pinned library knows about".
+    """
+    literals: set[str] = set()
+    assets_field = Format.model_fields["assets"].annotation
+    # annotation shape: list[Union[Assets, Assets81, ...]] | None
+    for outer in typing.get_args(assets_field):
+        for inner in typing.get_args(outer):  # the Union inside list[...]
+            for arm in typing.get_args(inner):
+                asset_type_field = getattr(arm, "model_fields", {}).get("asset_type")
+                if asset_type_field is not None:
+                    literals.update(typing.get_args(asset_type_field.annotation))
+    return frozenset(literals)
+
+
+_KNOWN_ASSET_TYPES = _known_asset_types()
+_SCHEMA_VALIDATION_FAILURE_MARKERS = (
+    "doesn't match expected schema",
+    "does not match expected schema",
+    "validation error",
+    "validationerror",
+    "failed to validate",
+)
+
+
+def _as_format_dict(fmt: Any) -> dict[str, Any]:
+    """Normalize a format item (pydantic model or plain dict) to a dict.
+
+    The adcp client may return parsed library models or raw dicts depending on
+    the response shape; the tolerant validator needs one uniform input.
+    """
+    if isinstance(fmt, dict):
+        return fmt
+    model_dump = getattr(fmt, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+    raise AdCPAdapterError(f"Unexpected format item type from creative agent: {type(fmt)!r}")
+
+
+def _unknown_asset_types(fmt_data: dict[str, Any]) -> set[str]:
+    """Asset-type values in a format dict that adcp's closed union does not model."""
+    unknown: set[str] = set()
+    for asset in fmt_data.get("assets") or []:
+        if isinstance(asset, dict):
+            asset_type = asset.get("asset_type")
+            if isinstance(asset_type, str) and asset_type not in _KNOWN_ASSET_TYPES:
+                unknown.add(asset_type)
+    return unknown
+
+
+def _is_purely_additive_asset_type(fmt_data: dict[str, Any], unknown_types: set[str]) -> bool:
+    """True iff the ONLY reason fmt_data fails validation is an unknown additive asset_type.
+
+    Strategy (value-agnostic, robust to adcp's many-armed discriminated union):
+    substitute every unknown asset_type with a known sentinel and re-validate. If
+    it then validates cleanly, the format is well-formed apart from AdCP-additive
+    enum growth → safe to drop. If it still fails, there is a genuine structural
+    defect (or a mixed error) that must NOT be masked.
+    """
+    if not unknown_types:
+        return False
+    patched = copy.deepcopy(fmt_data)
+    for asset in patched.get("assets") or []:
+        if isinstance(asset, dict) and asset.get("asset_type") in unknown_types:
+            asset["asset_type"] = "image"  # known sentinel arm
+    try:
+        Format.model_validate(patched)
+    except ValidationError:
+        return False
+    return True
+
+
+def _validate_formats_tolerant(format_dicts: list[dict[str, Any]], logger: logging.Logger) -> list[Format]:
+    """Validate formats independently; tolerate ONLY AdCP-additive asset_type growth.
+
+    Postel / asymmetric strictness: strict on what we emit (adcp Literal untouched),
+    liberal on peer responses. A format whose sole defect is an unrecognized additive
+    asset_type is DROPPED (never mis-represented — we never model a creative we
+    cannot fully understand), aggregated into ONE structured WARNING. Any other
+    ValidationError still fails LOUD so real contract breakage is not masked.
+    """
+    validated: list[Format] = []
+    skipped_count = 0
+    skipped_asset_types: set[str] = set()
+    for fmt_data in format_dicts:
+        try:
+            validated.append(Format.model_validate(fmt_data))
+        except ValidationError:
+            unknown_types = _unknown_asset_types(fmt_data)
+            if unknown_types and _is_purely_additive_asset_type(fmt_data, unknown_types):
+                skipped_count += 1
+                skipped_asset_types.update(unknown_types)
+                continue
+            raise
+    if skipped_count:
+        logger.warning(
+            "Skipped %d creative format(s) using unsupported additive asset_type(s) %s "
+            "(not modeled by the pinned adcp schema); returning the %d compatible format(s).",
+            skipped_count,
+            sorted(skipped_asset_types),
+            len(validated),
+        )
+    return validated
 
 
 @dataclass
@@ -50,12 +163,12 @@ from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools
 
 def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Format:
     """Create a single mock format with proper typing for testing."""
-    from adcp.types.generated_poc.core.format import Assets5
+    from adcp.types.generated_poc.core.format import Assets81
 
-    # adcp 3.6.0: Assets classes are type-discriminated with Literal asset_type fields.
-    # Assets = image, Assets5 = video. Pass asset_type as plain string (not enum).
+    # adcp 4.3.0: Assets classes are type-discriminated with Literal asset_type fields.
+    # Assets = image, Assets81 = video. Pass asset_type as plain string (not enum).
     if asset_type == "video":
-        asset_item: Assets | Assets5 = Assets5(
+        asset_item: Assets | Assets81 = Assets81(
             item_type="individual",
             asset_id="primary",
             asset_type="video",
@@ -68,7 +181,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
             asset_type="image",
             required=True,
         )
-    assets: list[Assets | Assets5] = [asset_item]
+    assets: list[Assets | Assets81] = [asset_item]
     # Use Format (our extended class) instead of AdcpFormat to include is_standard field
     # Explicitly pass None for optional internal fields to satisfy mypy
     return Format(
@@ -298,17 +411,17 @@ class CreativeAgentRegistry:
                     f"_fetch_formats_from_agent: Got response with {len(formats_data.formats) if hasattr(formats_data, 'formats') else 'N/A'} formats"
                 )
 
-                # Convert to Format objects
-                # Note: Format now extends adcp library's Format class.
-                # fmt_data is a library Format with format_id.agent_url already set per spec.
-                # We convert to our Format subclass to get any additional internal fields.
-                formats = []
-                for fmt_data in formats_data.formats:
-                    # Convert library Format to our local Format subclass
-                    # from_attributes=True allows accepting parent class instances
-                    formats.append(Format.model_validate(fmt_data, from_attributes=True))
-
-                return formats
+                # Convert to Format objects via the tolerant per-format validator.
+                # adcp has already parsed the response wholesale to reach
+                # status="completed", so additive asset_type growth normally
+                # surfaces via the raw-MCP fallback path instead — but routing
+                # both ingestion points through the same helper keeps a single
+                # validation contract (DRY) and is defensive for the completed
+                # path too. The adcp client may hand back either parsed library
+                # models or plain dicts; normalize to one dict shape so the
+                # shared helper has a uniform input.
+                format_dicts = [_as_format_dict(fmt) for fmt in formats_data.formats]
+                return _validate_formats_tolerant(format_dicts, logger)
 
             elif result.status == "submitted":
                 raise AdCPAdapterError(f"Unexpected submitted status for list_creative_formats from {agent.name}")
@@ -324,14 +437,25 @@ class CreativeAgentRegistry:
                 # return TextContent with JSON. Also falls back when the SDK fails
                 # with generic errors (e.g., "no running event loop" → "No error
                 # details provided") that indicate an SDK-level transport issue.
+                error_text = str(error_msg)
                 sdk_transport_error = (
-                    "structuredContent" in str(error_msg)
-                    or "No error details provided" in str(error_msg)
-                    or "no running event loop" in str(error_msg)
-                    or "Failed to connect" in str(error_msg)
+                    "structuredContent" in error_text
+                    or "No error details provided" in error_text
+                    or "no running event loop" in error_text
+                    or "Failed to connect" in error_text
                 )
-                if sdk_transport_error:
-                    logger.warning(f"adcp SDK transport issue, falling back to raw HTTP: {error_msg}")
+                # Wholesale schema-validation FAILED (e.g. one AdCP-additive
+                # asset_type fails the closed Literal union → "doesn't match
+                # expected schema ListCreativeFormatsResponse" with thousands of
+                # errors). Route to the raw-MCP path where per-format tolerant
+                # ingestion can salvage the compatible formats instead of
+                # discarding the entire catalog.
+                schema_validation_failure = any(
+                    marker in error_text.lower() for marker in _SCHEMA_VALIDATION_FAILURE_MARKERS
+                )
+                if sdk_transport_error or schema_validation_failure:
+                    reason = "schema-validation failure" if schema_validation_failure else "SDK transport issue"
+                    logger.warning(f"adcp {reason}, falling back to raw HTTP: {error_msg}")
                     return await self._fetch_formats_raw_mcp(agent)
 
                 logger.error(f"Creative agent {agent.name} returned FAILED status. Error: {error_msg}")
@@ -448,7 +572,7 @@ class CreativeAgentRegistry:
             if item.get("type") == "text" and item.get("text"):
                 data = json.loads(item["text"])
                 formats_list = data.get("formats", [])
-                formats = [Format.model_validate(fmt_data) for fmt_data in formats_list]
+                formats = _validate_formats_tolerant(formats_list, logger)
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
         raise AdCPAdapterError("No text content in MCP tool result")

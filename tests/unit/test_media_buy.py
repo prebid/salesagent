@@ -23,7 +23,12 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -913,9 +918,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_gen"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-        ):
+        with (patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -1004,9 +1007,9 @@ class TestCreateMediaBuyStatusDetermination:
         assert _determine_media_buy_status(False, True, True, start, end, now) == "active"
 
     def test_pending_when_manual_approval_required(self):
-        """UC-002-ST03: manual approval required -> pending_activation.
+        """UC-002-ST03: manual approval required -> pending_start.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
+        Spec: CONFIRMED -- media-buy-status.json: pending_start = "Media buy created but not yet activated"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-03
         """
@@ -1015,13 +1018,13 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(True, True, True, start, end, now) == "pending_activation"
+        assert _determine_media_buy_status(True, True, True, start, end, now) == "pending_start"
 
     def test_pending_when_missing_creatives(self):
-        """UC-002-ST04: no creatives -> pending_activation.
+        """UC-002-ST04: no creatives -> pending_creatives.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
+        Spec: CONFIRMED -- media-buy-status.json: pending_creatives = "Media buy awaiting creative assets"
+        https://github.com/adcontextprotocol/adcp/blob/main/schemas/enums/media-buy-status.json
         Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
@@ -1029,12 +1032,12 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_activation"
+        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_creatives"
 
     def test_pending_when_before_start(self):
-        """UC-002-ST05: before start_time -> pending_activation.
+        """UC-002-ST05: before start_time -> pending_start.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_activation = "Media buy created but not yet activated"
+        Spec: CONFIRMED -- media-buy-status.json: pending_start = "Media buy created but not yet activated"
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
         Covers: UC-002-MAIN-21
         """
@@ -1043,7 +1046,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 2, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, True, True, start, end, now) == "pending_activation"
+        assert _determine_media_buy_status(False, True, True, start, end, now) == "pending_start"
 
 
 class TestCreateMediaBuyImplAuth:
@@ -1364,7 +1367,7 @@ class TestCreateMediaBuyAdapterInteraction:
 
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
-        error_response = CreateMediaBuyError(errors=[Error(code="budget_exceeded", message="Budget too high")])
+        error_response = CreateMediaBuyError(errors=[Error(code="BUDGET_EXCEEDED", message="Budget too high")])
 
         mock_adapter = MagicMock()
         mock_adapter.create_media_buy.return_value = error_response
@@ -1844,6 +1847,10 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -1901,6 +1908,10 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition: 'resume' is only valid from 'paused'
+            _stub_mb = MagicMock()
+            _stub_mb.status = "paused"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -1957,6 +1968,10 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2050,7 +2065,8 @@ class TestUpdateMediaBuyTiming:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy]
+            # Precondition + currency check + date check
+            mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy, mock_buy]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2271,6 +2287,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2346,6 +2366,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2428,6 +2452,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2511,6 +2539,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2610,6 +2642,10 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2709,7 +2745,7 @@ class TestUpdateMediaBuyIdentification:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises((ValueError, AdCPAuthorizationError), match="(?i)not found|does not own"):
+            with pytest.raises((AdCPNotFoundError, AdCPAuthorizationError), match="(?i)not found|does not own"):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_buyer_ref_no_longer_accepted_on_update(self):
@@ -2820,6 +2856,10 @@ class TestUpdateMediaBuyManualApproval:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2877,6 +2917,10 @@ class TestUpdateMediaBuyManualApproval:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2909,7 +2953,7 @@ class TestUpdateMediaBuyAdapterFailure:
         identity = _make_identity()
 
         adapter_error = UpdateMediaBuyError(
-            errors=[Error(code="activation_workflow_failed", message="Network timeout")],
+            errors=[Error(code="ACTIVATION_WORKFLOW_FAILED", message="Network timeout")],
         )
 
         with (
@@ -2937,6 +2981,10 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            # State-machine precondition guard needs a non-terminal status
+            _stub_mb = MagicMock()
+            _stub_mb.status = "active"
+            mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2978,7 +3026,7 @@ class TestUpdateMediaBuyAdapterFailure:
         cl.min_package_budget = None
 
         adapter_error = UpdateMediaBuyError(
-            errors=[Error(code="adapter_failure", message="GAM API timeout")],
+            errors=[Error(code="ADAPTER_FAILURE", message="GAM API timeout")],
         )
 
         with (
@@ -3397,7 +3445,7 @@ class TestDeliveryImplStatusFilter:
 
             # "all" is not a valid enum value; use a list of all statuses
             req = GetMediaBuyDeliveryRequest(
-                status_filter=[MBS.active, MBS.completed, MBS.pending_activation, MBS.paused],
+                status_filter=[MBS.active, MBS.completed, MBS.pending_start, MBS.paused],
                 start_date="2025-01-01",
                 end_date="2025-06-30",
             )
@@ -3595,7 +3643,7 @@ class TestDeliveryImplDateRange:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "invalid_date_range" for e in resp.errors)
+            assert any(e.code == "VALIDATION_ERROR" for e in resp.errors)
 
 
 class TestDeliveryImplErrors:
@@ -3634,7 +3682,7 @@ class TestDeliveryImplErrors:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "principal_not_found" for e in resp.errors)
+            assert any(e.code == "AUTH_REQUIRED" for e in resp.errors)
 
     def test_adapter_error_returns_error_code(self):
         """UC-004-E03: adapter failure returns adapter_error.
@@ -3676,7 +3724,7 @@ class TestDeliveryImplErrors:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert resp.errors is not None
-            assert any(e.code == "adapter_error" for e in resp.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in resp.errors)
 
     def test_ownership_mismatch_returns_not_found(self):
         """UC-004-E04: non-owner sees not_found, not ownership_mismatch.
@@ -3875,12 +3923,12 @@ class TestDeliveryResponseSerialization:
 class TestGetMediaBuysStatusComputation:
     """get_media_buys: _compute_status logic."""
 
-    def test_pending_activation_before_start(self):
-        """GMB-ST01: before start_date -> pending_activation.
+    def test_pending_start_before_start(self):
+        """GMB-ST01: before start_date -> pending_start.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_activation
+        Spec: CONFIRMED -- media-buy-status.json: pending_start
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_pending_activation_when_before_start
+        Ported from test_get_media_buys.py::test_pending_start_when_before_start
         """
         from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
@@ -3897,8 +3945,10 @@ class TestGetMediaBuysStatusComputation:
             raw_request={},
             created_at=None,
             updated_at=None,
+            status="active",
+            is_paused=False,
         )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_activation
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
     def test_active_when_in_flight(self):
         """GMB-ST02: within flight dates -> active.
@@ -3922,6 +3972,8 @@ class TestGetMediaBuysStatusComputation:
             raw_request={},
             created_at=None,
             updated_at=None,
+            status="active",
+            is_paused=False,
         )
         assert _compute_status(buy, date.today()) == MediaBuyStatus.active
 
@@ -3947,6 +3999,8 @@ class TestGetMediaBuysStatusComputation:
             raw_request={},
             created_at=None,
             updated_at=None,
+            status="active",
+            is_paused=False,
         )
         assert _compute_status(buy, date.today()) == MediaBuyStatus.completed
 
@@ -3972,8 +4026,10 @@ class TestGetMediaBuysStatusComputation:
             raw_request={},
             created_at=None,
             updated_at=None,
+            status="active",
+            is_paused=False,
         )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_activation
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
 
 class TestGetMediaBuysStatusFilter:

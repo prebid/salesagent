@@ -1,5 +1,7 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
+from typing import Annotated
+
 from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types.generated_poc.core.context import ContextObject
@@ -7,6 +9,7 @@ from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.enums.validation_mode import ValidationMode
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
@@ -18,8 +21,10 @@ async def sync_creatives(
     creatives: list[CreativeAsset],
     assignments: dict[str, list[str]] | None = None,
     creative_ids: list[str] | None = None,
-    delete_missing: bool = False,
-    dry_run: bool = False,
+    delete_missing: Annotated[
+        bool, Field(description="Delete creatives not in the sync payload (use with caution)")
+    ] = False,
+    dry_run: Annotated[bool, Field(description="Preview changes without applying them")] = False,
     validation_mode: ValidationMode | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
