@@ -102,6 +102,41 @@ class TestRepositoryListValuesForKey:
 
         assert rows_b == []
 
+    def test_batches_values_for_multiple_keys(self, integration_db):
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import GAMInventoryFactory, TenantFactory
+
+        with _TargetingCacheEnv() as env:
+            tenant = TenantFactory(tenant_id="cache_tmulti")
+            other_tenant = TenantFactory(tenant_id="cache_tmulti_other")
+            GAMInventoryFactory(
+                tenant=tenant,
+                inventory_type="custom_targeting_value",
+                inventory_id="v1",
+                name="sports",
+                inventory_metadata={"custom_targeting_key_id": "100"},
+            )
+            GAMInventoryFactory(
+                tenant=tenant,
+                inventory_type="custom_targeting_value",
+                inventory_id="v2",
+                name="news",
+                inventory_metadata={"custom_targeting_key_id": "200"},
+            )
+            GAMInventoryFactory(
+                tenant=other_tenant,
+                inventory_type="custom_targeting_value",
+                inventory_id="other",
+                name="other",
+                inventory_metadata={"custom_targeting_key_id": "100"},
+            )
+            session = env.get_session()
+            rows_by_key = GAMSyncRepository(session, tenant.tenant_id).list_values_for_keys({"100", "200", "999"})
+
+        assert [r.inventory_id for r in rows_by_key["100"]] == ["v1"]
+        assert [r.inventory_id for r in rows_by_key["200"]] == ["v2"]
+        assert rows_by_key["999"] == []
+
 
 class TestCachedTargetingValuesProjection:
     """``_cached_targeting_values`` shapes rows for the JSON response."""

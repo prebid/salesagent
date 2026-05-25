@@ -280,7 +280,7 @@
       <div class="sig-card__body">
         {% for k in keys %}
         <div class="krow" data-key-id="{{ k.id }}"
-             {% if k.has_cached_values %}data-lazy-load="0"{% else %}data-lazy-load="1"{% endif %}>
+             {% if k.lazy_load_values %}data-lazy-load="1"{% else %}data-lazy-load="0"{% endif %}>
           <div class="krow__chev">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
           </div>
@@ -295,6 +295,8 @@
             <span style="color: var(--sig-amber); display: inline-flex; align-items: center; gap: 6px;">
               <span class="sig-dot sig-dot--composite"></span> Freeform — can't enumerate values
             </span>
+            {% elif k.lazy_load_values %}
+            <span style="color: var(--sig-fg-muted);">Values load on expand</span>
             {% else %}
             <span><strong style="color: var(--sig-fg-primary);">{{ k.mapped_count }}</strong> of {{ k.total_values }} values mapped</span>
             <span class="mini-bar"><span style="width: {{ (k.mapped_count * 100 / k.total_values) if k.total_values else 0 }}%;"></span></span>

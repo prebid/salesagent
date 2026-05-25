@@ -177,6 +177,30 @@ class GAMSyncRepository:
             ).all()
         )
 
+    def list_values_for_keys(self, key_ids: set[str]) -> dict[str, list[GAMInventory]]:
+        """Custom-targeting-value rows for several keys, grouped by key ID.
+
+        Used by the signals page to pre-render only keys that already have
+        mapped values. Unmapped keys lazy-load values on expansion.
+        """
+        if not key_ids:
+            return {}
+        rows = self._session.scalars(
+            select(GAMInventory)
+            .where(
+                GAMInventory.tenant_id == self._tenant_id,
+                GAMInventory.inventory_type == "custom_targeting_value",
+                GAMInventory.inventory_metadata["custom_targeting_key_id"].astext.in_(sorted(key_ids)),
+            )
+            .order_by(GAMInventory.inventory_metadata["custom_targeting_key_id"].astext, GAMInventory.name)
+        ).all()
+        grouped: dict[str, list[GAMInventory]] = {key_id: [] for key_id in key_ids}
+        for row in rows:
+            key_id = str((row.inventory_metadata or {}).get("custom_targeting_key_id") or "")
+            if key_id:
+                grouped.setdefault(key_id, []).append(row)
+        return grouped
+
     def delete_values_for_key_except(self, key_id: str, keep_ids: set[str]) -> int:
         """Delete cached custom-targeting values for ``key_id`` not in ``keep_ids``.
 

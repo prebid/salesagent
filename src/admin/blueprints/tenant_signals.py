@@ -142,7 +142,7 @@ def _parse_float(raw: str | None) -> float | None:
 #   key row:     {"id", "name", "raw_name", "type", "values": [
 #                     {"id", "name", "display_name", "key_name", "mapped"}, ...
 #                 ], "mapped_count", "total_values", "is_freeform",
-#                 "has_cached_values"}
+#                 "has_cached_values", "lazy_load_values"}
 # Keeping the envelope uniform means the template needs no per-adapter forks.
 # ---------------------------------------------------------------------------
 
@@ -158,6 +158,8 @@ def _load_gam_signal_rows(
     gam_repo = GAMSyncRepository(session, tenant_id)
     segments_rows = gam_repo.list_inventory("audience_segment")
     keys_rows = gam_repo.list_inventory("custom_targeting_key")
+    mapped_key_ids = {key_id for key_id, _value_id in kv_index}
+    values_by_key_id = gam_repo.list_values_for_keys(mapped_key_ids)
 
     segments: list[dict[str, Any]] = []
     for row in segments_rows:
@@ -177,7 +179,8 @@ def _load_gam_signal_rows(
         key_id = row.inventory_id
         key_name = (row.inventory_metadata or {}).get("display_name") or row.name
         key_type = (row.inventory_metadata or {}).get("type") or "UNKNOWN"
-        value_rows = gam_repo.list_values_for_key(key_id) if key_type != "FREEFORM" else []
+        should_preload_values = key_type != "FREEFORM" and key_id in mapped_key_ids
+        value_rows = values_by_key_id.get(key_id, []) if should_preload_values else []
         values: list[dict[str, Any]] = []
         for v in value_rows:
             mapped_sig = kv_index.get((str(key_id), str(v.inventory_id)))
@@ -201,6 +204,7 @@ def _load_gam_signal_rows(
                 "total_values": len(values),
                 "is_freeform": key_type == "FREEFORM",
                 "has_cached_values": len(value_rows) > 0,
+                "lazy_load_values": key_type != "FREEFORM" and not should_preload_values,
             }
         )
     return segments, keys

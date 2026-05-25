@@ -8,6 +8,7 @@ spread across multiple packages, and the active/inactive status filter.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 
@@ -267,6 +268,41 @@ class TestCountReferences:
             )
             session = env.get_session()
             count = SignalUsageRepository(session, "usage_t8").count_references("sports_fans")
+
+        assert count == 2
+
+    def test_count_uses_targeted_query_for_supported_shapes(self, integration_db):
+        from src.core.database.repositories.signal_usage import SignalUsageRepository
+        from tests.factories import MediaBuyFactory
+
+        with _SignalUsageEnv() as env:
+            tenant = TenantFactory(tenant_id="usage_t8b")
+            principal = PrincipalFactory(tenant=tenant)
+            _buy_with_signals(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_pkg",
+                status="active",
+                include=["sports_fans"],
+            )
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_top",
+                status="active",
+                raw_request={"targeting_overlay": {"audience_exclude": ["sports_fans"]}},
+            )
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_done",
+                status="completed",
+                raw_request={"targeting_overlay": {"audience_include": ["sports_fans"]}},
+            )
+            session = env.get_session()
+            repo = SignalUsageRepository(session, "usage_t8b")
+            with patch.object(SignalUsageRepository, "usage_index", side_effect=AssertionError("full scan")):
+                count = repo.count_references("sports_fans")
 
         assert count == 2
 

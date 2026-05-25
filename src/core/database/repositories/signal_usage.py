@@ -26,9 +26,9 @@ unless explicitly added to the terminal set.
 Why Python iteration and not JSONB path queries: the rest of the
 codebase walks ``raw_request`` in Python (see
 ``src/core/tools/media_buy_delivery.py``) and operates at publisher
-scale — typically <1000 live buys per tenant. A single SELECT + dict
-walk is cheaper than maintaining a JSONB-path query idiom that doesn't
-exist elsewhere in the codebase.
+scale — typically <1000 live buys per tenant. Bulk usage still uses a
+single SELECT + dict walk; one-off delete checks use targeted JSONB
+containment so they do not rescan unrelated buys.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import MediaBuy
@@ -63,6 +63,17 @@ _TERMINAL_STATUSES: tuple[str, ...] = (
     "rejected",
     "failed",
 )
+
+
+def _raw_request_contains_signal(signal_id: str):
+    """Return JSONB containment predicates for every supported overlay shape."""
+    payloads = (
+        {"targeting_overlay": {"audience_include": [signal_id]}},
+        {"targeting_overlay": {"audience_exclude": [signal_id]}},
+        {"packages": [{"targeting_overlay": {"audience_include": [signal_id]}}]},
+        {"packages": [{"targeting_overlay": {"audience_exclude": [signal_id]}}]},
+    )
+    return or_(*(MediaBuy.raw_request.contains(payload) for payload in payloads))
 
 
 def _iter_referenced_signal_ids(raw_request: dict[str, Any] | None) -> Iterable[str]:
@@ -138,11 +149,19 @@ class SignalUsageRepository:
     def count_references(self, signal_id: str) -> int:
         """Count active media buys referencing ``signal_id``.
 
-        Convenience wrapper around :meth:`usage_index` — most callers
-        already need the full index (it powers both the inline chips and
-        the delete confirmation), but a one-off lookup is occasionally
-        cheaper to read at the call site.
+        Uses targeted JSONB containment over the supported AdCP overlay
+        shapes. The signals list still uses :meth:`usage_index` because it
+        needs all signals at once; a direct delete check only needs one ID.
         """
         if not signal_id:
             return 0
-        return self.usage_index().get(signal_id, SignalUsage(0, None)).active_buy_count
+        stmt = (
+            select(func.count())
+            .select_from(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.status.notin_(_TERMINAL_STATUSES),
+                _raw_request_contains_signal(signal_id),
+            )
+        )
+        return int(self._session.scalar(stmt) or 0)
