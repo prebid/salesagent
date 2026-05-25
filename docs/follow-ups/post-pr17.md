@@ -99,8 +99,8 @@ over it.
 schema drift surfaces immediately. Currently a request with
 `nonsense_field` succeeds — the test asserts ToolError and gets none.
 
-**Why**: One of our compat middlewares (`SpecDefaultsMiddleware` or
-the FastMCP/typed-dispatcher level upstream of it) is silently
+**Why**: One of our compat layers (`pre_validation_hooks` or the
+FastMCP/typed-dispatcher level upstream of it) is silently
 stripping unknown fields even outside production mode. That breaks
 the strict-dev contract documented in CLAUDE.md pattern #7
 ("Development/CI: Default → `extra='forbid'` (strict validation)").
@@ -113,13 +113,13 @@ dev-mode reject path.
 
 ## P2 — Architectural cleanup (typed-fixture migration)
 
-The current branch reduced our reliance on `core/middleware/spec_defaults.py`
-by updating `tests/e2e/adcp_request_builder.py` to provide proper
+The current branch reduced our reliance on request compat hooks by
+updating `tests/e2e/adcp_request_builder.py` to provide proper
 shapes for `idempotency_key`, `account`, `asset_type`, `format_id`,
 and `assignments`. The middleware still has setdefault paths for
 callers that bypass these builders.
 
-**Goal**: delete `core/middleware/spec_defaults.py` and
+**Goal**: delete remaining local schema-compat shims such as
 `src/core/schemas/_asset_type_compat.py`. Replace dict-literal protocol
 payloads in tests with typed `*Request` Pydantic models so that
 construction-time validation catches every shape error and mypy +
@@ -150,8 +150,9 @@ the SDK itself as a `RequestCompatLayer`:
 - `format_id` string → `FormatReferenceStructuredObject` (4.x → 4.4)
 - `asset_type` discriminator inference for missing-field payloads (3.x → 4.4)
 
-The seller-specific patches (`account=auth-chain`, `idempotency_key`
-autogen) DO NOT belong upstream — they violate the spec's intent.
+Seller-specific patches such as missing-account placeholders or
+`idempotency_key` autogen DO NOT belong upstream — they violate the spec's
+intent.
 
 **Suggested next step**: file an issue against the `adcp` Python SDK
 repo describing `RequestCompatLayer(target_version=..., min_buyer_version=...)`

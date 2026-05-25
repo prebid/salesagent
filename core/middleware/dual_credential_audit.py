@@ -25,10 +25,10 @@ Behavior:
   wins; this middleware only audits.
 
 Position in the ASGI stack:
-``AdminWSGIMount`` → ``DualCredentialAuditMiddleware`` → SpecDefaults →
-agent-card rewrite → SDK auth → handler. Sitting outside the SDK auth
-chain means the audit fires regardless of which leg the request lands
-on.
+``AdminWSGIMount`` → ``DualCredentialAuditMiddleware`` → origin guard →
+optional subdomain routing → signing verification → SDK auth → handler.
+Sitting outside the SDK auth chain means the audit fires regardless of
+which leg the request lands on.
 """
 
 from __future__ import annotations

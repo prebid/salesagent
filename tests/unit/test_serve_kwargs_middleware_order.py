@@ -115,6 +115,31 @@ def test_pre_validation_hooks_wired():
     assert "sync_creatives" in hooks
 
 
+def test_pre_validation_hooks_do_not_default_account_refs():
+    """Account-bearing tools must not get seller-specific placeholder refs.
+
+    Missing ``account`` is a buyer protocol violation for these tools; the
+    typed dispatcher should reject it instead of letting a pre-validation hook
+    inject a fake ``account_id`` such as the old ``auth-chain`` sentinel.
+    """
+    from core import main as core_main
+
+    with (
+        patch.object(core_main, "build_router", return_value=MagicMock()),
+        patch("src.admin.app.create_app", return_value=MagicMock()),
+        patch("core.main.build_subdomain_router", return_value=MagicMock()),
+    ):
+        kwargs = core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
+    hooks = kwargs.get("pre_validation_hooks")
+    assert hooks is not None, "pre_validation_hooks missing — pre-v3 buyer payloads will fail validation"
+
+    account_required_tools = {"create_media_buy", "sync_accounts", "activate_signal"}
+    unexpected_hooks = sorted(account_required_tools.intersection(hooks))
+    assert not unexpected_hooks, (
+        f"pre_validation_hooks must not mask missing account refs with seller-specific defaults: {unexpected_hooks}"
+    )
+
+
 def test_signing_verify_runs_last(middleware_classes):
     """``SigningVerifyMiddleware`` must be the last entry — it only
     inspects buyer-protocol traffic that survived the earlier filters."""
