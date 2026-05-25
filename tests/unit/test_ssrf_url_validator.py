@@ -28,6 +28,11 @@ class TestCheckUrlSsrf:
         assert is_safe is True
         assert error == ""
 
+    def test_require_https_rejects_public_http_url(self):
+        is_safe, error = check_url_ssrf("http://example.com/agent", require_https=True)
+        assert is_safe is False
+        assert "https" in error.lower()
+
     def test_localhost_rejected(self):
         is_safe, error = check_url_ssrf("http://localhost:9999")
         assert is_safe is False

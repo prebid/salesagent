@@ -158,6 +158,37 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
         assert delivery["totals"]["ctr"] == 0.01
 
 
+def test_delivery_service_refuses_public_http_url(webhook_service, mock_db_session, monkeypatch):
+    """Legacy stored HTTP webhook URLs should not be delivered."""
+    monkeypatch.delenv("ADCP_AUTH_TEST_MODE", raising=False)
+    monkeypatch.delenv("WEBHOOK_ALLOW_PRIVATE_IPS", raising=False)
+
+    start_time = datetime.now(UTC)
+    mock_config = MagicMock()
+    mock_config.url = "http://example.com/webhook"
+    mock_config.authentication_type = None
+    mock_config.authentication_token = None
+    mock_config.validation_token = None
+    mock_config.webhook_secret = None
+    mock_config.signing_mode = "hmac"
+    mock_config.auth_blocked_at = None
+    mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        result = webhook_service.send_delivery_webhook(
+            media_buy_id="buy_http",
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=1000,
+            spend=100.0,
+        )
+
+    assert result is False
+    mock_client.return_value.__enter__.return_value.post.assert_not_called()
+
+
 def test_final_notification_type(webhook_service, mock_db_session):
     """Test that is_final sets notification_type to 'final' (PR #86)."""
     media_buy_id = "buy_final"

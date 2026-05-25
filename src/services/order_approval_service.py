@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.webhook_validator import WebhookURLValidator
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +356,11 @@ def _send_approval_webhook(
     """
     try:
         import httpx
+
+        is_valid, error = WebhookURLValidator.validate_delivery_url(webhook_url)
+        if not is_valid:
+            logger.error("Refusing approval webhook delivery to %s: %s", webhook_url, error)
+            return
 
         payload: dict[str, Any] = {
             "event": "order_approval_update",

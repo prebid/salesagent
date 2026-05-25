@@ -96,3 +96,49 @@ async def test_protocol_webhook_service_legacy_hmac_body_verifies() -> None:
         body=call["data"],
         options=LegacyWebhookHmacOptions(secret=secret.encode(), sender_identity="agent_1", now=time.time()),
     )
+
+
+@pytest.mark.asyncio
+async def test_protocol_webhook_service_refuses_public_http_url(monkeypatch) -> None:
+    monkeypatch.delenv("ADCP_AUTH_TEST_MODE", raising=False)
+    monkeypatch.delenv("WEBHOOK_ALLOW_PRIVATE_IPS", raising=False)
+
+    service = ProtocolWebhookService()
+    session = _Session()
+    service._session = session
+    config = PushNotificationConfig(
+        id="pnc_1",
+        tenant_id="tenant_1",
+        principal_id="agent_1",
+        url="http://example.com/webhooks",
+        signing_mode="hmac",
+        is_active=True,
+    )
+
+    ok = await service.send_notification(config, {"task_id": "catalog_1"}, {"task_type": "signal.updated"})
+
+    assert ok is False
+    assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_protocol_webhook_service_refuses_metadata_url(monkeypatch) -> None:
+    monkeypatch.delenv("ADCP_AUTH_TEST_MODE", raising=False)
+    monkeypatch.delenv("WEBHOOK_ALLOW_PRIVATE_IPS", raising=False)
+
+    service = ProtocolWebhookService()
+    session = _Session()
+    service._session = session
+    config = PushNotificationConfig(
+        id="pnc_1",
+        tenant_id="tenant_1",
+        principal_id="agent_1",
+        url="https://169.254.169.254/latest/meta-data",
+        signing_mode="hmac",
+        is_active=True,
+    )
+
+    ok = await service.send_notification(config, {"task_id": "catalog_1"}, {"task_type": "signal.updated"})
+
+    assert ok is False
+    assert session.calls == []

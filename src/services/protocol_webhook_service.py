@@ -32,6 +32,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
+from src.core.webhook_validator import WebhookURLValidator
 from src.services.webhook_signing import (
     SIGNING_MODE_BOTH,
     SIGNING_MODE_HMAC,
@@ -99,6 +100,11 @@ class ProtocolWebhookService:
             logger.debug(
                 f"No webhook URL configured in the push notification. Here's payload: {payload}, skipping notification"
             )
+            return False
+
+        is_valid, error = WebhookURLValidator.validate_delivery_url(push_notification_config.url)
+        if not is_valid:
+            logger.error("Refusing protocol webhook delivery to %s: %s", push_notification_config.url, error)
             return False
 
         url = _normalize_localhost_for_docker(push_notification_config.url)
@@ -247,6 +253,11 @@ class ProtocolWebhookService:
         max_attempts: int = 3,
     ) -> bool:
         """Send webhook with exponential backoff retry logic, logging, and audit trail."""
+        is_valid, error = WebhookURLValidator.validate_delivery_url(url)
+        if not is_valid:
+            logger.error("Refusing protocol webhook delivery to %s: %s", url, error)
+            return False
+
         # Calculate payload size for metrics
         payload_size_bytes = len(json.dumps(payload).encode("utf-8"))
 

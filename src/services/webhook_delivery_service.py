@@ -26,6 +26,7 @@ import httpx
 from adcp import get_adcp_version
 
 from src.core.metrics import webhook_signing_misconfigured_total
+from src.core.webhook_validator import WebhookURLValidator
 from src.services.webhook_signing import (
     SIGNING_MODE_HMAC,
     LoadedSigningCredential,
@@ -519,6 +520,23 @@ class WebhookDeliveryService:
 
         url = snapshot["url"]
         signing_mode = snapshot["signing_mode"]
+        is_valid, error = WebhookURLValidator.validate_delivery_url(url)
+        if not is_valid:
+            logger.error("Refusing delivery webhook to %s: %s", url, error)
+            self._record_delivery_log(
+                tenant_id=log_tenant_id,
+                principal_id=log_principal_id,
+                media_buy_id=log_media_buy_id,
+                url=url,
+                delivery_payload=log_delivery_payload,
+                attempt=1,
+                status="failed",
+                sequence_number=log_sequence_number,
+                notification_type=log_notification_type,
+                error_message=f"unsafe webhook URL: {error}",
+            )
+            circuit_breaker.record_failure()
+            return False
 
         base_headers: dict[str, str] = {
             "Content-Type": "application/json",

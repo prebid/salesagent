@@ -230,6 +230,27 @@ def test_webhook_notification_sent_on_success():
         assert headers["Authorization"] == "Bearer test_token"
 
 
+def test_webhook_notification_refuses_public_http_url(monkeypatch):
+    """Approval callbacks should not deliver legacy stored HTTP URLs."""
+    from src.services.order_approval_service import _send_approval_webhook
+
+    monkeypatch.delenv("ADCP_AUTH_TEST_MODE", raising=False)
+    monkeypatch.delenv("WEBHOOK_ALLOW_PRIVATE_IPS", raising=False)
+
+    with patch("src.services.order_approval_service.get_db_session") as mock_db, patch("httpx.Client") as mock_httpx:
+        _send_approval_webhook(
+            webhook_url="http://example.com/webhook",
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+            media_buy_id="mb_123",
+            status="approved",
+            message="Order approved successfully",
+        )
+
+    mock_db.assert_not_called()
+    mock_httpx.return_value.__enter__.return_value.post.assert_not_called()
+
+
 @patch("src.services.order_approval_service.time.sleep")
 def test_webhook_retries_on_failure(mock_sleep):
     """Test webhook retries on HTTP failure."""

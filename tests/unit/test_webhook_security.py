@@ -18,51 +18,51 @@ class TestWebhookURLValidator:
         assert is_valid
         assert error == ""
 
-    def test_valid_public_http_url(self):
-        """Valid public HTTP URLs should pass (for testing)."""
+    def test_public_http_url_rejected(self):
+        """Production webhook URLs must use HTTPS."""
         is_valid, error = WebhookURLValidator.validate_webhook_url("http://example.com/webhook")
-        assert is_valid
-        assert error == ""
+        assert not is_valid
+        assert "https" in error.lower()
 
     def test_blocks_localhost(self):
         """Should block localhost."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://localhost:3000/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url("https://localhost:3000/webhook")
         assert not is_valid
         assert "blocked" in error.lower()
 
     def test_blocks_127_0_0_1(self):
         """Should block 127.0.0.1."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://127.0.0.1:8080/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url("https://127.0.0.1:8080/webhook")
         assert not is_valid
         assert "loopback" in error.lower() or "private" in error.lower() or "internal" in error.lower()
 
     def test_blocks_private_network_10(self):
         """Should block 10.0.0.0/8 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://10.0.0.5/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url("https://10.0.0.5/webhook")
         assert not is_valid
         assert "private" in error.lower() or "internal" in error.lower()
 
     def test_blocks_private_network_192(self):
         """Should block 192.168.0.0/16 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://192.168.1.1/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url("https://192.168.1.1/webhook")
         assert not is_valid
         assert "private" in error.lower() or "internal" in error.lower()
 
     def test_blocks_private_network_172(self):
         """Should block 172.16.0.0/12 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://172.16.0.1/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url("https://172.16.0.1/webhook")
         assert not is_valid
         assert "private" in error.lower() or "internal" in error.lower()
 
     def test_blocks_link_local(self):
         """Should block 169.254.0.0/16 link-local (AWS metadata service)."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://169.254.169.254/latest/meta-data")
+        is_valid, error = WebhookURLValidator.validate_webhook_url("https://169.254.169.254/latest/meta-data")
         assert not is_valid
         assert "link" in error.lower() or "private" in error.lower() or "blocked" in error.lower()
 
     def test_blocks_metadata_hostname(self):
         """Should block cloud metadata hostnames."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://metadata.google.internal/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url("https://metadata.google.internal/webhook")
         assert not is_valid
         assert "blocked" in error.lower()
 
@@ -70,11 +70,11 @@ class TestWebhookURLValidator:
         """Should reject non-HTTP protocols."""
         is_valid, error = WebhookURLValidator.validate_webhook_url("ftp://example.com/webhook")
         assert not is_valid
-        assert "http" in error.lower()
+        assert "https" in error.lower()
 
     def test_requires_hostname(self):
         """Should reject URLs without hostname."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http:///webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url("https:///webhook")
         assert not is_valid
         assert "hostname" in error.lower()
 
@@ -96,6 +96,51 @@ class TestWebhookURLValidator:
         """Testing mode should still block private networks even with allow_localhost."""
         is_valid, error = WebhookURLValidator.validate_for_testing("http://192.168.1.1/webhook", allow_localhost=True)
         assert not is_valid
+
+    def test_delivery_validation_rejects_public_http_url(self, monkeypatch):
+        """Delivery-time validation should protect legacy stored HTTP URLs."""
+        monkeypatch.delenv("ADCP_AUTH_TEST_MODE", raising=False)
+        monkeypatch.delenv("WEBHOOK_ALLOW_PRIVATE_IPS", raising=False)
+
+        is_valid, error = WebhookURLValidator.validate_delivery_url("http://example.com/webhook")
+        assert not is_valid
+        assert "https" in error.lower()
+
+    def test_delivery_validation_rejects_private_https_url(self, monkeypatch):
+        """Delivery-time validation should protect legacy stored private URLs."""
+        monkeypatch.delenv("ADCP_AUTH_TEST_MODE", raising=False)
+        monkeypatch.delenv("WEBHOOK_ALLOW_PRIVATE_IPS", raising=False)
+
+        is_valid, error = WebhookURLValidator.validate_delivery_url("https://169.254.169.254/latest/meta-data")
+        assert not is_valid
+        assert "private" in error.lower() or "blocked" in error.lower()
+
+    def test_delivery_validation_allows_localhost_in_test_mode(self, monkeypatch):
+        """Local E2E webhook receivers should still work in explicit test mode."""
+        monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+        monkeypatch.delenv("WEBHOOK_ALLOW_PRIVATE_IPS", raising=False)
+
+        is_valid, error = WebhookURLValidator.validate_delivery_url("http://localhost:3001/webhook")
+        assert is_valid
+        assert error == ""
+
+    def test_delivery_validation_private_override_rejects_public_http_url(self, monkeypatch):
+        """The dev override should not reopen public HTTP delivery."""
+        monkeypatch.delenv("ADCP_AUTH_TEST_MODE", raising=False)
+        monkeypatch.setenv("WEBHOOK_ALLOW_PRIVATE_IPS", "true")
+
+        is_valid, error = WebhookURLValidator.validate_delivery_url("http://example.com/webhook")
+        assert not is_valid
+        assert "https" in error.lower()
+
+    def test_delivery_validation_private_override_rejects_metadata_url(self, monkeypatch):
+        """The dev override should not allow metadata/private SSRF destinations."""
+        monkeypatch.delenv("ADCP_AUTH_TEST_MODE", raising=False)
+        monkeypatch.setenv("WEBHOOK_ALLOW_PRIVATE_IPS", "true")
+
+        is_valid, error = WebhookURLValidator.validate_delivery_url("https://169.254.169.254/latest/meta-data")
+        assert not is_valid
+        assert "private" in error.lower() or "blocked" in error.lower()
 
 
 class TestWebhookAuthenticator:

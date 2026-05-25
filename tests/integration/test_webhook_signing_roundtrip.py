@@ -74,7 +74,7 @@ class TestWebhookSigningRoundtrip:
             principal = PrincipalFactory(tenant=tenant, principal_id="p_signing")
 
             # Webhook config opts the buyer into RFC 9421 signing.
-            webhook_url = "https://buyer.example.com/webhook/abcd"
+            webhook_url = "https://example.com/buyer-webhook/abcd"
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
@@ -161,7 +161,7 @@ class TestWebhookSigningFailClosed:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://buyer.example.com/webhook",
+                url="https://example.com/buyer-webhook",
                 signing_mode="rfc9421",
             )
             # NO TenantSigningCredentialFactory — that's the failure mode.
@@ -205,7 +205,7 @@ class TestWebhookSigningFailClosed:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://buyer.example.com/webhook",
+                url="https://example.com/buyer-webhook",
                 signing_mode="rfc9421",
             )
             env.set_http_response(200)
