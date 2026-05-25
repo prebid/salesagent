@@ -126,15 +126,33 @@ def then_no_real_api_calls(ctx: dict) -> None:
     Verifies the mock registry was used instead of real HTTP calls.
     The harness patches ``get_creative_agent_registry`` — if production
     code called it, it got the mock and no real API calls occurred.
+
+    Two verification paths:
+    1. If a response exists (success path): verify production called the mock registry.
+    2. If an error exists (failure path): verify the mock was the source (the error
+       came from our mock, not from a real HTTP call that failed).
+    In either case, the mock being active proves no real calls escaped.
     """
     env = ctx["env"]
     assert env is not None, "Expected harness env in ctx — without the harness, real API calls could occur"
     registry_mock = env.mock.get("registry")
     assert registry_mock is not None, "Registry mock not configured in harness"
-    # If a response exists, production ran the impl — verify it used the mock
-    if "response" in ctx:
-        mock_registry = registry_mock.return_value
-        formats_called = mock_registry.list_all_formats.called or mock_registry.list_all_formats_with_errors.called
-        assert formats_called, (
-            "Production code returned a response but did not call the mock registry — real API calls may have been made"
-        )
+
+    # The mock being called (at all) proves production code went through the patch
+    # point and never reached real HTTP. Whether it succeeded or failed is irrelevant
+    # to THIS step's claim: "no real API calls".
+    mock_registry = registry_mock.return_value
+    assert mock_registry is not None, "Registry mock has no return_value configured"
+
+    # Verify the registry mock was actually consulted by production code.
+    # Production must call one of these methods to get format data.
+    registry_was_consulted = (
+        registry_mock.called
+        or mock_registry.list_all_formats.called
+        or mock_registry.list_all_formats_with_errors.called
+    )
+    assert registry_was_consulted, (
+        "Neither the registry factory mock nor its methods were called — "
+        "production code may have bypassed the patched registry entirely. "
+        f"Response present: {'response' in ctx}, Error present: {'error' in ctx}"
+    )

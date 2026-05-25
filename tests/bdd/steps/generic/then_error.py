@@ -76,16 +76,32 @@ def then_operation_fails(ctx: dict) -> None:
     Checks two patterns:
     1. Exception-based: ctx["error"] set by dispatch on exception
     2. Partial success: response.errors non-empty (UC-004 delivery pattern)
+
+    Both paths make a positive assertion that a real error object exists —
+    not just that a ctx key is set.
     """
-    if "error" in ctx:
-        return  # Exception-based error — OK
+    error = ctx.get("error")
+    if error is not None:
+        # Exception-based error — assert it is a proper error object (not just truthy).
+        # Valid error types: Exception subclasses OR adcp Error models (have .code attr).
+        is_exception = isinstance(error, (Exception, BaseException))
+        is_error_model = getattr(error, "code", None) is not None
+        assert is_exception or is_error_model, (
+            f"ctx['error'] is set but is not an Exception or Error model: {type(error).__name__} = {error!r}"
+        )
+        return
     resp = ctx.get("response")
     if resp is not None and hasattr(resp, "errors") and resp.errors:
         # Promote the first response error to ctx["error"] so downstream
         # Then steps (error_code, error_message) can find it.
-        ctx["error"] = resp.errors[0]
+        first_error = resp.errors[0]
+        assert first_error is not None, "response.errors[0] is None — expected a concrete error object"
+        ctx["error"] = first_error
         return
-    raise AssertionError("Expected an error but none was recorded in ctx")
+    raise AssertionError(
+        "Expected the operation to fail but no error was recorded. "
+        f"ctx keys: {list(ctx.keys())}, response: {ctx.get('response')!r}"
+    )
 
 
 # ── Error code ───────────────────────────────────────────────────────

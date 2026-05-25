@@ -140,16 +140,18 @@ def then_has_referrals(ctx: dict) -> None:
 
     # On mock transports, verify the Given agents' URLs appear in the response.
     # On e2e_rest, the Given step is a no-op (Docker's real agent serves),
-    # so we can't predict the URL — structural checks above are sufficient.
+    # so we verify structural properties instead of exact URL matching.
     given_agents = ctx.get("creative_agent_referrals", [])
-    if given_agents:
+    if given_agents and not _is_e2e(ctx):
         expected_urls = {str(a.agent_url) for a in given_agents}
         missing = expected_urls - actual_urls
-        if missing:
-            # E2E won't match — Given URLs are test fixtures, Docker has its own
-            is_e2e = any("e2e" in str(u) or "creative-agent" in str(u) for u in actual_urls)
-            if not is_e2e:
-                assert not missing, f"Given agent URLs not in response: {missing}. Response has: {actual_urls}"
+        assert not missing, f"Given agent URLs not found in response: {missing}. Response contains: {actual_urls}"
+    elif _is_e2e(ctx):
+        # E2E: Docker's real creative agent serves its own URL — verify the
+        # response URLs are well-formed HTTP endpoints (structural check since
+        # we cannot predict Docker's URL).
+        for url_str in actual_urls:
+            assert url_str.startswith("http"), f"E2E referral URL should be http/https, got: {url_str!r}"
 
 
 @then("each referral should include the agent URL and supported capabilities")

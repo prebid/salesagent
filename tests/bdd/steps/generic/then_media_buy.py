@@ -100,17 +100,35 @@ def then_response_has_packages(ctx: dict) -> None:
 
 @then("each package should include product_id, budget, and pricing details")
 def then_packages_have_details(ctx: dict) -> None:
-    """Assert each package has product_id, budget, AND pricing details."""
+    """Assert each package has product_id, budget, AND pricing details with concrete values."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     packages = _get_response_field(resp, "packages")
-    assert packages, "No packages in response"
+    assert packages is not None, "No packages field in response"
+    assert isinstance(packages, list), f"Expected packages to be a list, got {type(packages).__name__}"
+    assert packages, f"Expected non-empty packages list but got empty: {packages}"
     for i, pkg in enumerate(packages):
         pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
-        assert "product_id" in pkg_dict, f"Package {i} missing product_id"
-        assert "budget" in pkg_dict, f"Package {i} missing budget"
-        # Step text claims "pricing details" — verify pricing_option_id is present
-        assert pkg_dict.get("pricing_option_id"), f"Package {i} missing pricing_option_id (pricing details)"
+        # product_id must be present AND non-empty (proves allocation occurred)
+        product_id = pkg_dict.get("product_id")
+        assert product_id is not None, f"Package {i} has product_id=None — expected a concrete product allocation"
+        assert isinstance(product_id, str), f"Package {i} product_id is {type(product_id).__name__}, expected str"
+        assert product_id != "", f"Package {i} has empty product_id string"
+        # budget must be present AND be a numeric value or dict with amount
+        budget = pkg_dict.get("budget")
+        assert budget is not None, f"Package {i} has budget=None — step claims 'budget' is included"
+        if isinstance(budget, dict):
+            assert "amount" in budget, f"Package {i} budget dict missing 'amount' key: {budget}"
+            assert budget["amount"] is not None, f"Package {i} budget.amount is None"
+        # pricing details: pricing_option_id must be a non-empty value
+        pricing_option_id = pkg_dict.get("pricing_option_id")
+        assert pricing_option_id is not None, (
+            f"Package {i} has pricing_option_id=None — step claims 'pricing details' are included"
+        )
+        assert isinstance(pricing_option_id, str), (
+            f"Package {i} pricing_option_id is {type(pricing_option_id).__name__}, expected str"
+        )
+        assert pricing_option_id != "", f"Package {i} has empty pricing_option_id string"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -264,15 +282,28 @@ def then_slack_notification_sent(ctx: dict) -> None:
     """Assert Slack notifier was called with seller-facing event details.
 
     In E2E, mocks live in the test process while the server runs in Docker,
-    so mock.call_count is always 0. Fall back to outcome assertion (media buy
-    exists in DB, proving the full pipeline -- including notification -- ran).
+    so mock.call_count is always 0. Verify the media buy reached a status that
+    triggers seller notification (the notification is a side-effect of status
+    transitions in production code).
     """
     from tests.bdd.steps._outcome_helpers import assert_media_buy_created, is_e2e
 
     if is_e2e(ctx):
-        # E2E: cannot observe Slack mock calls -- verify the media buy was
-        # created successfully, which proves the notification code path ran
-        assert_media_buy_created(ctx)
+        # E2E: cannot observe Slack mock calls — verify:
+        # 1. The media buy was created successfully
+        # 2. It reached a status that triggers Slack notification to the Seller
+        mb = assert_media_buy_created(ctx)
+        # Seller notifications fire on creation/approval-needed status transitions
+        notification_trigger_statuses = (
+            "pending_approval",
+            "active",
+            "completed",
+            "submitted",
+        )
+        assert mb.status in notification_trigger_statuses, (
+            f"E2E media buy has status '{mb.status}' which does not trigger "
+            f"Seller Slack notification. Expected one of {notification_trigger_statuses}."
+        )
         return
 
     # In-process: full mock verification
@@ -283,8 +314,10 @@ def then_slack_notification_sent(ctx: dict) -> None:
     assert call_args is not None, "Slack notify_media_buy_event called but call_args is None"
     event_type = call_args.args[0] if call_args.args else call_args.kwargs.get("event_type")
     media_buy_id = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("media_buy_id")
-    assert event_type, "Slack notification missing event_type argument"
-    assert media_buy_id, "Slack notification missing media_buy_id — cannot confirm it references the correct media buy"
+    assert event_type is not None, "Slack notification missing event_type argument"
+    assert media_buy_id is not None, (
+        "Slack notification missing media_buy_id — cannot confirm it references the correct media buy"
+    )
     seller_event_types = ("approval_required", "created", "config_approval_required")
     assert event_type in seller_event_types, (
         f"Expected seller-facing event_type (one of {seller_event_types}), "
@@ -305,7 +338,8 @@ def then_slack_notification_sent(ctx: dict) -> None:
         "tenant_name as a kwarg; if it arrived positionally the call signature has diverged"
     )
     tenant_name = call_args.kwargs["tenant_name"]
-    assert tenant_name, "Slack notification has empty tenant_name — cannot confirm it targets the Seller"
+    assert isinstance(tenant_name, str), f"Slack notification tenant_name is {type(tenant_name).__name__}, expected str"
+    assert tenant_name != "", "Slack notification has empty tenant_name — cannot confirm it targets the Seller"
     tenant = ctx.get("tenant")
     if tenant is not None:
         expected_tenant_name = getattr(tenant, "name", None)
@@ -475,6 +509,18 @@ def then_webhook_notification(ctx: dict) -> None:
                 "FIXME(salesagent-9vgz.1): Wire through the production admin approve/reject flow "
                 "which populates request_data from the originating create_media_buy request."
             )
+
+        # Happy path: step.request_data carries push_notification_config with the buyer URL.
+        # This proves the full dispatch chain is wired:
+        #   PushNotificationConfig (A) + WorkflowStep.request_data (B) + ObjectWorkflowMapping (C)
+        #   + terminal status (D) = webhook WILL be dispatched by _send_push_notifications.
+        assert isinstance(step_push_cfg, dict), (
+            f"step.request_data['push_notification_config'] is not a dict: {type(step_push_cfg)}"
+        )
+        assert step_push_cfg.get("url") == expected_url, (
+            f"step.request_data push_notification_config URL mismatch: "
+            f"expected '{expected_url}', got '{step_push_cfg.get('url')}'"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
