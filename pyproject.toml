@@ -169,8 +169,6 @@ ignore = [
     "E402",    # Flask app (admin_ui.py) requires imports after app config; 3 occurrences
     "E722",    # 12 bare excepts in error-recovery paths (adapters, auth); TODO: add specific exceptions
     "F821",    # 4 false positives from conditional imports and TYPE_CHECKING blocks
-    "F403",    # 8 star imports in __init__.py re-exports; TODO: replace with explicit imports
-    "F405",    # Consequence of F403 — will resolve when F403 is fixed
     "E741",    # 3 uses of `l` variable in loops; renaming would hurt readability in math-heavy code
     "B904",    # 47 raise-without-from in adapter error handling; TODO: add `from e` systematically
     "B027",    # 6 empty methods in BaseAdapter — intentional optional interface, not abstract
