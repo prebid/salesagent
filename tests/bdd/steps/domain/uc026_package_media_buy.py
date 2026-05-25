@@ -2476,8 +2476,6 @@ def then_pkg_budget_value(ctx: dict, budget: int) -> None:
 @then(parsers.parse("the package catalogs should be {expected}"))
 def then_pkg_catalogs(ctx: dict, expected: str) -> None:
     """Assert package catalogs match expected JSON."""
-    import pytest
-
     # Handle "unchanged" case — delegate to the dedicated unchanged step
     if expected.strip().lower() == "unchanged":
         then_catalogs_unchanged(ctx)
@@ -2485,24 +2483,23 @@ def then_pkg_catalogs(ctx: dict, expected: str) -> None:
 
     pkgs = _assert_has_packages(ctx)
     actual_catalogs = _pkg_field(pkgs[0], "catalogs")
-    if actual_catalogs is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: catalogs not echoed in response. Expected {expected}. FIXME(salesagent-9vgz.1)"
-        )
     expected_parsed = json.loads(expected)
+
+    assert actual_catalogs is not None, f"Expected catalogs {expected} but catalogs field is None in response"
+
     # Normalize for comparison
-    if isinstance(actual_catalogs, list) and isinstance(expected_parsed, list):
-        actual_normalized = [
-            c if isinstance(c, dict) else (c.model_dump() if hasattr(c, "model_dump") else {"raw": str(c)})
-            for c in actual_catalogs
-        ]
-        assert len(actual_normalized) == len(expected_parsed), (
-            f"Expected {len(expected_parsed)} catalogs, got {len(actual_normalized)}"
-        )
-        # Verify each expected catalog is present with matching fields
-        for exp_cat in expected_parsed:
-            if isinstance(exp_cat, dict):
-                _assert_catalog_in_list(exp_cat, actual_normalized)
+    actual_normalized = [
+        c if isinstance(c, dict) else (c.model_dump() if hasattr(c, "model_dump") else {"raw": str(c)})
+        for c in actual_catalogs
+    ]
+    expected_list = expected_parsed if isinstance(expected_parsed, list) else [expected_parsed]
+    assert len(actual_normalized) == len(expected_list), (
+        f"Expected {len(expected_list)} catalogs, got {len(actual_normalized)}"
+    )
+    # Verify each expected catalog is present with matching fields
+    for exp_cat in expected_list:
+        if isinstance(exp_cat, dict):
+            _assert_catalog_in_list(exp_cat, actual_normalized)
 
 
 def _assert_catalog_in_list(expected: dict, actual_list: list[dict]) -> None:
