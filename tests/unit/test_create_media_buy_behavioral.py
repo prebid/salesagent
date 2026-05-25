@@ -268,7 +268,7 @@ class TestProductNotFound:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "VALIDATION_ERROR"
+        assert errors[0].code == "NOT_FOUND"
         assert "prod_missing" in errors[0].message
         assert "not found" in errors[0].message.lower()
 
@@ -347,9 +347,9 @@ class TestMaxDailySpendExceeded:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
                     # Validation errors must NOT be about daily spend
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
-                        f"Daily spend validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
+                    ), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend validation are fine
 
@@ -721,9 +721,9 @@ class TestInlineCreativesProcessedBeforeApproval:
 
         # Verify creatives were processed before the adapter (approval check) was accessed
         assert "creatives_processed" in call_order, "process_and_upload_package_creatives was not called"
-        assert call_order.index("creatives_processed") < call_order.index("approval_check"), (
-            f"Creatives must be processed before approval check. Order: {call_order}"
-        )
+        assert call_order.index("creatives_processed") < call_order.index(
+            "approval_check"
+        ), f"Creatives must be processed before approval check. Order: {call_order}"
 
 
 class TestMultipleInvalidCreativesAccumulated:
@@ -1108,9 +1108,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "not found" not in str(e).lower() or "product" not in str(e).lower(), (
-                        f"Product validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "not found" not in str(e).lower() or "product" not in str(e).lower()
+                    ), f"Product validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to product validation are fine
 
@@ -1136,9 +1136,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "currency" not in str(e).lower() or "not supported" not in str(e).lower(), (
-                        f"Currency validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "currency" not in str(e).lower() or "not supported" not in str(e).lower()
+                    ), f"Currency validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to currency validation are fine
 
@@ -1408,9 +1408,9 @@ class TestAsapStartTimingObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
-                        f"Daily spend validation should have passed but got: {e}"
-                    )
+                    assert (
+                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
+                    ), f"Daily spend validation should have passed but got: {e}"
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend are fine
 
