@@ -291,6 +291,7 @@ class Tenant(Base, JSONValidatorMixin):
     )
 
     __table_args__ = (
+        CheckConstraint("position(':' in tenant_id) = 0", name="ck_tenants_tenant_id_no_colon"),
         Index("idx_subdomain", "subdomain"),
         Index("ix_tenants_virtual_host", "virtual_host", unique=True),
         Index("ix_tenants_external_org_id", "external_org_id"),
