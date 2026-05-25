@@ -451,31 +451,70 @@ def then_error_contains_count(ctx: dict, count: str) -> None:
 
 @then(parsers.parse("the result should be {outcome}"))
 def then_result_should_be(ctx: dict, outcome: str) -> None:
-    """Assert outcome of a partition/boundary scenario."""
+    """Assert outcome of a partition/boundary scenario.
+
+    Handles three outcome families:
+    - Success outcomes: "success", "account resolution succeeds", "X validation passes"
+    - Error outcomes: "error CODE ...", "error with suggestion"
+    - Unknown: raises ValueError for unrecognized patterns
+    """
     if outcome.startswith("account resolution succeeds"):
         assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-        assert "resolved_account_id" in ctx, "Expected resolved_account_id in ctx"
-    elif outcome == "success":
+        resolved_id = ctx.get("resolved_account_id")
+        assert resolved_id is not None, "Expected resolved_account_id in ctx but it was absent"
+        assert isinstance(resolved_id, str) and len(resolved_id) > 0, (
+            f"Expected resolved_account_id to be a non-empty string, got: {resolved_id!r}"
+        )
+    elif outcome == "success" or outcome.endswith("validation passes"):
         assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-        assert "response" in ctx, "Expected response in ctx"
-    elif outcome.startswith("error "):
+        resp = ctx.get("response")
+        assert resp is not None, "Expected response in ctx but got None"
+        # Verify the response is a successful creation with a media_buy_id
+        from tests.bdd.steps._outcome_helpers import _get_response_field
+
+        media_buy_id = _get_response_field(resp, "media_buy_id")
+        assert media_buy_id is not None, (
+            f"Expected media_buy_id in response but got None. Response type: {type(resp).__name__}"
+        )
+        assert isinstance(media_buy_id, str) and len(media_buy_id) > 0, (
+            f"Expected media_buy_id to be a non-empty string, got: {media_buy_id!r}"
+        )
+    elif outcome.startswith("error"):
         assert "error" in ctx, f"Expected an error for outcome: {outcome}"
         from src.core.exceptions import AdCPError
 
         error = ctx["error"]
-        # Parse expected: "error CODE recovery_hint" or "error CODE with suggestion"
-        parts = outcome[6:].strip().split()
-        expected_code = parts[0]
-        if isinstance(error, AdCPError):
-            assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
-        # Check recovery hint if specified
-        if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
+        # Parse expected: "error CODE recovery_hint", "error CODE with suggestion", or "error with suggestion"
+        remainder = outcome[5:].strip()  # strip "error" prefix
+        if remainder.startswith("with suggestion"):
+            # "error with suggestion" — no specific code, just check suggestion exists
+            assert isinstance(error, AdCPError), (
+                f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
+            )
+            assert error.details is not None, "Expected error details with suggestion, got None"
+            assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+        else:
+            parts = remainder.split()
+            expected_code = parts[0]
             if isinstance(error, AdCPError):
+                assert error.error_code == expected_code, (
+                    f"Expected error code '{expected_code}', got '{error.error_code}'"
+                )
+            # Check recovery hint if specified
+            if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
+                assert isinstance(error, AdCPError), (
+                    f"Expected AdCPError for recovery check, got {type(error).__name__}: {error}"
+                )
                 assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
-        # Check "with suggestion" if specified
-        if "with suggestion" in outcome.lower() or "with" in parts:
-            if isinstance(error, AdCPError) and error.details:
-                assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+            # Check "with suggestion" if specified
+            if "with suggestion" in outcome.lower():
+                assert isinstance(error, AdCPError), (
+                    f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
+                )
+                assert error.details is not None, "Expected error details with suggestion, got None"
+                assert "suggestion" in error.details, (
+                    f"Expected suggestion in details: {error.details}"
+                )
     else:
         raise ValueError(f"Unknown outcome: {outcome}")
 
