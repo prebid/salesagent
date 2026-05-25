@@ -459,64 +459,97 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     - Unknown: raises ValueError for unrecognized patterns
     """
     if outcome.startswith("account resolution succeeds"):
-        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-        resolved_id = ctx.get("resolved_account_id")
-        assert resolved_id is not None, "Expected resolved_account_id in ctx but it was absent"
-        assert isinstance(resolved_id, str) and len(resolved_id) > 0, (
-            f"Expected resolved_account_id to be a non-empty string, got: {resolved_id!r}"
-        )
-    elif outcome == "success" or outcome.endswith("validation passes"):
-        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-        resp = ctx.get("response")
-        assert resp is not None, "Expected response in ctx but got None"
-        # Verify the response is a successful creation with a media_buy_id
-        from tests.bdd.steps._outcome_helpers import _get_response_field
-
-        media_buy_id = _get_response_field(resp, "media_buy_id")
-        assert media_buy_id is not None, (
-            f"Expected media_buy_id in response but got None. Response type: {type(resp).__name__}"
-        )
-        assert isinstance(media_buy_id, str) and len(media_buy_id) > 0, (
-            f"Expected media_buy_id to be a non-empty string, got: {media_buy_id!r}"
-        )
+        _assert_account_resolution_succeeds(ctx)
     elif outcome.startswith("error"):
-        assert "error" in ctx, f"Expected an error for outcome: {outcome}"
-        from src.core.exceptions import AdCPError
+        _assert_error_outcome(ctx, outcome)
+    else:
+        # All non-error, non-account-resolution outcomes are success scenarios
+        # (e.g., "success", "X validation passes", "X check skipped", "auto-approved path taken")
+        _assert_success_with_media_buy_id(ctx)
 
-        error = ctx["error"]
-        # Parse expected: "error CODE recovery_hint", "error CODE with suggestion", or "error with suggestion"
-        remainder = outcome[5:].strip()  # strip "error" prefix
-        if remainder.startswith("with suggestion"):
-            # "error with suggestion" — no specific code, just check suggestion exists
-            assert isinstance(error, AdCPError), (
-                f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
+
+def _assert_account_resolution_succeeds(ctx: dict) -> None:
+    """Assert account resolution produced the correct account_id."""
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    resolved_id = ctx["resolved_account_id"]
+    assert isinstance(resolved_id, str), (
+        f"Expected resolved_account_id to be a string, got {type(resolved_id).__name__}: {resolved_id!r}"
+    )
+    # Compare against the expected account_id from the request's account_ref
+    account_ref = ctx.get("account_ref")
+    if account_ref is not None and hasattr(account_ref, "root"):
+        root = account_ref.root
+        if hasattr(root, "account_id"):
+            # Explicit account_id reference — resolved must match exactly
+            assert resolved_id == root.account_id, (
+                f"Expected resolved_account_id '{root.account_id}', got '{resolved_id}'"
             )
+            return
+    # Natural key resolution — verify against request_account_id if available
+    if "request_account_id" in ctx:
+        assert resolved_id == ctx["request_account_id"], (
+            f"Expected resolved_account_id '{ctx['request_account_id']}', got '{resolved_id}'"
+        )
+    else:
+        # Natural key scenario: verify the ID is a non-trivial string (alphanumeric + hyphens)
+        import re
+
+        assert re.match(r"^[a-zA-Z0-9_-]+$", resolved_id), (
+            f"Expected resolved_account_id to be a valid ID string, got: {resolved_id!r}"
+        )
+
+
+def _assert_success_with_media_buy_id(ctx: dict) -> None:
+    """Assert successful creation produced a valid UUID media_buy_id."""
+    import re
+
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected response in ctx but got None"
+    from tests.bdd.steps._outcome_helpers import _get_response_field
+
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id is not None, (
+        f"Expected media_buy_id in response but got None. Response type: {type(resp).__name__}"
+    )
+    assert isinstance(media_buy_id, str), (
+        f"Expected media_buy_id to be a string, got {type(media_buy_id).__name__}: {media_buy_id!r}"
+    )
+    assert re.match(r"^[a-f0-9-]+$", media_buy_id), (
+        f"Expected media_buy_id to be UUID format (hex + hyphens), got: {media_buy_id!r}"
+    )
+
+
+def _assert_error_outcome(ctx: dict, outcome: str) -> None:
+    """Assert error outcome with exact code and recovery matching."""
+    from src.core.exceptions import AdCPError
+
+    assert "error" in ctx, f"Expected an error for outcome: {outcome}"
+    error = ctx["error"]
+    remainder = outcome[5:].strip()  # strip "error" prefix
+
+    if remainder.startswith("with suggestion"):
+        # "error with suggestion" — no specific code, just check suggestion exists
+        assert isinstance(error, AdCPError), (
+            f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
+        )
+        assert error.details is not None, "Expected error details with suggestion, got None"
+        assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+    else:
+        parts = remainder.split()
+        expected_code = parts[0]
+        # Error code assertion is unconditional — must be AdCPError with matching code
+        assert isinstance(error, AdCPError), (
+            f"Expected AdCPError with code '{expected_code}', got {type(error).__name__}: {error}"
+        )
+        assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
+        # Check recovery hint if specified
+        if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
+            assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
+        # Check "with suggestion" if specified
+        if "with suggestion" in outcome.lower():
             assert error.details is not None, "Expected error details with suggestion, got None"
             assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
-        else:
-            parts = remainder.split()
-            expected_code = parts[0]
-            if isinstance(error, AdCPError):
-                assert error.error_code == expected_code, (
-                    f"Expected error code '{expected_code}', got '{error.error_code}'"
-                )
-            # Check recovery hint if specified
-            if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
-                assert isinstance(error, AdCPError), (
-                    f"Expected AdCPError for recovery check, got {type(error).__name__}: {error}"
-                )
-                assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
-            # Check "with suggestion" if specified
-            if "with suggestion" in outcome.lower():
-                assert isinstance(error, AdCPError), (
-                    f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
-                )
-                assert error.details is not None, "Expected error details with suggestion, got None"
-                assert "suggestion" in error.details, (
-                    f"Expected suggestion in details: {error.details}"
-                )
-    else:
-        raise ValueError(f"Unknown outcome: {outcome}")
 
 
 # ═══════════════════════════════════════════════════════════════════════

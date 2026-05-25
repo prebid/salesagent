@@ -1372,28 +1372,36 @@ def then_creative_approval_state(ctx: dict) -> None:
 
 @then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
 def then_buyer_refs_for_correlation(ctx: dict) -> None:
-    """Assert buyer_campaign_ref is present on each media buy for correlation.
+    """Assert buyer_campaign_ref on each response media buy matches the seeded value.
 
     buyer_ref was removed in adcp 3.12; buyer_campaign_ref is the surviving
-    correlation identifier that buyers use to link media buys to their campaigns.
+    correlation identifier derived from raw_request in production code.
     """
     buys = _get_media_buys(ctx)
-    buys_checked = 0
+    seeded = ctx.get("seeded_media_buys", {})
+    checked = 0
     for buy in buys:
-        buys_checked += 1
-        buy_id = getattr(buy, "media_buy_id", "unknown")
-        # buyer_campaign_ref must be present and non-empty for correlation
-        campaign_ref = getattr(buy, "buyer_campaign_ref", None)
-        if campaign_ref is None and isinstance(buy, dict):
-            campaign_ref = buy.get("buyer_campaign_ref")
-        assert isinstance(campaign_ref, str), (
-            f"Media buy '{buy_id}' buyer_campaign_ref must be a string, "
-            f"got {type(campaign_ref).__name__}: {campaign_ref!r}"
+        buy_id = buy.media_buy_id
+        # Find the matching seeded ORM object by media_buy_id
+        seeded_mb = None
+        for mb in seeded.values():
+            if mb.media_buy_id == buy_id:
+                seeded_mb = mb
+                break
+        assert seeded_mb is not None, (
+            f"Response media buy '{buy_id}' not found in seeded_media_buys — "
+            f"known IDs: {[m.media_buy_id for m in seeded.values()]}"
         )
-        assert campaign_ref != "", (
-            f"Media buy '{buy_id}' buyer_campaign_ref is empty — required for buyer-side correlation"
+        expected_ref = (seeded_mb.raw_request or {}).get("buyer_campaign_ref")
+        actual_ref = buy.buyer_campaign_ref
+        assert actual_ref == expected_ref, (
+            f"Media buy '{buy_id}' buyer_campaign_ref mismatch: "
+            f"expected {expected_ref!r} (from factory raw_request), got {actual_ref!r}"
         )
-    assert buys_checked >= 1, "Expected at least one media buy in the response"
+        checked += 1
+    assert checked == len(seeded), (
+        f"Expected {len(seeded)} media buys with buyer_campaign_ref verified, but only checked {checked}"
+    )
 
 
 @then(parsers.parse('the response should include media buys "{mb1}" and "{mb2}"'))
@@ -1961,27 +1969,35 @@ def then_snapshot_field_count(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the snapshot should include "{field}" amount'))
 def then_snapshot_field_amount(ctx: dict, field: str) -> None:
-    """Assert every package snapshot includes the named field as a non-negative numeric amount.
+    """Assert snapshot field matches the exact value from the seeded expected_snapshots.
 
-    Checks ALL packages with snapshots, not just the first one found.
+    The Given step stores expected Snapshot objects in ctx["expected_snapshots"][pkg_id].
+    We verify the response snapshot field equals that exact seeded value.
     """
+    expected_snapshots = ctx.get("expected_snapshots", {})
+    assert expected_snapshots, (
+        f"No expected_snapshots in ctx — the Given step must seed snapshot data "
+        f"via _make_test_snapshot() before asserting '{field}' amount"
+    )
     buys = _get_media_buys(ctx)
     snapshots_checked = 0
     for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            snapshot = getattr(pkg, "snapshot", None)
-            if snapshot is None:
+        for pkg in buy.packages or []:
+            if pkg.snapshot is None:
                 continue
             snapshots_checked += 1
-            val = getattr(snapshot, field, None)
-            if val is None and isinstance(snapshot, dict):
-                val = snapshot.get(field)
-            pkg_id = getattr(pkg, "package_id", "unknown")
-            assert val is not None, f"Snapshot field '{field}' not present on package '{pkg_id}'"
-            assert isinstance(val, int | float), (
-                f"Expected '{field}' to be a numeric amount on package '{pkg_id}', got {type(val).__name__}: {val!r}"
+            actual_val = getattr(pkg.snapshot, field, None)
+            assert actual_val is not None, f"Snapshot field '{field}' not present on package '{pkg.package_id}'"
+            expected_snapshot = expected_snapshots.get(pkg.package_id)
+            assert expected_snapshot is not None, (
+                f"Package '{pkg.package_id}' has a snapshot but no expected_snapshot was seeded. "
+                f"Known seeded packages: {list(expected_snapshots)}"
             )
-            assert val >= 0, f"Expected '{field}' amount >= 0 on package '{pkg_id}', got {val}"
+            expected_val = getattr(expected_snapshot, field)
+            assert actual_val == expected_val, (
+                f"Snapshot '{field}' on package '{pkg.package_id}': "
+                f"expected {expected_val!r} (from seeded snapshot), got {actual_val!r}"
+            )
     assert snapshots_checked > 0, f"No packages with snapshots found — cannot verify '{field}' amount"
 
 
@@ -2071,46 +2087,34 @@ def then_no_real_api_calls(ctx: dict) -> None:
     """Assert no real ad platform API calls were made during query.
 
     Two verification paths:
-    1. If the env has adapter mocks (e.g. create/update envs), verify no
-       adapter methods were called.
-    2. If the env has NO adapter patches (e.g. MediaBuyListEnv — pure DB read),
-       verify by design: EXTERNAL_PATCHES is empty (no adapter wiring exists)
-       AND the response contains valid media buy data from the database.
+    1. If the env has adapter mocks, verify no adapter methods were called.
+    2. If the env has NO adapter patches (MediaBuyListEnv — pure DB read),
+       verify by design: EXTERNAL_PATCHES is empty, confirming no adapter
+       wiring exists and the operation is database-only.
     """
     env = ctx["env"]
     if "adapter" in env.mock:
         # Path 1: adapter mock exists — verify no methods were called
         adapter_mock = env.mock["adapter"].return_value
-        methods_checked = 0
         for method_name in ("create_line_item", "get_report", "sync_creative"):
             method = getattr(adapter_mock, method_name, None)
             if method is not None and hasattr(method, "called"):
-                methods_checked += 1
-                assert not method.called, f"Real adapter method '{method_name}' was called in sandbox mode"
-        assert methods_checked > 0, (
-            "Adapter mock exists but no callable methods found to verify — "
-            f"adapter mock type: {type(adapter_mock).__name__}"
-        )
+                assert not method.called, (
+                    f"Adapter method '{method_name}' was called — expected no real "
+                    f"ad platform API calls in sandbox mode"
+                )
     else:
-        # Path 2: no adapter mock — operation is adapter-free by design.
-        # Verify the env has no adapter-related patches at all.
-        non_adapter_patches = {"registry", "audit_logger"}
-        unexpected = set(env.EXTERNAL_PATCHES) - non_adapter_patches
-        assert not unexpected, (
-            f"No adapter mock but EXTERNAL_PATCHES contains unexpected entries: {unexpected}. "
-            f"If the env patches ad platform services, it should include an adapter mock "
-            f"to verify no real calls were made in sandbox mode."
+        # Path 2: no adapter mock — verify the env is adapter-free by design.
+        # MediaBuyListEnv has EXTERNAL_PATCHES = {} (no adapter involvement).
+        assert env.EXTERNAL_PATCHES == {}, (
+            f"Expected EXTERNAL_PATCHES to be empty (adapter-free operation), "
+            f"got: {env.EXTERNAL_PATCHES}. An adapter-free env proves no real "
+            f"ad platform calls were possible."
         )
-        # Confirm response was successful with actual data — proves the operation
-        # completed using only the database (no adapter involvement).
+        # Verify the response succeeded with data from DB (not empty/error)
         resp = ctx.get("response")
-        assert resp is not None, "No adapter mock and no response — operation may have failed silently"
-        buys = getattr(resp, "media_buys", None)
-        assert buys is not None, (
-            "Response exists but has no media_buys field — cannot confirm "
-            "database-only operation completed successfully"
-        )
-        assert isinstance(buys, list), f"Expected media_buys to be a list, got {type(buys).__name__}"
+        assert resp is not None, "No adapter mock and no response — cannot confirm database-only operation"
+        assert resp.media_buys is not None, "Response.media_buys is None — expected database-sourced results"
 
 
 @then("the response should indicate a validation error")
