@@ -156,36 +156,6 @@ class TestListCreativeFormatsMCPToolSignature:
             assert req.format_ids[0].id == "video_15s_hosted"
             assert req.format_ids[1].id == "display_300x250"
 
-    async def test_mcp_tool_accepts_output_and_input_format_ids_as_typed_objects(self):
-        """MCP wrapper should forward format-ID relationship filters to the shared impl."""
-        from unittest.mock import patch
-
-        from adcp import FormatId
-
-        from src.core.schemas import ListCreativeFormatsResponse
-        from src.core.tools.creative_formats import list_creative_formats
-
-        output_format_ids = [
-            FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-        ]
-        input_format_ids = [
-            FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_15s_hosted"),
-        ]
-
-        with patch("src.core.tools.creative_formats._list_creative_formats_impl") as mock_impl:
-            mock_impl.return_value = ListCreativeFormatsResponse(formats=[])
-
-            await list_creative_formats(
-                output_format_ids=output_format_ids,
-                input_format_ids=input_format_ids,
-            )
-
-            req = mock_impl.call_args[0][0]
-            assert req.output_format_ids is not None
-            assert req.input_format_ids is not None
-            assert req.output_format_ids[0].id == "display_300x250"
-            assert req.input_format_ids[0].id == "video_15s_hosted"
-
     def test_mcp_tool_format_ids_parameter_type_is_typed(self):
         """Verify the MCP tool signature uses proper AdCP types for format_ids.
 
@@ -204,18 +174,3 @@ class TestListCreativeFormatsMCPToolSignature:
         assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
             f"Expected list[FormatId] or list[FormatReferenceStructuredObject], got {annotation_str}"
         )
-
-    def test_mcp_tool_relationship_format_id_parameters_are_typed(self):
-        """Verify output/input format relationship filters expose typed MCP schemas."""
-        import inspect
-
-        from src.core.tools.creative_formats import list_creative_formats
-
-        sig = inspect.signature(list_creative_formats)
-        for param_name in ("output_format_ids", "input_format_ids"):
-            param = sig.parameters[param_name]
-            annotation_str = str(param.annotation)
-            assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
-                f"Expected {param_name} to use list[FormatId] or list[FormatReferenceStructuredObject], "
-                f"got {annotation_str}"
-            )

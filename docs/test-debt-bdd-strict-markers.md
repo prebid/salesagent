@@ -379,7 +379,7 @@ that scenario causes a hard suite failure rather than silent xpass.
 - **Test-helper improvements:** 2 (H1, H2)
 - **Total:** ~18 items
 
-Severity distribution: 3× P1 (security/correctness), 7× P2, 7× P3.
+Severity distribution: 3× P1 (security/correctness), 6× P2, 9× P3.
 
 If filed as one umbrella GH issue with a checklist, this fits comfortably
 in a single tracking issue. If filed individually, only the 3 P1s warrant

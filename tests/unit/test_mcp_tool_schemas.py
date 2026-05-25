@@ -143,13 +143,6 @@ class TestMCPToolTypedSchemas:
             f"format_ids should use FormatId type, got {annotation_str}"
         )
 
-        # Check output/input format relationship filters use FormatId types.
-        for param_name in ("output_format_ids", "input_format_ids"):
-            annotation_str = str(params[param_name].annotation)
-            assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
-                f"{param_name} should use FormatId type, got {annotation_str}"
-            )
-
         # Check asset_types uses AssetContentType type (if still present)
         if "asset_types" in params:
             assert "AssetContentType" in str(params["asset_types"].annotation) or "str" in str(

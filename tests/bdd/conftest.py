@@ -13,7 +13,7 @@ via ``pytest_runtest_makereport``. No metadata or @pending tags needed — the
 code is the source of truth.
 
 Scenarios for unimplemented *production* features use explicit ``xfail`` markers
-with a reason (e.g., "MCP wrapper does not accept wcag_level").
+with a reason (e.g., "MCP wrapper does not accept disclosure_positions").
 """
 
 from __future__ import annotations
@@ -311,15 +311,13 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 ]
 
 
-# MCP selective xfails: the MCP wrapper doesn't accept some filter params.
+# MCP selective xfails: the MCP wrapper doesn't accept disclosure_positions.
 # Only xfail examples that actually SEND the param — "omitted"/"not_provided"
 # variants send no param and pass fine.
 # (tag, example_substrings, reason, strict)
 # strict=True  → must fail (genuine xfail)
 # strict=False → may pass vacuously (MCP errors → empty list → exclusion assertions pass)
 _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
-    ("T-UC-005-partition-wcag", {"level_a", "level_aa", "level_aaa"}, "MCP wrapper does not accept wcag_level", True),
-    ("T-UC-005-boundary-wcag", {"first enum value", "last enum value"}, "MCP wrapper does not accept wcag_level", True),
     # MCP wrapper does not accept disclosure_positions keyword (strict=False: some variants xpass)
     (
         "T-UC-005-partition-disclosure",
