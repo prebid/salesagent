@@ -34,7 +34,7 @@ from tests.integration.conftest import (
     add_required_setup_data,
     create_test_product_with_pricing,
 )
-from tests.utils.a2a_helpers import create_a2a_message_with_skill
+from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -203,9 +203,9 @@ class TestA2AErrorPropagation:
         # DataPart. The wire shape is the spec envelope (adcp_error + errors),
         # not the previous {success: False, errors: [...]} ad-hoc dict.
         assert "adcp_error" in artifact_data, "Response must carry the envelope-level adcp_error key"
-        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR", (
-            f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
-        )
+        assert (
+            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
         assert "errors" in artifact_data, "Response must include 'errors' field"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
 
@@ -316,11 +316,62 @@ class TestA2AErrorPropagation:
 
         # CRITICAL ASSERTIONS: Success response
         assert artifact_data["success"] is True, "success must be True for successful operation"
-        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
-            "errors field must be None or empty array for success"
-        )
+        assert (
+            artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0
+        ), "errors field must be None or empty array for success"
         assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
+
+    async def test_sync_creatives_missing_creatives_param_wire_envelope(self, handler, test_tenant, test_principal):
+        """sync_creatives missing 'creatives' param surfaces two-layer envelope on the A2A wire.
+
+        Mirrors the gold-standard test_create_media_buy_validation_error_includes_errors_field
+        pattern: real on_message_send → real handler raises AdCPValidationError →
+        dispatcher routes through _build_failed_skill_result → wire envelope in DataPart.
+
+        Konstantine review (PR #1306, 2026-05-24): mock-only tests do not prove
+        wiring; this exercises the full A2A transport pipeline end-to-end.
+        """
+        identity = ResolvedIdentity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        # INVALID parameters — no 'creatives' key, which the handler explicitly
+        # validates against (src/a2a_server/adcp_a2a_server.py:1677-1681).
+        skill_params = {"dry_run": True}
+        message = self.create_message_with_skill("sync_creatives", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact = result.artifacts[0]
+        artifact_data = self.extract_data_from_artifact(artifact)
+
+        # CRITICAL: full two-layer envelope on the wire.
+        assert "adcp_error" in artifact_data, "Wire envelope must carry top-level adcp_error key"
+        assert (
+            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
+        assert "errors" in artifact_data, "Wire envelope must include errors array"
+        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
+
+        error = artifact_data["errors"][0]
+        assert error["code"] == "VALIDATION_ERROR", f"Per-error code must match envelope code, got {error.get('code')}"
+        assert "creatives" in error["message"], f"Error message must name the missing field, got: {error['message']}"
 
     async def test_create_media_buy_response_includes_all_adcp_fields(self, handler, test_tenant, test_principal):
         """Test that A2A response includes all AdCP domain fields (not just cherry-picked ones).
@@ -390,6 +441,106 @@ class TestA2AErrorPropagation:
         # Verify success case
         assert artifact_data["success"] is True, "Success should be True for successful operation"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
+
+    async def test_create_creative_missing_required_params_wire_envelope(self, handler, test_tenant, test_principal):
+        """create_creative missing required params → two-layer envelope on the A2A wire.
+
+        Required params per src/a2a_server/adcp_a2a_server.py:1745: format_id,
+        content_uri, name. Omitting all three triggers the missing-params check
+        BEFORE the unimplemented TODO branch, so this exercises only the
+        validation path through the real dispatcher.
+
+        Mirrors test_create_media_buy_validation_error_includes_errors_field at
+        line 164 — the gold-standard pattern Konstantine cited.
+        """
+        identity = ResolvedIdentity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        # INVALID parameters — none of {format_id, content_uri, name}.
+        message = self.create_message_with_skill("create_creative", {})
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+
+        # Full two-layer envelope on the wire.
+        assert "adcp_error" in artifact_data, "Wire envelope must carry top-level adcp_error key"
+        assert (
+            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
+        assert "errors" in artifact_data, "Wire envelope must include errors array"
+        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
+
+        error = artifact_data["errors"][0]
+        assert error["code"] == "VALIDATION_ERROR", f"Per-error code must match envelope code, got {error.get('code')}"
+        # Per-error message enumerates the missing required fields.
+        msg = error["message"]
+        assert (
+            "format_id" in msg and "content_uri" in msg and "name" in msg
+        ), f"Per-error message must name all missing required fields, got: {msg}"
+
+    async def test_assign_creative_missing_required_params_wire_envelope(self, handler, test_tenant, test_principal):
+        """assign_creative missing required params → two-layer envelope on the A2A wire.
+
+        Required params per src/a2a_server/adcp_a2a_server.py:1783: media_buy_id,
+        package_id, creative_id. Sending only media_buy_id triggers the missing-
+        params check BEFORE the unimplemented TODO branch.
+
+        Mirrors test_create_media_buy_validation_error_includes_errors_field at
+        line 164 — the gold-standard pattern Konstantine cited.
+        """
+        identity = ResolvedIdentity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        # INVALID parameters — only media_buy_id, missing package_id + creative_id.
+        message = self.create_message_with_skill("assign_creative", {"media_buy_id": "mb_123"})
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+
+        assert "adcp_error" in artifact_data
+        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        assert "errors" in artifact_data
+        assert len(artifact_data["errors"]) > 0
+
+        error = artifact_data["errors"][0]
+        assert error["code"] == "VALIDATION_ERROR"
+        # Per-error message enumerates ONLY the missing fields (not the provided media_buy_id).
+        msg = error["message"]
+        assert "package_id" in msg and "creative_id" in msg, f"Per-error message must name missing fields, got: {msg}"
 
 
 @pytest.mark.integration
@@ -528,9 +679,9 @@ class TestA2AErrorResponseStructure:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.recovery == "transient", (
-                "Custom recovery='transient' override must be preserved, not default 'terminal'"
-            )
+            assert (
+                error.recovery == "transient"
+            ), "Custom recovery='transient' override must be preserved, not default 'terminal'"
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
 
@@ -601,3 +752,93 @@ class TestA2AErrorResponseStructure:
                 await handler._handle_explicit_skill("get_products", {}, None)
 
             assert "downstream service exploded" in str(exc_info.value)
+
+
+@pytest.mark.integration
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+class TestA2AContextEcho:
+    """AdCPError.context echoes through to the A2A wire DataPart.
+
+    Distinct from the validation-error coverage in TestA2AErrorPropagation:
+    this class focuses on the context-correlation field round-tripping
+    through the full on_message_send → dispatcher → envelope-builder pipeline.
+
+    Konstantine review (PR #1306, 2026-05-24): "Send a request that triggers
+    an error carrying context, assert `context` appears in the response JSON."
+    """
+
+    @pytest.fixture
+    def handler(self):
+        """Create A2A handler instance."""
+        return AdCPRequestHandler()
+
+    async def test_adcp_error_with_context_echoes_through_a2a_wire_envelope(self, integration_db, handler):
+        """ContextObject set on AdCPError echoes through to the A2A wire DataPart.
+
+        AdCPError carries an optional ``context`` (spec 3.0.6 normative) so buyer
+        agents can correlate failures to the request that produced them.
+        build_two_layer_error_envelope serializes it at envelope top-level (not
+        inside errors[]). _build_failed_skill_result surfaces the envelope as the
+        artifact DataPart, so the context dict must reach the wire intact.
+
+        Mirrors test_adcp_error_carries_recovery_through_a2a_boundary (line 467)
+        for the context-correlation field, exercising the full on_message_send
+        pipeline to prove the wire shape — not just the envelope builder.
+        """
+        from unittest.mock import patch
+
+        from adcp.types.generated_poc.core.context import ContextObject
+
+        from src.core.exceptions import AdCPValidationError
+
+        # Construct context with multiple correlation fields to verify dict-level echo.
+        echoed_context = ContextObject(
+            session_id="sess_pr1306_context_echo",
+            workflow_step="echo_validation",
+            request_id="req_abc_42",
+        )
+
+        async def raise_with_context(params, identity):
+            # @_a2a_skill decorator passes AdCPError through unchanged so the
+            # dispatcher catches it and builds the envelope.
+            raise AdCPValidationError(
+                "Synthetic validation error to verify context echo",
+                context=echoed_context,
+            )
+
+        # Patch get_products handler — it's dispatcher-routable and discovery-skill
+        # so we don't need a real principal in DB (auth is optional).
+        with patch.object(handler, "_handle_get_products_skill", raise_with_context):
+            # Auth/identity layer mocked at the boundary (matches gold-standard pattern).
+            handler._get_auth_token = MagicMock(return_value=None)
+            handler._resolve_a2a_identity = MagicMock(return_value=None)
+
+            message = create_a2a_message_with_skill("get_products", {"brief": "test"})
+            req_params = SendMessageRequest(message=message)
+
+            result = await handler.on_message_send(req_params, ServerCallContext())
+
+        # Must be a Task with artifacts — AdCPError flows through dispatcher (not A2AError).
+        assert isinstance(result, Task)
+        assert result.artifacts is not None and len(result.artifacts) > 0
+
+        artifact_data = extract_data_from_artifact(result.artifacts[0])
+
+        # Two-layer envelope present
+        assert "adcp_error" in artifact_data
+        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+
+        # CRITICAL: context echoes at top-level of the envelope (NOT nested under errors[]).
+        assert "context" in artifact_data, (
+            f"AdCPError(context=...) must echo through to wire envelope DataPart. "
+            f"Got keys: {sorted(artifact_data.keys())}"
+        )
+        echoed = artifact_data["context"]
+        assert (
+            echoed.get("session_id") == "sess_pr1306_context_echo"
+        ), f"session_id must round-trip unchanged, got: {echoed}"
+        assert (
+            echoed.get("workflow_step") == "echo_validation"
+        ), f"workflow_step must round-trip unchanged, got: {echoed}"
+        assert echoed.get("request_id") == "req_abc_42", f"request_id must round-trip unchanged, got: {echoed}"

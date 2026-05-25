@@ -1482,6 +1482,8 @@ class AdCPRequestHandler(RequestHandler):
             # AdCP Spec Creative Management (centralized library approach)
             "sync_creatives": self._handle_sync_creatives_skill,
             "list_creatives": self._handle_list_creatives_skill,
+            "create_creative": self._handle_create_creative_skill,
+            "assign_creative": self._handle_assign_creative_skill,
             # Creative Management & Approval
             "approve_creative": self._handle_approve_creative_skill,
             "get_media_buy_status": self._handle_get_media_buy_status_skill,
