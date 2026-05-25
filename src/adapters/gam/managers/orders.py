@@ -433,7 +433,9 @@ class GAMOrdersManager:
             if impl_config.get("targeted_placement_ids"):
                 if "inventoryTargeting" not in line_item_targeting:
                     line_item_targeting["inventoryTargeting"] = {}
-                line_item_targeting["inventoryTargeting"]["targetedPlacementIds"] = list(impl_config["targeted_placement_ids"])
+                line_item_targeting["inventoryTargeting"]["targetedPlacementIds"] = list(
+                    impl_config["targeted_placement_ids"]
+                )
 
             # Require inventory targeting - no fallback
             if "inventoryTargeting" not in line_item_targeting or not line_item_targeting["inventoryTargeting"]:
@@ -492,9 +494,33 @@ class GAMOrdersManager:
                             format_id_str, agent_url=agent_url, tenant_id=tenant_id, product_id=product_id_for_format
                         )
                     except (ValueError, AdCPNotFoundError, AdCPAdapterError) as e:
-                        error_msg = f"Format lookup failed for '{format_display}': {e}"
-                        log(f"[red]Error: {error_msg}[/red]")
-                        raise ValueError(error_msg)
+                        # If the FormatId object carries parameterized dimensions (AdCP 2.5), use them
+                        # to synthesize a minimal Format so the fallback path below can build the placeholder.
+                        # This handles formats like display_image whose spec lives on the product's format_ids
+                        # but not in the creative agent registry.
+                        fid_w = getattr(format_id_obj, "width", None) or (
+                            format_id_obj.get("width") if isinstance(format_id_obj, dict) else None
+                        )
+                        fid_h = getattr(format_id_obj, "height", None) or (
+                            format_id_obj.get("height") if isinstance(format_id_obj, dict) else None
+                        )
+                        if fid_w and fid_h:
+                            from src.core.schemas import Format as FormatSchema
+                            from src.core.schemas import FormatId as FormatIdSchema
+
+                            log(
+                                f"  [yellow]Format spec not found in registry; using FormatId dimensions {fid_w}x{fid_h} for placeholder[/yellow]"
+                            )
+                            format_obj = FormatSchema(
+                                format_id=FormatIdSchema(
+                                    agent_url=agent_url or "https://creative.adcontextprotocol.org/", id=format_id_str
+                                ),
+                                name=format_id_str,
+                            )
+                        else:
+                            error_msg = f"Format lookup failed for '{format_display}': {e}"
+                            log(f"[red]Error: {error_msg}[/red]")
+                            raise ValueError(error_msg)
 
                     # Check if format type is supported by product
                     # adcp 3.12: Format.type removed. Infer from format_id string.

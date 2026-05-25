@@ -138,11 +138,11 @@ from src.services.activity_feed import activity_feed
 
 
 def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | MediaPackage) -> list[str] | None:
-    """Safely get creative_ids from a package (backward compatibility).
+    """Safely get creative_ids from a package, including from creative_assignments.
 
-    The creative_ids field is a local extension added to PackageRequest for
-    backward compatibility. It may not exist on library types, so we use
-    getattr to safely access it.
+    Checks both the legacy creative_ids field and the creative_assignments field
+    (AdCP 2.5). creative_assignments uses this field to reference existing library
+    creatives by ID with optional weight/placement metadata.
 
     Args:
         package: Package or PackageRequest object
@@ -150,7 +150,18 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
     Returns:
         List of creative IDs if present, None otherwise
     """
-    return getattr(package, "creative_ids", None)
+    ids: list[str] = list(getattr(package, "creative_ids", None) or [])
+
+    for assignment in getattr(package, "creative_assignments", None) or []:
+        cid = (
+            assignment.creative_id
+            if hasattr(assignment, "creative_id")
+            else (assignment.get("creative_id") if isinstance(assignment, dict) else None)
+        )
+        if cid and cid not in ids:
+            ids.append(cid)
+
+    return ids if ids else None
 
 
 def _determine_media_buy_status(
@@ -293,8 +304,18 @@ def _validate_creatives_before_adapter_call(
         if creative.format:
             format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
 
-        # Fail validation if format spec not found (no skipping!)
+        # Fail validation if format spec not found, unless creative has explicit dimensions.
+        # Parameterized format_ids (width+height stored in format_parameters) are handled
+        # by the adapter using synthesized specs — no registry entry required.
         if not format_spec:
+            params = creative.format_parameters or {}
+            if isinstance(params, dict) and params.get("width") and params.get("height"):
+                logger.info(
+                    f"Format '{creative.format}' not in registry but creative "
+                    f"{creative.creative_id} has explicit dimensions "
+                    f"({params['width']}x{params['height']}) — skipping format spec validation"
+                )
+                continue
             validation_errors.append(
                 f"Creative {creative.creative_id} has unknown format '{creative.format}' "
                 f"from agent {creative.agent_url}. Format must be registered with the creative agent."
@@ -957,40 +978,22 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             else:
                 logger.info(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
 
-        # After creatives are uploaded (or skipped), retry order approval
-        # This is necessary because:
-        # 1. GAM may still be processing inventory forecasts (NO_FORECAST_YET error)
-        # 2. Creatives may have been uploaded after the initial approval attempt
-        logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
-        try:
-            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
-            if hasattr(adapter, "orders_manager") and adapter.orders_manager:
-                approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
-                if approval_success:
-                    logger.info(f"[APPROVAL] Successfully approved GAM order {response.media_buy_id}")
-                else:
-                    # GAM approval failed - return failure so status can be updated
-                    error_msg = (
-                        f"Failed to approve order {response.media_buy_id}, "
-                        f"it will remain in DRAFT status. This may be due to missing creatives or "
-                        f"GAM still processing inventory forecasts."
-                    )
-                    logger.warning(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
-            else:
-                logger.info("[APPROVAL] Adapter does not support order approval, skipping")
-        except Exception as approval_error:
-            # Approval exception - return failure
-            error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
-            logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-            return False, error_msg
+        # Hand off GAM order approval to background service to avoid HTTP timeout.
+        # GAM requires 0-120s for inventory forecasting before an order can be approved.
+        # Running this synchronously caused 502s against nginx's default 60s proxy_read_timeout.
+        _adapter_for_check = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
+        if hasattr(_adapter_for_check, "orders_manager") and _adapter_for_check.orders_manager:
+            from src.services.background_approval_service import start_order_approval_background
 
-        # Update media buy status to 'active' after successful adapter execution
-        # (UC-002:437 — "updates the media buy status to active")
-        with MediaBuyUoW(tenant_id) as uow3:
-            assert uow3.media_buys is not None
-            uow3.media_buys.update_status(media_buy_id, "active")
-            logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
+            approval_id = start_order_approval_background(
+                order_id=response.media_buy_id,
+                media_buy_id=media_buy_id,
+                tenant_id=tenant_id,
+                principal_id=principal.principal_id,
+            )
+            logger.info(f"[APPROVAL] GAM order approval handed to background service: {approval_id}")
+        else:
+            logger.info("[APPROVAL] Adapter does not support order approval, skipping")
 
         return True, None
 

@@ -270,3 +270,155 @@ def is_approval_task_running(order_id: str) -> bool:
     """Check if approval polling is running for a specific order."""
     with _approval_lock:
         return any(order_id in task_id for task_id in _active_approval_tasks)
+
+
+def start_order_approval_background(
+    order_id: str,
+    media_buy_id: str,
+    tenant_id: str,
+    principal_id: str,
+    polling_interval_seconds: int = 30,
+    max_polling_duration_minutes: int = 15,
+) -> str:
+    """Start background GAM order approval for a manually-approved media buy.
+
+    Used by execute_approved_media_buy after the GAM order and creatives have been
+    created.  GAM requires 0-120s of inventory forecasting before it will accept
+    the approval call — running this synchronously caused 502s because the request
+    exceeded nginx's default proxy_read_timeout.
+
+    Args:
+        order_id: GAM order ID to approve
+        media_buy_id: Salesagent media buy ID (used for status updates on failure)
+        tenant_id: Tenant ID
+        principal_id: Principal ID
+        polling_interval_seconds: Seconds between GAM polling attempts (default: 30)
+        max_polling_duration_minutes: Polling timeout in minutes (default: 15)
+
+    Returns:
+        thread_id string for diagnostics
+    """
+    thread_id = f"mb_approval_{media_buy_id}_{order_id}"
+
+    with _approval_lock:
+        if thread_id in _active_approval_tasks:
+            logger.warning(f"Approval polling already running for media buy {media_buy_id}")
+            return thread_id
+
+    thread = threading.Thread(
+        target=_run_media_buy_approval_thread,
+        args=(tenant_id, order_id, media_buy_id, polling_interval_seconds, max_polling_duration_minutes),
+        daemon=True,
+        name=f"mb-approval-{media_buy_id}",
+    )
+
+    with _approval_lock:
+        _active_approval_tasks[thread_id] = thread
+
+    thread.start()
+    logger.info(f"Started background media buy approval thread: {thread_id}")
+    return thread_id
+
+
+def _run_media_buy_approval_thread(
+    tenant_id: str,
+    order_id: str,
+    media_buy_id: str,
+    polling_interval_seconds: int,
+    max_polling_duration_minutes: int,
+) -> None:
+    """Poll GAM until the order is approved or the deadline is reached.
+
+    On success: updates media_buy status to 'active'.
+    On failure: updates media_buy status to 'failed' so the dashboard reflects it.
+    """
+    thread_id = f"mb_approval_{media_buy_id}_{order_id}"
+    start_time = datetime.now(UTC)
+    max_duration_seconds = max_polling_duration_minutes * 60
+    attempt = 0
+
+    try:
+        logger.info(
+            f"[{media_buy_id}] Starting GAM order approval polling for order {order_id} "
+            f"(interval={polling_interval_seconds}s, max={max_polling_duration_minutes}m)"
+        )
+
+        from src.adapters.gam.client import GAMClientManager
+        from src.adapters.gam.managers.orders import GAMOrdersManager
+
+        try:
+            with get_db_session() as db:
+                from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+                adapter_repo = AdapterConfigRepository(db, tenant_id)
+                adapter_config = adapter_repo.find_by_tenant()
+                if not adapter_config or adapter_config.adapter_type != "google_ad_manager":
+                    raise ValueError(f"No GAM adapter config for tenant {tenant_id}")
+                if not adapter_config.gam_network_code:
+                    raise ValueError(f"GAM network code not configured for tenant {tenant_id}")
+                gam_config = adapter_repo.get_gam_config(adapter_config)
+
+            client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
+            orders_manager = GAMOrdersManager(client_manager, dry_run=False)
+        except Exception as e:
+            logger.error(f"[{media_buy_id}] Failed to initialise GAM adapter: {e}")
+            _mark_media_buy_approval_failed(tenant_id, media_buy_id, f"Adapter initialisation failed: {e}")
+            return
+
+        while True:
+            attempt += 1
+            elapsed = (datetime.now(UTC) - start_time).total_seconds()
+
+            if elapsed > max_duration_seconds:
+                error_msg = (
+                    f"GAM order approval timed out after {max_polling_duration_minutes} minutes "
+                    f"({attempt} attempts). GAM forecasting still not ready."
+                )
+                logger.error(f"[{media_buy_id}] {error_msg}")
+                _mark_media_buy_approval_failed(tenant_id, media_buy_id, error_msg)
+                break
+
+            logger.info(f"[{media_buy_id}] GAM approval attempt {attempt} for order {order_id}")
+            try:
+                if orders_manager.approve_order(order_id, max_retries=1):
+                    logger.info(f"[{media_buy_id}] GAM order {order_id} approved after {attempt} attempt(s)")
+                    _mark_media_buy_approval_succeeded(tenant_id, media_buy_id)
+                    break
+                logger.info(
+                    f"[{media_buy_id}] GAM forecasting not ready yet, "
+                    f"retrying in {polling_interval_seconds}s"
+                )
+            except Exception as e:
+                logger.warning(f"[{media_buy_id}] Approval attempt {attempt} raised: {e}")
+
+            time.sleep(polling_interval_seconds)
+
+    except Exception as e:
+        logger.error(f"[{media_buy_id}] Approval polling thread failed: {e}", exc_info=True)
+        _mark_media_buy_approval_failed(tenant_id, media_buy_id, str(e))
+
+    finally:
+        with _approval_lock:
+            _active_approval_tasks.pop(thread_id, None)
+
+
+def _mark_media_buy_approval_succeeded(tenant_id: str, media_buy_id: str) -> None:
+    """Update media buy status to 'active' when background GAM approval succeeds."""
+    try:
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            uow.media_buys.update_status(media_buy_id, "active")
+        logger.info(f"Marked media buy {media_buy_id} as active after GAM approval")
+    except Exception as e:
+        logger.error(f"Could not update media buy {media_buy_id} status to active: {e}")
+
+
+def _mark_media_buy_approval_failed(tenant_id: str, media_buy_id: str, error_message: str) -> None:
+    """Update media buy status to 'failed' when background GAM approval is rejected."""
+    try:
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            uow.media_buys.update_status(media_buy_id, "failed")
+        logger.info(f"Marked media buy {media_buy_id} as failed: {error_message}")
+    except Exception as e:
+        logger.error(f"Could not update media buy {media_buy_id} status to failed: {e}")

@@ -136,11 +136,18 @@ def _validate_creative_input(
                 f"and the agent is running. Error: {str(validation_error)}"
             )
         elif not format_spec:
-            # Format not found (agent is reachable but format doesn't exist)
-            raise ValueError(
-                f"Unknown format '{format_id}' from agent {agent_url}. "
-                f"Format must be registered with the creative agent. "
-                f"Use list_creative_formats to see available formats."
+            # Allow parameterized format_ids (explicit width+height) without a registry entry.
+            # The GAM adapter synthesizes a format spec from dimensions in this case.
+            has_dimensions = bool(getattr(format_value, "width", None) and getattr(format_value, "height", None))
+            if not has_dimensions:
+                raise ValueError(
+                    f"Unknown format '{format_id}' from agent {agent_url}. "
+                    f"Format must be registered with the creative agent. "
+                    f"Use list_creative_formats to see available formats."
+                )
+            logger.info(
+                f"Format '{format_id}' not in registry but parameterized "
+                f"({format_value.width}x{format_value.height}) — allowing without registry entry"
             )
         # TODO(#767): Call validate_creative when available in creative agent spec
         # to validate that creative manifest matches format requirements
