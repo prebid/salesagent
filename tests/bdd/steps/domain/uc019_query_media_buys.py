@@ -1372,8 +1372,28 @@ def then_creative_approval_state(ctx: dict) -> None:
 
 @then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
 def then_buyer_refs_for_correlation(ctx: dict) -> None:
-    """No-op: buyer_ref removed in adcp 3.12. buyer_campaign_ref checked elsewhere."""
-    assert ctx.get("response") is not None or ctx.get("error") is not None
+    """Assert buyer_campaign_ref is present on each media buy for correlation.
+
+    buyer_ref was removed in adcp 3.12; buyer_campaign_ref is the surviving
+    correlation identifier that buyers use to link media buys to their campaigns.
+    """
+    buys = _get_media_buys(ctx)
+    buys_checked = 0
+    for buy in buys:
+        buys_checked += 1
+        buy_id = getattr(buy, "media_buy_id", "unknown")
+        # buyer_campaign_ref must be present and non-empty for correlation
+        campaign_ref = getattr(buy, "buyer_campaign_ref", None)
+        if campaign_ref is None and isinstance(buy, dict):
+            campaign_ref = buy.get("buyer_campaign_ref")
+        assert isinstance(campaign_ref, str), (
+            f"Media buy '{buy_id}' buyer_campaign_ref must be a string, "
+            f"got {type(campaign_ref).__name__}: {campaign_ref!r}"
+        )
+        assert campaign_ref != "", (
+            f"Media buy '{buy_id}' buyer_campaign_ref is empty — required for buyer-side correlation"
+        )
+    assert buys_checked >= 1, "Expected at least one media buy in the response"
 
 
 @then(parsers.parse('the response should include media buys "{mb1}" and "{mb2}"'))
@@ -1583,14 +1603,19 @@ def then_error_field_validation(ctx: dict) -> None:
 
 @then(parsers.parse('the error should include a "recovery" field indicating correctable failure'))
 def then_error_recovery_correctable(ctx: dict) -> None:
-    """Assert error has correctable recovery classification."""
+    """Assert error has recovery field set to 'correctable'.
+
+    The step text explicitly says "correctable failure" — the recovery field
+    must be exactly "correctable" (not "retryable" or other values).
+    """
     error = ctx.get("error")
-    assert error is not None, "Expected an error"
+    assert error is not None, "Expected an error but got none"
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
-    assert error.recovery in ("correctable", "retryable"), (
-        f"Expected correctable/retryable recovery, got '{error.recovery}'"
+    assert error.recovery == "correctable", (
+        f"Expected recovery='correctable' (step says 'correctable failure'), "
+        f"got recovery='{error.recovery!r}' on error code '{error.error_code}'"
     )
 
 
@@ -1936,23 +1961,28 @@ def then_snapshot_field_count(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the snapshot should include "{field}" amount'))
 def then_snapshot_field_amount(ctx: dict, field: str) -> None:
-    """Assert snapshot has an amount field."""
+    """Assert every package snapshot includes the named field as a non-negative numeric amount.
 
+    Checks ALL packages with snapshots, not just the first one found.
+    """
     buys = _get_media_buys(ctx)
+    snapshots_checked = 0
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             snapshot = getattr(pkg, "snapshot", None)
-            if snapshot is not None:
-                val = getattr(snapshot, field, None)
-                if val is None and isinstance(snapshot, dict):
-                    val = snapshot.get(field)
-                assert val is not None, f"Snapshot field '{field}' amount not present on package"
-                assert isinstance(val, int | float), (
-                    f"Expected '{field}' to be a numeric amount, got {type(val).__name__}: {val!r}"
-                )
-                assert val >= 0, f"Expected '{field}' amount to be non-negative, got {val}"
-                return
-    raise AssertionError(f"No snapshots found — cannot verify '{field}' amount")
+            if snapshot is None:
+                continue
+            snapshots_checked += 1
+            val = getattr(snapshot, field, None)
+            if val is None and isinstance(snapshot, dict):
+                val = snapshot.get(field)
+            pkg_id = getattr(pkg, "package_id", "unknown")
+            assert val is not None, f"Snapshot field '{field}' not present on package '{pkg_id}'"
+            assert isinstance(val, int | float), (
+                f"Expected '{field}' to be a numeric amount on package '{pkg_id}', got {type(val).__name__}: {val!r}"
+            )
+            assert val >= 0, f"Expected '{field}' amount >= 0 on package '{pkg_id}', got {val}"
+    assert snapshots_checked > 0, f"No packages with snapshots found — cannot verify '{field}' amount"
 
 
 @then(parsers.parse("the response should include {count:d} media buys"))
@@ -2038,13 +2068,14 @@ def then_no_sandbox_field(ctx: dict) -> None:
 
 @then("no real ad platform API calls should have been made")
 def then_no_real_api_calls(ctx: dict) -> None:
-    """Assert no real adapter API calls (sandbox mode).
+    """Assert no real ad platform API calls were made during query.
 
     Two verification paths:
-    1. If the env has adapter mocks (e.g. create/update envs), verify no methods were called.
+    1. If the env has adapter mocks (e.g. create/update envs), verify no
+       adapter methods were called.
     2. If the env has NO adapter patches (e.g. MediaBuyListEnv — pure DB read),
-       this proves no adapter calls are possible by design. Verify EXTERNAL_PATCHES
-       is empty to confirm the operation is adapter-free.
+       verify by design: EXTERNAL_PATCHES is empty (no adapter wiring exists)
+       AND the response contains valid media buy data from the database.
     """
     env = ctx["env"]
     if "adapter" in env.mock:
@@ -2062,8 +2093,7 @@ def then_no_real_api_calls(ctx: dict) -> None:
         )
     else:
         # Path 2: no adapter mock — operation is adapter-free by design.
-        # Some envs patch non-adapter services (registry, audit_logger) that
-        # are not ad platform API calls.  Only flag truly unknown patches.
+        # Verify the env has no adapter-related patches at all.
         non_adapter_patches = {"registry", "audit_logger"}
         unexpected = set(env.EXTERNAL_PATCHES) - non_adapter_patches
         assert not unexpected, (
@@ -2071,8 +2101,16 @@ def then_no_real_api_calls(ctx: dict) -> None:
             f"If the env patches ad platform services, it should include an adapter mock "
             f"to verify no real calls were made in sandbox mode."
         )
-        # Confirm response was successful (operation completed without adapter)
-        assert ctx.get("response") is not None, "No adapter mock and no response — operation may have failed silently"
+        # Confirm response was successful with actual data — proves the operation
+        # completed using only the database (no adapter involvement).
+        resp = ctx.get("response")
+        assert resp is not None, "No adapter mock and no response — operation may have failed silently"
+        buys = getattr(resp, "media_buys", None)
+        assert buys is not None, (
+            "Response exists but has no media_buys field — cannot confirm "
+            "database-only operation completed successfully"
+        )
+        assert isinstance(buys, list), f"Expected media_buys to be a list, got {type(buys).__name__}"
 
 
 @then("the response should indicate a validation error")
