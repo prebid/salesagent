@@ -199,12 +199,20 @@ def then_page_shows_n_accounts(ctx: dict, count: int) -> None:
 
 @then(parsers.parse('the page shows account "{name}" with status "{status}"'))
 def then_page_shows_account(ctx: dict, name: str, status: str) -> None:
-    """Assert the page shows an account with the given name and status badge."""
+    """Assert the page shows an account with the given name and status badge in the same row."""
     html = ctx["response"].data.decode()
     assert name in html, f"Account '{name}' not found on page"
-    # Status badge should be present
+    # Find the table row containing this account name and verify the status badge
+    # is within that same row (not just anywhere on the page)
     badge_class = f"status-{status}"
-    assert badge_class in html, f"Status badge '{badge_class}' not found"
+    rows = html.split("<tr onclick=")
+    matched_row = None
+    for row in rows:
+        if name in row:
+            matched_row = row
+            break
+    assert matched_row is not None, f"No table row found containing account '{name}'"
+    assert badge_class in matched_row, f"Account '{name}' row does not contain status badge '{badge_class}'"
 
 
 @then(parsers.parse('the page does not show account "{name}"'))
@@ -283,9 +291,11 @@ def then_redirected_to_create(ctx: dict) -> None:
 
 @then("the page returns a redirect to the login page")
 def then_redirect_to_login(ctx: dict) -> None:
-    """Assert unauthenticated users are redirected."""
+    """Assert unauthenticated users are redirected to the login page."""
     response = ctx["response"]
-    assert response.status_code in (302, 303, 401), f"Expected redirect/unauthorized, got {response.status_code}"
+    assert response.status_code in (302, 303), f"Expected redirect to login, got {response.status_code}"
+    location = response.headers.get("Location", "")
+    assert "login" in location, f"Expected redirect Location to contain 'login', got: {location}"
 
 
 @then(parsers.parse('the database contains an account named "{name}"'))
