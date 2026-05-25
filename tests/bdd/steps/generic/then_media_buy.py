@@ -76,14 +76,13 @@ def then_response_field_matches(ctx: dict, field: str, value: str) -> None:
 def then_response_has_packages(ctx: dict) -> None:
     """Assert response includes packages array with allocated packages (product_id assigned).
 
-    Verifies the exact expected count from request_kwargs (not just > 0) and that
+    Verifies the exact expected count from request_kwargs and that
     each package has a product_id proving allocation occurred.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     packages = _get_response_field(resp, "packages")
     assert packages is not None, "Expected 'packages' in response"
-    assert len(packages) > 0, "Expected at least one package in response"
     # Verify exact count matches what was requested (scenario sets up N packages)
     request_kwargs = ctx.get("request_kwargs", {})
     expected_packages = request_kwargs.get("packages")
@@ -91,9 +90,11 @@ def then_response_has_packages(ctx: dict) -> None:
         assert len(packages) == len(expected_packages), (
             f"Expected {len(expected_packages)} packages (matching request), got {len(packages)}"
         )
+    else:
+        assert packages, "Expected at least one package in response"
     # "with allocations" means each package has a product_id (allocation to a product)
     for i, pkg in enumerate(packages):
-        pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
+        pkg_dict = pkg if isinstance(pkg, dict) else pkg.model_dump()
         assert pkg_dict.get("product_id"), f"Package {i} missing product_id — not allocated"
 
 
@@ -818,12 +819,16 @@ def then_response_has_success_fields(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a success response but none found"
     media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert isinstance(media_buy_id, str) and len(media_buy_id) > 0, (
+    assert isinstance(media_buy_id, str) and media_buy_id, (
         f"Expected non-empty string media_buy_id in success response, got: {media_buy_id!r}"
     )
     packages = _get_response_field(resp, "packages")
     assert isinstance(packages, list), f"Expected packages to be a list, got: {type(packages).__name__}"
-    assert len(packages) > 0, "Expected at least one package in success response"
+    assert packages, "Expected at least one package in success response"
+    # Verify each package has a product_id proving allocation
+    for i, pkg in enumerate(packages):
+        pkg_dict = pkg if isinstance(pkg, dict) else pkg.model_dump()
+        assert pkg_dict.get("product_id"), f"Package {i} missing product_id in success response"
     status = _get_response_field(resp, "status")
     assert status is not None, "Expected status field in success response"
     valid_statuses = ("completed", "submitted", "pending_approval", "activating", "pending_start")

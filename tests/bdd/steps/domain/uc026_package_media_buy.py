@@ -1636,11 +1636,11 @@ def _promote_create_errors(ctx: dict) -> None:
 def then_package_has_id(ctx: dict) -> None:
     """Assert response contains at least one package with a seller-assigned package_id."""
     packages = _get_packages(ctx)
-    assert len(packages) > 0, "No packages in response"
+    assert packages, "No packages in response"
     pkg = packages[0]
     pkg_id = _pkg_field(pkg, "package_id")
     assert pkg_id is not None, "Package missing package_id"
-    assert isinstance(pkg_id, str) and len(pkg_id.strip()) > 0, (
+    assert isinstance(pkg_id, str) and pkg_id.strip(), (
         f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
     )
 
@@ -1685,15 +1685,13 @@ def then_package_default_formats(ctx: dict) -> None:
     if format_ids is None:
         pytest.xfail("SPEC-PRODUCTION GAP: format_ids not defaulted to product formats when omitted from request")
     assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
-    assert len(format_ids) > 0, "Expected format_ids to default to all product formats, got empty list"
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in context"
-    product_format_ids = getattr(product, "format_ids", None) or []
-    product_ids = {_extract_format_id(f) for f in product_format_ids}
-    assert product_ids, "Product has no format_ids"
-    pkg_ids = {_extract_format_id(f) for f in format_ids}
-    assert pkg_ids == product_ids, (
-        f"Package format_ids should default to all product formats. Expected {product_ids}, got {pkg_ids}"
+    assert format_ids, "Expected format_ids to default to all product formats, got empty list"
+    product = ctx["default_product"]
+    product_format_ids = product.format_ids or []
+    expected_ids = {_extract_format_id(f) for f in product_format_ids}
+    actual_ids = {_extract_format_id(f) for f in format_ids}
+    assert actual_ids == expected_ids, (
+        f"Package format_ids should default to all product formats. Expected {expected_ids}, got {actual_ids}"
     )
 
 
@@ -1716,9 +1714,7 @@ def then_package_formats_to_provide(ctx: dict) -> None:
     assert isinstance(formats_to_provide, list), (
         f"Expected format_ids_to_provide to be a list, got {type(formats_to_provide)}"
     )
-    assert len(formats_to_provide) > 0, (
-        "Expected format_ids_to_provide to list formats needing creative assets, got empty list"
-    )
+    assert formats_to_provide, "Expected format_ids_to_provide to list formats needing creative assets, got empty list"
     # Verify format_ids_to_provide is a subset of package format_ids
     format_ids = _pkg_field(pkg, "format_ids")
     if format_ids:
@@ -1822,7 +1818,7 @@ def then_package_explicit_formats(ctx: dict, fmt_ids: str) -> None:
 def then_package_all_fields(ctx: dict) -> None:
     """Assert package echoes all provided fields from the request."""
     packages = _get_packages(ctx)
-    assert len(packages) > 0, "No packages in response"
+    assert packages, "No packages in response"
     pkg = packages[0]
     pkg_id = _pkg_field(pkg, "package_id")
     assert pkg_id is not None, "Package missing package_id"
@@ -2282,13 +2278,11 @@ def then_no_duplicate(ctx: dict) -> None:
 def then_new_pkg_in_mb(ctx: dict, mb_id: str) -> None:
     """Assert a new package was created with a new package_id (cross-buy scenario)."""
     packages = _get_packages(ctx)
-    assert len(packages) > 0, "No packages in response"
+    assert packages, "No packages in response"
     pkg = packages[0]
     pkg_id = _pkg_field(pkg, "package_id")
     assert pkg_id is not None, "Package missing package_id"
-    assert isinstance(pkg_id, str) and len(pkg_id.strip()) > 0, (
-        f"Expected non-empty seller-assigned package_id, got {pkg_id!r}"
-    )
+    assert isinstance(pkg_id, str) and pkg_id.strip(), f"Expected non-empty seller-assigned package_id, got {pkg_id!r}"
     # Verify this is a NEW package_id (different from any existing one)
     existing_pkg_id = ctx.get("existing_package_id")
     assert existing_pkg_id is not None, (
@@ -2315,12 +2309,10 @@ def then_new_pkg_in_mb(ctx: dict, mb_id: str) -> None:
 def then_new_pkg_created(ctx: dict) -> None:
     """Assert a new package was created with a seller-assigned package_id."""
     packages = _get_packages(ctx)
-    assert len(packages) > 0, "No packages in response"
+    assert packages, "No packages in response"
     pkg = packages[0]
     pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id is not None and len(str(pkg_id).strip()) > 0, (
-        f"Expected non-empty seller-assigned package_id, got {pkg_id!r}"
-    )
+    assert pkg_id is not None and str(pkg_id).strip(), f"Expected non-empty seller-assigned package_id, got {pkg_id!r}"
 
 
 @then("the existing package should be returned without creating a duplicate")

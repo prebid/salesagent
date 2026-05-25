@@ -784,9 +784,9 @@ def then_implementation_date_null(ctx: dict) -> None:
     """Assert response has a null implementation_date (pending approval)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    assert hasattr(resp, "implementation_date"), "Response has no implementation_date field"
-    impl_date = resp.implementation_date
-    assert impl_date is None, f"Expected implementation_date to be None (pending approval), got {impl_date!r}"
+    assert resp.implementation_date is None, (
+        f"Expected implementation_date to be None (pending approval), got {resp.implementation_date!r}"
+    )
 
 
 @then("the response should contain an implementation_date that is not null")
@@ -803,10 +803,6 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
     assert "error" not in ctx, f"Response is an error ({ctx.get('error')}) — cannot check implementation_date on error"
-    assert hasattr(resp, "implementation_date"), (
-        f"Response (type: {type(resp).__name__}) has no implementation_date field — "
-        "step claims response 'should contain' it"
-    )
     impl_date = resp.implementation_date
     # Step text claims "not null" unconditionally — hard assert.
     # If production doesn't populate this, the SCENARIO should be xfailed in conftest.py,

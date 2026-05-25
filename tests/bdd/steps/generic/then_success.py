@@ -36,8 +36,10 @@ def then_response_status(ctx: dict, status: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
 
-    # If response has an explicit status field, check it directly.
-    if hasattr(resp, "status"):
+    # Determine if response type declares a ``status`` field via Pydantic metadata.
+    # Uses getattr on the class (not instance) to handle non-Pydantic test doubles.
+    resp_fields = getattr(type(resp), "model_fields", {})
+    if "status" in resp_fields:
         actual = resp.status
         assert actual == status, f"Expected status '{status}', got '{actual}'"
         return
@@ -53,13 +55,12 @@ def then_response_status(ctx: dict, status: str) -> None:
     error = ctx.get("error")
     assert error is None, f"Status 'completed' claimed but the operation recorded an error: {error!r}"
 
-    present = [a for a in _STATUSLESS_SUCCESS_ATTRS if hasattr(resp, a)]
-    assert present, (
-        f"Status-less response {type(resp).__name__} exposes none of the "
-        f"expected success collections {_STATUSLESS_SUCCESS_ATTRS} — cannot "
-        f"prove the operation completed successfully"
-    )
-    for attr in present:
+    # Verify at least one schema-required success collection is present and populated.
+    found_count = 0
+    for attr in _STATUSLESS_SUCCESS_ATTRS:
+        if attr not in resp_fields:
+            continue
+        found_count += 1
         value = getattr(resp, attr)
         assert value is not None, (
             f"Status 'completed' claimed but response.{attr} is None — the schema-required success payload is missing"
@@ -68,6 +69,11 @@ def then_response_status(ctx: dict, status: str) -> None:
             assert isinstance(value, list), (
                 f"Status 'completed' claimed but response.{attr} is {type(value).__name__}, expected a list"
             )
+    assert found_count >= 1, (
+        f"Status-less response {type(resp).__name__} exposes none of the "
+        f"expected success collections {_STATUSLESS_SUCCESS_ATTRS} — cannot "
+        f"prove the operation completed successfully"
+    )
 
 
 # ── Response contains field ──────────────────────────────────────────

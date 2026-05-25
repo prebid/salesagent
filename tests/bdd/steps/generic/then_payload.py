@@ -10,6 +10,7 @@ No stub mode. No dict intermediaries — assertions access Format attributes dir
 from __future__ import annotations
 
 from collections.abc import Sequence
+from enum import Enum
 from typing import Any
 
 from pytest_bdd import parsers, then
@@ -123,17 +124,19 @@ def then_has_referrals(ctx: dict) -> None:
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    referrals = getattr(resp, "creative_agents", None) or []
-    assert len(referrals) > 0, "Expected creative agent referrals in response"
+    referrals = resp.creative_agents
+    assert referrals is not None, "Expected creative_agents field in response, got None"
+    assert referrals, "Expected creative agent referrals in response but got empty list"
 
-    # Verify each referral is well-formed
+    # Verify each referral has well-formed fields and collect URLs for cross-check
     actual_urls = set()
     for ref in referrals:
-        url = getattr(ref, "agent_url", None)
-        assert url, f"Referral missing agent_url: {ref}"
-        actual_urls.add(str(url))
-        capabilities = getattr(ref, "capabilities", None)
-        assert capabilities is not None, f"Referral missing capabilities: {ref}"
+        url_value = ref.agent_url
+        assert url_value, f"Referral missing agent_url: {ref}"
+        url_str = str(url_value)
+        assert url_str.startswith("http"), f"agent_url should be http/https URL, got: {url_str!r}"
+        actual_urls.add(url_str)
+        assert ref.capabilities is not None, f"Referral missing capabilities: {ref}"
 
     # On mock transports, verify the Given agents' URLs appear in the response.
     # On e2e_rest, the Given step is a no-op (Docker's real agent serves),
@@ -158,23 +161,23 @@ def then_referral_fields(ctx: dict) -> None:
     - capabilities is a non-empty list with known capability values
     """
     resp = ctx.get("response")
-    referrals = getattr(resp, "creative_agents", None) or []
-    assert len(referrals) > 0, "No referrals to verify — expected at least one creative agent"
+    assert resp is not None, "Expected a response"
+    referrals = resp.creative_agents
+    assert referrals, "No referrals to verify — expected at least one creative agent"
+    known_capabilities = {"validation", "assembly", "preview", "delivery"}
     for ref in referrals:
-        url = getattr(ref, "agent_url", None)
-        assert url, f"Missing agent_url in referral: {ref}"
-        url_str = str(url)  # handles both str and Pydantic AnyUrl
-        assert url_str.startswith("http"), f"agent_url should be a URL (http/https), got: {url!r}"
-        caps = getattr(ref, "capabilities", None)
+        url_value = ref.agent_url
+        assert url_value, f"Missing agent_url in referral: {ref}"
+        url_str = str(url_value)
+        assert url_str.startswith("http"), f"agent_url should be a URL (http/https), got: {url_str!r}"
+        caps = ref.capabilities
         assert caps is not None, f"Missing capabilities in referral: {ref}"
-        assert isinstance(caps, (list, tuple)) and len(caps) > 0, (
-            f"capabilities should be a non-empty list, got: {caps!r}"
-        )
+        assert isinstance(caps, (list, tuple)), f"capabilities should be a list, got: {type(caps).__name__}"
+        assert caps, "capabilities should be non-empty, got empty list"
         # Verify capabilities are known enum values (not arbitrary strings)
-        cap_strs = {str(c.value) if hasattr(c, "value") else str(c) for c in caps}
-        known = {"validation", "assembly", "preview", "delivery"}
-        unknown = cap_strs - known
-        assert not unknown, f"Unknown capabilities: {unknown}. Expected subset of {known}"
+        cap_strs = {str(c.value) if isinstance(c, Enum) else str(c) for c in caps}
+        unknown = cap_strs - known_capabilities
+        assert not unknown, f"Unknown capabilities: {unknown}. Expected subset of {known_capabilities}"
 
 
 # ── Format field presence ────────────────────────────────────────────
@@ -225,24 +228,20 @@ def then_format_assets(ctx: dict) -> None:
     required_asset_keys = {"asset_type", "asset_id"}
 
     formats = _get_formats(ctx)
-    assert len(formats) > 0, "No formats in response — cannot verify asset requirements"
+    assert formats, "No formats in response — cannot verify asset requirements"
 
     for f in formats:
-        has_assets = hasattr(f, "assets") and f.assets
-        has_renders = hasattr(f, "renders") and f.renders
-        assert has_assets or has_renders, (
+        assets = f.assets
+        renders = f.renders
+        assert assets or renders, (
             f"Format '{_fmt_name(f)}' has neither assets nor renders — "
             f"step requires 'each format' to include asset requirements"
         )
 
-        if has_assets:
-            for a in f.assets:
-                # Enumerate actual keys on the asset (via model_dump for Pydantic
-                # or attribute introspection for plain objects).
-                if hasattr(a, "model_dump"):
-                    asset_keys = set(a.model_dump(exclude_none=True).keys())
-                else:
-                    asset_keys = {k for k in dir(a) if not k.startswith("_") and getattr(a, k, None) is not None}
+        if assets:
+            for a in assets:
+                # Enumerate actual keys on the asset via model_dump (all assets are Pydantic models).
+                asset_keys = set(a.model_dump(exclude_none=True).keys())
                 missing = required_asset_keys - asset_keys
                 assert not missing, (
                     f"Asset in format '{_fmt_name(f)}' missing required keys {missing} "
@@ -250,23 +249,20 @@ def then_format_assets(ctx: dict) -> None:
                     f"Spec requires each asset requirement to carry asset_type + asset_id."
                 )
                 # asset_type value must be a concrete string (enum value), not None/empty.
-                asset_type = getattr(a, "asset_type", None)
-                asset_type_str = asset_type.value if hasattr(asset_type, "value") else asset_type
+                asset_type = a.asset_type
+                asset_type_str = asset_type.value if isinstance(asset_type, Enum) else asset_type
                 assert asset_type_str, (
                     f"Asset in format '{_fmt_name(f)}' has empty asset_type — buyers cannot know what media to upload"
                 )
 
-        if has_renders:
-            for r in f.renders:
-                dims = getattr(r, "dimensions", None)
+        if renders:
+            for r in renders:
+                dims = r.dimensions
                 assert dims is not None, f"Render in format '{_fmt_name(f)}' missing dimensions"
                 # Enumerate dimension keys and require at least one width specification.
                 # Responsive formats carry width info via ``responsive.width``
                 # rather than a top-level ``width`` or ``min_width`` key.
-                if hasattr(dims, "model_dump"):
-                    dim_keys = set(dims.model_dump(exclude_none=True).keys())
-                else:
-                    dim_keys = {k for k in dir(dims) if not k.startswith("_") and getattr(dims, k, None) is not None}
+                dim_keys = set(dims.model_dump(exclude_none=True).keys())
                 width_keys = {"width", "min_width", "responsive"}
                 assert dim_keys & width_keys, (
                     f"Render dimensions in format '{_fmt_name(f)}' missing width specification. "

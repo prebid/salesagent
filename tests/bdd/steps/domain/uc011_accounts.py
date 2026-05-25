@@ -452,9 +452,8 @@ def then_accounts_array_count(ctx: dict, count: int) -> None:
     """Assert the response accounts array has the expected count."""
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
-    assert hasattr(resp, "accounts"), f"Response has no 'accounts' field: {type(resp)}"
-    actual = len(resp.accounts)
-    assert actual == count, f"Expected {count} accounts, got {actual}"
+    accounts = resp.accounts  # AttributeError if field missing
+    assert len(accounts) == count, f"Expected {count} accounts, got {len(accounts)}"
 
 
 @then("each account includes account_id, name, status, advertiser, rate_card, and payment_terms")
@@ -524,10 +523,10 @@ def then_other_statuses_excluded(ctx: dict) -> None:
     # This step verifies the exclusion is real: created statuses that aren't in
     # the response were actually filtered out (not just absent by coincidence).
     assert len(created_statuses) > 1, "Test setup should create accounts with multiple statuses to verify exclusion"
-    excluded = created_statuses - returned_statuses
-    assert len(excluded) > 0, (
-        f"Expected some statuses to be excluded, but all created statuses "
-        f"({created_statuses}) appear in response ({returned_statuses})"
+    # returned_statuses should be a strict subset — not all created statuses appear
+    assert returned_statuses < created_statuses, (
+        f"Expected returned statuses ({returned_statuses}) to be a strict subset of "
+        f"created statuses ({created_statuses}) — some statuses must be excluded by the filter"
     )
 
 
@@ -536,8 +535,8 @@ def then_empty_accounts(ctx: dict) -> None:
     """Assert the response has an empty accounts array."""
     resp = ctx.get("response")
     assert resp is not None, f"Expected a response but got error: {ctx.get('error')}"
-    assert hasattr(resp, "accounts"), f"Response has no 'accounts' field: {type(resp)}"
-    assert len(resp.accounts) == 0, f"Expected 0 accounts, got {len(resp.accounts)}"
+    accounts = resp.accounts  # AttributeError if field missing
+    assert accounts == [], f"Expected empty accounts array, got {len(accounts)} items"
 
 
 @then("the response is not an error")
@@ -597,13 +596,17 @@ def then_accounts_from_first_page(ctx: dict) -> None:
     error = ctx.get("error")
     assert error is None, f"Expected success but got error: {error}"
     assert resp is not None, "Expected a response"
-    assert hasattr(resp, "accounts"), f"Response has no 'accounts' field: {type(resp)}"
-    assert len(resp.accounts) > 0, "Expected at least one account on the first page"
-    # Accounts are sorted by account_id — verify first account has the lexicographically
-    # smallest account_id, confirming we started from offset 0.
-    account_ids = [a.account_id for a in resp.accounts]
+    accounts = resp.accounts  # AttributeError if field missing
+    expected_ids = sorted(ctx.get("expected_account_ids", set()))
+    assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
+    # Verify accounts are sorted by account_id (first-page ordering from offset 0)
+    account_ids = [a.account_id for a in accounts]
     assert account_ids == sorted(account_ids), (
         f"Accounts not sorted by account_id — cannot confirm first-page ordering: {account_ids}"
+    )
+    # First returned account must be the lexicographically first expected account
+    assert account_ids[0] == expected_ids[0], (
+        f"First page should start with account '{expected_ids[0]}', got '{account_ids[0]}'"
     )
 
 
@@ -1013,11 +1016,11 @@ def then_response_is_error_variant(ctx: dict) -> None:
 
 @then("the response contains an accounts array")
 def then_has_accounts_array(ctx: dict) -> None:
-    """Assert the response has an accounts array."""
+    """Assert the response has an accounts array (non-None list)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    assert hasattr(resp, "accounts"), f"Response has no accounts: {type(resp)}"
-    assert resp.accounts is not None, "accounts is None"
+    accounts = resp.accounts  # AttributeError if field missing
+    assert isinstance(accounts, list), f"accounts is not a list: {type(accounts)}"
 
 
 @then("the response does not contain an operation-level errors array")
@@ -1035,15 +1038,18 @@ def then_response_is_success_variant(ctx: dict) -> None:
     assert ctx.get("error") is None, f"Expected success variant, got error: {ctx.get('error')}"
     resp = ctx.get("response")
     assert resp is not None, "Expected success response"
-    assert hasattr(resp, "accounts"), f"Success variant must have accounts: {type(resp)}"
+    accounts = resp.accounts  # AttributeError if field missing on non-success variant
+    assert isinstance(accounts, list), f"Success variant accounts must be a list: {type(accounts)}"
 
 
 @then("each error includes code and message")
 def then_each_error_has_code_message(ctx: dict) -> None:
-    """Assert each error has code and message fields."""
+    """Assert the error has a non-empty error_code and a non-empty message."""
     error = _get_error(ctx)
-    assert hasattr(error, "error_code") or hasattr(error, "code"), f"Error missing code: {error}"
-    assert str(error), f"Error has no message: {error}"
+    error_code = error.error_code  # AttributeError if missing
+    assert isinstance(error_code, str) and error_code, f"Expected non-empty error_code, got {error_code!r}"
+    message = str(error)
+    assert message, f"Error has no message: {error}"
 
 
 @then("a response with both accounts and errors arrays is invalid")
@@ -1084,10 +1090,11 @@ def then_all_accounts_action(ctx: dict, action: str) -> None:
     """Assert all accounts in the response have the given action."""
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
-    assert len(resp.accounts) > 0, "Expected at least one account"
-    for acct in resp.accounts:
-        actual = _action_str(acct.action)
-        assert actual == action, f"Expected action '{action}', got '{actual}'"
+    accounts = resp.accounts
+    actions = {_action_str(acct.action) for acct in accounts}
+    assert actions == {action}, (
+        f"Expected all accounts to have action '{action}', got actions {actions} across {len(accounts)} accounts"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1100,8 +1107,12 @@ def then_failed_has_errors(ctx: dict) -> None:
     """Assert the last referenced (failed) account has a non-empty errors array."""
     acct = ctx.get("last_account")
     assert acct is not None, "No account referenced — need a prior 'account for brand domain' step"
-    assert acct.errors is not None, "Expected errors array on failed account, got None"
-    assert len(acct.errors) > 0, f"Expected non-empty errors array, got {acct.errors}"
+    errors = acct.errors
+    assert errors is not None, "Expected errors array on failed account, got None"
+    # Verify each error has required fields (code + message)
+    for err in errors:
+        assert err.code, f"Per-account error missing code: {err}"
+        assert err.message, f"Per-account error missing message: {err}"
 
 
 @then("the response does not contain an operation-level errors field")
@@ -1474,15 +1485,20 @@ def then_no_db_writes(ctx: dict) -> None:
 
 @then("the account was actually created on the seller")
 def then_account_in_db(ctx: dict) -> None:
-    """Assert the sync actually wrote to DB."""
+    """Assert the sync actually wrote to DB — verify the response account_id is persisted."""
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
 
     tenant, principal = ctx["tenant"], ctx["principal"]
+    # The response should have the account that was just created
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response from the sync"
+    expected_id = resp.accounts[0].account_id
     with get_db_session() as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
-        assert len(accounts) > 0, "Expected at least 1 account in DB after sync"
+        db_ids = {a.account_id for a in accounts}
+        assert expected_id in db_ids, f"Expected account '{expected_id}' in DB, found: {db_ids}"
 
 
 # ── Then: delete_missing assertions ───────────────────────────────────
@@ -2020,9 +2036,14 @@ def then_governance_agents_stored(ctx: dict, domain: str) -> None:
         matching = [a for a in accounts if a.brand and a.brand.domain == domain]
         assert len(matching) == 1, f"Expected 1 account for {domain}, got {len(matching)}"
         account = matching[0]
-        assert account.governance_agents is not None, f"Expected governance_agents to be stored for {domain}, got None"
-        assert len(account.governance_agents) > 0, (
-            f"Expected non-empty governance_agents for {domain}, got {account.governance_agents}"
+        agents = account.governance_agents
+        assert agents is not None, f"Expected governance_agents to be stored for {domain}, got None"
+        # The When step sends exactly 1 governance agent with known URL and categories
+        assert len(agents) == 1, f"Expected 1 governance_agent for {domain}, got {len(agents)}"
+        agent = agents[0]
+        agent_url = agent.get("url") if isinstance(agent, dict) else getattr(agent, "url", None)
+        assert agent_url == "https://governance.example.com/check", (
+            f"Expected governance agent url 'https://governance.example.com/check', got '{agent_url}'"
         )
 
 
