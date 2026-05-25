@@ -1,0 +1,2711 @@
+{
+  "components": {
+    "schemas": {
+      "AdServerObject": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_external_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "active",
+              "inactive",
+              "archived",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "supply_tag",
+              "zone",
+              "demand_partner",
+              "creative_format"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "external_id",
+          "name"
+        ],
+        "title": "AdServerObject",
+        "type": "object"
+      },
+      "AdServerObjectSearchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "object_types": {
+            "description": "Restrict search to these adapter object types.",
+            "items": {
+              "enum": [
+                "supply_tag",
+                "zone",
+                "demand_partner",
+                "creative_format"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "page_size": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "parent_external_id": {
+            "description": "Restrict search to children of this ad-server object.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "description": "Optional text search.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [],
+        "title": "AdServerObjectSearchRequest",
+        "type": "object"
+      },
+      "AdServerObjectSearchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/AdServerObject"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "objects",
+          "count"
+        ],
+        "title": "AdServerObjectSearchResponse",
+        "type": "object"
+      },
+      "AdapterCapabilities": {
+        "additionalProperties": false,
+        "description": "Full response from ``GET /adapters/{adapter_type}/capabilities``.",
+        "properties": {
+          "contract_version": {
+            "description": "Version of this adapter's tenant-management contract.",
+            "title": "Contract Version",
+            "type": "string"
+          },
+          "inventory_entity_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inventory Entity Label"
+          },
+          "openapi_url": {
+            "description": "Adapter-specific OpenAPI reference URL.",
+            "title": "Openapi Url",
+            "type": "string"
+          },
+          "reporting_bundled_with_inventory": {
+            "default": false,
+            "title": "Reporting Bundled With Inventory",
+            "type": "boolean"
+          },
+          "supported_object_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Object Types",
+            "type": "array"
+          },
+          "supported_pricing_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Pricing Models",
+            "type": "array"
+          },
+          "supported_signal_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Signal Types",
+            "type": "array"
+          },
+          "supports_audiences": {
+            "default": false,
+            "title": "Supports Audiences",
+            "type": "boolean"
+          },
+          "supports_custom_targeting": {
+            "default": false,
+            "title": "Supports Custom Targeting",
+            "type": "boolean"
+          },
+          "supports_dynamic_products": {
+            "default": false,
+            "title": "Supports Dynamic Products",
+            "type": "boolean"
+          },
+          "supports_forecasting": {
+            "default": false,
+            "title": "Supports Forecasting",
+            "type": "boolean"
+          },
+          "supports_geo_targeting": {
+            "default": false,
+            "title": "Supports Geo Targeting",
+            "type": "boolean"
+          },
+          "supports_inventory_profiles": {
+            "default": false,
+            "title": "Supports Inventory Profiles",
+            "type": "boolean"
+          },
+          "supports_inventory_sync": {
+            "default": false,
+            "title": "Supports Inventory Sync",
+            "type": "boolean"
+          },
+          "supports_pricing_recommendations": {
+            "default": false,
+            "title": "Supports Pricing Recommendations",
+            "type": "boolean"
+          },
+          "supports_realtime_reporting": {
+            "default": false,
+            "title": "Supports Realtime Reporting",
+            "type": "boolean"
+          },
+          "supports_reporting": {
+            "default": false,
+            "title": "Supports Reporting",
+            "type": "boolean"
+          },
+          "supports_reporting_sync": {
+            "default": false,
+            "title": "Supports Reporting Sync",
+            "type": "boolean"
+          },
+          "supports_webhooks": {
+            "default": false,
+            "title": "Supports Webhooks",
+            "type": "boolean"
+          },
+          "sync_streams": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sync Streams",
+            "type": "array"
+          },
+          "type": {
+            "description": "Adapter type identifier.",
+            "title": "Type",
+            "type": "string"
+          },
+          "unsupported_features": {
+            "items": {
+              "$ref": "#/components/schemas/AdapterUnsupportedFeature"
+            },
+            "title": "Unsupported Features",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "contract_version",
+          "openapi_url"
+        ],
+        "title": "AdapterCapabilitiesResponse",
+        "type": "object"
+      },
+      "AdapterConfig": {
+        "additionalProperties": false,
+        "description": "SpringServe (Magnite) ad-server adapter configuration.\n\nExactly one auth path is required: ``email`` + ``password`` (the\ncanonical path -- the SpringServe API mints a 2-hour token from\nthese credentials and the adapter caches + refreshes) or\n``api_token`` (a pre-minted token, escape hatch for partner-\nprovisioned tokens; no auto-refresh).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_demand_partner_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Demand Partner Id"
+          },
+          "demand_class": {
+            "default": "line_item",
+            "enum": [
+              "line_item",
+              "tag"
+            ],
+            "title": "Demand Class",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Email"
+          },
+          "enable_key_value_targeting": {
+            "default": false,
+            "title": "Enable Key Value Targeting",
+            "type": "boolean"
+          },
+          "environment": {
+            "const": "production",
+            "default": "production",
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "springserve",
+            "default": "springserve",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "SpringServeAdapterConfig",
+        "type": "object"
+      },
+      "AdapterConfigResponse": {
+        "additionalProperties": false,
+        "description": "Adapter config view returned with secrets redacted.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "network_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Network Code"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Refresh Token"
+          },
+          "service_account_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service Account Email"
+          },
+          "service_account_key_json": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service Account Key Json"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "configured"
+        ],
+        "title": "AdapterConfigResponse",
+        "type": "object"
+      },
+      "AdapterStatusResponse": {
+        "additionalProperties": false,
+        "description": "Compact adapter status block returned in provision responses.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "connection_test_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Test Error"
+          },
+          "connection_test_passed": {
+            "title": "Connection Test Passed",
+            "type": "boolean"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "configured",
+          "connection_test_passed"
+        ],
+        "title": "AdapterStatusResponse",
+        "type": "object"
+      },
+      "AdapterUnsupportedFeature": {
+        "additionalProperties": false,
+        "description": "Machine-readable unsupported capability surfaced by adapter contracts.",
+        "properties": {
+          "feature": {
+            "description": "Stable unsupported feature identifier.",
+            "minLength": 1,
+            "title": "Feature",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "remediation": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Remediation"
+          }
+        },
+        "required": [
+          "feature",
+          "reason"
+        ],
+        "title": "AdapterUnsupportedFeature",
+        "type": "object"
+      },
+      "ApiError": {
+        "additionalProperties": false,
+        "description": "Standard problem-detail shape used by every Tenant Management endpoint.",
+        "properties": {
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Details"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ],
+        "title": "ApiError",
+        "type": "object"
+      },
+      "BroadstreetAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Broadstreet adapter configuration.",
+        "properties": {
+          "api_key": {
+            "format": "password",
+            "title": "Api Key",
+            "type": "string",
+            "writeOnly": true
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "network_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Network Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "broadstreet",
+            "default": "broadstreet",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network_id",
+          "api_key"
+        ],
+        "title": "BroadstreetAdapterConfig",
+        "type": "object"
+      },
+      "ContractValidationMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "severity"
+        ],
+        "title": "ContractValidationMessage",
+        "type": "object"
+      },
+      "CreativeFormatClassification": {
+        "additionalProperties": false,
+        "properties": {
+          "ad_server_observations": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "confidence": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "custom": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/AdServerObject"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "display",
+              "video",
+              "audio",
+              "native",
+              "out_of_page",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requires_review": {
+            "type": "boolean"
+          },
+          "source": {
+            "enum": [
+              "declared",
+              "inferred",
+              "publisher_override"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "confidence",
+          "requires_review"
+        ],
+        "title": "CreativeFormatClassification",
+        "type": "object"
+      },
+      "EmbedBreadcrumbRoot": {
+        "additionalProperties": false,
+        "description": "First-crumb override for embedded-mode admin pages.\n\nWhen the upstream host renders the salesagent admin UI inside its own\nchrome (``tenant.is_embedded=True``), the first breadcrumb crumb should\npoint back to the host's storefront homepage rather than the\nsalesagent's tenant dashboard. ``label`` is the visible link text;\n``url`` is the absolute HTTPS link the host wants the user dropped at.\n\nValidated at schema boundary so bad input never reaches the rendered\ntemplate; the same model also gates the per-request\n``X-Embed-Breadcrumb-Root`` header value (see\n:func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).",
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "title": "EmbedBreadcrumbRoot",
+        "type": "object"
+      },
+      "FreeWheelAdapterConfig": {
+        "additionalProperties": false,
+        "description": "FreeWheel Publisher API adapter configuration.\n\nExactly one auth path is required: ``username`` + ``password`` (OAuth2\npassword grant \u2014 the canonical path, auto-refreshing) or ``api_token``\n(pre-minted bearer, escape hatch for partner-provisioned tokens).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "environment": {
+            "default": "production",
+            "enum": [
+              "production",
+              "staging"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "freewheel",
+            "default": "freewheel",
+            "title": "Type",
+            "type": "string"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Username"
+          }
+        },
+        "title": "FreeWheelAdapterConfig",
+        "type": "object"
+      },
+      "GAMAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Google Ad Manager adapter configuration.",
+        "properties": {
+          "network_code": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Network Code",
+            "type": "string"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Refresh Token"
+          },
+          "service_account_email": {
+            "maxLength": 255,
+            "minLength": 3,
+            "title": "Service Account Email",
+            "type": "string"
+          },
+          "service_account_key_json": {
+            "format": "password",
+            "title": "Service Account Key Json",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": {
+            "const": "google_ad_manager",
+            "default": "google_ad_manager",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network_code",
+          "service_account_email",
+          "service_account_key_json"
+        ],
+        "title": "GAMAdapterConfig",
+        "type": "object"
+      },
+      "InitialPrincipalRequest": {
+        "additionalProperties": false,
+        "description": "Optional initial advertiser created at provision time.",
+        "properties": {
+          "external_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "External Advertiser Id"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "InitialPrincipalRequest",
+        "type": "object"
+      },
+      "InventoryConfigurationCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "candidate_id": {
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "creative_formats": {
+            "items": {
+              "$ref": "#/components/schemas/CreativeFormatClassification"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "estimated_availability": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "mapped_objects": {
+            "items": {
+              "$ref": "#/components/schemas/AdServerObject"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scale": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "name",
+          "confidence",
+          "mapped_objects",
+          "creative_formats"
+        ],
+        "title": "InventoryConfigurationCandidate",
+        "type": "object"
+      },
+      "InventoryConfigurationCandidateListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/InventoryConfigurationCandidate"
+            },
+            "type": "array"
+          },
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "candidates",
+          "count"
+        ],
+        "title": "InventoryConfigurationCandidateListResponse",
+        "type": "object"
+      },
+      "InventoryConfigurationPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "configuration": {
+            "$ref": "#/components/schemas/InventoryConfigurationWrite"
+          }
+        },
+        "required": [
+          "configuration"
+        ],
+        "title": "InventoryConfigurationPreviewRequest",
+        "type": "object"
+      },
+      "InventoryConfigurationPreviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ContractValidationMessage"
+            },
+            "type": "array"
+          },
+          "normalized_configuration": {
+            "$ref": "#/components/schemas/InventoryConfigurationWrite"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "messages"
+        ],
+        "title": "InventoryConfigurationPreviewResponse",
+        "type": "object"
+      },
+      "InventoryConfigurationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/InventoryConfigurationWrite"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "configuration"
+        ],
+        "title": "InventoryConfigurationResponse",
+        "type": "object"
+      },
+      "InventoryConfigurationWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "creative_format_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mapped_object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "mapped_object_ids",
+          "creative_format_ids"
+        ],
+        "title": "InventoryConfigurationWrite",
+        "type": "object"
+      },
+      "ListSyncHistoryResponse": {
+        "additionalProperties": false,
+        "description": "``GET /tenants/{tid}/sync-history`` response with cursor pagination.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/SyncRunInfo"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "count"
+        ],
+        "title": "ListSyncHistoryResponse",
+        "type": "object"
+      },
+      "MockAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Mock adapter configuration (no real backend).",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "mock",
+            "default": "mock",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "MockAdapterConfig",
+        "type": "object"
+      },
+      "PreviewAdapterRequest": {
+        "additionalProperties": false,
+        "description": "Pre-provision adapter probe \u2014 same union as :class:`ProvisionTenantRequest`.",
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/AdapterConfig"
+          }
+        },
+        "required": [
+          "adapter"
+        ],
+        "title": "PreviewAdapterRequest",
+        "type": "object"
+      },
+      "PreviewAdapterResponse": {
+        "additionalProperties": false,
+        "description": "Adapter preview with network metadata for the Storefront UX.\n\n``ok=False`` (bad creds) is returned with HTTP 200 \u2014 Storefront renders\nthis inline. Hard errors (malformed body, missing API key) still surface\nvia the normal 4xx path.\n\n``error_code`` carries the same typed classification as\n:class:`TestConnectionResponse` so the UI can branch on machine-readable\nfault categories rather than parsing ``error``.",
+        "properties": {
+          "currency_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency Code"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "network_not_found",
+                  "permission_denied",
+                  "invalid_credentials",
+                  "invalid_config",
+                  "upstream_unavailable",
+                  "connection_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "inventory_reachable": {
+            "default": false,
+            "title": "Inventory Reachable",
+            "type": "boolean"
+          },
+          "network_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Network Code"
+          },
+          "network_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Network Name"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "remediation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "vendor_enables_role",
+                  "customer_rebinds_account",
+                  "customer_rotates_token"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Remediation"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Zone"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PreviewAdapterResponse",
+        "type": "object"
+      },
+      "PricingRecommendation": {
+        "additionalProperties": false,
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "inventory_configuration_id": {
+            "type": "string"
+          },
+          "recommendations": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "basis": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "confidence": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "floor_cpm": {
+                  "type": "number"
+                },
+                "pricing_model": {
+                  "enum": [
+                    "cpm",
+                    "flat_rate"
+                  ],
+                  "type": "string"
+                },
+                "target_cpm": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "pricing_model",
+                "confidence",
+                "basis"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "inventory_configuration_id",
+          "currency",
+          "recommendations"
+        ],
+        "title": "PricingRecommendation",
+        "type": "object"
+      },
+      "PricingRecommendationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/PricingRecommendation"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "recommendations",
+          "count"
+        ],
+        "title": "PricingRecommendationResponse",
+        "type": "object"
+      },
+      "ProvisionTenantRequest": {
+        "additionalProperties": false,
+        "description": "Request body for ``POST /tenants/provision``.",
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/AdapterConfig"
+          },
+          "billing_plan": {
+            "default": "standard",
+            "maxLength": 64,
+            "title": "Billing Plan",
+            "type": "string"
+          },
+          "contact_email": {
+            "format": "email",
+            "title": "Contact Email",
+            "type": "string"
+          },
+          "default_currency": {
+            "default": "USD",
+            "maxLength": 3,
+            "minLength": 3,
+            "title": "Default Currency",
+            "type": "string"
+          },
+          "default_gam_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Gam Advertiser Id"
+          },
+          "embed_breadcrumb_root": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbedBreadcrumbRoot"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "external_org_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "External Org Id",
+            "type": "string"
+          },
+          "external_source": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "External Source",
+            "type": "string"
+          },
+          "initial_principal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InitialPrincipalRequest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "public_agent_url": {
+            "default": "https://interchange.io",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Public Agent Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "external_org_id",
+          "external_source",
+          "contact_email",
+          "adapter"
+        ],
+        "title": "ProvisionTenantRequest",
+        "type": "object"
+      },
+      "ProvisionTenantResponse": {
+        "additionalProperties": false,
+        "description": "Response body for ``POST /tenants/provision``.",
+        "properties": {
+          "a2a_url": {
+            "format": "uri",
+            "minLength": 1,
+            "title": "A2A Url",
+            "type": "string"
+          },
+          "adapter": {
+            "$ref": "#/components/schemas/AdapterStatusResponse"
+          },
+          "admin_url_path": {
+            "title": "Admin Url Path",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "external_org_id": {
+            "title": "External Org Id",
+            "type": "string"
+          },
+          "external_source": {
+            "title": "External Source",
+            "type": "string"
+          },
+          "initial_principal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvisionedPrincipalResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "is_embedded": {
+            "const": true,
+            "default": true,
+            "title": "Is Embedded",
+            "type": "boolean"
+          },
+          "managed_externally": {
+            "const": true,
+            "default": true,
+            "title": "Managed Externally",
+            "type": "boolean"
+          },
+          "mcp_url": {
+            "format": "uri",
+            "minLength": 1,
+            "title": "Mcp Url",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "external_org_id",
+          "external_source",
+          "created_at",
+          "mcp_url",
+          "a2a_url",
+          "admin_url_path",
+          "adapter"
+        ],
+        "title": "ProvisionTenantResponse",
+        "type": "object"
+      },
+      "ProvisionedPrincipalResponse": {
+        "additionalProperties": false,
+        "description": "Initial principal returned from provision.\n\nIncludes the principal's ``access_token`` so the host product can stamp\n``x-adcp-auth`` on buyer-protocol calls (or store the token for the host's\nown buyer agents to use). The token is the value already persisted in\n``Principal.access_token`` \u2014 exposing it here just avoids forcing host\nproducts into out-of-band DB reads to discover something we already minted.\n\nIdentity-propagation via ``X-Identity-*`` headers (the sprint 2 buyer-protocol\nmiddleware) is still the long-term direction; this token is what unblocks\nhost products today and remains the canonical bearer for any caller that\nisn't routing through the trusted-network identity proxy.",
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "principal_id": {
+            "title": "Principal Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal_id",
+          "name",
+          "access_token"
+        ],
+        "title": "ProvisionedPrincipalResponse",
+        "type": "object"
+      },
+      "RefreshConflictResponse": {
+        "additionalProperties": false,
+        "description": "``POST /tenants/{tid}/refresh`` response (HTTP 409) \u2014 sync already running.\n\nMirrors the 202 :class:`RefreshResponse` shape (``sync_run_ids`` +\n``started_at`` at the top level so receivers don't need a second\nparse path) plus a structured error block. Issue #463: the\nstorefront's \"Retry\" UI needs a clear signal that the click\ntriggered nothing new \u2014 the indistinguishable 202-with-reused-ids\nresponse is the problem this shape fixes.",
+        "properties": {
+          "error": {
+            "default": "sync_already_running",
+            "title": "Error",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "running_sync_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Running Sync Types",
+            "type": "array"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "sync_run_ids": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sync Run Ids",
+            "type": "object"
+          }
+        },
+        "required": [
+          "message",
+          "started_at"
+        ],
+        "title": "RefreshConflictResponse",
+        "type": "object"
+      },
+      "RefreshResponse": {
+        "additionalProperties": false,
+        "description": "``POST /tenants/{tid}/refresh`` response (HTTP 202) \u2014 fan-out of sync run ids.\n\nStorefront reads ``GET /tenants/{tid}/status`` (``syncs`` block) for\nprogress per sync type. Re-POST within 60 seconds returns the SAME\nids (idempotent \u2014 avoids hammering GAM when a publisher mashes the\nbutton).",
+        "properties": {
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "sync_run_ids": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sync Run Ids",
+            "type": "object"
+          }
+        },
+        "required": [
+          "started_at"
+        ],
+        "title": "RefreshResponse",
+        "type": "object"
+      },
+      "ReportingForecastSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "forecast_available": {
+            "type": "boolean"
+          },
+          "historical_impressions": {
+            "type": "integer"
+          },
+          "historical_revenue": {
+            "type": "number"
+          },
+          "inventory_configuration_id": {
+            "type": "string"
+          },
+          "reporting_days": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "inventory_configuration_id",
+          "reporting_days",
+          "forecast_available"
+        ],
+        "title": "ReportingForecastSummary",
+        "type": "object"
+      },
+      "SetupTaskItem": {
+        "additionalProperties": false,
+        "description": "One configuration-completeness item in the status setup_tasks block.\n\nSeverity drives Storefront UI urgency; scope drives routing \u2014 Scope3\nescalates ``platform`` items internally (it's the host's job to\nfinish provisioning), while ``publisher`` items deep-link into the\niframe at the matching Settings tab.",
+        "properties": {
+          "configure_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Configure Path"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_complete": {
+            "title": "Is Complete",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "platform",
+              "publisher"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "warning",
+              "info"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "severity",
+          "scope",
+          "description",
+          "is_complete"
+        ],
+        "title": "SetupTaskItem",
+        "type": "object"
+      },
+      "SetupTasksBlock": {
+        "additionalProperties": false,
+        "description": "Configuration-completeness rollup for ``GET /tenants/{tid}/status``.\n\nReplaces the separate ``setup_checklist`` round-trip \u2014 Storefront\nrenders the homepage checklist directly off this block.",
+        "properties": {
+          "blocker_count": {
+            "default": 0,
+            "title": "Blocker Count",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SetupTaskItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "warning_count": {
+            "default": 0,
+            "title": "Warning Count",
+            "type": "integer"
+          }
+        },
+        "title": "SetupTasksBlock",
+        "type": "object"
+      },
+      "SignalCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "buyer_targetable": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lineage": {
+            "items": {
+              "$ref": "#/components/schemas/AdServerObject"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "privacy_flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "enum": [
+              "key_value",
+              "audience_segment"
+            ],
+            "type": "string"
+          },
+          "value_mode": {
+            "enum": [
+              "enumerable",
+              "free_form",
+              "range"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "name",
+          "value_mode",
+          "buyer_targetable"
+        ],
+        "title": "SignalCandidate",
+        "type": "object"
+      },
+      "SignalCandidateListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signals": {
+            "items": {
+              "$ref": "#/components/schemas/SignalCandidate"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "signals",
+          "count"
+        ],
+        "title": "SignalCandidateListResponse",
+        "type": "object"
+      },
+      "SignalMappingPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mapping": {
+            "$ref": "#/components/schemas/SignalMappingWrite"
+          }
+        },
+        "required": [
+          "mapping"
+        ],
+        "title": "SignalMappingPreviewRequest",
+        "type": "object"
+      },
+      "SignalMappingPreviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ContractValidationMessage"
+            },
+            "type": "array"
+          },
+          "normalized_mapping": {
+            "$ref": "#/components/schemas/SignalMappingWrite"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "messages"
+        ],
+        "title": "SignalMappingPreviewResponse",
+        "type": "object"
+      },
+      "SignalMappingResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "mapping": {
+            "$ref": "#/components/schemas/SignalMappingWrite"
+          }
+        },
+        "required": [
+          "id",
+          "mapping"
+        ],
+        "title": "SignalMappingResponse",
+        "type": "object"
+      },
+      "SignalMappingWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "buyer_facing_name": {
+            "type": "string"
+          },
+          "buyer_targetable": {
+            "type": "boolean"
+          },
+          "signal_candidate_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal_candidate_id",
+          "buyer_facing_name",
+          "buyer_targetable"
+        ],
+        "title": "SignalMappingWrite",
+        "type": "object"
+      },
+      "SpringServeAdapterConfig": {
+        "additionalProperties": false,
+        "description": "SpringServe (Magnite) ad-server adapter configuration.\n\nExactly one auth path is required: ``email`` + ``password`` (the\ncanonical path -- the SpringServe API mints a 2-hour token from\nthese credentials and the adapter caches + refreshes) or\n``api_token`` (a pre-minted token, escape hatch for partner-\nprovisioned tokens; no auto-refresh).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_demand_partner_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Demand Partner Id"
+          },
+          "demand_class": {
+            "default": "line_item",
+            "enum": [
+              "line_item",
+              "tag"
+            ],
+            "title": "Demand Class",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Email"
+          },
+          "enable_key_value_targeting": {
+            "default": false,
+            "title": "Enable Key Value Targeting",
+            "type": "boolean"
+          },
+          "environment": {
+            "const": "production",
+            "default": "production",
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "springserve",
+            "default": "springserve",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "SpringServeAdapterConfig",
+        "type": "object"
+      },
+      "StatusAdapterBlock": {
+        "additionalProperties": false,
+        "description": "Adapter block of the tenant status snapshot.",
+        "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "last_test_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Test Error"
+          },
+          "last_tested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Tested At"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "connected"
+        ],
+        "title": "StatusAdapterBlock",
+        "type": "object"
+      },
+      "StatusCreativesBlock": {
+        "additionalProperties": false,
+        "description": "Creative-level counters.",
+        "properties": {
+          "active_count": {
+            "default": 0,
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "pending_review_count": {
+            "default": 0,
+            "title": "Pending Review Count",
+            "type": "integer"
+          },
+          "rejected_last_24h_count": {
+            "default": 0,
+            "title": "Rejected Last 24H Count",
+            "type": "integer"
+          }
+        },
+        "title": "StatusCreativesBlock",
+        "type": "object"
+      },
+      "StatusMediaBuysBlock": {
+        "additionalProperties": false,
+        "description": "Top-level media-buy counters (a buy contains 1+ packages).",
+        "properties": {
+          "active_count": {
+            "default": 0,
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "pending_approval_count": {
+            "default": 0,
+            "title": "Pending Approval Count",
+            "type": "integer"
+          }
+        },
+        "title": "StatusMediaBuysBlock",
+        "type": "object"
+      },
+      "StatusPackagesBlock": {
+        "additionalProperties": false,
+        "description": "Package-level counters (line items inside media buys).",
+        "properties": {
+          "active_count": {
+            "default": 0,
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "paused_count": {
+            "default": 0,
+            "title": "Paused Count",
+            "type": "integer"
+          }
+        },
+        "title": "StatusPackagesBlock",
+        "type": "object"
+      },
+      "StatusProductsBlock": {
+        "additionalProperties": false,
+        "description": "Product-level counters.\n\nDistinct from :class:`StatusPackagesBlock` \u2014 one product can have\nmultiple priced packages, so package counts don't answer \"what is\nthe publisher actually selling?\". Storefront surfaces ``active_count``\non its homepage as the primary \"what's the publisher doing\" signal.\n\nNote: the Product model doesn't carry an explicit ``status`` field\ntoday. ``archived_at IS NULL`` rows count as active; non-null rows\ncount as archived. ``draft_count`` is 0 until a draft state lands\n(forward-compatible field \u2014 Storefront can render a \"Drafts\" badge\nwithout an API shape change when it does).",
+        "properties": {
+          "active_count": {
+            "default": 0,
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "archived_count": {
+            "default": 0,
+            "title": "Archived Count",
+            "type": "integer"
+          },
+          "draft_count": {
+            "default": 0,
+            "title": "Draft Count",
+            "type": "integer"
+          }
+        },
+        "title": "StatusProductsBlock",
+        "type": "object"
+      },
+      "StatusSyncRunBlock": {
+        "additionalProperties": false,
+        "description": "One sync-run summary inside :class:`StatusSyncsBlock`.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "item_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Item Count"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Run At"
+          },
+          "status": {
+            "default": "never_run",
+            "enum": [
+              "success",
+              "failed",
+              "running",
+              "never_run"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "StatusSyncRunBlock",
+        "type": "object"
+      },
+      "StatusSyncsBlock": {
+        "additionalProperties": false,
+        "description": "Recent state of each sync category for a tenant.",
+        "properties": {
+          "advertisers": {
+            "$ref": "#/components/schemas/StatusSyncRunBlock"
+          },
+          "custom_targeting": {
+            "$ref": "#/components/schemas/StatusSyncRunBlock"
+          },
+          "inventory": {
+            "$ref": "#/components/schemas/StatusSyncRunBlock"
+          }
+        },
+        "title": "StatusSyncsBlock",
+        "type": "object"
+      },
+      "StatusWebhooksBlock": {
+        "additionalProperties": false,
+        "description": "Outbound-webhook summary. ``None`` until sprint 6 lands the table.",
+        "properties": {
+          "last_24h": {
+            "additionalProperties": true,
+            "title": "Last 24H",
+            "type": "object"
+          },
+          "last_failure_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Failure At"
+          }
+        },
+        "title": "StatusWebhooksBlock",
+        "type": "object"
+      },
+      "StatusWorkflowsBlock": {
+        "additionalProperties": false,
+        "description": "Open-workflow summary.",
+        "properties": {
+          "by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Kind",
+            "type": "object"
+          },
+          "oldest_opened_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Oldest Opened At"
+          },
+          "open_count": {
+            "default": 0,
+            "title": "Open Count",
+            "type": "integer"
+          }
+        },
+        "title": "StatusWorkflowsBlock",
+        "type": "object"
+      },
+      "SyncRunInfo": {
+        "additionalProperties": false,
+        "description": "One sync-run entry in the historical timeline.",
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Completed At"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Duration Seconds"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Summary"
+          },
+          "items_failed": {
+            "default": 0,
+            "title": "Items Failed",
+            "type": "integer"
+          },
+          "items_processed": {
+            "default": 0,
+            "title": "Items Processed",
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "sync_id": {
+            "title": "Sync Id",
+            "type": "string"
+          },
+          "sync_type": {
+            "title": "Sync Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sync_id",
+          "sync_type",
+          "started_at",
+          "status"
+        ],
+        "title": "SyncRunInfo",
+        "type": "object"
+      },
+      "TenantStatusResponse": {
+        "additionalProperties": false,
+        "description": "``GET /tenants/{tid}/status`` \u2014 one round-trip operational snapshot.",
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/StatusAdapterBlock"
+          },
+          "creatives": {
+            "$ref": "#/components/schemas/StatusCreativesBlock"
+          },
+          "fetched_at": {
+            "format": "date-time",
+            "title": "Fetched At",
+            "type": "string"
+          },
+          "media_buys": {
+            "$ref": "#/components/schemas/StatusMediaBuysBlock"
+          },
+          "packages": {
+            "$ref": "#/components/schemas/StatusPackagesBlock"
+          },
+          "products": {
+            "$ref": "#/components/schemas/StatusProductsBlock"
+          },
+          "setup_tasks": {
+            "$ref": "#/components/schemas/SetupTasksBlock"
+          },
+          "syncs": {
+            "$ref": "#/components/schemas/StatusSyncsBlock"
+          },
+          "webhooks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StatusWebhooksBlock"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "workflows": {
+            "$ref": "#/components/schemas/StatusWorkflowsBlock"
+          }
+        },
+        "required": [
+          "adapter",
+          "fetched_at"
+        ],
+        "title": "TenantStatusResponse",
+        "type": "object"
+      },
+      "TestConnectionResponse": {
+        "additionalProperties": false,
+        "description": "Result of an adapter connection probe.\n\n``error_code`` classifies the fault into a closed set of typed values\nso the UI can branch without parsing the human-readable ``error``.\nThe same code appears as the suffix of the ``adapter_{code}`` error\nin :class:`ApiError` envelopes from the provision / PUT paths. See\n:mod:`src.admin.services.adapter_connection_tester`.\n\n``remediation`` (when populated) tells the UI WHO can fix the problem\n\u2014 useful for ``permission_denied`` (vendor enables a role vs customer\nrebinds the account) where the error code alone isn't actionable.",
+        "properties": {
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "network_not_found",
+                  "permission_denied",
+                  "invalid_credentials",
+                  "invalid_config",
+                  "upstream_unavailable",
+                  "connection_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "remediation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "vendor_enables_role",
+                  "customer_rebinds_account",
+                  "customer_rotates_token"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Remediation"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          },
+          "tested_at": {
+            "format": "date-time",
+            "title": "Tested At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "tested_at"
+        ],
+        "title": "TestConnectionResponse",
+        "type": "object"
+      },
+      "UnsupportedFeature": {
+        "additionalProperties": false,
+        "description": "Machine-readable unsupported capability surfaced by adapter contracts.",
+        "properties": {
+          "feature": {
+            "description": "Stable unsupported feature identifier.",
+            "minLength": 1,
+            "title": "Feature",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "remediation": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Remediation"
+          }
+        },
+        "required": [
+          "feature",
+          "reason"
+        ],
+        "title": "AdapterUnsupportedFeature",
+        "type": "object"
+      },
+      "WebhookEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_type": {
+            "const": "springserve",
+            "type": "string"
+          },
+          "event": {
+            "enum": [
+              "workflow.created",
+              "workflow.decided",
+              "media_buy.created",
+              "media_buy.status_changed",
+              "creative.created",
+              "creative.status_changed",
+              "principal.created",
+              "product.created",
+              "product.updated",
+              "sync_run.completed",
+              "sync_run.failed",
+              "tenant.config_changed"
+            ],
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "tenant_id",
+          "adapter_type",
+          "occurred_at",
+          "payload"
+        ],
+        "title": "WebhookEvent",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "TenantManagementApiKey": {
+        "in": "header",
+        "name": "X-Tenant-Management-API-Key",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "Direct-sold CTV, online video, and audio inventory via Magnite's SpringServe ad server.",
+    "title": "Sales Agent Tenant Management Adapter Contract \u2014 SpringServe (Magnite)",
+    "version": "2026-05-01"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/adapters/springserve/capabilities": {
+      "get": {
+        "operationId": "get_springserve_capabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterCapabilities"
+                }
+              }
+            },
+            "description": "Adapter capabilities."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Tenant management API key is missing or invalid."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Tenant management API key is not authorized."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unknown adapter type."
+          }
+        },
+        "security": [
+          {
+            "TenantManagementApiKey": []
+          }
+        ],
+        "summary": "Get SpringServe (Magnite) tenant-management capabilities."
+      }
+    },
+    "/adapters/springserve/openapi.json": {
+      "get": {
+        "operationId": "get_springserve_openapi",
+        "responses": {
+          "200": {
+            "description": "OpenAPI document."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Tenant management API key is missing or invalid."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Tenant management API key is not authorized."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unknown adapter type."
+          }
+        },
+        "security": [
+          {
+            "TenantManagementApiKey": []
+          }
+        ],
+        "summary": "Get SpringServe (Magnite) adapter contract OpenAPI document."
+      }
+    }
+  },
+  "security": [
+    {
+      "TenantManagementApiKey": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "/api/v1/tenant-management"
+    }
+  ],
+  "x-salesagent-adapter": "springserve",
+  "x-salesagent-candidate-generation": "supply_tag_rollup",
+  "x-salesagent-common-tenant-endpoints": {
+    "contract_components_only": [
+      "GET /tenants/{tenant_id}/ad-server-objects/search",
+      "GET /tenants/{tenant_id}/inventory-configuration-candidates",
+      "POST /tenants/{tenant_id}/inventory-configurations/preview",
+      "POST /tenants/{tenant_id}/inventory-configurations",
+      "GET /tenants/{tenant_id}/signal-candidates",
+      "POST /tenants/{tenant_id}/signal-mappings/preview",
+      "POST /tenants/{tenant_id}/signal-mappings",
+      "GET /tenants/{tenant_id}/pricing-recommendations"
+    ],
+    "live": [
+      "POST /tenants/preview-adapter",
+      "POST /tenants/provision",
+      "GET /tenants/{tenant_id}/status",
+      "POST /tenants/{tenant_id}/refresh",
+      "GET /tenants/{tenant_id}/sync-history",
+      "PUT /tenants/{tenant_id}/adapter-config",
+      "POST /tenants/{tenant_id}/adapter-config/test-connection"
+    ]
+  },
+  "x-salesagent-common-tenant-operations": {
+    "contract_components_only": {
+      "GET /tenants/{tenant_id}/ad-server-objects/search": {
+        "request": "#/components/schemas/AdServerObjectSearchRequest",
+        "response": "#/components/schemas/AdServerObjectSearchResponse"
+      },
+      "GET /tenants/{tenant_id}/inventory-configuration-candidates": {
+        "response": "#/components/schemas/InventoryConfigurationCandidateListResponse"
+      },
+      "GET /tenants/{tenant_id}/pricing-recommendations": {
+        "response": "#/components/schemas/PricingRecommendationResponse"
+      },
+      "GET /tenants/{tenant_id}/signal-candidates": {
+        "response": "#/components/schemas/SignalCandidateListResponse"
+      },
+      "POST /tenants/{tenant_id}/inventory-configurations": {
+        "request": "#/components/schemas/InventoryConfigurationWrite",
+        "response": "#/components/schemas/InventoryConfigurationResponse"
+      },
+      "POST /tenants/{tenant_id}/inventory-configurations/preview": {
+        "request": "#/components/schemas/InventoryConfigurationPreviewRequest",
+        "response": "#/components/schemas/InventoryConfigurationPreviewResponse"
+      },
+      "POST /tenants/{tenant_id}/signal-mappings": {
+        "request": "#/components/schemas/SignalMappingWrite",
+        "response": "#/components/schemas/SignalMappingResponse"
+      },
+      "POST /tenants/{tenant_id}/signal-mappings/preview": {
+        "request": "#/components/schemas/SignalMappingPreviewRequest",
+        "response": "#/components/schemas/SignalMappingPreviewResponse"
+      }
+    },
+    "live": {
+      "GET /tenants/{tenant_id}/status": {
+        "response": "#/components/schemas/TenantStatusResponse"
+      },
+      "GET /tenants/{tenant_id}/sync-history": {
+        "response": "#/components/schemas/ListSyncHistoryResponse"
+      },
+      "POST /tenants/preview-adapter": {
+        "errors": "#/components/schemas/ApiError",
+        "request": "#/components/schemas/PreviewAdapterRequest",
+        "response": "#/components/schemas/PreviewAdapterResponse"
+      },
+      "POST /tenants/provision": {
+        "errors": "#/components/schemas/ApiError",
+        "request": "#/components/schemas/ProvisionTenantRequest",
+        "response": "#/components/schemas/ProvisionTenantResponse"
+      },
+      "POST /tenants/{tenant_id}/adapter-config/test-connection": {
+        "errors": "#/components/schemas/ApiError",
+        "response": "#/components/schemas/TestConnectionResponse"
+      },
+      "POST /tenants/{tenant_id}/refresh": {
+        "conflict": "#/components/schemas/RefreshConflictResponse",
+        "response": "#/components/schemas/RefreshResponse"
+      },
+      "PUT /tenants/{tenant_id}/adapter-config": {
+        "errors": "#/components/schemas/ApiError",
+        "request": "#/components/schemas/AdapterConfig",
+        "response": "#/components/schemas/AdapterConfigResponse"
+      }
+    }
+  },
+  "x-salesagent-contract-version": "2026-05-01",
+  "x-salesagent-normalization-notes": [
+    "SpringServe setup is normalized around supply tags/zones and demand-partner mappings."
+  ],
+  "x-salesagent-search-limits": {
+    "default_page_size": 50,
+    "max_page_size": 100
+  },
+  "x-salesagent-supported-object-types": [
+    "supply_tag",
+    "zone",
+    "demand_partner",
+    "creative_format"
+  ],
+  "x-salesagent-supported-signal-types": [
+    "key_value",
+    "audience_segment"
+  ],
+  "x-salesagent-sync-streams": [
+    "inventory",
+    "reporting"
+  ]
+}

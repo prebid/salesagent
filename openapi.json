@@ -152,6 +152,182 @@
         "title": "AccountDetail",
         "type": "object"
       },
+      "AdapterCapabilitiesResponse.f44f287": {
+        "additionalProperties": false,
+        "description": "Full response from ``GET /adapters/{adapter_type}/capabilities``.",
+        "properties": {
+          "contract_version": {
+            "description": "Version of this adapter's tenant-management contract.",
+            "title": "Contract Version",
+            "type": "string"
+          },
+          "inventory_entity_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inventory Entity Label"
+          },
+          "openapi_url": {
+            "description": "Adapter-specific OpenAPI reference URL.",
+            "title": "Openapi Url",
+            "type": "string"
+          },
+          "reporting_bundled_with_inventory": {
+            "default": false,
+            "title": "Reporting Bundled With Inventory",
+            "type": "boolean"
+          },
+          "supported_object_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Object Types",
+            "type": "array"
+          },
+          "supported_pricing_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Pricing Models",
+            "type": "array"
+          },
+          "supported_signal_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Signal Types",
+            "type": "array"
+          },
+          "supports_audiences": {
+            "default": false,
+            "title": "Supports Audiences",
+            "type": "boolean"
+          },
+          "supports_custom_targeting": {
+            "default": false,
+            "title": "Supports Custom Targeting",
+            "type": "boolean"
+          },
+          "supports_dynamic_products": {
+            "default": false,
+            "title": "Supports Dynamic Products",
+            "type": "boolean"
+          },
+          "supports_forecasting": {
+            "default": false,
+            "title": "Supports Forecasting",
+            "type": "boolean"
+          },
+          "supports_geo_targeting": {
+            "default": false,
+            "title": "Supports Geo Targeting",
+            "type": "boolean"
+          },
+          "supports_inventory_profiles": {
+            "default": false,
+            "title": "Supports Inventory Profiles",
+            "type": "boolean"
+          },
+          "supports_inventory_sync": {
+            "default": false,
+            "title": "Supports Inventory Sync",
+            "type": "boolean"
+          },
+          "supports_pricing_recommendations": {
+            "default": false,
+            "title": "Supports Pricing Recommendations",
+            "type": "boolean"
+          },
+          "supports_realtime_reporting": {
+            "default": false,
+            "title": "Supports Realtime Reporting",
+            "type": "boolean"
+          },
+          "supports_reporting": {
+            "default": false,
+            "title": "Supports Reporting",
+            "type": "boolean"
+          },
+          "supports_reporting_sync": {
+            "default": false,
+            "title": "Supports Reporting Sync",
+            "type": "boolean"
+          },
+          "supports_webhooks": {
+            "default": false,
+            "title": "Supports Webhooks",
+            "type": "boolean"
+          },
+          "sync_streams": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sync Streams",
+            "type": "array"
+          },
+          "type": {
+            "description": "Adapter type identifier.",
+            "title": "Type",
+            "type": "string"
+          },
+          "unsupported_features": {
+            "items": {
+              "$ref": "#/components/schemas/AdapterCapabilitiesResponse.f44f287.AdapterUnsupportedFeature"
+            },
+            "title": "Unsupported Features",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "contract_version",
+          "openapi_url"
+        ],
+        "title": "AdapterCapabilitiesResponse",
+        "type": "object"
+      },
+      "AdapterCapabilitiesResponse.f44f287.AdapterUnsupportedFeature": {
+        "additionalProperties": false,
+        "description": "Machine-readable unsupported capability surfaced by adapter contracts.",
+        "properties": {
+          "feature": {
+            "description": "Stable unsupported feature identifier.",
+            "minLength": 1,
+            "title": "Feature",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "remediation": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Remediation"
+          }
+        },
+        "required": [
+          "feature",
+          "reason"
+        ],
+        "title": "AdapterUnsupportedFeature",
+        "type": "object"
+      },
       "AdapterConfigEnvelope.61b280c": {
         "discriminator": {
           "mapping": {
@@ -525,6 +701,12 @@
           "configured"
         ],
         "title": "AdapterConfigResponse",
+        "type": "object"
+      },
+      "AdapterOpenApiDocument.f44f287": {
+        "additionalProperties": true,
+        "description": "OpenAPI document returned by ``GET /adapters/{adapter_type}/openapi.json``.",
+        "title": "AdapterOpenApiDocument",
         "type": "object"
       },
       "ApiError.f44f287": {
@@ -1120,6 +1302,11 @@
             "default": null,
             "title": "Inventory Entity Label"
           },
+          "reporting_bundled_with_inventory": {
+            "default": false,
+            "title": "Reporting Bundled With Inventory",
+            "type": "boolean"
+          },
           "supported_pricing_models": {
             "items": {
               "type": "string"
@@ -1157,6 +1344,11 @@
             "title": "Supports Realtime Reporting",
             "type": "boolean"
           },
+          "supports_reporting_sync": {
+            "default": false,
+            "title": "Supports Reporting Sync",
+            "type": "boolean"
+          },
           "supports_webhooks": {
             "default": false,
             "title": "Supports Webhooks",
@@ -1173,11 +1365,21 @@
           "capabilities": {
             "$ref": "#/components/schemas/ListAdaptersResponse.f44f287.AdapterCapabilitiesSummary"
           },
+          "capabilities_url": {
+            "description": "Adapter-specific capabilities URL.",
+            "title": "Capabilities Url",
+            "type": "string"
+          },
           "connection_schema": {
             "additionalProperties": true,
             "description": "JSON Schema for this adapter's typed connection config (the discriminated union member).",
             "title": "Connection Schema",
             "type": "object"
+          },
+          "contract_version": {
+            "description": "Version of this adapter's tenant-management contract.",
+            "title": "Contract Version",
+            "type": "string"
           },
           "default_channels": {
             "items": {
@@ -1194,6 +1396,11 @@
           "name": {
             "description": "Human-readable adapter name.",
             "title": "Name",
+            "type": "string"
+          },
+          "openapi_url": {
+            "description": "Adapter-specific OpenAPI reference URL.",
+            "title": "Openapi Url",
             "type": "string"
           },
           "tier": {
@@ -1216,6 +1423,9 @@
           "type",
           "name",
           "description",
+          "contract_version",
+          "openapi_url",
+          "capabilities_url",
           "capabilities",
           "connection_schema"
         ],
@@ -4964,6 +5174,108 @@
           }
         },
         "summary": "Return the full catalog of supported ad-server adapter types.",
+        "tags": []
+      }
+    },
+    "/api/v1/tenant-management/adapters/{adapter_type}/capabilities": {
+      "get": {
+        "description": "",
+        "operationId": "get__api_v1_tenant-management_adapters_{adapter_type}_capabilities",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "adapter_type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterCapabilitiesResponse.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Return the detailed tenant-management contract capabilities for one adapter.",
+        "tags": []
+      }
+    },
+    "/api/v1/tenant-management/adapters/{adapter_type}/openapi.json": {
+      "get": {
+        "description": "",
+        "operationId": "get__api_v1_tenant-management_adapters_{adapter_type}_openapi.json",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "adapter_type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterOpenApiDocument.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Return the adapter-specific tenant-management contract OpenAPI document.",
         "tags": []
       }
     },

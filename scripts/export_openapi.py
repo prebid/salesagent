@@ -16,6 +16,7 @@ Usage::
 
     uv run python scripts/export_openapi.py
     # writes docs/api/tenant-management-openapi.{json,yaml}
+    # and docs/api/adapters/{adapter_type}-openapi.{json,yaml}
 
 The structural test
 ``tests/unit/test_openapi_export_in_sync.py`` regenerates the spec at
@@ -35,10 +36,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # would. Insert it explicitly so ``import src.admin...`` resolves.
 sys.path.insert(0, str(REPO_ROOT))
 
-import yaml  # noqa: E402
+import yaml  # type: ignore[import-untyped, unused-ignore] # noqa: E402
 from flask import Flask  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "docs" / "api"
+ADAPTER_OUT_DIR = OUT_DIR / "adapters"
 JSON_PATH = OUT_DIR / "tenant-management-openapi.json"
 YAML_PATH = OUT_DIR / "tenant-management-openapi.yaml"
 
@@ -74,20 +76,42 @@ def build_spec() -> dict:
         return dict(spec.spec)
 
 
-def main() -> int:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    spec_dict = build_spec()
+def build_adapter_specs() -> dict[str, dict]:
+    """Build every published adapter-specific OpenAPI contract."""
+    from src.admin.tenant_management_api import build_adapter_openapi_documents
 
+    return build_adapter_openapi_documents()
+
+
+def _write_openapi_pair(spec_dict: dict, json_path: Path, yaml_path: Path) -> list[Path]:
     json_text = json.dumps(spec_dict, indent=2, sort_keys=True) + "\n"
     yaml_spec = json.loads(json_text)
     yaml_text = yaml.safe_dump(yaml_spec, sort_keys=True, default_flow_style=False)
 
-    for path in (JSON_PATH, ROOT_JSON_PATH):
-        path.write_text(json_text, encoding="utf-8")
-    for path in (YAML_PATH, ROOT_YAML_PATH):
-        path.write_text(yaml_text, encoding="utf-8")
+    json_path.write_text(json_text, encoding="utf-8")
+    yaml_path.write_text(yaml_text, encoding="utf-8")
+    return [json_path, yaml_path]
 
-    for path in (JSON_PATH, YAML_PATH, ROOT_JSON_PATH, ROOT_YAML_PATH):
+
+def main() -> int:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    ADAPTER_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    spec_dict = build_spec()
+
+    written = []
+    written.extend(_write_openapi_pair(spec_dict, JSON_PATH, YAML_PATH))
+    written.extend(_write_openapi_pair(spec_dict, ROOT_JSON_PATH, ROOT_YAML_PATH))
+
+    for adapter_type, adapter_spec in build_adapter_specs().items():
+        written.extend(
+            _write_openapi_pair(
+                adapter_spec,
+                ADAPTER_OUT_DIR / f"{adapter_type}-openapi.json",
+                ADAPTER_OUT_DIR / f"{adapter_type}-openapi.yaml",
+            )
+        )
+
+    for path in written:
         print(f"wrote {path.relative_to(REPO_ROOT)}")
     return 0
 

@@ -12,7 +12,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    RootModel,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from src.admin.services.adapter_connection_tester import AdapterErrorCode, RemediationHint
 from src.core.config import get_pydantic_extra_mode
@@ -226,6 +236,38 @@ class AdapterCapabilitiesSummary(BaseModel):
     supported_pricing_models: list[str] = Field(default_factory=list)
     supports_webhooks: bool = False
     supports_realtime_reporting: bool = False
+    supports_reporting_sync: bool = False
+    reporting_bundled_with_inventory: bool = False
+
+
+class AdapterUnsupportedFeature(BaseModel):
+    """Machine-readable unsupported capability surfaced by adapter contracts."""
+
+    model_config = _config()
+
+    feature: str = Field(..., min_length=1, description="Stable unsupported feature identifier.")
+    reason: str = Field(..., min_length=1)
+    remediation: str | None = Field(default=None, min_length=1)
+
+
+class AdapterCapabilitiesResponse(AdapterCapabilitiesSummary):
+    """Full response from ``GET /adapters/{adapter_type}/capabilities``."""
+
+    type: str = Field(..., description="Adapter type identifier.")
+    contract_version: str = Field(..., description="Version of this adapter's tenant-management contract.")
+    openapi_url: str = Field(..., description="Adapter-specific OpenAPI reference URL.")
+    supports_audiences: bool = False
+    supports_forecasting: bool = False
+    supports_reporting: bool = False
+    supports_pricing_recommendations: bool = False
+    sync_streams: list[str] = Field(default_factory=list)
+    supported_object_types: list[str] = Field(default_factory=list)
+    supported_signal_types: list[str] = Field(default_factory=list)
+    unsupported_features: list[AdapterUnsupportedFeature] = Field(default_factory=list)
+
+
+class AdapterOpenApiDocument(RootModel[dict[str, Any]]):
+    """OpenAPI document returned by ``GET /adapters/{adapter_type}/openapi.json``."""
 
 
 class AdapterCatalogEntry(BaseModel):
@@ -245,6 +287,9 @@ class AdapterCatalogEntry(BaseModel):
         ),
     )
     default_channels: list[str] = Field(default_factory=list)
+    contract_version: str = Field(..., description="Version of this adapter's tenant-management contract.")
+    openapi_url: str = Field(..., description="Adapter-specific OpenAPI reference URL.")
+    capabilities_url: str = Field(..., description="Adapter-specific capabilities URL.")
     capabilities: AdapterCapabilitiesSummary
     connection_schema: dict[str, Any] = Field(
         ..., description="JSON Schema for this adapter's typed connection config (the discriminated union member)."

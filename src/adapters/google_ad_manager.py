@@ -95,6 +95,7 @@ class GoogleAdManager(AdServerAdapter):
         # reporting sync; line-item stats are written by gam_orders_service
         # as part of the inventory sync.
         reporting_bundled_with_inventory=True,  # Surfaces label on /admin/scheduling
+        supports_custom_targeting=True,
         supports_realtime_reporting=True,  # Snapshots via cached GAM line item stats
     )
 

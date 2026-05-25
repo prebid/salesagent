@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, has_request_context, jsonify, request
 from spectree import Response, SpecTree
 from spectree.models import InType, SecureType, SecurityScheme, SecuritySchemeData
 from sqlalchemy import delete, func, or_, select
@@ -27,10 +27,13 @@ from src.admin.api_schemas.tenant_management import (
     WEBHOOK_EVENT_TYPES,
     AccountDetail,
     AccountSummary,
+    AdapterCapabilitiesResponse,
     AdapterCapabilitiesSummary,
     AdapterCatalogEntry,
     AdapterConfigResponse,
+    AdapterOpenApiDocument,
     AdapterStatusResponse,
+    AdapterUnsupportedFeature,
     ApiError,
     ApproveWorkflowRequest,
     BroadstreetAdapterConfig,
@@ -62,7 +65,11 @@ from src.admin.api_schemas.tenant_management import (
     RefreshConflictResponse,
     RefreshResponse,
     RejectWorkflowRequest,
+    SetupTaskItem,
+    SetupTasksBlock,
     SpringServeAdapterConfig,
+    StatusSyncRunBlock,
+    StatusSyncsBlock,
     TargetingValuesRefreshResponse,
     TenantDetail,
     TenantStatusResponse,
@@ -501,6 +508,740 @@ _ADAPTER_CONFIG_TYPED = {
     "springserve": SpringServeAdapterConfig,
 }
 
+_ADAPTER_CONTRACT_VERSION = "2026-05-01"
+
+_ADAPTER_CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
+    "google_ad_manager": {
+        "sync_streams": ["inventory", "custom_targeting", "advertisers"],
+        "supported_object_types": [
+            "ad_unit",
+            "placement",
+            "creative_format",
+            "targeting_key",
+            "targeting_value",
+            "advertiser",
+        ],
+        "supported_signal_types": ["custom_targeting", "audience_segment"],
+        "supports_forecasting": True,
+        "supports_pricing_recommendations": False,
+        "supported_pricing_models": ["cpm", "vcpm", "cpc", "flat_rate"],
+        "candidate_generation": "hierarchy_rollup_recent_delivery",
+        "search_limits": {"default_page_size": 50, "max_page_size": 100},
+        "normalization_notes": [
+            "GAM 1x1 and fluid size declarations are evidence for classification, not final creative formats.",
+            "Large networks should use on-demand search and curated candidates instead of full raw ad-unit setup flows.",
+        ],
+    },
+    "freewheel": {
+        "sync_streams": ["inventory", "reporting"],
+        "supported_object_types": ["placement", "package", "network", "creative_profile", "advertiser"],
+        "supported_signal_types": ["custom_targeting", "audience_segment"],
+        "supports_forecasting": False,
+        "supports_pricing_recommendations": False,
+        "candidate_generation": "placement_package_rollup",
+        "search_limits": {"default_page_size": 50, "max_page_size": 100},
+        "normalization_notes": ["FreeWheel inventory setup is normalized around placement/package concepts."],
+    },
+    "springserve": {
+        "sync_streams": ["inventory", "reporting"],
+        "supported_object_types": ["supply_tag", "zone", "demand_partner", "creative_format"],
+        "supported_signal_types": ["key_value", "audience_segment"],
+        "supports_forecasting": False,
+        "supports_pricing_recommendations": False,
+        "candidate_generation": "supply_tag_rollup",
+        "search_limits": {"default_page_size": 50, "max_page_size": 100},
+        "normalization_notes": [
+            "SpringServe setup is normalized around supply tags/zones and demand-partner mappings."
+        ],
+    },
+    "mock": {
+        "sync_streams": [],
+        "supported_object_types": ["placement", "package", "creative_format", "audience_segment", "custom_targeting"],
+        "supported_signal_types": ["custom_targeting", "audience_segment"],
+        "supports_forecasting": True,
+        "supports_pricing_recommendations": True,
+        "candidate_generation": "deterministic_sample_objects",
+        "search_limits": {"default_page_size": 50, "max_page_size": 100},
+        "normalization_notes": ["Mock contracts return deterministic sample objects for local and CI setup flows."],
+    },
+    "broadstreet": {
+        "sync_streams": [],
+        "supported_object_types": ["zone", "advertisement", "campaign", "creative_size"],
+        "supported_signal_types": [],
+        "supports_forecasting": False,
+        "supports_pricing_recommendations": False,
+        "candidate_generation": "zone_creative_size_rollup",
+        "search_limits": {"default_page_size": 50, "max_page_size": 100},
+        "normalization_notes": ["Broadstreet setup is normalized around zones and supported creative sizes."],
+    },
+}
+
+_ADAPTER_FEATURE_CONTRACTS: dict[str, dict[str, str]] = {
+    "inventory_sync": {
+        "reason": "Sales Agent cannot import inventory objects from this adapter.",
+        "remediation": "Use manually configured products until inventory sync support is added for this adapter.",
+    },
+    "reporting": {
+        "reason": "Sales Agent cannot import reporting data from this adapter.",
+        "remediation": "Use external reporting exports until scheduled reporting sync support is added.",
+    },
+    "realtime_reporting": {
+        "reason": "Sales Agent does not expose low-latency reporting reads for this adapter.",
+        "remediation": "Use scheduled reporting sync or the ad server's native reporting UI.",
+    },
+    "forecasting": {
+        "reason": "Sales Agent does not expose an adapter-backed forecast endpoint for this adapter.",
+        "remediation": "Use historical delivery summaries or the ad server's native forecasting tools.",
+    },
+    "pricing_recommendations": {
+        "reason": "Sales Agent does not compute adapter-specific pricing recommendations for this adapter.",
+        "remediation": "Configure pricing manually or use an external pricing workflow.",
+    },
+    "webhooks": {
+        "reason": "Sales Agent cannot subscribe to adapter-native change events for this adapter.",
+        "remediation": "Poll status and sync-history endpoints until webhook support is available.",
+    },
+    "custom_targeting": {
+        "reason": "Sales Agent cannot import custom targeting keys or values for this adapter.",
+        "remediation": "Create buyer-facing signals manually or use broad inventory targeting only.",
+    },
+    "audiences": {
+        "reason": "Sales Agent cannot import audience segments for this adapter.",
+        "remediation": "Use contextual signals or configure audience mappings outside Sales Agent.",
+    },
+}
+
+
+def _tenant_management_url(path: str) -> str:
+    """Return a script-root aware tenant-management API URL path."""
+    script_root = request.script_root.rstrip("/") if has_request_context() else ""
+    return f"{script_root}/api/v1/tenant-management{path}"
+
+
+def _canonical_catalog_adapter_type(adapter_type: str) -> str | None:
+    """Resolve public adapter aliases to catalog keys."""
+    normalized = adapter_type.lower()
+    if normalized == "gam":
+        normalized = "google_ad_manager"
+    if normalized not in _ADAPTER_CATALOG_METADATA or normalized not in _ADAPTER_CONFIG_TYPED:
+        return None
+    return normalized
+
+
+def _adapter_capabilities_summary(caps_dataclass: Any | None) -> AdapterCapabilitiesSummary:
+    if caps_dataclass is None:
+        return AdapterCapabilitiesSummary()
+    return AdapterCapabilitiesSummary(
+        supports_inventory_sync=caps_dataclass.supports_inventory_sync,
+        supports_inventory_profiles=caps_dataclass.supports_inventory_profiles,
+        inventory_entity_label=caps_dataclass.inventory_entity_label,
+        supports_custom_targeting=caps_dataclass.supports_custom_targeting,
+        supports_geo_targeting=caps_dataclass.supports_geo_targeting,
+        supports_dynamic_products=caps_dataclass.supports_dynamic_products,
+        supported_pricing_models=list(caps_dataclass.supported_pricing_models or []),
+        supports_webhooks=caps_dataclass.supports_webhooks,
+        supports_realtime_reporting=caps_dataclass.supports_realtime_reporting,
+        supports_reporting_sync=caps_dataclass.supports_reporting_sync,
+        reporting_bundled_with_inventory=caps_dataclass.reporting_bundled_with_inventory,
+    )
+
+
+def _unsupported_features(
+    profile: dict[str, Any], summary: AdapterCapabilitiesSummary
+) -> list[AdapterUnsupportedFeature]:
+    supported_signal_types = set(_supported_signal_types(profile, summary))
+    feature_checks = {
+        "inventory_sync": summary.supports_inventory_sync,
+        "reporting": summary.supports_reporting_sync
+        or summary.supports_realtime_reporting
+        or summary.reporting_bundled_with_inventory,
+        "realtime_reporting": summary.supports_realtime_reporting,
+        "forecasting": bool(profile.get("supports_forecasting")),
+        "pricing_recommendations": bool(profile.get("supports_pricing_recommendations")),
+        "webhooks": summary.supports_webhooks,
+        "custom_targeting": summary.supports_custom_targeting,
+        "audiences": "audience_segment" in supported_signal_types,
+    }
+    unsupported_features: list[AdapterUnsupportedFeature] = []
+    for feature, supported in feature_checks.items():
+        if supported:
+            continue
+        contract = _ADAPTER_FEATURE_CONTRACTS[feature]
+        unsupported_features.append(
+            AdapterUnsupportedFeature(
+                feature=feature,
+                reason=contract["reason"],
+                remediation=contract["remediation"],
+            )
+        )
+    return unsupported_features
+
+
+def _supported_signal_types(profile: dict[str, Any], summary: AdapterCapabilitiesSummary) -> list[str]:
+    """Return signal types only when the runtime adapter capability supports them."""
+    if not summary.supports_custom_targeting:
+        return []
+    return list(profile.get("supported_signal_types", []))
+
+
+def _build_adapter_capabilities(adapter_type: str, adapter_class: Any) -> AdapterCapabilitiesResponse:
+    caps = _adapter_capabilities_summary(getattr(adapter_class, "capabilities", None))
+    profile = _ADAPTER_CONTRACT_PROFILES.get(adapter_type, {})
+    caps_data = caps.model_dump()
+    caps_data["supported_pricing_models"] = list(
+        caps.supported_pricing_models or profile.get("supported_pricing_models", [])
+    )
+    supported_signal_types = _supported_signal_types(profile, caps)
+    return AdapterCapabilitiesResponse(
+        **caps_data,
+        type=adapter_type,
+        contract_version=_ADAPTER_CONTRACT_VERSION,
+        openapi_url=_tenant_management_url(f"/adapters/{adapter_type}/openapi.json"),
+        supports_audiences="audience_segment" in supported_signal_types,
+        supports_forecasting=bool(profile.get("supports_forecasting")),
+        supports_reporting=caps.supports_reporting_sync
+        or caps.supports_realtime_reporting
+        or caps.reporting_bundled_with_inventory,
+        supports_pricing_recommendations=bool(profile.get("supports_pricing_recommendations")),
+        sync_streams=list(profile.get("sync_streams", [])),
+        supported_object_types=list(profile.get("supported_object_types", [])),
+        supported_signal_types=supported_signal_types,
+        unsupported_features=_unsupported_features(profile, caps),
+    )
+
+
+def _adapter_catalog_entry(registry_key: str, adapter_class: Any) -> AdapterCatalogEntry:
+    metadata = _ADAPTER_CATALOG_METADATA[registry_key]
+    typed_config = _ADAPTER_CONFIG_TYPED.get(registry_key)
+    return AdapterCatalogEntry(
+        type=registry_key,
+        name=metadata["name"],
+        description=metadata["description"],
+        tier=metadata.get("tier", "live"),
+        default_channels=list(getattr(adapter_class, "default_channels", []) or []),
+        contract_version=_ADAPTER_CONTRACT_VERSION,
+        openapi_url=_tenant_management_url(f"/adapters/{registry_key}/openapi.json"),
+        capabilities_url=_tenant_management_url(f"/adapters/{registry_key}/capabilities"),
+        capabilities=_adapter_capabilities_summary(getattr(adapter_class, "capabilities", None)),
+        connection_schema=_adapter_connection_schema(typed_config) if typed_config else {},
+    )
+
+
+def _adapter_connection_schema(model_class: Any, **kwargs: Any) -> dict[str, Any]:
+    """Return JSON Schema for a dynamically selected Pydantic model class."""
+    return cast(dict[str, Any], model_class.model_json_schema(**kwargs))
+
+
+def _json_schema_object(title: str, properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "title": title,
+        "additionalProperties": False,
+        "properties": properties,
+        "required": required or [],
+    }
+
+
+def _add_component_schema(schemas: dict[str, Any], name: str, model_class: Any) -> None:
+    """Add a Pydantic schema and promote its nested refs to components."""
+    schema = _adapter_connection_schema(model_class, ref_template="#/components/schemas/{model}")
+    for definition_name, definition_schema in schema.pop("$defs", {}).items():
+        schemas.setdefault(definition_name, definition_schema)
+    schemas[name] = schema
+
+
+def _specialize_adapter_config_request_schema(schemas: dict[str, Any], schema_name: str) -> None:
+    """Point adapter-bearing request schemas at this document's adapter config."""
+    properties = schemas.get(schema_name, {}).get("properties", {})
+    if "adapter" in properties:
+        properties["adapter"] = {"$ref": "#/components/schemas/AdapterConfig"}
+
+
+def _signal_type_schema(supported_signal_types: list[str]) -> dict[str, Any]:
+    if supported_signal_types:
+        return {"type": "string", "enum": supported_signal_types}
+    return {
+        "type": "string",
+        "description": "No signal candidate types are supported by this adapter.",
+    }
+
+
+def _api_error_response(description: str) -> dict[str, Any]:
+    return {
+        "description": description,
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}},
+    }
+
+
+def _auth_error_responses() -> dict[str, Any]:
+    return {
+        "401": _api_error_response("Tenant management API key is missing or invalid."),
+        "403": _api_error_response("Tenant management API key is not authorized."),
+    }
+
+
+def _build_adapter_openapi_document(adapter_type: str, adapter_class: Any) -> dict[str, Any]:
+    metadata = _ADAPTER_CATALOG_METADATA[adapter_type]
+    profile = _ADAPTER_CONTRACT_PROFILES.get(adapter_type, {})
+    typed_config = _ADAPTER_CONFIG_TYPED[adapter_type]
+    capabilities = _build_adapter_capabilities(adapter_type, adapter_class)
+    object_type_enum = capabilities.supported_object_types or ["ad_server_object"]
+    signal_type = _signal_type_schema(capabilities.supported_signal_types)
+
+    schemas: dict[str, Any] = {}
+    for component_name, model_class in (
+        ("AdapterConfig", typed_config),
+        ("AdapterCapabilities", AdapterCapabilitiesResponse),
+        ("UnsupportedFeature", AdapterUnsupportedFeature),
+        ("ApiError", ApiError),
+        ("AdapterConfigResponse", AdapterConfigResponse),
+        ("TestConnectionResponse", TestConnectionResponse),
+        ("PreviewAdapterRequest", PreviewAdapterRequest),
+        ("PreviewAdapterResponse", PreviewAdapterResponse),
+        ("ProvisionTenantRequest", ProvisionTenantRequest),
+        ("ProvisionTenantResponse", ProvisionTenantResponse),
+        ("TenantStatusResponse", TenantStatusResponse),
+        ("StatusSyncsBlock", StatusSyncsBlock),
+        ("StatusSyncRunBlock", StatusSyncRunBlock),
+        ("SetupTasksBlock", SetupTasksBlock),
+        ("SetupTaskItem", SetupTaskItem),
+        ("RefreshResponse", RefreshResponse),
+        ("RefreshConflictResponse", RefreshConflictResponse),
+        ("ListSyncHistoryResponse", ListSyncHistoryResponse),
+    ):
+        _add_component_schema(schemas, component_name, model_class)
+    _specialize_adapter_config_request_schema(schemas, "PreviewAdapterRequest")
+    _specialize_adapter_config_request_schema(schemas, "ProvisionTenantRequest")
+
+    schemas.update(
+        {
+            "AdServerObject": _json_schema_object(
+                "AdServerObject",
+                {
+                    "type": {"type": "string", "enum": object_type_enum},
+                    "external_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "parent_external_id": {"type": ["string", "null"]},
+                    "status": {"type": "string", "enum": ["active", "inactive", "archived", "unknown"]},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["type", "external_id", "name"],
+            ),
+            "AdServerObjectSearchRequest": _json_schema_object(
+                "AdServerObjectSearchRequest",
+                {
+                    "query": {"type": ["string", "null"], "description": "Optional text search."},
+                    "object_types": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": object_type_enum},
+                        "description": "Restrict search to these adapter object types.",
+                    },
+                    "parent_external_id": {
+                        "type": ["string", "null"],
+                        "description": "Restrict search to children of this ad-server object.",
+                    },
+                    "page_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": profile.get("search_limits", {}).get("max_page_size", 100),
+                        "default": profile.get("search_limits", {}).get("default_page_size", 50),
+                    },
+                    "cursor": {"type": ["string", "null"]},
+                },
+            ),
+            "AdServerObjectSearchResponse": _json_schema_object(
+                "AdServerObjectSearchResponse",
+                {
+                    "objects": {"type": "array", "items": {"$ref": "#/components/schemas/AdServerObject"}},
+                    "count": {"type": "integer", "minimum": 0},
+                    "next_cursor": {"type": ["string", "null"]},
+                },
+                ["objects", "count"],
+            ),
+            "CreativeFormatClassification": _json_schema_object(
+                "CreativeFormatClassification",
+                {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["display", "video", "audio", "native", "out_of_page", "custom"],
+                    },
+                    "custom": {"type": "boolean"},
+                    "source": {"type": "string", "enum": ["declared", "inferred", "publisher_override"]},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "requires_review": {"type": "boolean"},
+                    "evidence": {"type": "array", "items": {"$ref": "#/components/schemas/AdServerObject"}},
+                    "ad_server_observations": {"type": "object", "additionalProperties": True},
+                },
+                ["id", "name", "kind", "confidence", "requires_review"],
+            ),
+            "InventoryConfigurationCandidate": _json_schema_object(
+                "InventoryConfigurationCandidate",
+                {
+                    "candidate_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": ["string", "null"]},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "mapped_objects": {"type": "array", "items": {"$ref": "#/components/schemas/AdServerObject"}},
+                    "creative_formats": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/CreativeFormatClassification"},
+                    },
+                    "scale": {"type": "object", "additionalProperties": True},
+                    "estimated_availability": {"type": "object", "additionalProperties": True},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["candidate_id", "name", "confidence", "mapped_objects", "creative_formats"],
+            ),
+            "InventoryConfigurationCandidateListResponse": _json_schema_object(
+                "InventoryConfigurationCandidateListResponse",
+                {
+                    "candidates": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/InventoryConfigurationCandidate"},
+                    },
+                    "count": {"type": "integer", "minimum": 0},
+                    "next_cursor": {"type": ["string", "null"]},
+                },
+                ["candidates", "count"],
+            ),
+            "InventoryConfigurationWrite": _json_schema_object(
+                "InventoryConfigurationWrite",
+                {
+                    "name": {"type": "string"},
+                    "mapped_object_ids": {"type": "array", "items": {"type": "string"}},
+                    "creative_format_ids": {"type": "array", "items": {"type": "string"}},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["name", "mapped_object_ids", "creative_format_ids"],
+            ),
+            "InventoryConfigurationResponse": _json_schema_object(
+                "InventoryConfigurationResponse",
+                {
+                    "id": {"type": "string"},
+                    "configuration": {"$ref": "#/components/schemas/InventoryConfigurationWrite"},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["id", "configuration"],
+            ),
+            "ContractValidationMessage": _json_schema_object(
+                "ContractValidationMessage",
+                {
+                    "field": {"type": ["string", "null"]},
+                    "code": {"type": "string"},
+                    "message": {"type": "string"},
+                    "severity": {"type": "string", "enum": ["error", "warning", "info"]},
+                },
+                ["code", "message", "severity"],
+            ),
+            "InventoryConfigurationPreviewRequest": _json_schema_object(
+                "InventoryConfigurationPreviewRequest",
+                {
+                    "configuration": {"$ref": "#/components/schemas/InventoryConfigurationWrite"},
+                },
+                ["configuration"],
+            ),
+            "InventoryConfigurationPreviewResponse": _json_schema_object(
+                "InventoryConfigurationPreviewResponse",
+                {
+                    "valid": {"type": "boolean"},
+                    "messages": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/ContractValidationMessage"},
+                    },
+                    "normalized_configuration": {"$ref": "#/components/schemas/InventoryConfigurationWrite"},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["valid", "messages"],
+            ),
+            "SignalCandidate": _json_schema_object(
+                "SignalCandidate",
+                {
+                    "id": {"type": "string"},
+                    "type": signal_type,
+                    "name": {"type": "string"},
+                    "value_mode": {"type": "string", "enum": ["enumerable", "free_form", "range"]},
+                    "buyer_targetable": {"type": "boolean"},
+                    "privacy_flags": {"type": "array", "items": {"type": "string"}},
+                    "lineage": {"type": "array", "items": {"$ref": "#/components/schemas/AdServerObject"}},
+                },
+                ["id", "type", "name", "value_mode", "buyer_targetable"],
+            ),
+            "SignalCandidateListResponse": _json_schema_object(
+                "SignalCandidateListResponse",
+                {
+                    "signals": {"type": "array", "items": {"$ref": "#/components/schemas/SignalCandidate"}},
+                    "count": {"type": "integer", "minimum": 0},
+                    "next_cursor": {"type": ["string", "null"]},
+                },
+                ["signals", "count"],
+            ),
+            "SignalMappingWrite": _json_schema_object(
+                "SignalMappingWrite",
+                {
+                    "signal_candidate_id": {"type": "string"},
+                    "buyer_facing_name": {"type": "string"},
+                    "buyer_targetable": {"type": "boolean"},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["signal_candidate_id", "buyer_facing_name", "buyer_targetable"],
+            ),
+            "SignalMappingResponse": _json_schema_object(
+                "SignalMappingResponse",
+                {
+                    "id": {"type": "string"},
+                    "mapping": {"$ref": "#/components/schemas/SignalMappingWrite"},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["id", "mapping"],
+            ),
+            "SignalMappingPreviewRequest": _json_schema_object(
+                "SignalMappingPreviewRequest",
+                {
+                    "mapping": {"$ref": "#/components/schemas/SignalMappingWrite"},
+                },
+                ["mapping"],
+            ),
+            "SignalMappingPreviewResponse": _json_schema_object(
+                "SignalMappingPreviewResponse",
+                {
+                    "valid": {"type": "boolean"},
+                    "messages": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/ContractValidationMessage"},
+                    },
+                    "normalized_mapping": {"$ref": "#/components/schemas/SignalMappingWrite"},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["valid", "messages"],
+            ),
+            "ReportingForecastSummary": _json_schema_object(
+                "ReportingForecastSummary",
+                {
+                    "inventory_configuration_id": {"type": "string"},
+                    "reporting_days": {"type": "integer"},
+                    "forecast_available": {"type": "boolean"},
+                    "historical_impressions": {"type": "integer"},
+                    "historical_revenue": {"type": "number"},
+                    "adapter_details": {"type": "object", "additionalProperties": True},
+                },
+                ["inventory_configuration_id", "reporting_days", "forecast_available"],
+            ),
+            "PricingRecommendation": _json_schema_object(
+                "PricingRecommendation",
+                {
+                    "inventory_configuration_id": {"type": "string"},
+                    "currency": {"type": "string"},
+                    "recommendations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "pricing_model": {"type": "string", "enum": capabilities.supported_pricing_models},
+                                "floor_cpm": {"type": "number"},
+                                "target_cpm": {"type": "number"},
+                                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                                "basis": {"type": "object", "additionalProperties": True},
+                            },
+                            "required": ["pricing_model", "confidence", "basis"],
+                        },
+                    },
+                },
+                ["inventory_configuration_id", "currency", "recommendations"],
+            ),
+            "PricingRecommendationResponse": _json_schema_object(
+                "PricingRecommendationResponse",
+                {
+                    "recommendations": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/PricingRecommendation"},
+                    },
+                    "count": {"type": "integer", "minimum": 0},
+                },
+                ["recommendations", "count"],
+            ),
+            "WebhookEvent": _json_schema_object(
+                "WebhookEvent",
+                {
+                    "event": {"type": "string", "enum": WEBHOOK_EVENT_TYPES},
+                    "tenant_id": {"type": "string"},
+                    "adapter_type": {"type": "string", "const": adapter_type},
+                    "occurred_at": {"type": "string", "format": "date-time"},
+                    "payload": {"type": "object", "additionalProperties": True},
+                },
+                ["event", "tenant_id", "adapter_type", "occurred_at", "payload"],
+            ),
+        }
+    )
+    components = {
+        "schemas": schemas,
+        "securitySchemes": {
+            "TenantManagementApiKey": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-Tenant-Management-API-Key",
+            }
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": f"Sales Agent Tenant Management Adapter Contract — {metadata['name']}",
+            "version": _ADAPTER_CONTRACT_VERSION,
+            "description": metadata["description"],
+        },
+        "servers": [{"url": _tenant_management_url("")}],
+        "paths": {
+            f"/adapters/{adapter_type}/capabilities": {
+                "get": {
+                    "operationId": f"get_{adapter_type}_capabilities",
+                    "summary": f"Get {metadata['name']} tenant-management capabilities.",
+                    "responses": {
+                        "200": {
+                            "description": "Adapter capabilities.",
+                            "content": {
+                                "application/json": {"schema": {"$ref": "#/components/schemas/AdapterCapabilities"}}
+                            },
+                        },
+                        **_auth_error_responses(),
+                        "404": _api_error_response("Unknown adapter type."),
+                    },
+                    "security": [{"TenantManagementApiKey": []}],
+                }
+            },
+            f"/adapters/{adapter_type}/openapi.json": {
+                "get": {
+                    "operationId": f"get_{adapter_type}_openapi",
+                    "summary": f"Get {metadata['name']} adapter contract OpenAPI document.",
+                    "responses": {
+                        "200": {"description": "OpenAPI document."},
+                        **_auth_error_responses(),
+                        "404": _api_error_response("Unknown adapter type."),
+                    },
+                    "security": [{"TenantManagementApiKey": []}],
+                }
+            },
+        },
+        "components": components,
+        "security": [{"TenantManagementApiKey": []}],
+        "x-salesagent-adapter": adapter_type,
+        "x-salesagent-contract-version": _ADAPTER_CONTRACT_VERSION,
+        "x-salesagent-sync-streams": capabilities.sync_streams,
+        "x-salesagent-supported-object-types": capabilities.supported_object_types,
+        "x-salesagent-supported-signal-types": capabilities.supported_signal_types,
+        "x-salesagent-candidate-generation": profile.get("candidate_generation"),
+        "x-salesagent-search-limits": profile.get("search_limits", {}),
+        "x-salesagent-normalization-notes": profile.get("normalization_notes", []),
+        "x-salesagent-common-tenant-endpoints": {
+            "live": [
+                "POST /tenants/preview-adapter",
+                "POST /tenants/provision",
+                "GET /tenants/{tenant_id}/status",
+                "POST /tenants/{tenant_id}/refresh",
+                "GET /tenants/{tenant_id}/sync-history",
+                "PUT /tenants/{tenant_id}/adapter-config",
+                "POST /tenants/{tenant_id}/adapter-config/test-connection",
+            ],
+            "contract_components_only": [
+                "GET /tenants/{tenant_id}/ad-server-objects/search",
+                "GET /tenants/{tenant_id}/inventory-configuration-candidates",
+                "POST /tenants/{tenant_id}/inventory-configurations/preview",
+                "POST /tenants/{tenant_id}/inventory-configurations",
+                "GET /tenants/{tenant_id}/signal-candidates",
+                "POST /tenants/{tenant_id}/signal-mappings/preview",
+                "POST /tenants/{tenant_id}/signal-mappings",
+                "GET /tenants/{tenant_id}/pricing-recommendations",
+            ],
+        },
+        "x-salesagent-common-tenant-operations": {
+            "live": {
+                "POST /tenants/preview-adapter": {
+                    "request": "#/components/schemas/PreviewAdapterRequest",
+                    "response": "#/components/schemas/PreviewAdapterResponse",
+                    "errors": "#/components/schemas/ApiError",
+                },
+                "POST /tenants/provision": {
+                    "request": "#/components/schemas/ProvisionTenantRequest",
+                    "response": "#/components/schemas/ProvisionTenantResponse",
+                    "errors": "#/components/schemas/ApiError",
+                },
+                "GET /tenants/{tenant_id}/status": {"response": "#/components/schemas/TenantStatusResponse"},
+                "POST /tenants/{tenant_id}/refresh": {
+                    "response": "#/components/schemas/RefreshResponse",
+                    "conflict": "#/components/schemas/RefreshConflictResponse",
+                },
+                "GET /tenants/{tenant_id}/sync-history": {"response": "#/components/schemas/ListSyncHistoryResponse"},
+                "PUT /tenants/{tenant_id}/adapter-config": {
+                    "request": "#/components/schemas/AdapterConfig",
+                    "response": "#/components/schemas/AdapterConfigResponse",
+                    "errors": "#/components/schemas/ApiError",
+                },
+                "POST /tenants/{tenant_id}/adapter-config/test-connection": {
+                    "response": "#/components/schemas/TestConnectionResponse",
+                    "errors": "#/components/schemas/ApiError",
+                },
+            },
+            "contract_components_only": {
+                "GET /tenants/{tenant_id}/ad-server-objects/search": {
+                    "request": "#/components/schemas/AdServerObjectSearchRequest",
+                    "response": "#/components/schemas/AdServerObjectSearchResponse",
+                },
+                "GET /tenants/{tenant_id}/inventory-configuration-candidates": {
+                    "response": "#/components/schemas/InventoryConfigurationCandidateListResponse"
+                },
+                "POST /tenants/{tenant_id}/inventory-configurations/preview": {
+                    "request": "#/components/schemas/InventoryConfigurationPreviewRequest",
+                    "response": "#/components/schemas/InventoryConfigurationPreviewResponse",
+                },
+                "POST /tenants/{tenant_id}/inventory-configurations": {
+                    "request": "#/components/schemas/InventoryConfigurationWrite",
+                    "response": "#/components/schemas/InventoryConfigurationResponse",
+                },
+                "POST /tenants/{tenant_id}/signal-mappings/preview": {
+                    "request": "#/components/schemas/SignalMappingPreviewRequest",
+                    "response": "#/components/schemas/SignalMappingPreviewResponse",
+                },
+                "GET /tenants/{tenant_id}/signal-candidates": {
+                    "response": "#/components/schemas/SignalCandidateListResponse"
+                },
+                "POST /tenants/{tenant_id}/signal-mappings": {
+                    "request": "#/components/schemas/SignalMappingWrite",
+                    "response": "#/components/schemas/SignalMappingResponse",
+                },
+                "GET /tenants/{tenant_id}/pricing-recommendations": {
+                    "response": "#/components/schemas/PricingRecommendationResponse"
+                },
+            },
+        },
+    }
+
+
+def build_adapter_openapi_document(adapter_type: str) -> dict[str, Any]:
+    """Build one adapter-specific OpenAPI document by public adapter type."""
+    from src.adapters import ADAPTER_REGISTRY
+
+    canonical_type = _canonical_catalog_adapter_type(adapter_type)
+    if canonical_type is None:
+        raise ValueError(f"Unknown adapter type: {adapter_type!r}")
+
+    adapter_class = ADAPTER_REGISTRY.get(canonical_type)
+    if adapter_class is None:
+        raise ValueError(f"Unknown adapter type: {adapter_type!r}")
+
+    return _build_adapter_openapi_document(canonical_type, adapter_class)
+
+
+def build_adapter_openapi_documents() -> dict[str, dict[str, Any]]:
+    """Build all published adapter OpenAPI documents for static export."""
+    return {
+        adapter_type: build_adapter_openapi_document(adapter_type)
+        for adapter_type in sorted(_ADAPTER_CATALOG_METADATA)
+        if adapter_type in _ADAPTER_CONFIG_TYPED
+    }
+
 
 @tenant_management_api.route("/adapters", methods=["GET"])
 @require_tenant_management_api_key
@@ -548,44 +1289,45 @@ def list_adapters():
             continue
         seen_types.add(registry_key)
 
-        metadata = _ADAPTER_CATALOG_METADATA[registry_key]
-        tier = metadata.get("tier", "live")
+        tier = _ADAPTER_CATALOG_METADATA[registry_key].get("tier", "live")
         if tier_filter is not None and tier != tier_filter:
             continue
-        caps_dataclass = getattr(adapter_class, "capabilities", None)
-        capabilities_summary = (
-            AdapterCapabilitiesSummary(
-                supports_inventory_sync=caps_dataclass.supports_inventory_sync,
-                supports_inventory_profiles=caps_dataclass.supports_inventory_profiles,
-                inventory_entity_label=caps_dataclass.inventory_entity_label,
-                supports_custom_targeting=caps_dataclass.supports_custom_targeting,
-                supports_geo_targeting=caps_dataclass.supports_geo_targeting,
-                supports_dynamic_products=caps_dataclass.supports_dynamic_products,
-                supported_pricing_models=list(caps_dataclass.supported_pricing_models or []),
-                supports_webhooks=caps_dataclass.supports_webhooks,
-                supports_realtime_reporting=caps_dataclass.supports_realtime_reporting,
-            )
-            if caps_dataclass is not None
-            else AdapterCapabilitiesSummary()
-        )
 
-        typed_config = _ADAPTER_CONFIG_TYPED.get(registry_key)
-        connection_schema = typed_config.model_json_schema() if typed_config else {}
-
-        entries.append(
-            AdapterCatalogEntry(
-                type=registry_key,
-                name=metadata["name"],
-                description=metadata["description"],
-                tier=tier,
-                default_channels=list(getattr(adapter_class, "default_channels", []) or []),
-                capabilities=capabilities_summary,
-                connection_schema=connection_schema,
-            )
-        )
+        entries.append(_adapter_catalog_entry(registry_key, adapter_class))
 
     entries.sort(key=lambda e: e.type)
     return jsonify(ListAdaptersResponse(adapters=entries, count=len(entries)).model_dump())
+
+
+@tenant_management_api.route("/adapters/<adapter_type>/capabilities", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=AdapterCapabilitiesResponse, HTTP_404=ApiError))
+def get_adapter_contract_capabilities(adapter_type: str):
+    """Return the detailed tenant-management contract capabilities for one adapter."""
+    from src.adapters import ADAPTER_REGISTRY
+
+    canonical_type = _canonical_catalog_adapter_type(adapter_type)
+    if canonical_type is None:
+        return _api_error("adapter_not_found", f"Unknown adapter type: {adapter_type!r}", 404)
+
+    adapter_class = ADAPTER_REGISTRY.get(canonical_type)
+    if adapter_class is None:
+        return _api_error("adapter_not_found", f"Unknown adapter type: {adapter_type!r}", 404)
+
+    return jsonify(_build_adapter_capabilities(canonical_type, adapter_class).model_dump())
+
+
+@tenant_management_api.route("/adapters/<adapter_type>/openapi.json", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=AdapterOpenApiDocument, HTTP_404=ApiError))
+def get_adapter_contract_openapi(adapter_type: str):
+    """Return the adapter-specific tenant-management contract OpenAPI document."""
+    try:
+        document = build_adapter_openapi_document(adapter_type)
+    except ValueError:
+        return _api_error("adapter_not_found", f"Unknown adapter type: {adapter_type!r}", 404)
+
+    return jsonify(document)
 
 
 @tenant_management_api.route("/tenants", methods=["GET"])

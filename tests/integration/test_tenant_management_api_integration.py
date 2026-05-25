@@ -141,7 +141,11 @@ class TestTenantManagementAPIIntegration:
         assert fw["tier"] == "live"
         assert "olv" in fw["default_channels"]
         assert "ctv" in fw["default_channels"]
+        assert fw["contract_version"] == "2026-05-01"
+        assert fw["capabilities_url"] == "/api/v1/tenant-management/adapters/freewheel/capabilities"
+        assert fw["openapi_url"] == "/api/v1/tenant-management/adapters/freewheel/openapi.json"
         assert fw["capabilities"]["supports_inventory_sync"] is True
+        assert fw["capabilities"]["supports_reporting_sync"] is True
         assert "cpm" in fw["capabilities"]["supported_pricing_models"]
 
         # JSON Schema must carry the discriminator literal so embedders can
@@ -191,6 +195,158 @@ class TestTenantManagementAPIIntegration:
         """Discovery endpoint is gated by the tenant-management API key."""
         response = client.get("/api/v1/tenant-management/adapters")
         assert response.status_code in (401, 403)
+
+    def test_get_adapter_capabilities_returns_contract_details(self, client, mock_api_key_auth):
+        """Per-adapter capabilities expose the contract metadata Storefront needs."""
+        response = client.get(
+            "/api/v1/tenant-management/adapters/freewheel/capabilities",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+
+        assert response.status_code == 200
+        body = response.json
+        assert body["type"] == "freewheel"
+        assert body["contract_version"] == "2026-05-01"
+        assert body["openapi_url"] == "/api/v1/tenant-management/adapters/freewheel/openapi.json"
+        assert body["supports_inventory_sync"] is True
+        assert body["supports_reporting_sync"] is True
+        assert body["supports_reporting"] is True
+        assert body["sync_streams"] == ["inventory", "reporting"]
+        assert "placement" in body["supported_object_types"]
+        assert "audience_segment" in body["supported_signal_types"]
+        pricing_gap = next(
+            feature for feature in body["unsupported_features"] if feature["feature"] == "pricing_recommendations"
+        )
+        assert "pricing recommendations" in pricing_gap["reason"]
+        assert pricing_gap["remediation"]
+
+    def test_get_adapter_capabilities_accepts_gam_alias(self, client, mock_api_key_auth):
+        """The public contract endpoint accepts the legacy GAM alias but returns the canonical type."""
+        response = client.get(
+            "/api/v1/tenant-management/adapters/gam/capabilities",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+
+        assert response.status_code == 200
+        assert response.json["type"] == "google_ad_manager"
+        assert response.json["supports_forecasting"] is True
+        assert response.json["supports_custom_targeting"] is True
+        assert response.json["sync_streams"] == ["inventory", "custom_targeting", "advertisers"]
+        assert "flat_rate" in response.json["supported_pricing_models"]
+
+    def test_get_adapter_openapi_returns_component_contract(self, client, mock_api_key_auth):
+        """Adapter OpenAPI docs are component-focused and avoid advertising unimplemented paths as live."""
+        response = client.get(
+            "/api/v1/tenant-management/adapters/google_ad_manager/openapi.json",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+
+        assert response.status_code == 200
+        document = response.json
+        assert document["openapi"] == "3.1.0"
+        assert document["info"]["version"] == "2026-05-01"
+        assert document["x-salesagent-adapter"] == "google_ad_manager"
+        assert "GAM 1x1" in " ".join(document["x-salesagent-normalization-notes"])
+        assert document["x-salesagent-common-tenant-endpoints"]["live"]
+        assert document["security"] == [{"TenantManagementApiKey": []}]
+        assert "TenantManagementApiKey" in document["components"]["securitySchemes"]
+        assert (
+            "GET /tenants/{tenant_id}/inventory-configuration-candidates"
+            in document["x-salesagent-common-tenant-endpoints"]["contract_components_only"]
+        )
+
+        schemas = document["components"]["schemas"]
+        for schema_name in (
+            "AdapterConfig",
+            "AdapterCapabilities",
+            "ApiError",
+            "TestConnectionResponse",
+            "PreviewAdapterResponse",
+            "TenantStatusResponse",
+            "SetupTaskItem",
+            "StatusSyncsBlock",
+            "AdServerObjectSearchRequest",
+            "AdServerObjectSearchResponse",
+            "AdServerObject",
+            "CreativeFormatClassification",
+            "InventoryConfigurationCandidate",
+            "InventoryConfigurationCandidateListResponse",
+            "InventoryConfigurationWrite",
+            "InventoryConfigurationResponse",
+            "InventoryConfigurationPreviewRequest",
+            "InventoryConfigurationPreviewResponse",
+            "SignalCandidate",
+            "SignalMappingWrite",
+            "SignalMappingResponse",
+            "SignalMappingPreviewRequest",
+            "SignalMappingPreviewResponse",
+            "ReportingForecastSummary",
+            "PricingRecommendation",
+            "PricingRecommendationResponse",
+            "WebhookEvent",
+            "UnsupportedFeature",
+        ):
+            assert schema_name in schemas
+
+        operations = document["x-salesagent-common-tenant-operations"]
+        assert (
+            operations["live"]["POST /tenants/{tenant_id}/adapter-config/test-connection"]["response"]
+            == "#/components/schemas/TestConnectionResponse"
+        )
+        assert schemas["PreviewAdapterRequest"]["properties"]["adapter"] == {
+            "$ref": "#/components/schemas/AdapterConfig"
+        }
+        assert schemas["ProvisionTenantRequest"]["properties"]["adapter"] == {
+            "$ref": "#/components/schemas/AdapterConfig"
+        }
+        assert (
+            operations["contract_components_only"]["GET /tenants/{tenant_id}/ad-server-objects/search"]["response"]
+            == "#/components/schemas/AdServerObjectSearchResponse"
+        )
+        for planned_endpoint in document["x-salesagent-common-tenant-endpoints"]["contract_components_only"]:
+            assert planned_endpoint in operations["contract_components_only"]
+        assert "/tenants/{tenant_id}/inventory-configuration-candidates" not in document["paths"]
+
+    def test_adapter_contract_signal_capabilities_are_consistent(self, client, mock_api_key_auth):
+        """Signal schemas and capabilities use the same adapter support decision."""
+        for adapter_type in ("mock", "broadstreet"):
+            capabilities_response = client.get(
+                f"/api/v1/tenant-management/adapters/{adapter_type}/capabilities",
+                headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            )
+            openapi_response = client.get(
+                f"/api/v1/tenant-management/adapters/{adapter_type}/openapi.json",
+                headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            )
+
+            assert capabilities_response.status_code == 200
+            assert openapi_response.status_code == 200
+            capabilities_body = capabilities_response.json
+            signal_type_schema = openapi_response.json["components"]["schemas"]["SignalCandidate"]["properties"]["type"]
+
+            assert capabilities_body["supported_signal_types"] == []
+            assert capabilities_body["supports_audiences"] is False
+            assert any(
+                feature["feature"] == "custom_targeting" for feature in capabilities_body["unsupported_features"]
+            )
+            assert "enum" not in signal_type_schema
+
+    def test_get_adapter_contract_unknown_type_returns_404(self, client, mock_api_key_auth):
+        """Unknown and parked adapters are not published as contract surfaces."""
+        for adapter_type in ("unknown", "triton"):
+            response = client.get(
+                f"/api/v1/tenant-management/adapters/{adapter_type}/capabilities",
+                headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            )
+            assert response.status_code == 404
+
+    def test_adapter_contract_endpoints_require_api_key(self, client):
+        """Contract endpoints are gated like the rest of tenant-management."""
+        capabilities_response = client.get("/api/v1/tenant-management/adapters/freewheel/capabilities")
+        openapi_response = client.get("/api/v1/tenant-management/adapters/freewheel/openapi.json")
+
+        assert capabilities_response.status_code in (401, 403)
+        assert openapi_response.status_code in (401, 403)
 
     def test_create_minimal_gam_tenant(self, client, mock_api_key_auth):
         """Test creating a minimal GAM tenant with just refresh token."""
