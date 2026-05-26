@@ -19,15 +19,15 @@ logger = logging.getLogger(__name__)
 _SIGNAL_SPEC_STOPWORDS = {
     "adult",
     "adults",
-    "audience",
-    "for",
     "interested",
+    "for",
     "people",
     "targeting",
     "the",
     "users",
     "with",
 }
+_BROAD_SIGNAL_SPEC_TOKENS = {"audience", "audiences", "segment", "segments"}
 
 from adcp.types import PaginationResponse
 from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
@@ -196,6 +196,8 @@ def _signal_matches_spec(signal: Signal, signal_spec: str | None) -> bool:
     spec_tokens = _signal_search_tokens(spec_lower)
     if not spec_tokens:
         return False
+    if spec_tokens <= _BROAD_SIGNAL_SPEC_TOKENS:
+        return True
     signal_tokens = _signal_search_tokens(searchable_text)
     return bool(spec_tokens & signal_tokens)
 

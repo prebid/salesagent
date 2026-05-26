@@ -24,7 +24,7 @@ env:
 
 jobs:
   pinned-smoke:
-    name: Pinned Storyboard Smoke
+    name: Pinned Storyboard Gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -41,14 +41,14 @@ jobs:
         export LOCKFILE_HASH=$(shasum -a 256 uv.lock | awk '{print $1}')
         docker compose up -d --wait --wait-timeout 180
 
-    - name: Run pinned storyboard smoke
+    - name: Run pinned storyboard gate
       env:
         AGENT_URL: http://localhost:8000
         AGENT_TOKEN: ci-test-token
         ADCP_SDK_VERSION: "7.11.0"
         ALLOW_HTTP: "1"
         PROTOCOLS: mcp
-        STORYBOARDS: pagination_integrity_list_accounts
+        STORYBOARDS: capability_discovery,pagination_integrity_list_accounts,get_signals_pagination_integrity,signal_owned
         REPORT_DIR: ${{ runner.temp }}/storyboard-pinned-smoke
         TIMEOUT: "180"
       run: ./scripts/storyboard-check.sh

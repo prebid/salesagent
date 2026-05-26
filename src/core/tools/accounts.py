@@ -163,7 +163,6 @@ def _apply_pagination(
     return paginated, PaginationResponse(
         has_more=has_more,
         cursor=_encode_cursor(offset + max_results) if has_more else None,
-        total_count=len(accounts),
     )
 
 

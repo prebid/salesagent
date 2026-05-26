@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Run the @adcp/sdk media_buy_seller storyboard against a live agent on both
-# transports (MCP + A2A) and print a tight pass/fail summary.
+# Run @adcp/sdk storyboards against a live agent on one or both transports and
+# print a tight pass/fail summary.
 #
-# This is the launch-readiness check that would have caught #71. The reporter
-# ran this exact storyboard against deployed Wonderstruck staging — every
-# protocol drift surfaces here in seconds.
+# By default this runs a capability-driven assessment: the SDK calls
+# get_adcp_capabilities and selects the storyboards for the agent's advertised
+# specialisms. Set STORYBOARD or STORYBOARDS only when deliberately narrowing a
+# local investigation.
 #
 # Usage:
 #   AGENT_URL=https://wonderstruck.sales-agent.scope3.com \
@@ -14,12 +15,19 @@
 #   # Pin the SDK version used by CI/release checks:
 #   ADCP_SDK_VERSION=7.11.0 ./scripts/storyboard-check.sh
 #
-#   # Or pass storyboard ID (default: media_buy_seller)
+#   # Or pass one storyboard ID
 #   STORYBOARD=capability_discovery ./scripts/storyboard-check.sh
 #
 #   # Or run a targeted storyboard smoke set:
 #   STORYBOARDS=pagination_integrity_list_accounts PROTOCOLS=mcp \
 #   ADCP_SDK_VERSION=7.11.0 ./scripts/storyboard-check.sh
+#
+#   # Or run all storyboards resolved from specific specialism bundles:
+#   SPECIALISMS=sales-non-guaranteed,signal-owned \
+#   EXCLUDED_STORYBOARDS=security_baseline ./scripts/storyboard-check.sh
+#
+#   # Or restrict report tracks while keeping capability-driven selection:
+#   TRACKS=core,media_buy,signals ./scripts/storyboard-check.sh
 #
 #   # Or production-path mode (no sandbox routing):
 #   NO_SANDBOX=1 ./scripts/storyboard-check.sh
@@ -48,8 +56,11 @@ AGENT_URL="${AGENT_URL:-}"
 AGENT_TOKEN="${AGENT_TOKEN:-}"
 ADCP_SDK_VERSION="${ADCP_SDK_VERSION:-latest}"
 ADCP_SDK_PACKAGE="@adcp/sdk@${ADCP_SDK_VERSION}"
-STORYBOARD="${STORYBOARD-media_buy_seller}"
+STORYBOARD="${STORYBOARD-}"
 STORYBOARDS="${STORYBOARDS:-}"
+SPECIALISMS="${SPECIALISMS:-}"
+EXCLUDED_STORYBOARDS="${EXCLUDED_STORYBOARDS:-}"
+TRACKS="${TRACKS:-}"
 PROTOCOLS="${PROTOCOLS:-mcp,a2a}"
 TIMEOUT="${TIMEOUT:-180}"
 NO_SANDBOX="${NO_SANDBOX:-0}"
@@ -104,6 +115,41 @@ if [[ "$PROTOCOLS" == "both" ]]; then
     PROTOCOLS="mcp,a2a"
 fi
 
+RESOLVED_STORYBOARDS="$STORYBOARDS"
+if [[ -z "$RESOLVED_STORYBOARDS" && -n "$SPECIALISMS" ]]; then
+    ids_file="${REPORT_DIR}/resolved-storyboards.txt"
+    : >"$ids_file"
+    IFS=',' read -ra SPECIALISM_LIST <<< "$SPECIALISMS"
+    for specialism in "${SPECIALISM_LIST[@]}"; do
+        specialism="${specialism//[[:space:]]/}"
+        if [[ -z "$specialism" ]]; then
+            continue
+        fi
+        specialism_json=$(npx -y "$ADCP_SDK_PACKAGE" storyboard show --specialism "$specialism" --json) || {
+            echo "✗ Failed to resolve storyboard specialism '$specialism'" >&2
+            exit 2
+        }
+        jq -r '.storyboards[].id' <<<"$specialism_json" >>"$ids_file"
+    done
+
+    RESOLVED_IDS=()
+    while IFS= read -r storyboard_id; do
+        if [[ -z "$storyboard_id" ]]; then
+            continue
+        fi
+        if [[ ",$EXCLUDED_STORYBOARDS," == *",$storyboard_id,"* ]]; then
+            continue
+        fi
+        RESOLVED_IDS+=("$storyboard_id")
+    done < <(sort -u "$ids_file")
+
+    if [[ ${#RESOLVED_IDS[@]} -eq 0 ]]; then
+        echo "✗ SPECIALISMS did not resolve to any runnable storyboards." >&2
+        exit 2
+    fi
+    RESOLVED_STORYBOARDS=$(IFS=,; echo "${RESOLVED_IDS[*]}")
+fi
+
 # ─── Per-transport runner ────────────────────────────────────────────────────
 
 # Run the storyboard against one transport and print a one-line summary plus
@@ -117,10 +163,13 @@ run_one() {
     local summary_out="${REPORT_DIR}/storyboard-${protocol}-summary.json"
     local cmd=(npx -y "$ADCP_SDK_PACKAGE" storyboard run "$url")
 
-    if [[ -n "$STORYBOARDS" ]]; then
-        cmd+=(--storyboards "$STORYBOARDS")
+    if [[ -n "$RESOLVED_STORYBOARDS" ]]; then
+        cmd+=(--storyboards "$RESOLVED_STORYBOARDS")
     elif [[ -n "$STORYBOARD" ]]; then
         cmd+=("$STORYBOARD")
+    fi
+    if [[ -n "$TRACKS" ]]; then
+        cmd+=(--tracks "$TRACKS")
     fi
 
     cmd+=(
@@ -242,14 +291,23 @@ PYEOF
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
-if [[ -n "$STORYBOARDS" ]]; then
-    echo "Storyboards: $STORYBOARDS"
+if [[ -n "$RESOLVED_STORYBOARDS" ]]; then
+    echo "Storyboards: $RESOLVED_STORYBOARDS"
 elif [[ -n "$STORYBOARD" ]]; then
     echo "Storyboard: $STORYBOARD"
 else
     echo "Storyboards: capability-driven"
 fi
+if [[ -n "$SPECIALISMS" ]]; then
+    echo "Specialisms: $SPECIALISMS"
+fi
+if [[ -n "$EXCLUDED_STORYBOARDS" ]]; then
+    echo "Excluded:   $EXCLUDED_STORYBOARDS"
+fi
 echo "SDK:        $ADCP_SDK_PACKAGE"
+if [[ -n "$TRACKS" ]]; then
+    echo "Tracks:     $TRACKS"
+fi
 echo "Protocols:  $PROTOCOLS"
 echo "Sandbox:    $([[ $NO_SANDBOX == 1 ]] && echo off || echo on)"
 echo "Reports:    $REPORT_DIR"

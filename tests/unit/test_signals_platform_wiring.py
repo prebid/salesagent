@@ -105,6 +105,25 @@ async def test_get_signals_matches_natural_language_signal_spec_tokens() -> None
 
 
 @pytest.mark.asyncio
+async def test_get_signals_treats_audience_as_broad_catalog_query() -> None:
+    identity = ResolvedIdentity(
+        principal_id="buyer_1",
+        tenant_id="tenant_1",
+        tenant={"ad_server": "google_ad_manager"},
+        protocol="mcp",
+    )
+    req = GetSignalsRequest(signal_spec="audience", pagination={"max_results": 1})
+
+    with patch("src.core.tools.signals._load_tenant_signals", return_value=[]):
+        response = await _get_signals_impl(req, identity)
+
+    assert len(response.signals) == 1
+    assert response.pagination is not None
+    assert response.pagination.has_more is True
+    assert response.pagination.cursor == "1"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("signal_spec", ["EV", "AI", "adults"])
 async def test_get_signals_short_or_stopword_specs_do_not_match_all(signal_spec: str) -> None:
     identity = ResolvedIdentity(

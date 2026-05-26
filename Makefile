@@ -93,7 +93,7 @@ storyboard-smoke:
 	ADCP_SDK_VERSION=$${ADCP_SDK_VERSION:-7.11.0} \
 	ALLOW_HTTP=$${ALLOW_HTTP:-1} \
 	PROTOCOLS=$${PROTOCOLS:-mcp} \
-	STORYBOARDS=$${STORYBOARDS:-pagination_integrity_list_accounts} \
+	STORYBOARDS=$${STORYBOARDS:-capability_discovery,pagination_integrity_list_accounts,get_signals_pagination_integrity,signal_owned} \
 	REPORT_DIR=$${REPORT_DIR:-.context/storyboard-smoke} \
 	./scripts/storyboard-check.sh
 

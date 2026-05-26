@@ -810,7 +810,7 @@ class TestSyncAccountsAccountId:
         assert list_response.pagination is not None
         assert list_response.pagination.has_more is True
         assert list_response.pagination.cursor is not None
-        assert list_response.pagination.total_count == 3
+        assert list_response.pagination.total_count is None
 
 
 class TestSyncAccountsWireStatusEnum:
