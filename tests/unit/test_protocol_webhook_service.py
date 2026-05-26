@@ -2,7 +2,8 @@ import json
 import time
 
 import pytest
-from adcp.webhooks import LegacyWebhookHmacOptions, verify_webhook_hmac
+from adcp import create_a2a_webhook_payload
+from adcp.webhooks import GeneratedTaskStatus, LegacyWebhookHmacOptions, verify_webhook_hmac
 
 from src.core.database.models import PushNotificationConfig
 from src.services import protocol_webhook_service
@@ -23,6 +24,13 @@ class _Session:
     def post(self, url, *, data, headers, timeout):
         self.calls.append({"url": url, "data": data, "headers": headers, "timeout": timeout})
         return _Response()
+
+
+def test_redact_webhook_url_removes_secret_bearing_parts() -> None:
+    assert (
+        protocol_webhook_service._redact_webhook_url("https://user:pass@example.com:8443/hook?sig=secret#frag")
+        == "https://example.com:8443/[redacted]"
+    )
 
 
 @pytest.mark.asyncio
@@ -96,6 +104,35 @@ async def test_protocol_webhook_service_legacy_hmac_body_verifies() -> None:
         body=call["data"],
         options=LegacyWebhookHmacOptions(secret=secret.encode(), sender_identity="agent_1", now=time.time()),
     )
+
+
+@pytest.mark.asyncio
+async def test_protocol_webhook_service_adds_idempotency_key_to_a2a_payload() -> None:
+    service = ProtocolWebhookService()
+    session = _Session()
+    service._session = session
+    payload = create_a2a_webhook_payload(
+        task_id="task_1",
+        status=GeneratedTaskStatus.completed,
+        context_id="ctx_1",
+        result={"media_buy_id": "mb_1"},
+    )
+    config = PushNotificationConfig(
+        id="pnc_1",
+        tenant_id="tenant_1",
+        principal_id="agent_1",
+        url="https://example.com/webhooks",
+        signing_mode="hmac",
+        is_active=True,
+    )
+
+    ok = await service.send_notification(config, payload, {"task_type": "create_media_buy", "tenant_id": "tenant_1"})
+
+    assert ok is True
+    body = json.loads(session.calls[0]["data"])
+    assert body["idempotency_key"]
+    assert body["id"] == "task_1"
+    assert body["contextId"] == "ctx_1"
 
 
 @pytest.mark.asyncio

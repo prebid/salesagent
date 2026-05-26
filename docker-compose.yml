@@ -56,11 +56,14 @@ services:
     environment:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       PYTHONPATH: "/app"
+      SEED_DEMO_AUTO_APPROVE: "${SEED_DEMO_AUTO_APPROVE:-0}"
+      WEBHOOK_SIGNING_KEYS_DIR: "/app/signing_keys"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./audit_logs:/app/audit_logs
+      - adcp_signing_keys:/app/signing_keys
     # ``migrate.py`` then ``seed_demo_data.py``: the second step is dev-only —
     # the seed is idempotent so re-runs are safe, and the env-gated mock-adapter
     # setup it relies on (``ADCP_TESTING``/``ADCP_MULTI_TENANT``) is set on the
@@ -120,6 +123,7 @@ services:
       PYTHONPATH: "/app/.venv/lib/python3.13/site-packages"
       PYTHONUNBUFFERED: "1"
       FLASK_ENV: development
+      WEBHOOK_SIGNING_KEYS_DIR: "/app/signing_keys"
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,6 +150,7 @@ services:
 
       # Optional: Mount audit logs
       - ./audit_logs:/app/audit_logs
+      - adcp_signing_keys:/app/signing_keys
       # Shared cache volumes for faster builds
       - adcp_global_pip_cache:/root/.cache/pip
       - adcp_global_uv_cache:/cache/uv
@@ -158,5 +163,6 @@ services:
 
 volumes:
   adcp_postgres_data:
+  adcp_signing_keys:
   adcp_global_pip_cache:
   adcp_global_uv_cache:

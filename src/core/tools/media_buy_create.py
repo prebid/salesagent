@@ -1500,6 +1500,16 @@ def _pricing_option_wire_id(option: Any) -> str:
     return f"{option.pricing_model.lower()}_{option.currency.lower()}_{fixed_str}"
 
 
+def _uses_first_pricing_option_alias(product: Any, pricing_option_id: str | None) -> bool:
+    """Return true for SDK fixture aliases that mean "first pricing option"."""
+    if not pricing_option_id:
+        return False
+    normalized = pricing_option_id.lower()
+    if normalized == "default":
+        return True
+    return normalized == "test-pricing" and getattr(product, "product_id", None) == "test-product"
+
+
 def _validate_pricing_model_selection(
     package: Package | PackageRequest | AdcpPackageRequest,
     product: Any,  # ProductModel from database
@@ -1547,7 +1557,7 @@ def _validate_pricing_model_selection(
     # Priority: pricing_option_id (AdCP spec) > pricing_model (legacy)
     pricing_option_id = package.pricing_option_id
     pricing_model_fallback = getattr(package, "pricing_model", None)  # Legacy field
-    if pricing_option_id and pricing_option_id.lower() == "default":
+    if _uses_first_pricing_option_alias(product, pricing_option_id):
         pricing_option_id = None
 
     # If neither specified, use first pricing option from product

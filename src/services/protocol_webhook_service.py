@@ -25,7 +25,7 @@ import requests
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import extract_webhook_result_data
 from adcp.types import McpWebhookPayload
-from adcp.webhooks import sign_legacy_webhook
+from adcp.webhooks import generate_webhook_idempotency_key, sign_legacy_webhook
 from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
@@ -62,6 +62,17 @@ def _normalize_localhost_for_docker(url: str) -> str:
     except Exception:
         logger.debug("Docker URL rewrite failed, using original URL", exc_info=True)
     return url
+
+
+def _redact_webhook_url(url: str) -> str:
+    """Return a log-safe webhook URL without credentials, path, query, or fragment."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or parsed.netloc or "[invalid-url]"
+        port = f":{parsed.port}" if parsed.port else ""
+        return urlunparse(parsed._replace(netloc=f"{host}{port}", path="/[redacted]", query="", fragment=""))
+    except Exception:
+        return "[invalid-url]"
 
 
 class ProtocolWebhookService:
@@ -104,10 +115,15 @@ class ProtocolWebhookService:
 
         is_valid, error = WebhookURLValidator.validate_delivery_url(push_notification_config.url)
         if not is_valid:
-            logger.error("Refusing protocol webhook delivery to %s: %s", push_notification_config.url, error)
+            logger.error(
+                "Refusing protocol webhook delivery to %s: %s",
+                _redact_webhook_url(push_notification_config.url),
+                error,
+            )
             return False
 
         url = _normalize_localhost_for_docker(push_notification_config.url)
+        log_safe_url = _redact_webhook_url(url)
 
         # Prepare headers
         timestamp = datetime.now(UTC).isoformat()
@@ -119,7 +135,9 @@ class ProtocolWebhookService:
 
         # Log sanitized config (exclude sensitive authentication_token)
         safe_config = {
-            "url": push_notification_config.url if hasattr(push_notification_config, "url") else None,
+            "url": _redact_webhook_url(push_notification_config.url)
+            if hasattr(push_notification_config, "url")
+            else None,
             "authentication_type": (
                 push_notification_config.authentication_type
                 if hasattr(push_notification_config, "authentication_type")
@@ -145,6 +163,7 @@ class ProtocolWebhookService:
         payload_dict: dict[str, Any]
         if isinstance(payload, (Task, TaskStatusUpdateEvent)):
             payload_dict = MessageToDict(payload, preserving_proto_field_name=False)
+            payload_dict.setdefault("idempotency_key", generate_webhook_idempotency_key())
         elif isinstance(payload, McpWebhookPayload):
             payload_dict = payload.model_dump(mode="json", exclude_none=True)
         elif isinstance(payload, dict):
@@ -190,7 +209,7 @@ class ProtocolWebhookService:
                     active_credential=active_credential,
                 )
             except SigningConfigurationError as exc:
-                logger.error("Cannot sign protocol webhook for %s: %s", url, exc)
+                logger.error("Cannot sign protocol webhook for %s: %s", log_safe_url, exc)
                 return False
 
         # Send notification with retry logic and logging
@@ -255,7 +274,7 @@ class ProtocolWebhookService:
         """Send webhook with exponential backoff retry logic, logging, and audit trail."""
         is_valid, error = WebhookURLValidator.validate_delivery_url(url)
         if not is_valid:
-            logger.error("Refusing protocol webhook delivery to %s: %s", url, error)
+            logger.error("Refusing protocol webhook delivery to %s: %s", _redact_webhook_url(url), error)
             return False
 
         # Calculate payload size for metrics
@@ -280,6 +299,7 @@ class ProtocolWebhookService:
         # Create webhook delivery log entry
         log_id = str(uuid4())
         start_time = time.time()
+        log_safe_url = _redact_webhook_url(url)
 
         # Log to audit system (start)
         audit_logger = None
@@ -289,7 +309,13 @@ class ProtocolWebhookService:
 
         for attempt in range(max_attempts):
             try:
-                logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
+                logger.info(
+                    "Sending webhook for task %s to %s (attempt %s/%s)",
+                    task_id,
+                    log_safe_url,
+                    attempt + 1,
+                    max_attempts,
+                )
 
                 def _post() -> requests.Response:
                     return self._session.post(url, data=body_bytes, headers=headers, timeout=10.0)

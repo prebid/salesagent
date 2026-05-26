@@ -21,6 +21,10 @@ on:
 
 env:
   CONDUCTOR_PORT: "8000"
+  SEED_DEMO_AUTO_APPROVE: "1"
+
+permissions:
+  contents: read
 
 jobs:
   pinned-smoke:
@@ -84,6 +88,7 @@ jobs:
         docker compose up -d --wait --wait-timeout 180
 
     - name: Run pinned sales non-guaranteed assessment
+      shell: bash
       env:
         AGENT_URL: http://localhost:8000
         AGENT_TOKEN: ci-test-token
@@ -92,11 +97,18 @@ jobs:
         PROTOCOLS: mcp,a2a
         SPECIALISMS: sales-non-guaranteed
         EXCLUDED_STORYBOARDS: security_baseline
-        STORYBOARD_SOFT_FAIL: "1"
         BETWEEN_PROTOCOLS_HOOK: ./scripts/storyboard-reset-compose.sh
         REPORT_DIR: ${{ runner.temp }}/storyboard-sales-non-guaranteed
         TIMEOUT: "240"
-      run: ./scripts/storyboard-check.sh
+      run: |
+        set +e
+        ./scripts/storyboard-check.sh
+        rc=$?
+        if [[ $rc -eq 1 ]]; then
+          echo "Non-blocking storyboard assertion failures recorded; see uploaded reports."
+          exit 0
+        fi
+        exit "$rc"
 
     - name: Upload storyboard reports
       if: always()
@@ -142,6 +154,7 @@ jobs:
         docker compose up -d --wait --wait-timeout 180
 
     - name: Run latest-SDK full assessment
+      shell: bash
       env:
         AGENT_URL: http://localhost:8000
         AGENT_TOKEN: ci-test-token
@@ -149,10 +162,18 @@ jobs:
         ALLOW_HTTP: "1"
         PROTOCOLS: mcp,a2a
         STORYBOARD: ""
-        STORYBOARD_SOFT_FAIL: "1"
+        BETWEEN_PROTOCOLS_HOOK: ./scripts/storyboard-reset-compose.sh
         REPORT_DIR: ${{ runner.temp }}/storyboard-latest-sdk
         TIMEOUT: "240"
-      run: ./scripts/storyboard-check.sh
+      run: |
+        set +e
+        ./scripts/storyboard-check.sh
+        rc=$?
+        if [[ $rc -eq 1 ]]; then
+          echo "Non-blocking storyboard assertion failures recorded; see uploaded reports."
+          exit 0
+        fi
+        exit "$rc"
 
     - name: Upload storyboard reports
       if: always()

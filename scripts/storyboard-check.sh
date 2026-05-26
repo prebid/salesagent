@@ -337,7 +337,7 @@ fi
 echo "Protocols:  $PROTOCOLS"
 echo "Sandbox:    $([[ $NO_SANDBOX == 1 ]] && echo off || echo on)"
 if [[ -n "$WEBHOOK_RECEIVER" || -n "$WEBHOOK_RECEIVER_PUBLIC_URL" || "$WEBHOOK_RECEIVER_AUTO_TUNNEL" == "1" ]]; then
-    echo "Webhooks:   receiver=${WEBHOOK_RECEIVER:-sdk-default} auto_tunnel=$WEBHOOK_RECEIVER_AUTO_TUNNEL public_url=${WEBHOOK_RECEIVER_PUBLIC_URL:-none}"
+    echo "Webhooks:   receiver=${WEBHOOK_RECEIVER:-sdk-default} auto_tunnel=$WEBHOOK_RECEIVER_AUTO_TUNNEL public_url=$([[ -n "$WEBHOOK_RECEIVER_PUBLIC_URL" ]] && echo '[configured]' || echo 'none')"
 fi
 echo "Reports:    $REPORT_DIR"
 echo
@@ -379,11 +379,19 @@ for i in "${!VALID_PROTOCOLS[@]}"; do
     # idempotency keys per scenario. Running MCP and A2A back-to-back against
     # the same DB causes the second protocol's idempotency replay to return
     # the cached create response while reading the post-update DB state.
-    # Set BETWEEN_PROTOCOLS_HOOK to a shell command that resets the seller's
-    # storage between protocol runs.
+    # Set BETWEEN_PROTOCOLS_HOOK to an executable path that resets the seller's
+    # storage between protocol runs. Arguments are intentionally unsupported so
+    # CI cannot accidentally turn this into shell eval.
     if [[ "$i" -lt $((${#VALID_PROTOCOLS[@]} - 1)) && -n "${BETWEEN_PROTOCOLS_HOOK:-}" ]]; then
         echo "── Reset between protocols ──"
-        eval "$BETWEEN_PROTOCOLS_HOOK" || echo "  (hook returned non-zero; continuing)"
+        if [[ "$BETWEEN_PROTOCOLS_HOOK" =~ [[:space:]] ]]; then
+            echo "✗ Reset hook must be an executable path without arguments: $BETWEEN_PROTOCOLS_HOOK" >&2
+            exit 2
+        fi
+        if ! "$BETWEEN_PROTOCOLS_HOOK"; then
+            echo "✗ Reset hook failed: $BETWEEN_PROTOCOLS_HOOK" >&2
+            exit 2
+        fi
         echo
     fi
 done

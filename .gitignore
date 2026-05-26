@@ -1,4 +1,6 @@
 # Local configuration
+.context/
+signing_keys/
 config.json
 __pycache__
 adcp.db

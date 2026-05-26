@@ -40,11 +40,14 @@ resolves the storyboard set from `sales-non-guaranteed`, excludes only
 `security_baseline` for the local Docker auth reasons described below, and
 uploads both storyboard reports and compose logs. CI runs this lane on both
 MCP and A2A and resets the compose stack between protocol runs so each
-transport starts from clean seeded state.
+transport starts from clean seeded state. The storyboard workflow explicitly
+sets `SEED_DEMO_AUTO_APPROVE=1` so the local seed exercises auto-approval paths;
+ordinary compose runs preserve the tenant's manual-review setting.
 
-This job is soft-fail. A red storyboard result should create or update the
-burn-down list, not block unrelated PRs until the lane is green enough to
-promote.
+This job remaps storyboard assertion failures (`exit 1`) to a non-blocking
+GitHub result, while reset-hook and infrastructure failures still fail the job.
+A red storyboard report should create or update the burn-down list, not block
+unrelated PRs until the lane is green enough to promote.
 
 Known local/CI limitation: `security_baseline` remains part of the release gate,
 where publishable auth metadata and HTTPS-style test-kit credentials are
@@ -54,9 +57,8 @@ environment reasons rather than product regressions.
 ### 3. Latest SDK Drift
 
 The same workflow runs a scheduled latest-SDK assessment with
-`ADCP_SDK_VERSION=latest` and `STORYBOARD_SOFT_FAIL=1`. This job should surface
-new failures quickly, but it does not block merges while the failure list is
-being triaged.
+`ADCP_SDK_VERSION=latest`. This job should surface new failures quickly, but it
+does not block merges while the failure list is being triaged.
 
 Use it to answer: "What did the current storyboard suite start expecting?"
 
@@ -90,12 +92,21 @@ npx -y @adcp/sdk@7.11.0 storyboard show --specialism sales-non-guaranteed
 npx -y @adcp/sdk@7.11.0 storyboard show --specialism signal-owned
 ```
 
-Pinned `sales-non-guaranteed` assessment, matching the non-blocking CI lane:
+Pinned `sales-non-guaranteed` assessment. Start or restart the compose stack
+with `SEED_DEMO_AUTO_APPROVE=1` first so the initial MCP pass sees the same
+auto-approval seed state as CI; the between-protocol reset hook applies that
+same seed state before A2A. `STORYBOARD_SOFT_FAIL=1` is only for local
+iteration so the command writes reports without failing the shell:
+
+```bash
+SEED_DEMO_AUTO_APPROVE=1 CONDUCTOR_PORT=8000 make compose-up
+```
 
 ```bash
 AGENT_URL=http://localhost:8000 \
 AGENT_TOKEN=ci-test-token \
 ADCP_SDK_VERSION=7.11.0 \
+SEED_DEMO_AUTO_APPROVE=1 \
 ALLOW_HTTP=1 \
 PROTOCOLS=mcp,a2a \
 SPECIALISMS=sales-non-guaranteed \
@@ -144,6 +155,7 @@ ALLOW_HTTP=1 \
 PROTOCOLS=mcp,a2a \
 STORYBOARD= \
 STORYBOARD_SOFT_FAIL=1 \
+BETWEEN_PROTOCOLS_HOOK=./scripts/storyboard-reset-compose.sh \
 REPORT_DIR=.context/storyboard-latest \
 ./scripts/storyboard-check.sh
 ```
