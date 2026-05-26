@@ -20,6 +20,8 @@ agent and the ``format_id`` is in :data:`STANDARD_FORMAT_IDS`. See
 
 from __future__ import annotations
 
+from typing import Any
+
 from adcp.canonical_formats.fixtures import load_v1_reference_catalog
 from adcp.types import FormatId as LibraryFormatId
 
@@ -149,9 +151,57 @@ def _audio_vast_format() -> Format:
     )
 
 
+def _normalize_tracker_asset(asset: dict[str, Any]) -> dict[str, Any]:
+    """Convert SDK beta tracker assets to the current schema's URL shape."""
+    if asset.get("item_type") != "individual" or asset.get("asset_type") != "pixel_tracker":
+        return asset
+
+    asset_id = str(asset.get("asset_id") or "")
+    role_by_id = {
+        "impression_tracker": "impression_tracker",
+        "viewability_tracker": "viewability_tracker",
+        "click_tracker": "click_tracker",
+    }
+    role = role_by_id.get(asset_id, "third_party_tracker")
+    raw_requirements = asset.get("requirements")
+    requirements: dict[str, Any] = raw_requirements if isinstance(raw_requirements, dict) else {}
+
+    return {
+        "item_type": "individual",
+        "asset_id": asset_id,
+        "asset_role": asset.get("asset_role") or role,
+        "asset_type": "url",
+        "required": bool(asset.get("required", False)),
+        "requirements": {
+            "role": role,
+            "protocols": ["https"],
+            "macro_support": True,
+            **requirements,
+        },
+    }
+
+
+def _normalize_sdk_assets(value: Any) -> Any:
+    """Recursively normalize SDK fixture assets before publishing locally."""
+    if isinstance(value, list):
+        return [_normalize_sdk_assets(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    normalized = _normalize_tracker_asset(dict(value))
+    if "assets" in normalized:
+        normalized["assets"] = _normalize_sdk_assets(normalized["assets"])
+    return normalized
+
+
 def _format_from_fixture(raw: dict) -> Format:
     """Parse one SDK reference-catalog entry into the local extended Format."""
-    return Format.model_validate(raw)
+    payload = dict(raw)
+    if "assets" in payload:
+        payload["assets"] = _normalize_sdk_assets(payload["assets"])
+    if "assets_required" in payload:
+        payload["assets_required"] = _normalize_sdk_assets(payload["assets_required"])
+    return Format.model_validate(payload)
 
 
 def _clone_with_legacy_id(source: Format, legacy_id: str, name: str | None = None) -> Format:

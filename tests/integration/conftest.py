@@ -176,6 +176,7 @@ def test_tenant_with_data(integration_db):
             subdomain=tenant_data["subdomain"],
             is_active=tenant_data["is_active"],
             ad_server="mock",  # Mock adapter is accepted in test environments (ADCP_TESTING=true)
+            default_gam_advertiser_id="test_adv",
             auth_setup_mode=False,  # Disable setup mode for production-ready auth
             auto_approve_format_ids=[],  # JSONType expects list, not json.dumps()
             human_review_required=False,
@@ -306,6 +307,7 @@ def sample_tenant(integration_db):
             subdomain="test",
             is_active=True,
             ad_server="mock",  # Mock adapter is accepted in test environments (ADCP_TESTING=true)
+            default_gam_advertiser_id="test_adv",
             auth_setup_mode=False,  # Disable setup mode for production-ready auth
             enable_axe_signals=True,
             authorized_emails=["test@example.com"],

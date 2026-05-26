@@ -276,5 +276,9 @@ class TestMalformedFormatIdObjects:
             ]
         )
         assert len(req.format_ids) == 2
-        assert req.format_ids[0].id == "display_300x250"
-        assert req.format_ids[1].id == "video_16x9"
+        assert req.format_ids[0].id == "display_image"
+        assert req.format_ids[0].width == 300
+        assert req.format_ids[0].height == 250
+        assert req.format_ids[1].id == "video_standard"
+        assert req.format_ids[1].width == 16
+        assert req.format_ids[1].height == 9

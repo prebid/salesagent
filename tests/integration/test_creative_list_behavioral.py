@@ -811,7 +811,7 @@ class TestListCreativeObjectConstruction:
         assert len(response.creatives) == 1
         creative = response.creatives[0]
         assert creative.format_id.width == 300
-        assert creative.format_id.height is None
+        assert creative.format_id.height == 250
 
     def test_invalid_status_defaults_to_pending_review(self, integration_db):
         """Spec: unknown status string defaults to pending_review."""

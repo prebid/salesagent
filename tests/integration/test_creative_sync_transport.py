@@ -281,15 +281,7 @@ class TestSyncStrictModeAbortTransport:
             )
 
         assert result.is_error, "Strict mode should error on missing package"
-        # Each transport surfaces the typed error in its own envelope:
-        # ``IMPL`` and A2A reconstruct the ``AdCPNotFoundError`` class,
-        # while ``MCP`` exposes the ``NOT_FOUND`` code in ToolError text.
-        if transport in (Transport.IMPL, Transport.A2A):
-            assert isinstance(result.error, AdCPNotFoundError)
-        else:
-            assert "NOT_FOUND" in str(result.error), (
-                f"MCP error should carry structured NOT_FOUND code; got {result.error!r}"
-            )
+        assert isinstance(result.error, AdCPNotFoundError)
 
 
 @pytest.mark.requires_db
@@ -851,16 +843,13 @@ class TestAssignmentFormatCompatibility:
         from tests.factories import (
             MediaBuyFactory,
             MediaPackageFactory,
-            PrincipalFactory,
             ProductFactory,
-            TenantFactory,
         )
 
         pkg_id = "pkg_fmt_check"
 
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            tenant, principal = env.setup_default_data()
 
             # Product only supports video_30s format
             product = ProductFactory(
@@ -906,16 +895,13 @@ class TestAssignmentResultFields:
         from tests.factories import (
             MediaBuyFactory,
             MediaPackageFactory,
-            PrincipalFactory,
             ProductFactory,
-            TenantFactory,
         )
 
         pkg_id = "pkg_assign_ok"
 
         with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            tenant, principal = env.setup_default_data()
 
             # Product supports the default display format
             product = ProductFactory(

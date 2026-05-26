@@ -83,6 +83,7 @@ def init_db(exit_on_error=False):
                     billing_plan="standard",
                     ad_server=None,  # No adapter - user must configure
                     enable_axe_signals=False,  # User should explicitly enable
+                    default_gam_advertiser_id="test-advertiser" if create_demo_tenant else None,
                     admin_token=admin_token,
                 )
 

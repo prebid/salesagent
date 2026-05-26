@@ -70,6 +70,17 @@ class TestStandardFormatCatalog:
             # before comparing to avoid the cosmetic mismatch.
             assert str(fmt.format_id.agent_url).rstrip("/") == STANDARD_AGENT_URL
 
+    def test_every_entry_serializes_to_adcp_output_schema(self):
+        """Published local catalog entries must validate at the MCP output boundary."""
+        for fmt_id, fmt in STANDARD_FORMATS.items():
+            payload = fmt.model_dump(mode="json", exclude_none=True)
+            validated = Format.model_validate(payload)
+            assert validated.format_id.id == fmt_id
+
+            for asset in payload.get("assets") or []:
+                if asset.get("item_type") == "individual":
+                    assert asset.get("asset_type") != "pixel_tracker", fmt_id
+
     def test_get_known_format_returns_object(self):
         fmt = get_standard_format("display_image")
         assert fmt is not None

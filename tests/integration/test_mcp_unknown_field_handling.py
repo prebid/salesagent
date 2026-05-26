@@ -10,8 +10,8 @@ import os
 from unittest.mock import patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from src.core.exceptions import AdCPInvalidRequestError
 from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -40,12 +40,12 @@ class TestMcpDevMode:
             assert result is not None
 
     def test_unknown_field_rejected(self, integration_db):
-        """Dev mode: unknown field causes ToolError — loud failure for schema drift detection."""
+        """Dev mode: unknown field causes a typed invalid request error."""
         from tests.harness.product import ProductEnv
 
         with ProductEnv(tenant_id=TENANT_ID) as env:
             _create_tenant_with_product()
-            with pytest.raises(ToolError, match="nonsense_field"):
+            with pytest.raises(AdCPInvalidRequestError, match="nonsense_field"):
                 env.call_mcp(brief="test ads", nonsense_field="bar")
 
     def test_deprecated_field_translated_even_in_dev(self, integration_db):
