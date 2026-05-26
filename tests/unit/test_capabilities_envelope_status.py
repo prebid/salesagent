@@ -5,9 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
 from adcp.decisioning import DecisioningCapabilities
-from adcp.decisioning.capabilities import MediaBuy
+from adcp.decisioning.capabilities import MediaBuy, WebhookSigning
 
 
 def test_sdk_capabilities_response_emits_status_natively() -> None:
@@ -17,82 +16,63 @@ def test_sdk_capabilities_response_emits_status_natively() -> None:
     assert capabilities_response(["media_buy"])["status"] == "completed"
 
 
-@pytest.mark.asyncio
-async def test_webhook_shim_is_installed_on_platform_handler() -> None:
-    """Importing the shim module installs the remaining webhook patch."""
+def test_webhook_signing_uses_sdk_native_projection() -> None:
+    """Importing the helper module no longer monkey-patches the SDK handler."""
     from adcp.decisioning.handler import PlatformHandler
 
     from core.platforms import _capabilities_envelope
 
-    assert PlatformHandler.get_adcp_capabilities is _capabilities_envelope._get_adcp_capabilities_patched
+    assert not hasattr(_capabilities_envelope, "_get_adcp_capabilities_patched")
+    assert PlatformHandler.get_adcp_capabilities.__module__ == "adcp.decisioning.handler"
 
 
-@pytest.mark.asyncio
-async def test_webhook_signing_capability_appended() -> None:
-    """Webhook signing capability is populated from the tenant-specific helper."""
-    import core.platforms._capabilities_envelope as mod
-    from core.platforms._capabilities_envelope import (
-        _ORIGINAL,
-        _get_adcp_capabilities_patched,
+def test_request_scoped_capabilities_adds_webhook_signing() -> None:
+    """Tenant webhook signing support flows through the typed SDK hook."""
+    from core.platforms._capabilities_envelope import capabilities_for_request
+
+    base = DecisioningCapabilities(
+        webhook_signing_managed_externally=True,
+        webhook_signing=WebhookSigning(supported=False, legacy_hmac_fallback=True),
     )
+    context = SimpleNamespace(tenant_id="tenant_1")
 
-    async def _original(self, params, context):  # noqa: ANN001
-        return {"status": "completed", "adcp": {}, "supported_protocols": ["media_buy"]}
+    with (
+        patch("core.platforms._capabilities_envelope._publisher_domains_for_tenant_id", return_value=[]),
+        patch(
+            "src.services.webhook_signing.load_active_signing_credential",
+            return_value=SimpleNamespace(alg="ed25519"),
+        ) as load_mock,
+    ):
+        scoped = capabilities_for_request(base, context=context)
 
-    capability = {
+    assert scoped is not None
+    assert scoped.webhook_signing_managed_externally is True
+    assert scoped.webhook_signing is not None
+    assert scoped.webhook_signing.model_dump(mode="json", exclude_none=True) == {
         "supported": True,
         "profile": "adcp/webhook-signing/v1",
         "algorithms": ["ed25519"],
         "legacy_hmac_fallback": True,
     }
-
-    mod._ORIGINAL = _original
-    try:
-        with patch(
-            "core.platforms._capabilities_envelope._webhook_signing_for_tenant_id",
-            return_value=capability,
-        ) as webhook_mock:
-            result = await _get_adcp_capabilities_patched(object(), context=SimpleNamespace(tenant_id="tenant_1"))
-        assert result["webhook_signing"] == capability
-        webhook_mock.assert_called_once_with("tenant_1")
-    finally:
-        mod._ORIGINAL = _ORIGINAL
-
-
-@pytest.mark.asyncio
-async def test_webhook_signing_capability_does_not_clobber_sdk_output() -> None:
-    """If the SDK/projected capabilities already include webhook_signing, keep it."""
-    import core.platforms._capabilities_envelope as mod
-    from core.platforms._capabilities_envelope import (
-        _ORIGINAL,
-        _get_adcp_capabilities_patched,
-    )
-
-    existing = {"supported": False}
-
-    async def _original(self, params, context):  # noqa: ANN001
-        return {"status": "completed", "webhook_signing": existing}
-
-    mod._ORIGINAL = _original
-    try:
-        with patch("core.platforms._capabilities_envelope._webhook_signing_for_tenant_id") as webhook_mock:
-            result = await _get_adcp_capabilities_patched(object())
-        assert result["webhook_signing"] == existing
-        webhook_mock.assert_not_called()
-    finally:
-        mod._ORIGINAL = _ORIGINAL
+    load_mock.assert_called_once_with(tenant_id="tenant_1", signing_mode="rfc9421")
 
 
 def test_request_scoped_capabilities_adds_portfolio_domains() -> None:
     """Tenant publisher domains flow through the SDK's typed capabilities hook."""
     from core.platforms._capabilities_envelope import capabilities_for_request
 
-    base = DecisioningCapabilities(media_buy=MediaBuy(supported_pricing_models=["cpm"]))
+    base = DecisioningCapabilities(
+        media_buy=MediaBuy(supported_pricing_models=["cpm"]),
+        webhook_signing=WebhookSigning(supported=False, legacy_hmac_fallback=True),
+    )
     context = SimpleNamespace(tenant_id="tenant_1")
 
-    with patch(
-        "core.platforms._capabilities_envelope._publisher_domains_for_tenant_id",
-        return_value=["alpha.com", "mike.com", "zeta.com"],
+    with (
+        patch(
+            "core.platforms._capabilities_envelope._publisher_domains_for_tenant_id",
+            return_value=["alpha.com", "mike.com", "zeta.com"],
+        ),
+        patch("src.services.webhook_signing.load_active_signing_credential", return_value=None),
     ):
         scoped = capabilities_for_request(base, context=context)
 
@@ -110,9 +90,15 @@ def test_request_scoped_capabilities_omits_empty_portfolio_domains() -> None:
     """Empty publisher-domain sets return None so the base capabilities project."""
     from core.platforms._capabilities_envelope import capabilities_for_request
 
-    base = DecisioningCapabilities(media_buy=MediaBuy(supported_pricing_models=["cpm"]))
+    base = DecisioningCapabilities(
+        media_buy=MediaBuy(supported_pricing_models=["cpm"]),
+        webhook_signing=WebhookSigning(supported=False, legacy_hmac_fallback=True),
+    )
 
-    with patch("core.platforms._capabilities_envelope._publisher_domains_for_tenant_id", return_value=[]):
+    with (
+        patch("core.platforms._capabilities_envelope._publisher_domains_for_tenant_id", return_value=[]),
+        patch("src.services.webhook_signing.load_active_signing_credential", return_value=None),
+    ):
         scoped = capabilities_for_request(base, context=SimpleNamespace(tenant_id="tenant_1"))
 
     assert scoped is None
@@ -123,7 +109,10 @@ def test_webhook_signing_unsupported_without_current_tenant() -> None:
     from core.platforms._capabilities_envelope import _webhook_signing_for_current_tenant
 
     with patch("core.platforms._capabilities_envelope.current_tenant", return_value=None):
-        assert _webhook_signing_for_current_tenant() == {"supported": False, "legacy_hmac_fallback": True}
+        assert _webhook_signing_for_current_tenant().model_dump(mode="json", exclude_none=True) == {
+            "supported": False,
+            "legacy_hmac_fallback": True,
+        }
 
 
 def test_webhook_signing_supported_for_active_local_credential() -> None:
@@ -136,7 +125,7 @@ def test_webhook_signing_supported_for_active_local_credential() -> None:
             "src.services.webhook_signing.load_active_signing_credential", return_value=SimpleNamespace(alg="ed25519")
         ) as load_mock,
     ):
-        assert _webhook_signing_for_current_tenant() == {
+        assert _webhook_signing_for_current_tenant().model_dump(mode="json", exclude_none=True) == {
             "supported": True,
             "profile": "adcp/webhook-signing/v1",
             "algorithms": ["ed25519"],
@@ -157,5 +146,8 @@ def test_webhook_signing_unsupported_when_credential_load_fails() -> None:
             side_effect=SigningConfigurationError("failed to read PEM"),
         ) as load_mock,
     ):
-        assert _webhook_signing_for_current_tenant() == {"supported": False, "legacy_hmac_fallback": True}
+        assert _webhook_signing_for_current_tenant().model_dump(mode="json", exclude_none=True) == {
+            "supported": False,
+            "legacy_hmac_fallback": True,
+        }
     load_mock.assert_called_once_with(tenant_id="tenant_1", signing_mode="rfc9421")

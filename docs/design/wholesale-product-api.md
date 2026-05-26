@@ -1,7 +1,13 @@
 # Wholesale Product API
 
-**Status:** Draft
+**Status:** Design note
 **Last updated:** 2026-05-26
+
+For the implemented end-to-end API guide, use
+[Embedded Wholesale Products API](../integration/embedded-wholesale-products-api.md).
+This document explains the model and tradeoffs; the integration guide and
+generated Tenant Management OpenAPI spec are authoritative for exact request
+and response shapes.
 
 ## Summary
 
@@ -203,12 +209,12 @@ candidate/preview/operator-read setup contract is incomplete.
 ### Inventory Sync
 
 ```http
-POST /api/v1/tenants/{tenant_id}/inventory/sync
-GET  /api/v1/tenants/{tenant_id}/inventory/sync
+POST /api/v1/tenant-management/tenants/{tenant_id}/refresh
+GET  /api/v1/tenant-management/tenants/{tenant_id}/status
 ```
 
-The POST starts or requests a refresh of the tenant's adapter inventory cache.
-The GET returns the latest sync state:
+The POST requests a refresh across the tenant's sync streams. The GET returns
+the latest tenant status, including the `syncs` block:
 
 ```json
 {
@@ -226,13 +232,13 @@ The GET returns the latest sync state:
 ```
 
 Adapter-specific setup pages can keep their existing endpoints, but the
-embedding storefront needs this generic sync surface so it does not need to
-special-case every adapter.
+embedding storefront needs this generic refresh/status surface so it does not
+need to special-case every adapter.
 
 ### Adapter Capability Discovery
 
 ```http
-GET /api/v1/tenants/{tenant_id}/inventory/adapter-capabilities
+GET /api/v1/tenant-management/tenants/{tenant_id}/inventory/adapter-capabilities
 ```
 
 Returns the adapter-specific selector vocabulary, searchable fields, execution
@@ -285,7 +291,7 @@ binding requirements, and broad composition capabilities.
 ### Inventory Selector Search
 
 ```http
-GET /api/v1/tenants/{tenant_id}/inventory/selectors
+GET /api/v1/tenant-management/tenants/{tenant_id}/inventory/selectors
 ```
 
 Query parameters:
@@ -329,7 +335,8 @@ server live during storefront autocomplete.
 ### Publisher Property Discovery
 
 ```http
-GET /api/v1/tenants/{tenant_id}/inventory/publisher-properties
+GET  /api/v1/tenant-management/tenants/{tenant_id}/inventory/publisher-properties
+POST /api/v1/tenant-management/tenants/{tenant_id}/inventory/publisher-properties:lookup
 ```
 
 Returns the publisher domains and property selectors that can be used in a
@@ -382,7 +389,7 @@ URL on embedded/shared-agent deployments.
 ### Creative Format Discovery
 
 ```http
-GET /api/v1/tenants/{tenant_id}/creative-formats
+GET /api/v1/tenant-management/tenants/{tenant_id}/creative-formats
 ```
 
 Returns creative formats available for wholesale product authoring. Internally this should
@@ -420,7 +427,7 @@ not invent a format shape that is unavailable from the creative-format catalog.
 ### Signal Candidate Discovery
 
 ```http
-GET /api/v1/tenants/{tenant_id}/signals/candidates
+GET /api/v1/tenant-management/tenants/{tenant_id}/signals/candidates
 ```
 
 Returns adapter objects that can become AdCP-visible signals. This endpoint is
@@ -491,11 +498,11 @@ Adapter coverage:
 ### Signal Mapping Writes
 
 ```http
-GET    /api/v1/tenants/{tenant_id}/signals/mappings
-POST   /api/v1/tenants/{tenant_id}/signals/mappings
-PATCH  /api/v1/tenants/{tenant_id}/signals/mappings/{signal_id}
-DELETE /api/v1/tenants/{tenant_id}/signals/mappings/{signal_id}
-POST   /api/v1/tenants/{tenant_id}/signals/mappings:bulk-create
+GET    /api/v1/tenant-management/tenants/{tenant_id}/signals/mappings
+POST   /api/v1/tenant-management/tenants/{tenant_id}/signals/mappings
+PATCH  /api/v1/tenant-management/tenants/{tenant_id}/signals/mappings/{signal_id}
+DELETE /api/v1/tenant-management/tenants/{tenant_id}/signals/mappings/{signal_id}
+POST   /api/v1/tenant-management/tenants/{tenant_id}/signals/mappings:bulk-create
 ```
 
 These endpoints are backed by `TenantSignal`, but unlike buyer-facing
@@ -534,9 +541,9 @@ can inspect, diff, edit, and explain what it wrote.
 ### Setup Preview and Validation
 
 ```http
-POST /api/v1/tenants/{tenant_id}/wholesale-products:preview
-POST /api/v1/tenants/{tenant_id}/signals/mappings:preview
-POST /api/v1/tenants/{tenant_id}/composition:validate
+POST /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products:preview
+POST /api/v1/tenant-management/tenants/{tenant_id}/signals/mappings:preview
+POST /api/v1/tenant-management/tenants/{tenant_id}/composition:validate
 ```
 
 Preview responses should include:
@@ -583,17 +590,17 @@ Example:
 Preferred external path:
 
 ```http
-GET    /api/v1/tenants/{tenant_id}/wholesale-products
-POST   /api/v1/tenants/{tenant_id}/wholesale-products
-GET    /api/v1/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
-PUT    /api/v1/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
-DELETE /api/v1/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
+GET    /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products
+POST   /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products
+GET    /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
+PUT    /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
+DELETE /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
 ```
 
 Existing inventory-component path:
 
 ```http
-/api/v1/tenants/{tenant_id}/inventory-profiles
+/api/v1/tenant-management/tenants/{tenant_id}/inventory-profiles
 ```
 
 `inventory-profiles` can remain for existing clients that explicitly manage
@@ -604,7 +611,7 @@ the nested `inventory` field.
 ### Wholesale Product Validation
 
 ```http
-POST /api/v1/tenants/{tenant_id}/wholesale-products:validate
+POST /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products:validate
 ```
 
 Validates without persisting:
@@ -624,11 +631,11 @@ The existing composition API already exposes `/products`. During migration,
 and AdCP-product terminology:
 
 ```http
-GET    /api/v1/tenants/{tenant_id}/products
-POST   /api/v1/tenants/{tenant_id}/products
-GET    /api/v1/tenants/{tenant_id}/products/{product_id}
-PUT    /api/v1/tenants/{tenant_id}/products/{product_id}
-DELETE /api/v1/tenants/{tenant_id}/products/{product_id}
+GET    /api/v1/tenant-management/tenants/{tenant_id}/products
+POST   /api/v1/tenant-management/tenants/{tenant_id}/products
+GET    /api/v1/tenant-management/tenants/{tenant_id}/products/{product_id}
+PUT    /api/v1/tenant-management/tenants/{tenant_id}/products/{product_id}
+DELETE /api/v1/tenant-management/tenants/{tenant_id}/products/{product_id}
 ```
 
 The compatibility write shape should accept the old profile linkage while the

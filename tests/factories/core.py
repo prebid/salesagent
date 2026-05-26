@@ -15,6 +15,7 @@ from src.core.database.models import (
     AdapterConfig,
     AuthorizedProperty,
     CurrencyLimit,
+    FreeWheelInventory,
     GamAdvertiser,
     GAMInventory,
     GAMLineItem,
@@ -22,6 +23,7 @@ from src.core.database.models import (
     ProductInventoryMapping,
     PropertyTag,
     PublisherPartner,
+    SpringServeInventory,
     Tenant,
 )
 
@@ -165,6 +167,38 @@ class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
             "sizes": [{"width": 300, "height": 250}],
         }
     )
+
+
+class FreeWheelInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = FreeWheelInventory
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    entity_type = "standard_attribute"
+    entity_id = Sequence(lambda n: f"genres:{1000 + n}")
+    name = LazyAttribute(lambda o: f"FreeWheel {o.entity_type} {o.entity_id}")
+    parent_id = "genres"
+    raw_json = LazyAttribute(lambda o: {"id": o.entity_id.split(":")[-1], "name": o.name})
+
+
+class SpringServeInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = SpringServeInventory
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    entity_type = "value_list"
+    entity_id = Sequence(lambda n: str(9000 + n))
+    name = LazyAttribute(lambda o: f"SpringServe {o.entity_type} {o.entity_id}")
+    supply_partner_id = None
+    supply_router_id = None
+    key_id = "700"
+    raw_json = LazyAttribute(lambda o: {"id": o.entity_id, "name": o.name, "key_id": o.key_id})
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):

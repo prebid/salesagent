@@ -58,6 +58,15 @@ class TenantConfigRepository:
         stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id)
         return list(self._session.scalars(stmt).all())
 
+    def list_property_tags(self) -> list[PropertyTag]:
+        """Get all property tags for the tenant."""
+        stmt = (
+            select(PropertyTag)
+            .filter_by(tenant_id=self._tenant_id)
+            .order_by(PropertyTag.name.asc(), PropertyTag.tag_id.asc())
+        )
+        return list(self._session.scalars(stmt).all())
+
     def get_publisher_partner_by_domain(self, publisher_domain: str) -> PublisherPartner | None:
         """Get one publisher partner by domain for the tenant."""
         stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id, publisher_domain=publisher_domain)

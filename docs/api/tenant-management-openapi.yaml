@@ -883,6 +883,36 @@ components:
       - url
       title: CreateWebhookSubscriptionRequest
       type: object
+    DeleteSignalMappingResponse.f44f287:
+      additionalProperties: false
+      description: Delete response for signal mappings.
+      properties:
+        message:
+          title: Message
+          type: string
+        success:
+          title: Success
+          type: boolean
+      required:
+      - success
+      - message
+      title: DeleteSignalMappingResponse
+      type: object
+    DeleteWholesaleProductResponse.f44f287:
+      additionalProperties: false
+      description: Delete response for wholesale products.
+      properties:
+        message:
+          title: Message
+          type: string
+        success:
+          title: Success
+          type: boolean
+      required:
+      - success
+      - message
+      title: DeleteWholesaleProductResponse
+      type: object
     FreeWheelSettings.f44f287:
       additionalProperties: false
       description: FreeWheel runtime settings that affect how buys are materialized.
@@ -973,6 +1003,89 @@ components:
           title: Type
           type: string
       title: GoogleAdManagerSettings
+      type: object
+    InventoryAdapterCapabilitiesResponse.f44f287:
+      additionalProperties: false
+      description: Tenant-specific adapter capabilities for wholesale-product authoring.
+      properties:
+        adapter:
+          title: Adapter
+          type: string
+        creative_binding_schemas:
+          items:
+            $ref: '#/components/schemas/InventoryAdapterCapabilitiesResponse.f44f287.CreativeBindingSchema'
+          title: Creative Binding Schemas
+          type: array
+        optimization_capabilities:
+          additionalProperties: true
+          title: Optimization Capabilities
+          type: object
+        pricing_capabilities:
+          additionalProperties: true
+          title: Pricing Capabilities
+          type: object
+        selector_types:
+          items:
+            $ref: '#/components/schemas/InventoryAdapterCapabilitiesResponse.f44f287.InventorySelectorTypeCapability'
+          title: Selector Types
+          type: array
+        targeting_capabilities:
+          additionalProperties: true
+          title: Targeting Capabilities
+          type: object
+      required:
+      - adapter
+      - selector_types
+      title: InventoryAdapterCapabilitiesResponse
+      type: object
+    InventoryAdapterCapabilitiesResponse.f44f287.CreativeBindingSchema:
+      additionalProperties: false
+      description: Format-binding schema advertised by an adapter.
+      properties:
+        schema:
+          additionalProperties: true
+          title: Schema
+          type: object
+        selector_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Selector Type
+      title: CreativeBindingSchema
+      type: object
+    InventoryAdapterCapabilitiesResponse.f44f287.InventorySelectorTypeCapability:
+      additionalProperties: false
+      description: Selector type supported by an adapter for wholesale products.
+      properties:
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        label:
+          title: Label
+          type: string
+        option_schema:
+          additionalProperties: true
+          title: Option Schema
+          type: object
+        selector_type:
+          title: Selector Type
+          type: string
+        supports_parent_filter:
+          default: false
+          title: Supports Parent Filter
+          type: boolean
+        supports_search:
+          default: true
+          title: Supports Search
+          type: boolean
+      required:
+      - selector_type
+      - label
+      title: InventorySelectorTypeCapability
       type: object
     ListAccountsManagedResponse.f44f287:
       additionalProperties: false
@@ -1358,6 +1471,75 @@ components:
       - updated_at
       title: BuyerAdvertiserMapping
       type: object
+    ListCreativeFormatsForAuthoringResponse.f44f287:
+      additionalProperties: false
+      description: Creative-format discovery for wholesale-product authoring.
+      properties:
+        count:
+          title: Count
+          type: integer
+        creative_formats:
+          items:
+            $ref: '#/components/schemas/ListCreativeFormatsForAuthoringResponse.f44f287.CreativeFormatSummary'
+          title: Creative Formats
+          type: array
+      required:
+      - creative_formats
+      - count
+      title: ListCreativeFormatsForAuthoringResponse
+      type: object
+    ListCreativeFormatsForAuthoringResponse.f44f287.CreativeFormatSummary:
+      additionalProperties: false
+      description: Creative format option exposed to the embedding storefront.
+      properties:
+        asset_types:
+          items:
+            type: string
+          title: Asset Types
+          type: array
+        dimensions:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Dimensions
+        format_id:
+          $ref: '#/components/schemas/ListCreativeFormatsForAuthoringResponse.f44f287.FormatIdRef'
+        name:
+          title: Name
+          type: string
+        raw:
+          additionalProperties: true
+          title: Raw
+          type: object
+        requirements:
+          additionalProperties: true
+          title: Requirements
+          type: object
+      required:
+      - format_id
+      - name
+      title: CreativeFormatSummary
+      type: object
+    ListCreativeFormatsForAuthoringResponse.f44f287.FormatIdRef:
+      additionalProperties: false
+      description: AdCP FormatId reference used by wholesale-product authoring.
+      properties:
+        agent_url:
+          maxLength: 2048
+          minLength: 1
+          title: Agent Url
+          type: string
+        id:
+          maxLength: 255
+          minLength: 1
+          title: Id
+          type: string
+      required:
+      - agent_url
+      - id
+      title: FormatIdRef
+      type: object
     ListGamAdvertisersResponse.f44f287:
       additionalProperties: false
       description: "``GET /tenants/{tid}/gam/advertisers`` response.\n\nCursor pagination\
@@ -1419,6 +1601,74 @@ components:
       - name
       - status
       title: GamAdvertiser
+      type: object
+    ListInventorySelectorsResponse.f44f287:
+      additionalProperties: false
+      description: Search/list response for ad-server selectors.
+      properties:
+        count:
+          title: Count
+          type: integer
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+        selectors:
+          items:
+            $ref: '#/components/schemas/ListInventorySelectorsResponse.f44f287.InventorySelectorSummary'
+          title: Selectors
+          type: array
+      required:
+      - selectors
+      - count
+      title: ListInventorySelectorsResponse
+      type: object
+    ListInventorySelectorsResponse.f44f287.InventorySelectorSummary:
+      additionalProperties: false
+      description: One cached ad-server selector candidate.
+      properties:
+        external_id:
+          title: External Id
+          type: string
+        metadata:
+          additionalProperties: true
+          title: Metadata
+          type: object
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Name
+        parent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Parent Id
+        path:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Path
+        selector_type:
+          title: Selector Type
+          type: string
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Status
+      required:
+      - selector_type
+      - external_id
+      title: InventorySelectorSummary
       type: object
     ListMediaBuysResponse.f44f287:
       additionalProperties: false
@@ -1580,6 +1830,221 @@ components:
       - request_count
       - resolved_via
       title: RecentBuyer
+      type: object
+    ListSignalCandidatesResponse.f44f287:
+      additionalProperties: false
+      description: Search/list response for adapter signal candidates.
+      properties:
+        candidates:
+          items:
+            $ref: '#/components/schemas/ListSignalCandidatesResponse.f44f287.SignalCandidateSummary'
+          title: Candidates
+          type: array
+        count:
+          title: Count
+          type: integer
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+      required:
+      - candidates
+      - count
+      title: ListSignalCandidatesResponse
+      type: object
+    ListSignalCandidatesResponse.f44f287.SignalCandidateSummary:
+      additionalProperties: false
+      description: One synced adapter object that can help create a signal mapping.
+      properties:
+        adapter_config_template:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Adapter Config Template
+        candidate_type:
+          title: Candidate Type
+          type: string
+        default_signal:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Default Signal
+        external_id:
+          title: External Id
+          type: string
+        mapping_kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Mapping Kind
+        metadata:
+          additionalProperties: true
+          title: Metadata
+          type: object
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Name
+        parent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Parent Id
+        path:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Path
+      required:
+      - candidate_type
+      - external_id
+      title: SignalCandidateSummary
+      type: object
+    ListSignalMappingsResponse.f44f287:
+      additionalProperties: false
+      description: List response for signal mappings.
+      properties:
+        count:
+          title: Count
+          type: integer
+        signals:
+          items:
+            $ref: '#/components/schemas/ListSignalMappingsResponse.f44f287.SignalMappingResponse'
+          title: Signals
+          type: array
+      required:
+      - signals
+      - count
+      title: ListSignalMappingsResponse
+      type: object
+    ListSignalMappingsResponse.f44f287.SignalMappingResponse:
+      additionalProperties: false
+      description: Signal mapping as persisted and returned to embedder clients.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          description: "Adapter-specific resolution map. Operator-authored, opaque\
+            \ to storefront. Examples: GAM custom KV \u2192 {kind: 'custom_key_value',\
+            \ key_id: '...', value_ids: {...}}; GAM audience \u2192 {kind: 'audience_segment',\
+            \ segment_id: '...'}; Freewheel \u2192 {kind: 'audience_item', audience_item_id:\
+            \ '...'}."
+          title: Adapter Config
+          type: object
+        categories:
+          description: Taxonomy when value_type='categorical'
+          items:
+            type: string
+          title: Categories
+          type: array
+        created_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Created At
+        data_provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Data Provider
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Etag
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        range:
+          anyOf:
+          - $ref: '#/components/schemas/ListSignalMappingsResponse.f44f287.SignalRange'
+          - type: 'null'
+          default: null
+          description: Bounds when value_type='numeric'
+        signal_id:
+          description: Stable AdCP signal_id. Use only letters, numbers, underscores,
+            and hyphens.
+          maxLength: 200
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+          title: Signal Id
+          type: string
+        tags:
+          items:
+            type: string
+          title: Tags
+          type: array
+        targeting_dimension:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: AdCP-standard dimension this signal narrows (audience, contextual,
+            weather, ...)
+          title: Targeting Dimension
+        updated_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Updated At
+        value_type:
+          enum:
+          - binary
+          - categorical
+          - numeric
+          title: Value Type
+          type: string
+      required:
+      - signal_id
+      - name
+      - value_type
+      title: SignalMappingResponse
+      type: object
+    ListSignalMappingsResponse.f44f287.SignalRange:
+      additionalProperties: false
+      description: Numeric bounds for a ``value_type='numeric'`` signal.
+      properties:
+        max:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Max
+        min:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min
+      title: SignalRange
       type: object
     ListSyncHistoryResponse.f44f287:
       additionalProperties: false
@@ -1819,6 +2284,420 @@ components:
       - created_at
       title: WebhookSubscriptionSummary
       type: object
+    ListWholesaleProductsResponse.f44f287:
+      additionalProperties: false
+      description: List response for wholesale products.
+      properties:
+        count:
+          title: Count
+          type: integer
+        wholesale_products:
+          items:
+            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesaleProductResponse'
+          title: Wholesale Products
+          type: array
+      required:
+      - wholesale_products
+      - count
+      title: ListWholesaleProductsResponse
+      type: object
+    ListWholesaleProductsResponse.f44f287.FormatIdRef:
+      additionalProperties: false
+      description: AdCP FormatId reference used by wholesale-product authoring.
+      properties:
+        agent_url:
+          maxLength: 2048
+          minLength: 1
+          title: Agent Url
+          type: string
+        id:
+          maxLength: 255
+          minLength: 1
+          title: Id
+          type: string
+      required:
+      - agent_url
+      - id
+      title: FormatIdRef
+      type: object
+    ListWholesaleProductsResponse.f44f287.InventoryExecutionSelector:
+      additionalProperties: false
+      description: Adapter selector that tells the ad server where a wholesale product
+        executes.
+      properties:
+        external_id:
+          maxLength: 255
+          minLength: 1
+          title: External Id
+          type: string
+        name:
+          anyOf:
+          - maxLength: 512
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        options:
+          additionalProperties: true
+          title: Options
+          type: object
+        selector_type:
+          maxLength: 64
+          minLength: 1
+          title: Selector Type
+          type: string
+      required:
+      - selector_type
+      - external_id
+      title: InventoryExecutionSelector
+      type: object
+    ListWholesaleProductsResponse.f44f287.PublisherPropertySelector:
+      additionalProperties: false
+      description: AdCP publisher-property selector.
+      properties:
+        property_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Ids
+        property_tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Tags
+        publisher_domain:
+          maxLength: 255
+          minLength: 1
+          title: Publisher Domain
+          type: string
+        selection_type:
+          default: all
+          enum:
+          - all
+          - by_id
+          - by_tag
+          title: Selection Type
+          type: string
+      required:
+      - publisher_domain
+      title: PublisherPropertySelector
+      type: object
+    ListWholesaleProductsResponse.f44f287.WholesaleCreativeFormat:
+      additionalProperties: false
+      description: Creative format accepted by a wholesale product.
+      properties:
+        format_id:
+          $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.FormatIdRef'
+        slot_requirements:
+          items:
+            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesaleSlotRequirement'
+          title: Slot Requirements
+          type: array
+      required:
+      - format_id
+      title: WholesaleCreativeFormat
+      type: object
+    ListWholesaleProductsResponse.f44f287.WholesaleFormatBinding:
+      additionalProperties: false
+      description: Adapter-specific binding for a buyer-facing creative format.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          title: Adapter Config
+          type: object
+        format_id:
+          $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.FormatIdRef'
+      required:
+      - format_id
+      title: WholesaleFormatBinding
+      type: object
+    ListWholesaleProductsResponse.f44f287.WholesaleInventory:
+      additionalProperties: false
+      description: Inventory section of a wholesale product.
+      properties:
+        creative_formats:
+          items:
+            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesaleCreativeFormat'
+          title: Creative Formats
+          type: array
+        execution:
+          $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesaleInventoryExecution'
+        publisher_properties:
+          items:
+            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.PublisherPropertySelector'
+          title: Publisher Properties
+          type: array
+      required:
+      - execution
+      title: WholesaleInventory
+      type: object
+    ListWholesaleProductsResponse.f44f287.WholesaleInventoryExecution:
+      additionalProperties: false
+      description: Adapter execution section of a wholesale product.
+      properties:
+        adapter:
+          maxLength: 64
+          minLength: 1
+          title: Adapter
+          type: string
+        format_bindings:
+          items:
+            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesaleFormatBinding'
+          title: Format Bindings
+          type: array
+        selectors:
+          items:
+            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.InventoryExecutionSelector'
+          title: Selectors
+          type: array
+      required:
+      - adapter
+      title: WholesaleInventoryExecution
+      type: object
+    ListWholesaleProductsResponse.f44f287.WholesalePricingOption:
+      additionalProperties: false
+      description: One pricing option accepted by the buyer-facing product.
+      properties:
+        currency:
+          default: USD
+          maxLength: 3
+          minLength: 3
+          title: Currency
+          type: string
+        is_fixed:
+          default: true
+          title: Is Fixed
+          type: boolean
+        min_spend_per_package:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min Spend Per Package
+        parameters:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Parameters
+        price_guidance:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Price Guidance
+        pricing_model:
+          maxLength: 32
+          minLength: 1
+          title: Pricing Model
+          type: string
+        rate:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Rate
+      required:
+      - pricing_model
+      title: WholesalePricingOption
+      type: object
+    ListWholesaleProductsResponse.f44f287.WholesaleProductResponse:
+      additionalProperties: false
+      description: Wholesale product as persisted and returned to embedder clients.
+      properties:
+        allowed_actions:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Allowed Actions
+        allowed_principal_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Allowed Principal Ids
+        channels:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Channels
+        created_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Created At
+        delivery_type:
+          default: guaranteed
+          maxLength: 50
+          minLength: 1
+          title: Delivery Type
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        forecast:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Forecast
+        format_options:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          default: null
+          title: Format Options
+        inventory:
+          $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesaleInventory'
+        inventory_profile_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Inventory Profile Id
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        optimization_capabilities:
+          additionalProperties: true
+          title: Optimization Capabilities
+          type: object
+        pricing_options:
+          items:
+            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesalePricingOption'
+          title: Pricing Options
+          type: array
+        product_id:
+          maxLength: 100
+          minLength: 1
+          title: Product Id
+          type: string
+        status:
+          default: active
+          enum:
+          - draft
+          - active
+          - archived
+          title: Status
+          type: string
+        targeting_capabilities:
+          additionalProperties: true
+          title: Targeting Capabilities
+          type: object
+        updated_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Updated At
+        vendor_metric_optimization:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Vendor Metric Optimization
+        wholesale_product_id:
+          maxLength: 100
+          minLength: 1
+          title: Wholesale Product Id
+          type: string
+      required:
+      - wholesale_product_id
+      - name
+      - inventory
+      - product_id
+      title: WholesaleProductResponse
+      type: object
+    ListWholesaleProductsResponse.f44f287.WholesaleSlotRequirement:
+      additionalProperties: false
+      description: Optional slot-level requirements for multi-asset formats.
+      properties:
+        asset_type:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Asset Type
+        duration_ms:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Duration Ms
+        height:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Height
+        name:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        required:
+          default: true
+          title: Required
+          type: boolean
+        requirements:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Requirements
+        slot_id:
+          maxLength: 128
+          minLength: 1
+          title: Slot Id
+          type: string
+        width:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Width
+      required:
+      - slot_id
+      title: WholesaleSlotRequirement
+      type: object
     ListWorkflowsResponse.f44f287:
       additionalProperties: false
       description: '``GET /tenants/{tid}/workflows`` response with cursor pagination.'
@@ -1907,6 +2786,23 @@ components:
       - created_at
       - updated_at
       title: WorkflowSummary
+      type: object
+    LookupPublisherPropertiesRequest.f44f287:
+      additionalProperties: false
+      description: Resolve and cache one publisher domain's AAO property structure.
+      properties:
+        force_refresh:
+          default: false
+          title: Force Refresh
+          type: boolean
+        publisher_domain:
+          maxLength: 500
+          minLength: 1
+          title: Publisher Domain
+          type: string
+      required:
+      - publisher_domain
+      title: LookupPublisherPropertiesRequest
       type: object
     MediaBuyDetail.f44f287:
       additionalProperties: false
@@ -2804,6 +3700,347 @@ components:
       - access_token
       title: ProvisionedPrincipalResponse
       type: object
+    PublisherPropertiesLookupResponse.f44f287:
+      additionalProperties: false
+      description: Domain lookup response plus the synced property mapping surface.
+      properties:
+        aao_status:
+          enum:
+          - authorized
+          - unbound
+          - pending
+          - no_properties
+          - unreachable
+          title: Aao Status
+          type: string
+        agent_url:
+          title: Agent Url
+          type: string
+        allowed_selectors:
+          items:
+            $ref: '#/components/schemas/PublisherPropertiesLookupResponse.f44f287.AllowedPublisherSelector'
+          title: Allowed Selectors
+          type: array
+        authorized_properties:
+          title: Authorized Properties
+          type: integer
+        domains:
+          items:
+            $ref: '#/components/schemas/PublisherPropertiesLookupResponse.f44f287.PublisherDomainSummary'
+          title: Domains
+          type: array
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error
+        is_authorized:
+          title: Is Authorized
+          type: boolean
+        properties:
+          items:
+            $ref: '#/components/schemas/PublisherPropertiesLookupResponse.f44f287.PublisherPropertySummary'
+          title: Properties
+          type: array
+        property_ids:
+          items:
+            type: string
+          title: Property Ids
+          type: array
+        property_tags:
+          items:
+            type: string
+          title: Property Tags
+          type: array
+        publisher_domain:
+          title: Publisher Domain
+          type: string
+        sync:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Sync
+        total_properties:
+          title: Total Properties
+          type: integer
+      required:
+      - domains
+      - properties
+      - allowed_selectors
+      - publisher_domain
+      - agent_url
+      - is_authorized
+      - aao_status
+      - total_properties
+      - authorized_properties
+      - property_ids
+      - property_tags
+      title: PublisherPropertiesLookupResponse
+      type: object
+    PublisherPropertiesLookupResponse.f44f287.AllowedPublisherSelector:
+      additionalProperties: false
+      description: Prebuilt selector option for publisher-property mapping UI.
+      properties:
+        label:
+          title: Label
+          type: string
+        property_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Ids
+        property_tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Tags
+        publisher_domain:
+          title: Publisher Domain
+          type: string
+        selection_type:
+          enum:
+          - all
+          - by_id
+          - by_tag
+          title: Selection Type
+          type: string
+      required:
+      - publisher_domain
+      - selection_type
+      - label
+      title: AllowedPublisherSelector
+      type: object
+    PublisherPropertiesLookupResponse.f44f287.PublisherDomainSummary:
+      additionalProperties: false
+      description: Publisher domain known to this tenant.
+      properties:
+        authorized_properties:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Authorized Properties
+        display_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Display Name
+        is_verified:
+          default: false
+          title: Is Verified
+          type: boolean
+        publisher_domain:
+          title: Publisher Domain
+          type: string
+        sync_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Sync Status
+        total_properties:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Total Properties
+      required:
+      - publisher_domain
+      title: PublisherDomainSummary
+      type: object
+    PublisherPropertiesLookupResponse.f44f287.PublisherPropertySummary:
+      additionalProperties: false
+      description: One publisher property available for product mapping.
+      properties:
+        identifiers:
+          items:
+            additionalProperties: true
+            type: object
+          title: Identifiers
+          type: array
+        name:
+          title: Name
+          type: string
+        property_id:
+          title: Property Id
+          type: string
+        property_type:
+          title: Property Type
+          type: string
+        publisher_domain:
+          title: Publisher Domain
+          type: string
+        tags:
+          items:
+            type: string
+          title: Tags
+          type: array
+        verification_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Verification Status
+      required:
+      - property_id
+      - publisher_domain
+      - property_type
+      - name
+      title: PublisherPropertySummary
+      type: object
+    PublisherPropertiesResponse.f44f287:
+      additionalProperties: false
+      description: Publisher-domain/property discovery response.
+      properties:
+        allowed_selectors:
+          items:
+            $ref: '#/components/schemas/PublisherPropertiesResponse.f44f287.AllowedPublisherSelector'
+          title: Allowed Selectors
+          type: array
+        domains:
+          items:
+            $ref: '#/components/schemas/PublisherPropertiesResponse.f44f287.PublisherDomainSummary'
+          title: Domains
+          type: array
+        properties:
+          items:
+            $ref: '#/components/schemas/PublisherPropertiesResponse.f44f287.PublisherPropertySummary'
+          title: Properties
+          type: array
+      required:
+      - domains
+      - properties
+      - allowed_selectors
+      title: PublisherPropertiesResponse
+      type: object
+    PublisherPropertiesResponse.f44f287.AllowedPublisherSelector:
+      additionalProperties: false
+      description: Prebuilt selector option for publisher-property mapping UI.
+      properties:
+        label:
+          title: Label
+          type: string
+        property_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Ids
+        property_tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Tags
+        publisher_domain:
+          title: Publisher Domain
+          type: string
+        selection_type:
+          enum:
+          - all
+          - by_id
+          - by_tag
+          title: Selection Type
+          type: string
+      required:
+      - publisher_domain
+      - selection_type
+      - label
+      title: AllowedPublisherSelector
+      type: object
+    PublisherPropertiesResponse.f44f287.PublisherDomainSummary:
+      additionalProperties: false
+      description: Publisher domain known to this tenant.
+      properties:
+        authorized_properties:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Authorized Properties
+        display_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Display Name
+        is_verified:
+          default: false
+          title: Is Verified
+          type: boolean
+        publisher_domain:
+          title: Publisher Domain
+          type: string
+        sync_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Sync Status
+        total_properties:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Total Properties
+      required:
+      - publisher_domain
+      title: PublisherDomainSummary
+      type: object
+    PublisherPropertiesResponse.f44f287.PublisherPropertySummary:
+      additionalProperties: false
+      description: One publisher property available for product mapping.
+      properties:
+        identifiers:
+          items:
+            additionalProperties: true
+            type: object
+          title: Identifiers
+          type: array
+        name:
+          title: Name
+          type: string
+        property_id:
+          title: Property Id
+          type: string
+        property_type:
+          title: Property Type
+          type: string
+        publisher_domain:
+          title: Publisher Domain
+          type: string
+        tags:
+          items:
+            type: string
+          title: Tags
+          type: array
+        verification_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Verification Status
+      required:
+      - property_id
+      - publisher_domain
+      - property_type
+      - name
+      title: PublisherPropertySummary
+      type: object
     RefreshConflictResponse.f44f287:
       additionalProperties: false
       description: "``POST /tenants/{tid}/refresh`` response (HTTP 409) \u2014 sync\
@@ -2873,6 +4110,333 @@ components:
       required:
       - notes
       title: RejectWorkflowRequest
+      type: object
+    SignalAdapterCapabilitiesResponse.f44f287:
+      additionalProperties: false
+      description: Tenant-specific adapter capabilities for signal mapping authoring.
+      properties:
+        adapter:
+          title: Adapter
+          type: string
+        mapping_kinds:
+          items:
+            $ref: '#/components/schemas/SignalAdapterCapabilitiesResponse.f44f287.SignalMappingKindCapability'
+          title: Mapping Kinds
+          type: array
+        supports_signal_mapping_authoring:
+          title: Supports Signal Mapping Authoring
+          type: boolean
+        value_types:
+          items:
+            type: string
+          title: Value Types
+          type: array
+      required:
+      - adapter
+      - supports_signal_mapping_authoring
+      title: SignalAdapterCapabilitiesResponse
+      type: object
+    SignalAdapterCapabilitiesResponse.f44f287.SignalMappingKindCapability:
+      additionalProperties: false
+      description: One adapter mapping kind that can back a buyer-facing signal.
+      properties:
+        adapter_config_schema:
+          additionalProperties: true
+          title: Adapter Config Schema
+          type: object
+        candidate_type:
+          anyOf:
+          - maxLength: 80
+            type: string
+          - type: 'null'
+          default: null
+          title: Candidate Type
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        label:
+          maxLength: 200
+          minLength: 1
+          title: Label
+          type: string
+        mapping_kind:
+          maxLength: 80
+          minLength: 1
+          title: Mapping Kind
+          type: string
+        supports_parent_filter:
+          default: false
+          title: Supports Parent Filter
+          type: boolean
+        supports_search:
+          default: true
+          title: Supports Search
+          type: boolean
+      required:
+      - mapping_kind
+      - label
+      title: SignalMappingKindCapability
+      type: object
+    SignalMappingRequest.f44f287:
+      additionalProperties: false
+      description: Create/update body for operator-authored signal mappings.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          description: "Adapter-specific resolution map. Operator-authored, opaque\
+            \ to storefront. Examples: GAM custom KV \u2192 {kind: 'custom_key_value',\
+            \ key_id: '...', value_ids: {...}}; GAM audience \u2192 {kind: 'audience_segment',\
+            \ segment_id: '...'}; Freewheel \u2192 {kind: 'audience_item', audience_item_id:\
+            \ '...'}."
+          title: Adapter Config
+          type: object
+        categories:
+          description: Taxonomy when value_type='categorical'
+          items:
+            type: string
+          title: Categories
+          type: array
+        data_provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Data Provider
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        range:
+          anyOf:
+          - $ref: '#/components/schemas/SignalMappingRequest.f44f287.SignalRange'
+          - type: 'null'
+          default: null
+          description: Bounds when value_type='numeric'
+        signal_id:
+          description: Stable AdCP signal_id. Use only letters, numbers, underscores,
+            and hyphens.
+          maxLength: 200
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+          title: Signal Id
+          type: string
+        tags:
+          items:
+            type: string
+          title: Tags
+          type: array
+        targeting_dimension:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: AdCP-standard dimension this signal narrows (audience, contextual,
+            weather, ...)
+          title: Targeting Dimension
+        value_type:
+          enum:
+          - binary
+          - categorical
+          - numeric
+          title: Value Type
+          type: string
+      required:
+      - signal_id
+      - name
+      - value_type
+      title: SignalMappingRequest
+      type: object
+    SignalMappingRequest.f44f287.SignalRange:
+      additionalProperties: false
+      description: Numeric bounds for a ``value_type='numeric'`` signal.
+      properties:
+        max:
+          anyOf:
+          - type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Max
+        min:
+          anyOf:
+          - type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min
+      title: SignalRange
+      type: object
+    SignalMappingResponse.f44f287:
+      additionalProperties: false
+      description: Signal mapping as persisted and returned to embedder clients.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          description: "Adapter-specific resolution map. Operator-authored, opaque\
+            \ to storefront. Examples: GAM custom KV \u2192 {kind: 'custom_key_value',\
+            \ key_id: '...', value_ids: {...}}; GAM audience \u2192 {kind: 'audience_segment',\
+            \ segment_id: '...'}; Freewheel \u2192 {kind: 'audience_item', audience_item_id:\
+            \ '...'}."
+          title: Adapter Config
+          type: object
+        categories:
+          description: Taxonomy when value_type='categorical'
+          items:
+            type: string
+          title: Categories
+          type: array
+        created_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Created At
+        data_provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Data Provider
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Etag
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        range:
+          anyOf:
+          - $ref: '#/components/schemas/SignalMappingResponse.f44f287.SignalRange'
+          - type: 'null'
+          default: null
+          description: Bounds when value_type='numeric'
+        signal_id:
+          description: Stable AdCP signal_id. Use only letters, numbers, underscores,
+            and hyphens.
+          maxLength: 200
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+          title: Signal Id
+          type: string
+        tags:
+          items:
+            type: string
+          title: Tags
+          type: array
+        targeting_dimension:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: AdCP-standard dimension this signal narrows (audience, contextual,
+            weather, ...)
+          title: Targeting Dimension
+        updated_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Updated At
+        value_type:
+          enum:
+          - binary
+          - categorical
+          - numeric
+          title: Value Type
+          type: string
+      required:
+      - signal_id
+      - name
+      - value_type
+      title: SignalMappingResponse
+      type: object
+    SignalMappingResponse.f44f287.SignalRange:
+      additionalProperties: false
+      description: Numeric bounds for a ``value_type='numeric'`` signal.
+      properties:
+        max:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Max
+        min:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min
+      title: SignalRange
+      type: object
+    SignalMappingValidationResponse.f44f287:
+      additionalProperties: false
+      description: Validation result for signal mapping authoring.
+      properties:
+        issues:
+          items:
+            $ref: '#/components/schemas/SignalMappingValidationResponse.f44f287.SignalMappingValidationIssue'
+          title: Issues
+          type: array
+        valid:
+          title: Valid
+          type: boolean
+      required:
+      - valid
+      title: SignalMappingValidationResponse
+      type: object
+    SignalMappingValidationResponse.f44f287.SignalMappingValidationIssue:
+      additionalProperties: false
+      description: One validation issue for a signal mapping draft.
+      properties:
+        code:
+          title: Code
+          type: string
+        field:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Field
+        message:
+          title: Message
+          type: string
+        severity:
+          default: error
+          enum:
+          - error
+          - warning
+          title: Severity
+          type: string
+      required:
+      - code
+      - message
+      title: SignalMappingValidationIssue
       type: object
     SpringServeSettings.f44f287:
       additionalProperties: false
@@ -3760,6 +5324,886 @@ components:
       - event_id
       - delivered
       title: WebhookTestDeliveryResult
+      type: object
+    WholesaleProductPreviewResponse.f44f287:
+      additionalProperties: false
+      description: Non-persisted product projection for authoring previews.
+      properties:
+        adapter_projection:
+          additionalProperties: true
+          title: Adapter Projection
+          type: object
+        buyer_projection:
+          additionalProperties: true
+          title: Buyer Projection
+          type: object
+        validation:
+          $ref: '#/components/schemas/WholesaleProductPreviewResponse.f44f287.WholesaleProductValidationResponse'
+      required:
+      - validation
+      - buyer_projection
+      - adapter_projection
+      title: WholesaleProductPreviewResponse
+      type: object
+    WholesaleProductPreviewResponse.f44f287.WholesaleProductValidationResponse:
+      additionalProperties: false
+      description: Validation result for wholesale-product authoring.
+      properties:
+        issues:
+          items:
+            $ref: '#/components/schemas/WholesaleProductPreviewResponse.f44f287.WholesaleValidationIssue'
+          title: Issues
+          type: array
+        valid:
+          title: Valid
+          type: boolean
+      required:
+      - valid
+      title: WholesaleProductValidationResponse
+      type: object
+    WholesaleProductPreviewResponse.f44f287.WholesaleValidationIssue:
+      additionalProperties: false
+      description: One validation issue for a wholesale-product draft.
+      properties:
+        code:
+          title: Code
+          type: string
+        field:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Field
+        message:
+          title: Message
+          type: string
+        severity:
+          default: error
+          enum:
+          - error
+          - warning
+          title: Severity
+          type: string
+      required:
+      - code
+      - message
+      title: WholesaleValidationIssue
+      type: object
+    WholesaleProductRequest.f44f287:
+      additionalProperties: false
+      description: Create/update body for wholesale-product authoring.
+      properties:
+        allowed_actions:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Allowed Actions
+        allowed_principal_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Allowed Principal Ids
+        channels:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Channels
+        delivery_type:
+          default: guaranteed
+          maxLength: 50
+          minLength: 1
+          title: Delivery Type
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        forecast:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Forecast
+        format_options:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          default: null
+          title: Format Options
+        inventory:
+          $ref: '#/components/schemas/WholesaleProductRequest.f44f287.WholesaleInventory'
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        optimization_capabilities:
+          additionalProperties: true
+          title: Optimization Capabilities
+          type: object
+        pricing_options:
+          items:
+            $ref: '#/components/schemas/WholesaleProductRequest.f44f287.WholesalePricingOption'
+          title: Pricing Options
+          type: array
+        status:
+          default: active
+          enum:
+          - draft
+          - active
+          - archived
+          title: Status
+          type: string
+        targeting_capabilities:
+          additionalProperties: true
+          title: Targeting Capabilities
+          type: object
+        vendor_metric_optimization:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Vendor Metric Optimization
+        wholesale_product_id:
+          anyOf:
+          - maxLength: 100
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Wholesale Product Id
+      required:
+      - name
+      - inventory
+      title: WholesaleProductRequest
+      type: object
+    WholesaleProductRequest.f44f287.FormatIdRef:
+      additionalProperties: false
+      description: AdCP FormatId reference used by wholesale-product authoring.
+      properties:
+        agent_url:
+          maxLength: 2048
+          minLength: 1
+          title: Agent Url
+          type: string
+        id:
+          maxLength: 255
+          minLength: 1
+          title: Id
+          type: string
+      required:
+      - agent_url
+      - id
+      title: FormatIdRef
+      type: object
+    WholesaleProductRequest.f44f287.InventoryExecutionSelector:
+      additionalProperties: false
+      description: Adapter selector that tells the ad server where a wholesale product
+        executes.
+      properties:
+        external_id:
+          maxLength: 255
+          minLength: 1
+          title: External Id
+          type: string
+        name:
+          anyOf:
+          - maxLength: 512
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        options:
+          additionalProperties: true
+          title: Options
+          type: object
+        selector_type:
+          maxLength: 64
+          minLength: 1
+          title: Selector Type
+          type: string
+      required:
+      - selector_type
+      - external_id
+      title: InventoryExecutionSelector
+      type: object
+    WholesaleProductRequest.f44f287.PublisherPropertySelector:
+      additionalProperties: false
+      description: AdCP publisher-property selector.
+      properties:
+        property_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Ids
+        property_tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Tags
+        publisher_domain:
+          maxLength: 255
+          minLength: 1
+          title: Publisher Domain
+          type: string
+        selection_type:
+          default: all
+          enum:
+          - all
+          - by_id
+          - by_tag
+          title: Selection Type
+          type: string
+      required:
+      - publisher_domain
+      title: PublisherPropertySelector
+      type: object
+    WholesaleProductRequest.f44f287.WholesaleCreativeFormat:
+      additionalProperties: false
+      description: Creative format accepted by a wholesale product.
+      properties:
+        format_id:
+          $ref: '#/components/schemas/WholesaleProductRequest.f44f287.FormatIdRef'
+        slot_requirements:
+          items:
+            $ref: '#/components/schemas/WholesaleProductRequest.f44f287.WholesaleSlotRequirement'
+          title: Slot Requirements
+          type: array
+      required:
+      - format_id
+      title: WholesaleCreativeFormat
+      type: object
+    WholesaleProductRequest.f44f287.WholesaleFormatBinding:
+      additionalProperties: false
+      description: Adapter-specific binding for a buyer-facing creative format.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          title: Adapter Config
+          type: object
+        format_id:
+          $ref: '#/components/schemas/WholesaleProductRequest.f44f287.FormatIdRef'
+      required:
+      - format_id
+      title: WholesaleFormatBinding
+      type: object
+    WholesaleProductRequest.f44f287.WholesaleInventory:
+      additionalProperties: false
+      description: Inventory section of a wholesale product.
+      properties:
+        creative_formats:
+          items:
+            $ref: '#/components/schemas/WholesaleProductRequest.f44f287.WholesaleCreativeFormat'
+          title: Creative Formats
+          type: array
+        execution:
+          $ref: '#/components/schemas/WholesaleProductRequest.f44f287.WholesaleInventoryExecution'
+        publisher_properties:
+          items:
+            $ref: '#/components/schemas/WholesaleProductRequest.f44f287.PublisherPropertySelector'
+          title: Publisher Properties
+          type: array
+      required:
+      - execution
+      title: WholesaleInventory
+      type: object
+    WholesaleProductRequest.f44f287.WholesaleInventoryExecution:
+      additionalProperties: false
+      description: Adapter execution section of a wholesale product.
+      properties:
+        adapter:
+          maxLength: 64
+          minLength: 1
+          title: Adapter
+          type: string
+        format_bindings:
+          items:
+            $ref: '#/components/schemas/WholesaleProductRequest.f44f287.WholesaleFormatBinding'
+          title: Format Bindings
+          type: array
+        selectors:
+          items:
+            $ref: '#/components/schemas/WholesaleProductRequest.f44f287.InventoryExecutionSelector'
+          title: Selectors
+          type: array
+      required:
+      - adapter
+      title: WholesaleInventoryExecution
+      type: object
+    WholesaleProductRequest.f44f287.WholesalePricingOption:
+      additionalProperties: false
+      description: One pricing option accepted by the buyer-facing product.
+      properties:
+        currency:
+          default: USD
+          maxLength: 3
+          minLength: 3
+          title: Currency
+          type: string
+        is_fixed:
+          default: true
+          title: Is Fixed
+          type: boolean
+        min_spend_per_package:
+          anyOf:
+          - type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min Spend Per Package
+        parameters:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Parameters
+        price_guidance:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Price Guidance
+        pricing_model:
+          maxLength: 32
+          minLength: 1
+          title: Pricing Model
+          type: string
+        rate:
+          anyOf:
+          - type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Rate
+      required:
+      - pricing_model
+      title: WholesalePricingOption
+      type: object
+    WholesaleProductRequest.f44f287.WholesaleSlotRequirement:
+      additionalProperties: false
+      description: Optional slot-level requirements for multi-asset formats.
+      properties:
+        asset_type:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Asset Type
+        duration_ms:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Duration Ms
+        height:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Height
+        name:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        required:
+          default: true
+          title: Required
+          type: boolean
+        requirements:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Requirements
+        slot_id:
+          maxLength: 128
+          minLength: 1
+          title: Slot Id
+          type: string
+        width:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Width
+      required:
+      - slot_id
+      title: WholesaleSlotRequirement
+      type: object
+    WholesaleProductResponse.f44f287:
+      additionalProperties: false
+      description: Wholesale product as persisted and returned to embedder clients.
+      properties:
+        allowed_actions:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Allowed Actions
+        allowed_principal_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Allowed Principal Ids
+        channels:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Channels
+        created_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Created At
+        delivery_type:
+          default: guaranteed
+          maxLength: 50
+          minLength: 1
+          title: Delivery Type
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        forecast:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Forecast
+        format_options:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          default: null
+          title: Format Options
+        inventory:
+          $ref: '#/components/schemas/WholesaleProductResponse.f44f287.WholesaleInventory'
+        inventory_profile_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Inventory Profile Id
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        optimization_capabilities:
+          additionalProperties: true
+          title: Optimization Capabilities
+          type: object
+        pricing_options:
+          items:
+            $ref: '#/components/schemas/WholesaleProductResponse.f44f287.WholesalePricingOption'
+          title: Pricing Options
+          type: array
+        product_id:
+          maxLength: 100
+          minLength: 1
+          title: Product Id
+          type: string
+        status:
+          default: active
+          enum:
+          - draft
+          - active
+          - archived
+          title: Status
+          type: string
+        targeting_capabilities:
+          additionalProperties: true
+          title: Targeting Capabilities
+          type: object
+        updated_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Updated At
+        vendor_metric_optimization:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Vendor Metric Optimization
+        wholesale_product_id:
+          maxLength: 100
+          minLength: 1
+          title: Wholesale Product Id
+          type: string
+      required:
+      - wholesale_product_id
+      - name
+      - inventory
+      - product_id
+      title: WholesaleProductResponse
+      type: object
+    WholesaleProductResponse.f44f287.FormatIdRef:
+      additionalProperties: false
+      description: AdCP FormatId reference used by wholesale-product authoring.
+      properties:
+        agent_url:
+          maxLength: 2048
+          minLength: 1
+          title: Agent Url
+          type: string
+        id:
+          maxLength: 255
+          minLength: 1
+          title: Id
+          type: string
+      required:
+      - agent_url
+      - id
+      title: FormatIdRef
+      type: object
+    WholesaleProductResponse.f44f287.InventoryExecutionSelector:
+      additionalProperties: false
+      description: Adapter selector that tells the ad server where a wholesale product
+        executes.
+      properties:
+        external_id:
+          maxLength: 255
+          minLength: 1
+          title: External Id
+          type: string
+        name:
+          anyOf:
+          - maxLength: 512
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        options:
+          additionalProperties: true
+          title: Options
+          type: object
+        selector_type:
+          maxLength: 64
+          minLength: 1
+          title: Selector Type
+          type: string
+      required:
+      - selector_type
+      - external_id
+      title: InventoryExecutionSelector
+      type: object
+    WholesaleProductResponse.f44f287.PublisherPropertySelector:
+      additionalProperties: false
+      description: AdCP publisher-property selector.
+      properties:
+        property_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Ids
+        property_tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Property Tags
+        publisher_domain:
+          maxLength: 255
+          minLength: 1
+          title: Publisher Domain
+          type: string
+        selection_type:
+          default: all
+          enum:
+          - all
+          - by_id
+          - by_tag
+          title: Selection Type
+          type: string
+      required:
+      - publisher_domain
+      title: PublisherPropertySelector
+      type: object
+    WholesaleProductResponse.f44f287.WholesaleCreativeFormat:
+      additionalProperties: false
+      description: Creative format accepted by a wholesale product.
+      properties:
+        format_id:
+          $ref: '#/components/schemas/WholesaleProductResponse.f44f287.FormatIdRef'
+        slot_requirements:
+          items:
+            $ref: '#/components/schemas/WholesaleProductResponse.f44f287.WholesaleSlotRequirement'
+          title: Slot Requirements
+          type: array
+      required:
+      - format_id
+      title: WholesaleCreativeFormat
+      type: object
+    WholesaleProductResponse.f44f287.WholesaleFormatBinding:
+      additionalProperties: false
+      description: Adapter-specific binding for a buyer-facing creative format.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          title: Adapter Config
+          type: object
+        format_id:
+          $ref: '#/components/schemas/WholesaleProductResponse.f44f287.FormatIdRef'
+      required:
+      - format_id
+      title: WholesaleFormatBinding
+      type: object
+    WholesaleProductResponse.f44f287.WholesaleInventory:
+      additionalProperties: false
+      description: Inventory section of a wholesale product.
+      properties:
+        creative_formats:
+          items:
+            $ref: '#/components/schemas/WholesaleProductResponse.f44f287.WholesaleCreativeFormat'
+          title: Creative Formats
+          type: array
+        execution:
+          $ref: '#/components/schemas/WholesaleProductResponse.f44f287.WholesaleInventoryExecution'
+        publisher_properties:
+          items:
+            $ref: '#/components/schemas/WholesaleProductResponse.f44f287.PublisherPropertySelector'
+          title: Publisher Properties
+          type: array
+      required:
+      - execution
+      title: WholesaleInventory
+      type: object
+    WholesaleProductResponse.f44f287.WholesaleInventoryExecution:
+      additionalProperties: false
+      description: Adapter execution section of a wholesale product.
+      properties:
+        adapter:
+          maxLength: 64
+          minLength: 1
+          title: Adapter
+          type: string
+        format_bindings:
+          items:
+            $ref: '#/components/schemas/WholesaleProductResponse.f44f287.WholesaleFormatBinding'
+          title: Format Bindings
+          type: array
+        selectors:
+          items:
+            $ref: '#/components/schemas/WholesaleProductResponse.f44f287.InventoryExecutionSelector'
+          title: Selectors
+          type: array
+      required:
+      - adapter
+      title: WholesaleInventoryExecution
+      type: object
+    WholesaleProductResponse.f44f287.WholesalePricingOption:
+      additionalProperties: false
+      description: One pricing option accepted by the buyer-facing product.
+      properties:
+        currency:
+          default: USD
+          maxLength: 3
+          minLength: 3
+          title: Currency
+          type: string
+        is_fixed:
+          default: true
+          title: Is Fixed
+          type: boolean
+        min_spend_per_package:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min Spend Per Package
+        parameters:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Parameters
+        price_guidance:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Price Guidance
+        pricing_model:
+          maxLength: 32
+          minLength: 1
+          title: Pricing Model
+          type: string
+        rate:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Rate
+      required:
+      - pricing_model
+      title: WholesalePricingOption
+      type: object
+    WholesaleProductResponse.f44f287.WholesaleSlotRequirement:
+      additionalProperties: false
+      description: Optional slot-level requirements for multi-asset formats.
+      properties:
+        asset_type:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Asset Type
+        duration_ms:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Duration Ms
+        height:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Height
+        name:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        required:
+          default: true
+          title: Required
+          type: boolean
+        requirements:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Requirements
+        slot_id:
+          maxLength: 128
+          minLength: 1
+          title: Slot Id
+          type: string
+        width:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Width
+      required:
+      - slot_id
+      title: WholesaleSlotRequirement
+      type: object
+    WholesaleProductValidationResponse.f44f287:
+      additionalProperties: false
+      description: Validation result for wholesale-product authoring.
+      properties:
+        issues:
+          items:
+            $ref: '#/components/schemas/WholesaleProductValidationResponse.f44f287.WholesaleValidationIssue'
+          title: Issues
+          type: array
+        valid:
+          title: Valid
+          type: boolean
+      required:
+      - valid
+      title: WholesaleProductValidationResponse
+      type: object
+    WholesaleProductValidationResponse.f44f287.WholesaleValidationIssue:
+      additionalProperties: false
+      description: One validation issue for a wholesale-product draft.
+      properties:
+        code:
+          title: Code
+          type: string
+        field:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Field
+        message:
+          title: Message
+          type: string
+        severity:
+          default: error
+          enum:
+          - error
+          - warning
+          title: Severity
+          type: string
+      required:
+      - code
+      - message
+      title: WholesaleValidationIssue
       type: object
     WorkflowDetail.f44f287:
       additionalProperties: false
@@ -5263,6 +7707,38 @@ paths:
           description: Unprocessable Content
       summary: PATCH a routing rule.
       tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/creative-formats:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_creative-formats
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCreativeFormatsForAuthoringResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return creative formats usable in wholesale-product authoring.
+      tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/deactivate:
     post:
       description: ''
@@ -5336,6 +7812,152 @@ paths:
                 $ref: '#/components/schemas/ValidationError.6a07bef'
           description: Unprocessable Content
       summary: Searchable, paginated read over the synced ``gam_advertisers`` cache.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/inventory/adapter-capabilities:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_inventory_adapter-capabilities
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InventoryAdapterCapabilitiesResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return the tenant adapter's wholesale-product authoring capabilities.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/inventory/publisher-properties:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_inventory_publisher-properties
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublisherPropertiesResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return publisher domains, properties, and ready-to-use property selectors.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/inventory/publisher-properties:lookup:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_inventory_publisher-properties:lookup
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LookupPublisherPropertiesRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublisherPropertiesLookupResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Resolve one publisher domain through AAO and cache its property IDs/tags.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/inventory/selectors:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_inventory_selectors
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListInventorySelectorsResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Search cached ad-server inventory selectors for wholesale-product setup.
       tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/media-buys:
     get:
@@ -5530,6 +8152,331 @@ paths:
           description: Unprocessable Content
       summary: "Fan out a refresh across all sync types \u2014 collapses N per-sync\
         \ triggers into one call."
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_signals
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSignalMappingsResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List signal mappings for an embedded tenant.
+      tags: []
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_signals
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalMappingRequest.f44f287'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalMappingResponse.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Create one signal mapping backed by TenantSignal.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals/adapter-capabilities:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_signals_adapter-capabilities
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalAdapterCapabilitiesResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return the tenant adapter's signal-mapping authoring capabilities.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals/candidates:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_signals_candidates
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSignalCandidatesResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Search cached adapter signal candidates for signal-mapping setup.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals/{signal_id}:
+    delete:
+      description: ''
+      operationId: delete__api_v1_tenant-management_tenants_{tenant_id}_signals_{signal_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: signal_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteSignalMappingResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Delete one signal mapping if no active media buy references it.
+      tags: []
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_signals_{signal_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: signal_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalMappingResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Get one signal mapping.
+      tags: []
+    put:
+      description: ''
+      operationId: put__api_v1_tenant-management_tenants_{tenant_id}_signals_{signal_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: signal_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalMappingRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalMappingResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Replace one signal mapping.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals:validate:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_signals:validate
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalMappingRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalMappingValidationResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Validate a signal mapping draft without persisting it.
       tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/status:
     get:
@@ -5848,6 +8795,293 @@ paths:
                 $ref: '#/components/schemas/ValidationError.6a07bef'
           description: Unprocessable Content
       summary: Synchronously fire a synthetic event of every registered type.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_wholesale-products
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List wholesale products for an embedded tenant.
+      tags: []
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_wholesale-products
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WholesaleProductRequest.f44f287'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WholesaleProductResponse.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Create a wholesale product backed by Product + InventoryProfile.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products/{product_id}:
+    delete:
+      description: ''
+      operationId: delete__api_v1_tenant-management_tenants_{tenant_id}_wholesale-products_{product_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: product_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteWholesaleProductResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Delete one wholesale product.
+      tags: []
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_wholesale-products_{product_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: product_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WholesaleProductResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Get one wholesale product.
+      tags: []
+    put:
+      description: ''
+      operationId: put__api_v1_tenant-management_tenants_{tenant_id}_wholesale-products_{product_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: product_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WholesaleProductRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WholesaleProductResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Replace one wholesale product.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products:preview:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_wholesale-products:preview
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WholesaleProductRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WholesaleProductPreviewResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Preview buyer and adapter projections for a wholesale-product draft.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products:validate:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_wholesale-products:validate
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WholesaleProductRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WholesaleProductValidationResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Validate a wholesale-product draft without persisting it.
       tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/workflows:
     get:

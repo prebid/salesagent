@@ -53,6 +53,7 @@ from adcp.decisioning.capabilities import (
     Signals,
     SignalsFeatures,
     SupportedProtocol,
+    WebhookSigning,
 )
 from adcp.server import (
     BearerTokenAuth,
@@ -425,16 +426,12 @@ def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
 def build_router() -> LazyPlatformRouter:
     from adcp.types.generated_poc.bundled.protocol.get_adcp_capabilities_response import Features
 
-    # Side-effect import: installs the remaining tenant-specific
-    # webhook_signing response shim. Publisher domains now flow through
-    # SalesagentPlatformRouter.get_adcp_capabilities_for_request so the SDK
-    # owns canonical response projection.
-    from core.platforms import _capabilities_envelope  # noqa: F401
     from core.platforms._delegate import SUPPORTED_ADCP_VERSIONS, SUPPORTED_MAJOR_VERSIONS
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
 
     capabilities = DecisioningCapabilities(
         specialisms=["sales-non-guaranteed", "signal-owned"],
+        webhook_signing_managed_externally=True,
         adcp=Adcp(
             major_versions=sorted(SUPPORTED_MAJOR_VERSIONS),
             supported_versions=list(SUPPORTED_ADCP_VERSIONS),
@@ -461,6 +458,7 @@ def build_router() -> LazyPlatformRouter:
             features=Features(inline_creative_management=True),
         ),
         signals=Signals(discovery_modes=["brief", "wholesale"], features=SignalsFeatures(catalog_signals=True)),
+        webhook_signing=WebhookSigning(supported=False, legacy_hmac_fallback=True),
         supported_protocols=[SupportedProtocol.media_buy, SupportedProtocol.signals],
     )
     # ProposalManager is wired per-tenant. Today every active tenant

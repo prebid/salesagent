@@ -157,6 +157,28 @@ class GAMSyncRepository:
             stmt = stmt.limit(limit)
         return list(self._session.scalars(stmt).all())
 
+    def search_inventory(
+        self,
+        inventory_type: str,
+        *,
+        q: str | None = None,
+        parent_id: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[GAMInventory]:
+        """Search synced GAM inventory rows for embedded product authoring."""
+        stmt = select(GAMInventory).where(
+            GAMInventory.tenant_id == self._tenant_id,
+            GAMInventory.inventory_type == inventory_type,
+        )
+        if q:
+            pattern = f"%{q}%"
+            stmt = stmt.where((GAMInventory.name.ilike(pattern)) | (GAMInventory.inventory_id.ilike(pattern)))
+        if parent_id is not None:
+            stmt = stmt.where(GAMInventory.inventory_metadata["parent_id"].astext == str(parent_id))
+        stmt = stmt.order_by(GAMInventory.name.asc(), GAMInventory.inventory_id.asc()).offset(offset).limit(limit)
+        return list(self._session.scalars(stmt).all())
+
     def list_values_for_key(self, key_id: str) -> list[GAMInventory]:
         """Custom-targeting-value rows for one key, ordered by name.
 

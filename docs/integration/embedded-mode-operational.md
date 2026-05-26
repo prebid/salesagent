@@ -4,7 +4,7 @@
 **Audience:** Operators deploying salesagent in embedded mode behind a host product (Scope3 Storefront cited as the first reference deployment)
 **Last updated:** 2026-05-04
 
-This document covers the deployment-side concerns that complement the API design: where to pull images, how to run locally, what GAM permissions to instruct publishers to grant, and when sync runs.
+This document covers the deployment-side concerns that complement the API design: where to pull images, how to run locally, what GAM permissions to instruct publishers to grant, and when sync runs. For the API-only product setup flow used by embedded storefronts, see [Embedded Wholesale Products API](embedded-wholesale-products-api.md).
 
 ## D.1 — Image distribution
 

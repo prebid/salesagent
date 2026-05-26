@@ -571,11 +571,16 @@ class Product(Base, JSONValidatorMixin):
 
     @property
     def effective_implementation_config(self) -> dict:
-        """Get GAM implementation config from inventory profile (if set) or product itself.
+        """Get adapter implementation config from inventory profile (if set) or product itself.
 
-        Returns implementation_config dict with GAM-specific settings.
+        Returns implementation_config dict with adapter-specific settings.
         When inventory_profile_id is set, overlays profile inventory onto product config (auto-updates).
         When inventory_profile_id is null, returns product's own config (legacy).
+
+        Generic fields for wholesale-product authoring:
+        - adapter: Adapter type for the execution selectors
+        - selectors: Adapter-specific inventory selectors
+        - format_bindings: Format-to-selector execution metadata
 
         Key fields for GAM adapter:
         - targeted_ad_unit_ids: List of GAM ad unit IDs
@@ -586,6 +591,10 @@ class Product(Base, JSONValidatorMixin):
         if self.inventory_profile_id and self.inventory_profile:
             profile = self.inventory_profile
             inventory_config = profile.inventory_config or {}
+            for key in ("adapter", "selectors", "format_bindings"):
+                if key in inventory_config:
+                    config[key] = inventory_config[key]
+
             ad_units = inventory_config.get("ad_units") or []
             placements = inventory_config.get("placements") or []
 

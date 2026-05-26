@@ -41,6 +41,7 @@ cmd_up() {
     export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT ADCP_TESTING=true CREATE_SAMPLE_DATA=true MANAGED_INSTANCE=true
     export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
     export DELIVERY_WEBHOOK_INTERVAL=5
+    export TENANT_MANAGEMENT_API_KEY="${TENANT_MANAGEMENT_API_KEY:-dev-tenant-management-key-change-me}"
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
     export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 
@@ -75,6 +76,7 @@ export ADCP_TESTING=true
 export CREATE_SAMPLE_DATA=true
 export MANAGED_INSTANCE=true
 export DELIVERY_WEBHOOK_INTERVAL=5
+export TENANT_MANAGEMENT_API_KEY="${TENANT_MANAGEMENT_API_KEY}"
 export GEMINI_API_KEY="${GEMINI_API_KEY}"
 export ENCRYPTION_KEY="${ENCRYPTION_KEY}"
 EOF

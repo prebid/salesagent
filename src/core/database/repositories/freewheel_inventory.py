@@ -44,6 +44,27 @@ class FreeWheelInventoryRepository:
             stmt = stmt.filter_by(parent_id=parent_id)
         return list(self._session.scalars(stmt).all())
 
+    def search(
+        self,
+        entity_type: str,
+        *,
+        q: str | None = None,
+        parent_id: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[FreeWheelInventory]:
+        """Search cached FreeWheel inventory for embedded product authoring."""
+        stmt = select(FreeWheelInventory).filter_by(tenant_id=self._tenant_id, entity_type=entity_type)
+        if parent_id is not None:
+            stmt = stmt.filter_by(parent_id=parent_id)
+        if q:
+            pattern = f"%{q}%"
+            stmt = stmt.where((FreeWheelInventory.name.ilike(pattern)) | (FreeWheelInventory.entity_id.ilike(pattern)))
+        stmt = (
+            stmt.order_by(FreeWheelInventory.name.asc(), FreeWheelInventory.entity_id.asc()).offset(offset).limit(limit)
+        )
+        return list(self._session.scalars(stmt).all())
+
     def latest_sync_at(self) -> datetime | None:
         """Return the most recent ``last_synced_at`` across all cached entities
         for this tenant, or ``None`` if the tenant has never synced. The

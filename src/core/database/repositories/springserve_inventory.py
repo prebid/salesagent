@@ -52,6 +52,36 @@ class SpringServeInventoryRepository:
             stmt = stmt.filter(SpringServeInventory.key_id == key_id)
         return list(self._session.scalars(stmt).all())
 
+    def search(
+        self,
+        entity_type: str,
+        *,
+        q: str | None = None,
+        parent_id: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[SpringServeInventory]:
+        """Search cached SpringServe inventory for embedded product authoring."""
+        stmt = select(SpringServeInventory).filter_by(tenant_id=self._tenant_id, entity_type=entity_type)
+        if parent_id is not None:
+            if entity_type == "supply_router":
+                stmt = stmt.filter(SpringServeInventory.supply_partner_id == parent_id)
+            elif entity_type == "supply_tag":
+                stmt = stmt.filter(SpringServeInventory.supply_router_id == parent_id)
+            elif entity_type == "value_list":
+                stmt = stmt.filter(SpringServeInventory.key_id == parent_id)
+        if q:
+            pattern = f"%{q}%"
+            stmt = stmt.where(
+                (SpringServeInventory.name.ilike(pattern)) | (SpringServeInventory.entity_id.ilike(pattern))
+            )
+        stmt = (
+            stmt.order_by(SpringServeInventory.name.asc(), SpringServeInventory.entity_id.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(self._session.scalars(stmt).all())
+
     def bulk_upsert(self, rows: Iterable[dict]) -> int:
         """Insert or update inventory rows. ``rows`` items must carry
         ``entity_type``, ``entity_id``, ``raw_json`` at minimum;

@@ -7,6 +7,8 @@ Tests the access control logic that restricts product visibility to specific pri
 exercised through the full _get_products_impl pipeline with real DB data.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
@@ -154,6 +156,32 @@ class TestProductPrincipalAccessControlPipeline:
 
         assert len(result.products) == 1
         assert result.products[0].product_id == "public_product"
+
+    @pytest.mark.asyncio
+    async def test_draft_and_archived_products_hidden_from_buyer_discovery(self, integration_db):
+        """Wholesale drafts and archived products are not buyer-visible through get_products."""
+        with ProductEnv(tenant_id="acl-product-status", principal_id="any-principal") as env:
+            tenant = TenantFactory(tenant_id="acl-product-status", subdomain="acl-product-status")
+            PrincipalFactory(tenant=tenant, principal_id="any-principal")
+            for product_id, implementation_config, archived_at in (
+                ("legacy_product", None, None),
+                ("active_product", {"status": "active"}, None),
+                ("draft_product", {"status": "draft"}, None),
+                ("archived_config_product", {"status": "archived"}, None),
+                ("archived_at_product", {"status": "active"}, datetime.now(UTC)),
+            ):
+                product = ProductFactory(
+                    tenant=tenant,
+                    product_id=product_id,
+                    implementation_config=implementation_config,
+                    archived_at=archived_at,
+                )
+                PricingOptionFactory(product=product)
+
+            result = await env.call_impl(brief="test")
+
+        result_ids = {product.product_id for product in result.products}
+        assert result_ids == {"legacy_product", "active_product"}
 
 
 class TestProductAccessFilterPipeline:

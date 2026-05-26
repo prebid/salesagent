@@ -159,6 +159,21 @@ def convert_product_models_to_resolved(
     return products
 
 
+def _is_buyer_visible_product_model(product_model: Any) -> bool:
+    """Return whether a persisted product should be visible through buyer discovery."""
+    attrs = getattr(product_model, "__dict__", {})
+    if attrs.get("archived_at") is not None:
+        return False
+
+    implementation_config = attrs.get("implementation_config")
+    if implementation_config is None and "implementation_config" not in attrs:
+        implementation_config = getattr(product_model, "implementation_config", None)
+    if not isinstance(implementation_config, dict):
+        return True
+
+    return implementation_config.get("status") not in {"draft", "archived"}
+
+
 async def _get_products_impl(
     req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:
@@ -365,7 +380,7 @@ async def _get_products_impl(
 
     with ProductUoW(tenant["tenant_id"]) as uow:
         assert uow.products is not None
-        db_products = uow.products.list_all()
+        db_products = [product for product in uow.products.list_all() if _is_buyer_visible_product_model(product)]
 
         # Convert database Product models to ResolvedProduct (wire-shape +
         # internal fields). Filter pipeline below operates on these; at the
@@ -439,6 +454,7 @@ async def _get_products_impl(
 
         dynamic_variants = await generate_variants_for_brief(tenant["tenant_id"], brief_text, our_agent_url)
         if dynamic_variants:
+            dynamic_variants = [product for product in dynamic_variants if _is_buyer_visible_product_model(product)]
             # Convert Product models to Product schemas for response
 
             # Convert database models to ResolvedProduct (matches the static-product
@@ -840,6 +856,7 @@ def get_product_catalog(tenant_id: str | None = None) -> list[ResolvedProduct]:
     with ProductUoW(tenant_id) as uow:
         assert uow.products is not None
         products = uow.products.list_all_with_inventory()
+        products = [product for product in products if _is_buyer_visible_product_model(product)]
 
         # Match the get_products pipeline: ORM → ResolvedProduct via the
         # sidecar conversion, so internal fields (implementation_config,
