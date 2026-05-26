@@ -219,7 +219,7 @@ Source: UC-002-main-mcp.md
 **Given** a package with `targeting_overlay.property_list` and/or `targeting_overlay.collection_list` references
 **When** the system creates the media buy and the buyer reads it back via `get_media_buys`
 **Then** the response includes `media_buys[i].packages[j].targeting_overlay.property_list.list_id` and `.collection_list.list_id` matching the values sent
-**Spec:** AdCP 3.0.6 `core/targeting.json:189-200`; storyboard `inventory_list_targeting`
+**Spec:** AdCP 3.0.0 `core/targeting.json` (`property_list`, `collection_list`); storyboard `inventory_list_targeting`
 **Business Rule:** BR-RULE-014
 **Priority:** P1
 
@@ -229,7 +229,7 @@ Source: UC-002-main-mcp.md
 **Given** a package with `targeting_overlay.property_list` set against a product whose `property_targeting_allowed` is false
 **When** the system validates targeting
 **Then** it returns a validation error identifying the product and the constraint
-**Spec:** AdCP 3.0.6 `core/targeting.json:191` ("Sellers SHOULD return a validation error if the product has property_targeting_allowed: false")
+**Spec:** AdCP 3.0.0 `core/product.json` `property_targeting_allowed` ("Sellers SHOULD return a validation error if the product has property_targeting_allowed: false")
 **Business Rule:** BR-RULE-014
 **Priority:** P1
 

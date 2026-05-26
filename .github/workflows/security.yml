@@ -71,6 +71,8 @@ jobs:
           grep "  ${PINACT_TARBALL}$" pinact_checksums.txt | sha256sum -c -
           tar -xzf "${PINACT_TARBALL}" -C /usr/local/bin/ pinact
           pinact run --check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   actionlint:
     name: actionlint (workflow expression lint)

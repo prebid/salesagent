@@ -209,9 +209,9 @@ def test_collection_list_roundtrips_through_postgres(roundtrip_tenant):
     assert len(response.media_buys) == 1
     pkg = response.media_buys[0].packages[0]
     assert pkg.targeting_overlay is not None
-    assert pkg.targeting_overlay.collection_list is not None, (
-        "collection_list nested reference must survive JSON SerDes"
-    )
+    assert (
+        pkg.targeting_overlay.collection_list is not None
+    ), "collection_list nested reference must survive JSON SerDes"
     assert pkg.targeting_overlay.collection_list.list_id == "C_collection_v1"
 
 
@@ -219,7 +219,7 @@ def test_collection_list_roundtrips_through_postgres(roundtrip_tenant):
 def test_both_lists_coexist_in_single_package(roundtrip_tenant):
     """A package can carry property_list AND collection_list — both round-trip.
 
-    Per AdCP 3.0.6 ``core/targeting.json``, ``property_list`` and
+    Per AdCP 3.0.0 ``core/targeting.json``, ``property_list`` and
     ``collection_list`` are independent fields; a buyer may set either or
     both. This test ensures nothing in the SerDes path silently drops the
     second list when the first is present (e.g. an ordering-sensitive

@@ -114,6 +114,15 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 ---
 
+## AdCP Spec Version
+
+This project targets AdCP spec **3.0.1** via the `adcp==4.3.0` Python SDK. See
+[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
+and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
+fails on pin drift.
+
+---
+
 ## 🚨 Critical Architecture Patterns
 
 ### 1. AdCP Schema: Extend Library Schemas
