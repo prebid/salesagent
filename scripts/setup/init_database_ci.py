@@ -56,6 +56,12 @@ def init_db_ci():
                     session.flush()
                     print("   ✓ Access control configured")
 
+                if not existing_tenant.default_gam_advertiser_id:
+                    print("Backfilling default advertiser for existing tenant...")
+                    existing_tenant.default_gam_advertiser_id = "test-advertiser"
+                    session.flush()
+                    print("   ✓ Default advertiser configured")
+
                 # Check if principal exists GLOBALLY by access_token (it's unique across all tenants)
                 stmt_principal = select(Principal).filter_by(access_token="ci-test-token")
                 existing_principal = session.scalars(stmt_principal).first()
@@ -132,6 +138,7 @@ def init_db_ci():
                     subdomain="ci-test",
                     billing_plan="test",
                     ad_server="mock",
+                    default_gam_advertiser_id="test-advertiser",
                     enable_axe_signals=True,
                     is_active=True,  # Explicitly set for auth lookup
                     authorized_emails=["ci-test@example.com"],  # Required by setup checklist
@@ -506,6 +513,10 @@ def init_db_ci():
             if existing_iso:
                 iso_tenant_id = existing_iso.tenant_id
                 print(f"Isolation tenant already exists (ID: {iso_tenant_id})")
+                if not existing_iso.default_gam_advertiser_id:
+                    existing_iso.default_gam_advertiser_id = "iso-test-advertiser"
+                    iso_session.commit()
+                    print("  ✓ Backfilled isolation tenant default advertiser")
             else:
                 iso_tenant_id = str(uuid.uuid4())
                 now_iso = datetime.now(UTC)
@@ -515,6 +526,7 @@ def init_db_ci():
                     subdomain="iso-test",
                     billing_plan="test",
                     ad_server="mock",
+                    default_gam_advertiser_id="iso-test-advertiser",
                     enable_axe_signals=False,
                     is_active=True,
                     authorized_emails=["iso-test@example.com"],

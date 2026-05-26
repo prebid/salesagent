@@ -72,6 +72,22 @@ class CreativeSyncEnv(IntegrationEnv):
     }
     DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
+    def setup_default_data(self) -> tuple[Any, Any]:
+        """Create default creative-sync tenant, principal, and wire account."""
+        tenant, principal = super().setup_default_data()
+
+        from tests.factories import AccountFactory, AgentAccountAccessFactory
+
+        tenant.default_gam_advertiser_id = "test_adv"
+        account = AccountFactory(
+            tenant=tenant,
+            account_id=f"{self._tenant_id}:{self._principal_id}",
+            principal_id=self._principal_id,
+            platform_mappings={"mock": {"advertiser_id": "test_adv"}},
+        )
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
+        return tenant, principal
+
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
         # Registry: return a mock that supports list_all_formats() + get_format()

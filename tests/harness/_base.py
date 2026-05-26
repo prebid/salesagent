@@ -800,15 +800,8 @@ class IntegrationEnv(BaseTestEnv):
         Returns (tenant, principal) ORM instances. Uses self._tenant_id
         and self._principal_id from constructor.
         """
-        from tests.factories import AccountFactory, AgentAccountAccessFactory, PrincipalFactory, TenantFactory
+        from tests.factories import PrincipalFactory, TenantFactory
 
-        tenant = TenantFactory(tenant_id=self._tenant_id, default_gam_advertiser_id="test_adv")
+        tenant = TenantFactory(tenant_id=self._tenant_id)
         principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=f"{self._tenant_id}:{self._principal_id}",
-            principal_id=self._principal_id,
-            platform_mappings={"mock": {"advertiser_id": "test_adv"}},
-        )
-        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         return tenant, principal
