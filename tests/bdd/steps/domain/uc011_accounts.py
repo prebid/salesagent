@@ -458,25 +458,31 @@ def then_accounts_array_count(ctx: dict, count: int) -> None:
 
 @then("each account includes account_id, name, status, advertiser, rate_card, and payment_terms")
 def then_accounts_have_fields(ctx: dict) -> None:
-    """Assert each account schema includes the required fields.
+    """Assert each returned account carries the expected fields from Given setup.
 
-    account_id, name, status: always required — must be non-None.
-    advertiser, rate_card, payment_terms: optional fields — verify the
-    schema exposes them (via model_fields), allowing callers to read the
-    field even when the value is None. We use schema introspection rather
-    than model_dump() because AdCPBaseModel.model_dump() defaults to
-    exclude_none=True, which strips optional fields with None values.
+    Required fields (account_id, name, status) must match the factory-seeded
+    values tracked in ctx. Optional fields (advertiser, rate_card, payment_terms)
+    must be present in the schema so callers can read them.
     """
     resp = ctx["response"]
-    for i, acct in enumerate(resp.accounts):
-        # Required fields — must be populated
-        assert acct.account_id is not None, f"Account {i} missing account_id"
-        assert acct.name is not None, f"Account {i} missing name"
-        assert acct.status is not None, f"Account {i} missing status"
-        # Optional fields — schema must expose them
+    expected_ids = ctx.get("expected_account_ids", set())
+    assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    assert returned_ids == expected_ids, f"Returned account_ids {returned_ids} != expected {expected_ids}"
+    for acct in resp.accounts:
+        # Required fields — verify values match factory defaults
+        assert acct.account_id in expected_ids, f"Unexpected account_id: {acct.account_id}"
+        assert isinstance(acct.name, str) and acct.name, f"Account {acct.account_id} has empty name"
+        actual_status = _status_str(acct.status)
+        assert actual_status in ctx.get("created_statuses", set()), (
+            f"Account {acct.account_id} status '{actual_status}' not in seeded statuses {ctx.get('created_statuses')}"
+        )
+        # Optional fields — schema must expose them (POST-S3 compliance).
+        # These fields are None when not set, but the schema must declare them
+        # so callers can read the field even when the value is None.
         fields = type(acct).model_fields
         for field_name in ("advertiser", "rate_card", "payment_terms"):
-            assert field_name in fields, f"Account {i} schema missing optional field '{field_name}'"
+            assert field_name in fields, f"Account {acct.account_id} schema missing optional field '{field_name}'"
 
 
 @then("the accounts are only those accessible to the authenticated agent")
@@ -643,23 +649,21 @@ def then_all_statuses_present(ctx: dict) -> None:
 
 @then("the result set is identical to requesting without any filter")
 def then_result_set_identical(ctx: dict) -> None:
-    """Assert the unfiltered result set contains all accounts.
+    """Assert the unfiltered result set contains exactly the seeded accounts.
 
-    The Given step created accounts with 4 different statuses,
-    so all 4 should appear in the unfiltered results. When expected_account_ids
-    is tracked in ctx by Given steps, verifies exact ID-set equality; otherwise
-    falls back to the minimum count check.
+    The Given step created accounts with 4 different statuses and tracked
+    their IDs in ctx["expected_account_ids"]. The unfiltered response must
+    return exactly that set — no extras, no omissions.
     """
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
-    assert len(resp.accounts) >= 4, f"Expected at least 4 accounts (one per status), got {len(resp.accounts)}"
     expected_ids = ctx.get("expected_account_ids")
-    if expected_ids:
-        returned_ids = {acct.account_id for acct in resp.accounts}
-        assert returned_ids == expected_ids, (
-            f"Result set mismatch: returned {returned_ids}, expected {expected_ids}. "
-            f"Extra: {returned_ids - expected_ids}, Missing: {expected_ids - returned_ids}"
-        )
+    assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    assert returned_ids == expected_ids, (
+        f"Result set mismatch: returned {returned_ids}, expected {expected_ids}. "
+        f"Extra: {returned_ids - expected_ids}, Missing: {expected_ids - returned_ids}"
+    )
 
 
 @then(parsers.parse('the response has outcome "{outcome}"'))
@@ -1054,20 +1058,22 @@ def then_each_error_has_code_message(ctx: dict) -> None:
 
 @then("a response with both accounts and errors arrays is invalid")
 def then_both_invalid(ctx: dict) -> None:
-    """Verify the schema prohibits both accounts and errors coexisting."""
+    """Verify the schema prohibits both accounts and errors coexisting.
+
+    SyncAccountsResponse is the success variant (has accounts, no errors field).
+    Constructing it with an errors array must raise ValidationError because
+    the success variant schema does not accept an errors field (oneOf union).
+    """
+    import pytest
     from pydantic import ValidationError
 
     from src.core.schemas.account import SyncAccountsResponse
 
-    try:
+    with pytest.raises((ValidationError, TypeError)):
         SyncAccountsResponse(
             accounts=[],
             errors=[{"code": "TEST", "message": "test"}],
         )
-        # If it doesn't raise, check that at least one field is rejected
-        # SyncAccountsResponse is the success variant — errors field may be absent
-    except (ValidationError, TypeError):
-        pass  # Expected — schema rejects this combination
 
 
 @then(parsers.parse("a response with neither_present is also invalid ({description})"))
@@ -1506,14 +1512,17 @@ def then_account_in_db(ctx: dict) -> None:
 
 @then(parsers.parse('the response includes a result for brand domain "{domain}" showing deactivation'))
 def then_deactivation_result(ctx: dict, domain: str) -> None:
-    """Assert the response shows a deactivated account for the given domain."""
+    """Assert the response shows a deactivated account for the given domain.
+
+    Production code (BR-RULE-061) sets action='updated' and status='closed'
+    for accounts removed by delete_missing.
+    """
     resp = ctx["response"]
     acct = _find_account_by_brand(resp, domain)
     actual_status = _status_str(acct.status)
     actual_action = _action_str(acct.action)
-    assert actual_status == "closed" or actual_action == "updated", (
-        f"Expected deactivation for {domain}: got status={actual_status}, action={actual_action}"
-    )
+    assert actual_status == "closed", f"Expected status 'closed' for deactivated {domain}, got '{actual_status}'"
+    assert actual_action == "updated", f"Expected action 'updated' for deactivated {domain}, got '{actual_action}'"
 
 
 @then(parsers.parse('the account for brand domain "{domain}" has action "unchanged" or "updated"'))
@@ -1546,7 +1555,11 @@ def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
 
 @then("only agent A's absent accounts are deactivated")
 def then_only_agent_a_deactivated(ctx: dict) -> None:
-    """Assert agent B's accounts were not deactivated by agent A's delete_missing operation."""
+    """Assert agent B's accounts were not deactivated by agent A's delete_missing.
+
+    Verifies production's agent-scoping: agent B's accounts must remain active
+    (not closed) after agent A's delete_missing operation.
+    """
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
 
@@ -1556,10 +1569,10 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
     with get_db_session() as session:
         repo = AccountRepository(session, tenant.tenant_id)
         agent_b_accounts = repo.list_by_principal(agent_b.principal_id)
-    closed = [a for a in agent_b_accounts if _status_str(a.status) == "closed"]
-    assert not closed, (
-        f"Agent A's delete_missing operation deactivated agent B's accounts: {[a.account_id for a in closed]}"
-    )
+    assert agent_b_accounts, "Test setup error: agent B should have at least one account"
+    statuses = {a.account_id: _status_str(a.status) for a in agent_b_accounts}
+    for acct_id, status in statuses.items():
+        assert status != "closed", f"Agent A's delete_missing deactivated agent B's account {acct_id} (status={status})"
 
 
 @then(parsers.parse('brand domain "{domain}" remains in its current state'))
@@ -1881,12 +1894,19 @@ def then_error_with_code(ctx: dict, code: str) -> None:
 
 @then("the error indicates accounts array must not be empty")
 def then_empty_accounts_error(ctx: dict) -> None:
-    """Assert the error mentions empty accounts array."""
+    """Assert the error is a validation error about empty accounts array.
+
+    Production raises AdCPValidationError with a message containing
+    'accounts array must not be empty'.
+    """
+    from src.core.exceptions import AdCPValidationError
+
     error = _get_error(ctx)
-    msg = str(error).lower()
-    assert "account" in msg or "empty" in msg or "min_length" in msg, (
-        f"Expected error about empty accounts, got: {error}"
+    assert isinstance(error, (AdCPValidationError, ValueError)), (
+        f"Expected AdCPValidationError, got {type(error).__name__}: {error}"
     )
+    msg = str(error).lower()
+    assert "empty" in msg and "account" in msg, f"Expected error about empty accounts array, got: {error}"
 
 
 @then("the per-account error indicates brand domain is required")
@@ -1900,11 +1920,18 @@ def then_brand_required_error(ctx: dict) -> None:
 
 @then("the per-account error indicates operator is required")
 def then_operator_required_error(ctx: dict) -> None:
-    """Assert the error mentions missing operator."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error about missing operator"
+    """Assert the error is a validation error indicating operator is required.
+
+    Production raises Pydantic ValidationError because operator is a required
+    field in the SyncAccountsRequest account entry schema.
+    """
+    from pydantic import ValidationError
+
+    error = _get_error(ctx)
+    assert isinstance(error, ValidationError), f"Expected Pydantic ValidationError, got {type(error).__name__}: {error}"
     msg = str(error).lower()
-    assert "operator" in msg or "required" in msg, f"Expected error about operator, got: {error}"
+    assert "operator" in msg, f"Expected error about 'operator', got: {error}"
+    assert "required" in msg or "missing" in msg, f"Expected 'required' or 'missing' in error, got: {error}"
 
 
 # ── Then: sandbox assertions ───────────────────────────────────────────
@@ -1929,14 +1956,30 @@ def then_sandbox_account_has_id(ctx: dict) -> None:
 
 @then("no real ad platform account should have been created")
 def then_no_real_platform_account(ctx: dict) -> None:
-    """Assert sandbox account doesn't create real platform resources.
+    """Assert sandbox account was created without external platform provisioning.
 
-    In our implementation, sandbox accounts are stored in DB but
-    no ad platform adapter is called. This is verified by the fact
-    that the account was created with sandbox=True.
+    Verifies the consequence (no external platform reference in DB), not just
+    the input (sandbox=True). The DB record should have no platform_mappings,
+    proving no adapter was called to provision an external account.
     """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
     acct = ctx.get("last_account") or ctx["response"].accounts[0]
-    assert acct.sandbox is True, "Expected sandbox account"
+    account_id = acct.account_id
+    assert account_id is not None, "Account missing account_id"
+
+    tenant = ctx["tenant"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        db_acct = repo.get_by_id(account_id)
+        assert db_acct is not None, f"Account {account_id} not found in DB"
+        assert db_acct.sandbox is True, f"DB account {account_id} sandbox={db_acct.sandbox}"
+        # No external platform reference should exist — platform_mappings must be None/empty
+        assert not db_acct.platform_mappings, (
+            f"Sandbox account {account_id} has platform_mappings={db_acct.platform_mappings} "
+            f"— expected no external platform references"
+        )
 
 
 @then(parsers.parse('the response should contain "{field}" array'))
@@ -1959,19 +2002,32 @@ def then_all_accounts_sandbox_true(ctx: dict) -> None:
 
 @then("the response should not include production accounts")
 def then_no_production_accounts(ctx: dict) -> None:
-    """Assert no accounts have sandbox=False (production)."""
+    """Assert all returned accounts are sandbox (no production accounts).
+
+    The sandbox filter was applied in the When step. Every returned account
+    must have sandbox=True; any sandbox=False or sandbox=None is a production
+    account that should have been filtered out.
+    """
     resp = ctx["response"]
     for acct in resp.accounts:
-        assert acct.sandbox is not False or acct.sandbox is True, (
-            f"Production account found: {acct.name} (sandbox={acct.sandbox})"
-        )
+        assert acct.sandbox is True, f"Production account found: {acct.account_id} (sandbox={acct.sandbox})"
 
 
 @then("the response should indicate a validation error")
 def then_response_validation_error(ctx: dict) -> None:
-    """Assert the response indicates a validation error."""
-    error = ctx.get("error")
-    assert error is not None, "Expected a validation error"
+    """Assert the response is a validation error of the expected type.
+
+    Sandbox validation errors should be real Pydantic/AdCP validation errors,
+    same as production (BR-RULE-209 INV-1).
+    """
+    from pydantic import ValidationError
+
+    from src.core.exceptions import AdCPValidationError
+
+    error = _get_error(ctx)
+    assert isinstance(error, (ValidationError, AdCPValidationError, ValueError)), (
+        f"Expected validation error type, got {type(error).__name__}: {error}"
+    )
 
 
 @then("the error should be a real validation error, not simulated")
@@ -1991,30 +2047,29 @@ def then_real_validation_error(ctx: dict) -> None:
 
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_has_fix_suggestion(ctx: dict) -> None:
-    """Assert the error includes a suggestion or recovery guidance.
+    """Assert the error includes actionable fix guidance.
 
-    Pydantic ValidationErrors inherently include fix guidance in their
-    message (e.g., 'Input should be ...'). Operation-level errors have
-    an explicit 'recovery' or 'suggestion' field.
+    Pydantic ValidationErrors include inline guidance ('Input should be ...').
+    Per-account errors (AdCP Error objects) carry an explicit 'suggestion' field.
+    The assertion verifies the error message contains actionable text that helps
+    the caller correct their input.
     """
     from pydantic import ValidationError
 
-    # Check per-account errors first
-    acct = ctx.get("last_account")
-    if acct is not None and acct.errors:
-        has_suggestion = any(getattr(e, "suggestion", None) for e in acct.errors)
-        if has_suggestion:
-            return
-    # Fall back to operation-level error
-    error = ctx.get("error")
-    if error is not None:
-        # Pydantic errors include inline fix guidance ("Input should be ...")
-        if isinstance(error, ValidationError):
-            return
-        has_field = hasattr(error, "recovery") or hasattr(error, "suggestion")
-        assert has_field, f"Expected suggestion/recovery in error: {error}"
-        return
-    raise AssertionError("No error found — expected suggestion field")
+    error = _get_error(ctx)
+    msg = str(error).lower()
+    # Pydantic errors include "input should be" as inline fix guidance.
+    # AdCP errors include "use one of" or "supported" as suggestion text.
+    assert isinstance(error, (ValidationError, ValueError, Exception)), (
+        f"Expected an error with fix guidance, got {type(error).__name__}"
+    )
+    assert (
+        "input should be" in msg
+        or "should be" in msg
+        or "use one of" in msg
+        or "supported" in msg
+        or "suggestion" in msg
+    ), f"Error lacks fix guidance (no 'should be'/'use one of'/'supported'): {error}"
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -89,6 +89,28 @@ def _find_keyword(keywords: list, keyword: str, match_type: str | None = None) -
     return None
 
 
+def _collect_pricing_option_ids(product: Any) -> set[str]:
+    """Extract all valid pricing_option_id values from a product.
+
+    Handles both explicit pricing_option_id attributes and synthetic IDs
+    constructed from (pricing_model, currency, is_fixed).
+    """
+    pricing_options = product.pricing_options if hasattr(product, "pricing_options") else []
+    valid_ids: set[str] = set()
+    for opt in pricing_options or []:
+        opt_id = getattr(opt, "pricing_option_id", None)
+        if opt_id is None:
+            pm = getattr(opt, "pricing_model", None)
+            cur = getattr(opt, "currency", None)
+            fixed = getattr(opt, "is_fixed", None)
+            if pm and cur and fixed is not None:
+                fixed_str = "fixed" if fixed else "auction"
+                opt_id = f"{pm}_{cur.lower()}_{fixed_str}"
+        if opt_id:
+            valid_ids.add(opt_id)
+    return valid_ids
+
+
 def _assert_pricing_option_max_bid(ctx: dict, pkg: Any, *, expected_is_ceiling: bool) -> None:
     """Verify ceiling/exact bid semantics by checking the product's pricing option max_bid.
 
@@ -1647,8 +1669,26 @@ def then_package_has_id(ctx: dict) -> None:
 
 @then(parsers.parse('the package should contain buyer_ref "{buyer_ref}"'))
 def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    assert ctx.get("response") is not None or ctx.get("error") is not None
+    """Verify package structure: buyer_ref removed in adcp 3.12, package_id replaces it.
+
+    Since buyer_ref was removed from the Package schema in adcp 3.12,
+    this step verifies:
+    1. The response contains a valid package (structural correctness).
+    2. The package has a seller-assigned package_id (the replacement for buyer_ref).
+    3. The buyer_ref field is absent from the package (spec compliance).
+    """
+    packages = _get_packages(ctx)
+    assert packages, "No packages in response"
+    pkg = packages[0]
+    # Package must have a seller-assigned package_id (the replacement for buyer_ref)
+    pkg_id = _pkg_field(pkg, "package_id")
+    assert pkg_id is not None, "Package missing package_id — seller must assign an identifier"
+    assert isinstance(pkg_id, str) and pkg_id.strip(), (
+        f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
+    )
+    # buyer_ref was removed in adcp 3.12; verify it's absent from the response
+    buyer_ref_value = _pkg_field(pkg, "buyer_ref")
+    assert buyer_ref_value is None, f"buyer_ref was removed in adcp 3.12 but is present on package: {buyer_ref_value!r}"
 
 
 @then(parsers.parse("the package should contain budget {budget:d}"))
@@ -1748,21 +1788,26 @@ def then_package_formats_to_provide(ctx: dict) -> None:
 
 @then("the package should contain format_ids_to_provide based on assigned creatives")
 def then_package_formats_to_provide_based_on_creatives(ctx: dict) -> None:
-    """Assert format_ids_to_provide reflects outstanding creative needs based on assignments."""
-    import pytest
+    """Assert format_ids_to_provide reflects outstanding creative needs based on assignments.
 
+    Production code computes format_ids_to_provide as the set difference between
+    the package's format_ids and the format_ids already covered by creative_assignments.
+    This step verifies that computation is correct.
+    """
     packages = _get_packages(ctx)
     pkg = packages[0]
     formats_to_provide = _pkg_field(pkg, "format_ids_to_provide")
-    if formats_to_provide is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: format_ids_to_provide not present in response. FIXME(salesagent-9vgz.1)")
+    assert formats_to_provide is not None, (
+        "format_ids_to_provide must be present in the response — production computes this "
+        "from package format_ids minus assigned creative format_ids"
+    )
     assert isinstance(formats_to_provide, list), (
         f"Expected format_ids_to_provide to be a list, got {type(formats_to_provide)}"
     )
-    # Cross-check against creative_assignments: formats_to_provide should exclude
-    # formats that already have creative assets assigned
+    # Extract format_ids and creative_assignments from the response package
     format_ids = _pkg_field(pkg, "format_ids") or []
     creative_assignments = _pkg_field(pkg, "creative_assignments") or []
+    # Compute assigned format_ids from creative_assignments in the response
     assigned_format_ids: set[str] = set()
     for ca in creative_assignments:
         ca_fids = ca.get("format_ids") if isinstance(ca, dict) else getattr(ca, "format_ids", None)
@@ -1773,19 +1818,22 @@ def then_package_formats_to_provide_based_on_creatives(ctx: dict) -> None:
     # Negative direction: assigned formats must NOT be in formats_to_provide
     if assigned_format_ids:
         overlap = provide_set & assigned_format_ids
-        assert not overlap, f"format_ids_to_provide contains {overlap} which already have creative assignments"
+        assert not overlap, (
+            f"format_ids_to_provide contains {overlap} which already have creative assignments — "
+            f"production should exclude assigned formats"
+        )
+    # Cross-check against package format_ids
     if format_ids:
         pkg_format_set = {_extract_format_id(f) for f in format_ids}
-        # formats_to_provide should be a subset of package format_ids
+        # formats_to_provide must be a subset of package format_ids
         extra = provide_set - pkg_format_set
-        assert not extra, f"format_ids_to_provide contains {extra} not in package format_ids {pkg_format_set}"
-        # Positive direction: all unassigned formats MUST appear in formats_to_provide
+        assert extra == set(), f"format_ids_to_provide contains {extra} not in package format_ids {pkg_format_set}"
+        # Positive direction: all unassigned package formats MUST appear in formats_to_provide
         expected_to_provide = pkg_format_set - assigned_format_ids
-        missing = expected_to_provide - provide_set
-        assert not missing, (
-            f"format_ids_to_provide is missing unassigned formats {missing}. "
-            f"Package formats: {pkg_format_set}, assigned: {assigned_format_ids}, "
-            f"formats_to_provide: {provide_set}"
+        assert provide_set == expected_to_provide, (
+            f"format_ids_to_provide mismatch: expected {expected_to_provide} "
+            f"(package formats {pkg_format_set} minus assigned {assigned_format_ids}), "
+            f"got {provide_set}"
         )
 
 
@@ -1816,30 +1864,48 @@ def then_package_explicit_formats(ctx: dict, fmt_ids: str) -> None:
 
 @then("the response should contain a package with all provided fields echoed")
 def then_package_all_fields(ctx: dict) -> None:
-    """Assert package echoes all provided fields from the request."""
+    """Assert package echoes all provided fields from the request.
+
+    Verifies that the production response echoes back every field the buyer
+    submitted in the package request. This is NOT mock-echo — it verifies the
+    production code persisted and returned each field correctly.
+    """
     packages = _get_packages(ctx)
     assert packages, "No packages in response"
     pkg = packages[0]
+    # Seller must assign a package_id
     pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id is not None, "Package missing package_id"
+    assert isinstance(pkg_id, str) and pkg_id.strip(), (
+        f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
+    )
     # Verify all fields from the request are echoed in the response
     request_kwargs = ctx.get("request_kwargs", {})
     req_packages = request_kwargs.get("packages", [])
     req_pkg = req_packages[0] if req_packages else {}
-    missing_fields = []
-    mismatched_fields = []
+    missing_fields: list[str] = []
+    mismatched_fields: list[str] = []
+    checked_fields: list[str] = []
     for field, expected_value in req_pkg.items():
         actual = _pkg_field(pkg, field)
         if actual is None:
             missing_fields.append(field)
             continue
+        checked_fields.append(field)
         # Compare scalar fields for value echo
         if isinstance(expected_value, (str, int, float, bool)):
             _compare_echoed_scalar(field, expected_value, actual, mismatched_fields)
+        # Compare list fields by length and content presence
+        elif isinstance(expected_value, list) and isinstance(actual, list):
+            assert len(actual) == len(expected_value), (
+                f"Field '{field}': expected {len(expected_value)} items, got {len(actual)}"
+            )
     assert not missing_fields, f"Package created but fields {missing_fields} not echoed in response"
-    if mismatched_fields:
-        details = "; ".join(mismatched_fields)
-        raise AssertionError(f"Echoed fields have wrong values: {details}")
+    assert not mismatched_fields, f"Echoed fields have wrong values: {'; '.join(mismatched_fields)}"
+    # Ensure at least one field was actually checked (guard against empty requests)
+    assert len(checked_fields) >= 2, (
+        f"Only {len(checked_fields)} field(s) checked ({checked_fields}). "
+        f"Request should have multiple fields for the 'all fields' scenario."
+    )
 
 
 def _compare_echoed_scalar(field: str, expected: str | int | float | bool, actual: Any, mismatches: list[str]) -> None:
@@ -1864,9 +1930,22 @@ def _compare_echoed_scalar(field: str, expected: str | int | float | bool, actua
 
 @then("the operation should succeed")
 def then_operation_succeeds(ctx: dict) -> None:
-    """Assert the operation succeeded (no error)."""
+    """Assert the operation succeeded with a valid response containing packages.
+
+    Verifies no error was recorded, the response exists, and the response
+    contains at least one package with a seller-assigned package_id — proving
+    production processed the request end-to-end.
+    """
     assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assert ctx.get("response") is not None, "Expected a response but none was recorded"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none was recorded"
+    # Verify the response has packages (proves production processed the request)
+    packages = _get_packages(ctx)
+    # Verify the first package has a seller-assigned package_id
+    pkg_id = _pkg_field(packages[0], "package_id")
+    assert isinstance(pkg_id, str) and pkg_id.strip(), (
+        f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
+    )
 
 
 # --- Outcome dispatch step (partition/boundary) ---
@@ -2216,12 +2295,25 @@ def then_contains_keyword_match(ctx: dict, keyword: str, match_type: str) -> Non
 
 @then(parsers.parse("the keyword bid_price {price} should be interpreted as ceiling (max_bid=true)"))
 def then_keyword_bid_ceiling(ctx: dict, price: str) -> None:
-    """Assert keyword bid_price is interpreted as ceiling (max_bid=true semantics)."""
+    """Assert keyword bid_price is interpreted as ceiling (max_bid=true semantics).
+
+    Verifies:
+    1. The operation succeeded (no error, valid response with packages).
+    2. The package has a targeting_overlay with keyword_targets containing the bid_price.
+    3. The bid_price value matches the expected price (production persisted it).
+    4. The pricing option has max_bid=true (ceiling semantics, not exact).
+    """
     import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
+    # Verify the package has a valid package_id (structural correctness)
+    pkg_id = _pkg_field(pkg, "package_id")
+    assert isinstance(pkg_id, str) and pkg_id.strip(), f"Expected seller-assigned package_id, got {pkg_id!r}"
+    # Verify ceiling semantics via the product's pricing option (production-computed)
+    _assert_pricing_option_max_bid(ctx, pkg, expected_is_ceiling=True)
+    # Check keyword_targets in the response targeting_overlay
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
         pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not in targeting_overlay. FIXME(salesagent-9vgz.1)")
@@ -2233,14 +2325,15 @@ def then_keyword_bid_ceiling(ctx: dict, price: str) -> None:
         if bid is not None and float(bid) == expected_price:
             found_with_bid = kw
             break
-    if found_with_bid is None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: no keyword with bid_price={price} found. FIXME(salesagent-9vgz.1)")
+    assert found_with_bid is not None, (
+        f"No keyword with bid_price={price} found in keyword_targets. "
+        f"Keywords present: {[(_keyword_field(k, 'keyword'), _keyword_field(k, 'bid_price')) for k in kw_targets]}"
+    )
+    # Verify the bid_price value matches exactly
     actual_bid = _keyword_field(found_with_bid, "bid_price")
     assert float(actual_bid) == expected_price, (
         f"Expected keyword bid_price {expected_price} (ceiling), got {actual_bid}"
     )
-    # Verify ceiling semantics: the product's pricing option must have max_bid=true
-    _assert_pricing_option_max_bid(ctx, pkg, expected_is_ceiling=True)
 
 
 # --- Dedup Then steps ---
@@ -2374,39 +2467,33 @@ def then_no_bid_price(ctx: dict) -> None:
 
 @then("pricing should be determined by pricing option defaults")
 def then_pricing_defaults(ctx: dict) -> None:
-    """Assert pricing is determined by pricing option defaults (no bid_price override)."""
+    """Assert pricing is determined by pricing option defaults (no bid_price override).
+
+    When no bid_price is submitted, the package uses the pricing option's
+    default rate. This step verifies:
+    1. bid_price is absent (no buyer override).
+    2. pricing_option_id is present and non-empty (links to pricing source).
+    3. The pricing_option_id matches a valid option from the product catalog.
+    """
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     # With no bid_price, pricing defaults apply — verify bid_price is absent
     actual_bid = _pkg_field(pkg, "bid_price")
     assert actual_bid is None, f"Expected no bid_price (pricing by defaults), got {actual_bid}"
-    # The package should still have a pricing_option_id (defaults come from the option)
+    # The package must have a pricing_option_id (defaults come from the option)
     po_id = _pkg_field(pkg, "pricing_option_id")
     assert po_id is not None, "pricing_option_id not echoed — cannot verify pricing defaults source"
-    assert isinstance(po_id, str) and len(po_id.strip()) > 0, (
+    assert isinstance(po_id, str) and po_id.strip() != "", (
         f"Expected non-empty pricing_option_id for default pricing, got {po_id!r}"
     )
-    # Verify the pricing_option_id references a valid option from the product
+    # Cross-validate: pricing_option_id must reference a valid product option
     product = ctx.get("default_product")
-    if product is not None:
-        pricing_options = getattr(product, "pricing_options", None) or []
-        valid_ids = set()
-        for opt in pricing_options:
-            opt_id = getattr(opt, "pricing_option_id", None)
-            if opt_id is None:
-                pm = getattr(opt, "pricing_model", None)
-                cur = getattr(opt, "currency", None)
-                fixed = getattr(opt, "is_fixed", None)
-                if pm and cur and fixed is not None:
-                    fixed_str = "fixed" if fixed else "auction"
-                    opt_id = f"{pm}_{cur.lower()}_{fixed_str}"
-            if opt_id:
-                valid_ids.add(opt_id)
-        if valid_ids:
-            assert po_id in valid_ids, (
-                f"pricing_option_id '{po_id}' does not match any product pricing option. Valid options: {valid_ids}"
-            )
+    assert product is not None, "default_product missing from ctx — Given step must set it"
+    valid_ids = _collect_pricing_option_ids(product)
+    assert po_id in valid_ids, (
+        f"pricing_option_id '{po_id}' does not match any product pricing option. Valid options: {valid_ids}"
+    )
 
 
 @then(parsers.parse("the package should be created with format_ids {fmt_ids}"))
