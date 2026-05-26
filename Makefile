@@ -1,6 +1,6 @@
 .PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
 .PHONY: test-stack-up test-stack-down test-all test-cov test-entity openapi
-.PHONY: test-int test-bdd test-e2e
+.PHONY: test-int test-bdd test-e2e storyboard-smoke
 
 setup:
 	uv run python scripts/setup-dev.py
@@ -86,6 +86,16 @@ ifndef TARGET
 	$(error TARGET is required. Usage: make test-e2e TARGET=tests/e2e/test_file.py)
 endif
 	scripts/run-test.sh --stack $(TARGET) $(ARGS)
+
+storyboard-smoke:
+	AGENT_URL=$${AGENT_URL:-http://localhost:8000} \
+	AGENT_TOKEN=$${AGENT_TOKEN:-ci-test-token} \
+	ADCP_SDK_VERSION=$${ADCP_SDK_VERSION:-7.11.0} \
+	ALLOW_HTTP=$${ALLOW_HTTP:-1} \
+	PROTOCOLS=$${PROTOCOLS:-mcp} \
+	STORYBOARDS=$${STORYBOARDS:-pagination_integrity_list_accounts} \
+	REPORT_DIR=$${REPORT_DIR:-.context/storyboard-smoke} \
+	./scripts/storyboard-check.sh
 
 # ─── Docker dev stack rebuild ──────────────────────────────────
 # Bypasses a BuildKit cache-mount edge case where ``compose build``

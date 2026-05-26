@@ -1,0 +1,110 @@
+name: Storyboard Validation
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main, develop ]
+  schedule:
+    # Nightly latest-SDK drift check.
+    - cron: "23 9 * * *"
+  workflow_dispatch:
+    inputs:
+      latest_sdk_full:
+        description: "Also run the latest-SDK full assessment"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+env:
+  CONDUCTOR_PORT: "8000"
+
+jobs:
+  pinned-smoke:
+    name: Pinned Storyboard Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Node
+      uses: actions/setup-node@v5
+      with:
+        node-version: "24"
+
+    - name: Start services with docker compose
+      run: |
+        export LOCKFILE_HASH=$(shasum -a 256 uv.lock | awk '{print $1}')
+        docker compose up -d --wait --wait-timeout 180
+
+    - name: Run pinned storyboard smoke
+      env:
+        AGENT_URL: http://localhost:8000
+        AGENT_TOKEN: ci-test-token
+        ADCP_SDK_VERSION: "7.11.0"
+        ALLOW_HTTP: "1"
+        PROTOCOLS: mcp
+        STORYBOARDS: pagination_integrity_list_accounts
+        REPORT_DIR: ${{ runner.temp }}/storyboard-pinned-smoke
+        TIMEOUT: "180"
+      run: ./scripts/storyboard-check.sh
+
+    - name: Upload storyboard reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: storyboard-pinned-smoke
+        path: ${{ runner.temp }}/storyboard-pinned-smoke
+        if-no-files-found: ignore
+
+    - name: Cleanup
+      if: always()
+      run: docker compose down -v
+
+  latest-sdk-full:
+    name: Latest SDK Storyboard Drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.latest_sdk_full == 'true')
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Node
+      uses: actions/setup-node@v5
+      with:
+        node-version: "24"
+
+    - name: Start services with docker compose
+      run: |
+        export LOCKFILE_HASH=$(shasum -a 256 uv.lock | awk '{print $1}')
+        docker compose up -d --wait --wait-timeout 180
+
+    - name: Run latest-SDK full assessment
+      env:
+        AGENT_URL: http://localhost:8000
+        AGENT_TOKEN: ci-test-token
+        ADCP_SDK_VERSION: latest
+        ALLOW_HTTP: "1"
+        PROTOCOLS: mcp,a2a
+        STORYBOARD: ""
+        STORYBOARD_SOFT_FAIL: "1"
+        REPORT_DIR: ${{ runner.temp }}/storyboard-latest-sdk
+        TIMEOUT: "240"
+      run: ./scripts/storyboard-check.sh
+
+    - name: Upload storyboard reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: storyboard-latest-sdk
+        path: ${{ runner.temp }}/storyboard-latest-sdk
+        if-no-files-found: ignore
+
+    - name: Cleanup
+      if: always()
+      run: docker compose down -v
