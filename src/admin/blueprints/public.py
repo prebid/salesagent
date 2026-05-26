@@ -183,7 +183,7 @@ def provision_tenant():
                 enable_axe_signals=True,
                 human_review_required=True,
                 admin_token=admin_token,
-                auto_approve_format_ids=json.dumps(["display_300x250", "display_728x90"]),
+                auto_approve_format_ids=json.dumps(["display_image", "display_html", "display_js"]),
                 # Access control
                 authorized_emails=json.dumps([user_email.lower()]),
                 authorized_domains=json.dumps([email_domain]) if email_domain else None,

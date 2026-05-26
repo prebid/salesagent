@@ -68,7 +68,9 @@ class TestGetProductsRequestAlignment:
         assert req.filters.delivery_type.value == "guaranteed"
         # format_ids are FormatId objects
         assert len(req.filters.format_ids) == 2
-        assert req.filters.format_ids[0].id == "display_300x250"
+        assert req.filters.format_ids[0].id == "display_image"
+        assert req.filters.format_ids[0].width == 300
+        assert req.filters.format_ids[0].height == 250
         assert req.filters.format_ids[1].id == "video_30s"
         assert req.filters.standard_formats_only is False
 
@@ -108,7 +110,9 @@ class TestGetProductsRequestAlignment:
         req = GetProductsRequest(
             buying_mode="wholesale", brand={"domain": "testbrand.com"}, filters=ProductFilters(format_ids=[fid])
         )
-        assert req.filters.format_ids[0].id == "display_300x250"
+        assert req.filters.format_ids[0].id == "display_image"
+        assert req.filters.format_ids[0].width == 300
+        assert req.filters.format_ids[0].height == 250
 
     def test_filters_delivery_type_values(self):
         """Test that delivery_type accepts valid values per AdCP spec."""
@@ -163,7 +167,9 @@ class TestProductFiltersModel:
         )
 
         assert len(filters.format_ids) == 3
-        assert filters.format_ids[0].id == "display_300x250"
+        assert filters.format_ids[0].id == "display_image"
+        assert filters.format_ids[0].width == 300
+        assert filters.format_ids[0].height == 250
 
     def test_model_dump_excludes_none(self):
         """Test that model_dump with exclude_none only includes set fields."""

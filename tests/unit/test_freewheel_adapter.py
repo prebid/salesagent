@@ -153,6 +153,71 @@ class TestLiveCreateMediaBuy:
         adapter._client.commercial.create_placement.assert_not_called()
 
 
+class TestLiveCreatives:
+    def _adapter(self, mock_principal):
+        adapter = FreeWheelAdapter(
+            config={"api_token": "test-bearer-token"},
+            principal=mock_principal,
+            dry_run=False,
+            tenant_id="tenant_fw_1",
+        )
+        adapter._client = MagicMock()
+        return adapter
+
+    def test_add_creative_assets_posts_canonical_vast_rendition(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        adapter._client.creatives.create_creative.return_value = MagicMock(id=1182735)
+
+        statuses = adapter.add_creative_assets(
+            "freewheel_900002",
+            [
+                {
+                    "creative_id": "fw_vast_1",
+                    "name": "FW VAST 30s",
+                    "url": "https://ads.example.com/vast.xml",
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": "video_vast",
+                        "duration_ms": 30000,
+                    },
+                    "content_type": "application/xml",
+                }
+            ],
+            today=datetime.now(UTC),
+        )
+
+        adapter._client.creatives.create_creative.assert_called_once_with(
+            name="FW VAST 30s",
+            advertiser_ids=[1356511],
+            base_ad_unit_id=None,
+            external_id="fw_vast_1",
+            renditions=[
+                {
+                    "uri": "https://ads.example.com/vast.xml",
+                    "content_type": "application/xml",
+                    "vast_rendition": True,
+                    "https_compatibility": "compatible",
+                }
+            ],
+            duration=30,
+        )
+        assert statuses[0].creative_id == "1182735"
+        assert statuses[0].status == "approved"
+
+    def test_add_creative_assets_missing_vast_url_marks_failed(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+
+        statuses = adapter.add_creative_assets(
+            "freewheel_900002",
+            [{"creative_id": "missing_url", "format": "video_vast"}],
+            today=datetime.now(UTC),
+        )
+
+        adapter._client.creatives.create_creative.assert_not_called()
+        assert statuses[0].creative_id == "missing_url"
+        assert statuses[0].status == "failed"
+
+
 class TestCheckMediaBuyStatus:
     def test_live_mode_reads_insertion_order_stage(self, mock_principal):
         adapter = FreeWheelAdapter(
@@ -412,9 +477,10 @@ class TestGetAvailableInventory:
         assert "genres" in inventory["targeting_options"]
         assert "languages" in inventory["targeting_options"]
 
-        # creative_specs surfaces the static VAST format declarations
-        assert len(inventory["creative_specs"]) == 6
-        assert any("pre_roll" in s["format_id"]["id"] for s in inventory["creative_specs"])
+        # creative_specs surfaces canonical VAST declarations; slot position is inventory targeting.
+        assert len(inventory["creative_specs"]) == 2
+        assert {s["format_id"]["id"] for s in inventory["creative_specs"]} == {"video_vast"}
+        assert {s["format_id"]["duration_ms"] for s in inventory["creative_specs"]} == {15000, 30000}
 
         # properties carries network/inventory metadata
         assert inventory["properties"]["sites_count"] == 2

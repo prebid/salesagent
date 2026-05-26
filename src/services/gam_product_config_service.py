@@ -11,7 +11,7 @@ class GAMProductConfigService:
     """Handles GAM-specific product configuration management."""
 
     @staticmethod
-    def generate_default_config(delivery_type: str, formats: list[str] | None = None) -> dict[str, Any]:
+    def generate_default_config(delivery_type: str, formats: list[Any] | None = None) -> dict[str, Any]:
         """Generate default GAM implementation config based on product delivery type.
 
         Args:
@@ -64,15 +64,17 @@ class GAMProductConfigService:
         return base_config
 
     @staticmethod
-    def _generate_creative_placeholders(formats: list[str]) -> list[dict[str, Any]]:
+    def _generate_creative_placeholders(formats: list[Any]) -> list[dict[str, Any]]:
         """Generate creative placeholders from format IDs.
 
         Args:
-            formats: List of format IDs (e.g., ["display_300x250", "display_728x90"])
+            formats: List of canonical FormatId dicts or legacy format strings.
 
         Returns:
             List of creative placeholder dictionaries for GAM
         """
+        from src.adapters.gam.formats import build_gam_creative_placeholder
+
         placeholders = []
 
         # Common format mappings (format_id -> dimensions)
@@ -88,11 +90,24 @@ class GAMProductConfigService:
         }
 
         for format_item in formats:
-            # Handle both format storage patterns:
-            # 1. Simple string: "display_300x250"
-            # 2. Dict with format_id: {"format_id": "display_300x250", "name": "...", ...}
+            try:
+                placeholder = build_gam_creative_placeholder(format_item)
+            except ValueError:
+                placeholder = None
+            if placeholder:
+                placeholders.append(
+                    {
+                        "width": placeholder["size"]["width"],
+                        "height": placeholder["size"]["height"],
+                        "expected_creative_count": placeholder.get("expectedCreativeCount", 1),
+                        "is_native": placeholder.get("creativeSizeType") == "NATIVE",
+                    }
+                )
+                continue
+
+            # Legacy fixed-size fallback for old product configs.
             if isinstance(format_item, dict):
-                format_id = format_item.get("format_id", "")
+                format_id = format_item.get("id") or format_item.get("format_id") or ""
             else:
                 format_id = format_item
 

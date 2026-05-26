@@ -970,7 +970,9 @@ class TestAdCPContract:
 
         # Verify format_id is FormatId object
         assert isinstance(adcp_response["format_id"], dict), "format_id should be FormatId object (as dict)"
-        assert adcp_response["format_id"]["id"] == "display_300x250", "Format ID should be display_300x250"
+        assert adcp_response["format_id"]["id"] == "display_image", "Legacy fixed-size ID should canonicalize"
+        assert adcp_response["format_id"]["width"] == 300
+        assert adcp_response["format_id"]["height"] == 250
         assert "agent_url" in adcp_response["format_id"], "format_id should have agent_url"
 
         # Test internal model_dump includes all fields

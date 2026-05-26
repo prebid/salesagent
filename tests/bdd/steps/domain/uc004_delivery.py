@@ -18,6 +18,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._values import enum_value
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -42,6 +43,8 @@ def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
     assert mock_post.called, "No webhook POST was made"
     call_kwargs = mock_post.call_args_list[-1][1]  # kwargs of last call
     payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
+    if not payload and call_kwargs.get("content"):
+        payload = json.loads(call_kwargs["content"].decode("utf-8"))
     assert payload, f"Webhook POST had no JSON payload: {call_kwargs}"
     return payload
 
@@ -52,6 +55,23 @@ def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
     assert mock_post.called, "No webhook POST was made"
     call_kwargs = mock_post.call_args_list[-1][1]
     return call_kwargs.get("headers", {})
+
+
+def _resolve_media_buy_id(ctx: dict, mb_id: str) -> str:
+    """Resolve any scenario alias to the concrete media_buy_id."""
+    return ctx.get("media_buy_aliases", {}).get(mb_id, mb_id)
+
+
+def _webhook_delivery_kwargs(ctx: dict) -> dict[str, Any]:
+    """Build auth kwargs for the lightweight webhook delivery harness."""
+    kwargs: dict[str, Any] = {}
+    if ctx.get("webhook_secret"):
+        kwargs["signing_secret"] = ctx["webhook_secret"]
+    headers = {"Content-Type": "application/json"}
+    if ctx.get("webhook_bearer_token"):
+        headers["Authorization"] = f"Bearer {ctx['webhook_bearer_token']}"
+    kwargs["headers"] = headers
+    return kwargs
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -226,16 +246,16 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
     Also persists PushNotificationConfig to DB when running inside an
     integration env (CircuitBreakerEnv) so send_delivery_webhook can find it.
     """
-    ctx.setdefault("webhook_config", {})[mb_id] = {
-        "url": _WEBHOOK_URL,
-        "active": True,
-    }
+    wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
+    wh["url"] = _WEBHOOK_URL
+    wh["active"] = True
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
-        _persist_webhook_config_if_needed(env)
+        _ensure_media_buy_in_db(ctx, mb_id, env._principal_id)
+        _persist_webhook_config_if_needed(ctx, env)
 
 
-def _persist_webhook_config_if_needed(env: Any) -> None:
+def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
     """Idempotently create Tenant, Principal, PushNotificationConfig in DB."""
     from sqlalchemy import select
 
@@ -246,13 +266,19 @@ def _persist_webhook_config_if_needed(env: Any) -> None:
     principal_id = env._principal_id
 
     # Fast path: config already exists
-    if session.scalars(
+    existing_config = session.scalars(
         select(PushNotificationConfig).where(
             PushNotificationConfig.tenant_id == tenant_id,
             PushNotificationConfig.principal_id == principal_id,
             PushNotificationConfig.url == _WEBHOOK_URL,
         )
-    ).first():
+    ).first()
+    if existing_config:
+        existing_config.authentication_type = "bearer" if ctx.get("webhook_bearer_token") else None
+        existing_config.authentication_token = ctx.get("webhook_bearer_token")
+        existing_config.webhook_secret = ctx.get("webhook_secret")
+        existing_config.signing_mode = "hmac"
+        session.commit()
         return
 
     from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
@@ -270,6 +296,10 @@ def _persist_webhook_config_if_needed(env: Any) -> None:
         principal=principal,
         url=_WEBHOOK_URL,
         is_active=True,
+        authentication_type="bearer" if ctx.get("webhook_bearer_token") else None,
+        authentication_token=ctx.get("webhook_bearer_token"),
+        webhook_secret=ctx.get("webhook_secret"),
+        signing_mode="hmac",
     )
 
 
@@ -312,18 +342,24 @@ def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
     wh["auth_scheme"] = scheme
     wh["active"] = True
     wh["url"] = "https://buyer.example.com/webhook"
+    _set_active_webhook(ctx, mb_id)
 
 
 @given("the shared secret is a valid 32+ character string")
 def given_shared_secret_valid(ctx: dict) -> None:
     """A valid shared secret for HMAC."""
     ctx["webhook_secret"] = "a" * 32
+    ctx["signing_secret"] = ctx["webhook_secret"]
+    for mb_id in ctx.get("webhook_config", {}):
+        _set_active_webhook(ctx, mb_id)
 
 
 @given("the bearer token is a valid 32+ character string")
 def given_bearer_token_valid(ctx: dict) -> None:
     """A valid bearer token."""
     ctx["webhook_bearer_token"] = "b" * 32
+    for mb_id in ctx.get("webhook_config", {}):
+        _set_active_webhook(ctx, mb_id)
 
 
 @given(parsers.parse("a media buy webhook configuration with credentials of {n:d} characters"))
@@ -346,7 +382,14 @@ def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> No
 def given_webhook_unreachable(ctx: dict) -> None:
     """Configure webhook endpoint to timeout."""
     env = ctx["env"]
-    env.mock["post"].side_effect = ConnectionError("Connection timeout")
+    if "client" in env.mock:
+        import httpx
+
+        env.mock["post"].side_effect = httpx.ConnectTimeout("Connection timeout")
+    else:
+        import requests
+
+        env.mock["post"].side_effect = requests.exceptions.ConnectionError("Connection timeout")
 
 
 @given(parsers.parse("the webhook endpoint returns {status_code:d} Unauthorized"))
@@ -620,7 +663,7 @@ def when_webhook_fires(ctx: dict, mb_id: str) -> None:
     """Webhook scheduler fires for a media buy."""
     env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id, **_webhook_delivery_kwargs(ctx))
     except Exception as exc:
         ctx["error"] = exc
 
@@ -630,7 +673,7 @@ def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
     """System delivers a webhook report for a specific media buy."""
     env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id, **_webhook_delivery_kwargs(ctx))
     except Exception as exc:
         ctx["error"] = exc
 
@@ -641,7 +684,11 @@ def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
     ctx["report_type"] = report_type
     env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id, notification_type=report_type)
+        ctx["webhook_result"] = env.call_deliver(
+            media_buy_id=mb_id,
+            notification_type=report_type,
+            **_webhook_delivery_kwargs(ctx),
+        )
     except Exception as exc:
         ctx["error"] = exc
 
@@ -653,7 +700,7 @@ def when_deliver_three_reports(ctx: dict, mb_id: str) -> None:
     env = ctx["env"]
     for _ in range(3):
         try:
-            result = env.call_deliver(media_buy_id=mb_id)
+            result = env.call_deliver(media_buy_id=mb_id, **_webhook_delivery_kwargs(ctx))
             ctx["webhook_reports"].append(result)
         except Exception as exc:
             ctx["error"] = exc
@@ -665,7 +712,7 @@ def when_attempt_webhook(ctx: dict) -> None:
     """System attempts webhook delivery."""
     env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver()
+        ctx["webhook_result"] = env.call_send()
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1058,7 +1105,7 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     assert len(deliveries) > 0, "No delivery data to check"
     d = deliveries[0]
-    actual_status = getattr(d, "status", None)
+    actual_status = enum_value(getattr(d, "status", None))
     assert actual_status == status, f"Expected status '{status}', got '{actual_status}'"
 
 
@@ -1129,7 +1176,7 @@ def then_only_status(ctx: dict, status: str) -> None:
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     for d in deliveries:
-        actual = getattr(d, "status", None)
+        actual = enum_value(getattr(d, "status", None))
         assert actual == status, f"Expected status '{status}', got '{actual}' for {d.media_buy_id}"
 
 
@@ -1931,7 +1978,16 @@ def _ensure_media_buy_in_db(
     if env is None or not hasattr(env, "_session"):
         return
 
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy
     from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+
+    existing = env._session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
+    if existing is not None:
+        existing.status = status
+        env._session.commit()
+        return
 
     # Ensure tenant exists
     if "db_tenant" not in ctx:

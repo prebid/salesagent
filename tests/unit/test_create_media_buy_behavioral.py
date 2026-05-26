@@ -515,6 +515,138 @@ class TestCreativeMissingUrl:
 
             assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
+    def test_audio_vast_creative_does_not_require_dimensions(self):
+        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+
+        mock_package = MagicMock()
+        mock_package.creative_ids = ["creative_1"]
+        mock_package.product_id = None
+
+        mock_creative = MagicMock()
+        mock_creative.creative_id = "creative_1"
+        mock_creative.format = "audio_vast"
+        mock_creative.agent_url = "https://creative.example.com"
+        mock_creative.data = {"assets": {"vast_tag": {"url": "https://ads.example.com/audio.xml"}}}
+
+        mock_format_spec = MagicMock()
+        mock_format_spec.output_format_ids = None
+        mock_format_spec.type = "audio"
+
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
+            patch(
+                "src.core.tools.media_buy_create.extract_media_url_and_dimensions",
+                return_value=("https://ads.example.com/audio.xml", None, None),
+            ),
+        ):
+            session = MagicMock()
+            session.scalars.return_value.all.return_value = [mock_creative]
+
+            _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+
+
+class TestSpringServeTagModeCreativePreparation:
+    @staticmethod
+    def _audio_package(*, creative_ids=None):
+        from src.core.schemas import FormatId, MediaPackage
+
+        return MediaPackage(
+            package_id="pkg_audio",
+            name="Audio",
+            delivery_type="guaranteed",
+            impressions=1000,
+            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="audio_vast")],
+            creative_ids=creative_ids,
+        )
+
+    @staticmethod
+    def _creative(*, format_id="audio_vast", url="https://ads.example.com/audio.xml"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            creative_id="creative_audio_vast",
+            name="Audio VAST",
+            agent_url="https://creative.adcontextprotocol.org",
+            format=format_id,
+            format_parameters={"duration_ms": 30000},
+            data={"assets": {"vast_tag": {"asset_type": "vast", "url": url}}},
+        )
+
+    def test_assigned_audio_vast_creative_becomes_vast_endpoint_url(self):
+        from src.core.tools.media_buy_create import _prepare_springserve_tag_mode_packages
+
+        adapter = MagicMock(adapter_name="springserve", demand_class="tag")
+        adapter._validate_creative_remote_url.return_value = None
+        package = self._audio_package(creative_ids=["creative_audio_vast"])
+        creative = self._creative()
+
+        with (
+            patch(
+                "src.core.tools.media_buy_create._load_creatives_by_id",
+                return_value={"creative_audio_vast": creative},
+            ),
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+        ):
+            [prepared] = _prepare_springserve_tag_mode_packages(
+                adapter,
+                [package],
+                "test_tenant",
+                session=MagicMock(),
+            )
+
+        extra_fields = prepared.implementation_config["springserve"]["extra_demand_tag_fields"]
+        assert extra_fields["vast_endpoint_url"] == "https://ads.example.com/audio.xml"
+
+    def test_missing_tag_mode_creative_fails_before_adapter_call(self):
+        from src.core.tools.media_buy_create import _prepare_springserve_tag_mode_packages
+
+        adapter = MagicMock(adapter_name="springserve", demand_class="tag")
+        package = self._audio_package()
+
+        with pytest.raises(AdCPValidationError, match="no assigned audio_vast creative"):
+            _prepare_springserve_tag_mode_packages(adapter, [package], "test_tenant", session=MagicMock())
+
+    def test_multiple_tag_mode_creatives_fail_before_adapter_call(self):
+        from src.core.tools.media_buy_create import _prepare_springserve_tag_mode_packages
+
+        adapter = MagicMock(adapter_name="springserve", demand_class="tag")
+        package = self._audio_package(creative_ids=["creative_1", "creative_2"])
+
+        with pytest.raises(AdCPValidationError, match="requires exactly one VAST creative"):
+            _prepare_springserve_tag_mode_packages(adapter, [package], "test_tenant", session=MagicMock())
+
+    def test_non_vast_tag_mode_creative_fails_before_adapter_call(self):
+        from src.core.tools.media_buy_create import _prepare_springserve_tag_mode_packages
+
+        adapter = MagicMock(adapter_name="springserve", demand_class="tag")
+        package = self._audio_package(creative_ids=["creative_audio_vast"])
+        creative = self._creative(format_id="audio_30s")
+
+        with patch(
+            "src.core.tools.media_buy_create._load_creatives_by_id",
+            return_value={"creative_audio_vast": creative},
+        ):
+            with pytest.raises(AdCPValidationError, match="requires a VAST format"):
+                _prepare_springserve_tag_mode_packages(adapter, [package], "test_tenant", session=MagicMock())
+
+    def test_invalid_vast_url_fails_before_adapter_call(self):
+        from src.core.tools.media_buy_create import _prepare_springserve_tag_mode_packages
+
+        adapter = MagicMock(adapter_name="springserve", demand_class="tag")
+        adapter._validate_creative_remote_url.return_value = "URL must use https"
+        package = self._audio_package(creative_ids=["creative_audio_vast"])
+        creative = self._creative(url="http://ads.example.com/audio.xml")
+
+        with (
+            patch(
+                "src.core.tools.media_buy_create._load_creatives_by_id",
+                return_value={"creative_audio_vast": creative},
+            ),
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+        ):
+            with pytest.raises(AdCPValidationError, match="VAST URL is invalid"):
+                _prepare_springserve_tag_mode_packages(adapter, [package], "test_tenant", session=MagicMock())
+
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
         """When creative has URL but missing dimensions, raise INVALID_CREATIVES.
 
@@ -551,6 +683,25 @@ class TestCreativeMissingUrl:
             assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
 
 
+class TestCanonicalFormatCompatibility:
+    def test_requested_canonical_display_matches_legacy_product_format(self):
+        from src.core.schemas import FormatId
+        from src.core.tools.media_buy_create import _matching_supported_format
+
+        requested = FormatId(
+            agent_url="https://creative.adcontextprotocol.org",
+            id="display_image",
+            width=300,
+            height=250,
+        )
+        legacy_product_format = FormatId(
+            agent_url="https://creative.adcontextprotocol.org",
+            id="display_300x250",
+        )
+
+        assert _matching_supported_format(requested, [legacy_product_format]) is legacy_product_format
+
+
 class TestCreativeUploadFailure:
     """GAP-004: Creative upload failure raises CREATIVE_UPLOAD_FAILED.
 
@@ -559,6 +710,19 @@ class TestCreativeUploadFailure:
     1. A behavioral test exercising the actual code path through _create_media_buy_impl
     2. A behavioral test of the ToolError wrapping logic
     """
+
+    def test_failed_asset_status_raises_creative_upload_failed(self):
+        from src.core.schemas import AssetStatus
+        from src.core.tools.media_buy_create import _uploaded_platform_creative_id
+
+        with pytest.raises(AdCPAdapterError) as exc_info:
+            _uploaded_platform_creative_id(
+                [AssetStatus(creative_id="creative_original", status="failed", message="missing VAST URL")],
+                "creative_original",
+            )
+
+        assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
+        assert "missing VAST URL" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_creative_upload_failure_raises_tool_error(self):
@@ -651,6 +815,23 @@ class TestCreativeUploadFailure:
                     return_value=MagicMock(output_format_ids=None),
                 ),
                 patch(
+                    "src.core.tools.media_buy_create.build_adapter_asset_from_stored_creative",
+                    return_value={
+                        "creative_id": "creative_no_platform",
+                        "package_assignments": ["pkg_prod_1_abc_1"],
+                        "format": "display_300x250_image",
+                        "format_id": {
+                            "agent_url": "https://creative.example.com",
+                            "id": "display_300x250_image",
+                        },
+                        "width": 300,
+                        "height": 250,
+                        "url": "https://example.com/ad.jpg",
+                        "asset_type": "image",
+                        "name": "Test Creative",
+                    },
+                ),
+                patch(
                     "src.core.tools.media_buy_create.extract_media_url_and_dimensions",
                     return_value=("https://example.com/ad.jpg", 300, 250),
                 ),
@@ -667,6 +848,134 @@ class TestCreativeUploadFailure:
                 assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
                 assert "creative_no_platform" in str(exc_info.value)
                 assert "Network timeout" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_auto_upload_uses_current_response_package_id_for_each_package(self):
+        from src.core.schemas import AssetStatus
+        from src.core.schemas import Package as RespPackage
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["creative_1"],
+                },
+                {
+                    "product_id": "prod_2",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["creative_2"],
+                },
+            ]
+        )
+        product_1 = _mock_product("prod_1")
+        product_2 = _mock_product("prod_2")
+
+        creatives = []
+        for creative_id in ("creative_1", "creative_2"):
+            creative = MagicMock()
+            creative.creative_id = creative_id
+            creative.format = "display_300x250_image"
+            creative.agent_url = "https://creative.example.com"
+            creative.name = creative_id
+            creative.data = {}
+            creatives.append(creative)
+
+        response_packages = []
+        for package_id in ("pkg_prod_1_response", "pkg_prod_2_response"):
+            resp_package = MagicMock(spec=RespPackage)
+            resp_package.package_id = package_id
+            resp_package.platform_line_item_id = None
+            response_packages.append(resp_package)
+
+        adapter_response = MagicMock(spec=CreateMediaBuySuccess)
+        adapter_response.media_buy_id = "mb_test123"
+        adapter_response.packages = response_packages
+        adapter_response.creative_deadline = None
+        adapter_response.__class__ = CreateMediaBuySuccess
+
+        mock_adapter = MagicMock()
+        mock_adapter.manual_approval_required = False
+        mock_adapter.manual_approval_operations = []
+        mock_adapter.__class__.__name__ = "MockAdapter"
+        mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
+        mock_adapter.validate_media_buy_request.return_value = []
+        mock_adapter.add_creative_assets.side_effect = [
+            [AssetStatus(creative_id="platform_1", status="approved")],
+            [AssetStatus(creative_id="platform_2", status="approved")],
+        ]
+
+        mock_schema_products = []
+        for product_id in ("prod_1", "prod_2"):
+            mock_schema_product = MagicMock()
+            mock_schema_product.product_id = product_id
+            mock_schema_product.name = f"Schema {product_id}"
+            mock_schema_product.implementation_config = None
+            mock_schema_product.format_ids = None
+            mock_schema_product.delivery_type = MagicMock(value="non_guaranteed")
+            mock_schema_products.append(mock_schema_product)
+
+        package_ids_used: list[str] = []
+
+        def build_asset(creative, package_id, format_spec):
+            package_ids_used.append(package_id)
+            return {
+                "creative_id": creative.creative_id,
+                "package_assignments": [package_id],
+                "format": "display_300x250_image",
+                "format_id": {
+                    "agent_url": "https://creative.example.com",
+                    "id": "display_300x250_image",
+                },
+                "width": 300,
+                "height": 250,
+                "url": "https://example.com/ad.jpg",
+                "asset_type": "image",
+                "name": creative.name,
+            }
+
+        with _PatchContext(products=[product_1, product_2]) as pc:
+            all_results = iter([[product_1, product_2], creatives])
+            first_results = iter([_mock_currency_limit(), None, None, None, None, None])
+            scalars_mock = MagicMock()
+            scalars_mock.all.side_effect = lambda: next(all_results)
+            scalars_mock.first.side_effect = lambda: next(first_results, None)
+            pc.db_session.scalars.return_value = scalars_mock
+
+            with (
+                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+                patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
+                patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+                patch(
+                    "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
+                    return_value=adapter_response,
+                ),
+                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
+                patch("src.core.tools.products.get_product_catalog", return_value=mock_schema_products),
+                patch("src.core.helpers.validate_creative_format_against_product", return_value=(True, None)),
+                patch(
+                    "src.core.tools.media_buy_create._get_format_spec_sync",
+                    return_value=MagicMock(output_format_ids=None),
+                ),
+                patch(
+                    "src.core.tools.media_buy_create.build_adapter_asset_from_stored_creative", side_effect=build_asset
+                ),
+                patch(
+                    "src.core.tools.media_buy_create.extract_media_url_and_dimensions",
+                    return_value=("https://example.com/ad.jpg", 300, 250),
+                ),
+                patch("src.core.tools.media_buy_create.extract_click_url", return_value=None),
+                patch("src.core.tools.media_buy_create.extract_impression_tracker_url", return_value=None),
+                patch("src.core.tools.media_buy_create.get_slack_notifier"),
+                patch("src.core.tools.media_buy_create.activity_feed"),
+            ):
+                mock_upload.return_value = (req.packages, {})
+                await _create_media_buy_impl(req=req, identity=pc.identity)
+
+        assert package_ids_used == ["pkg_prod_1_response", "pkg_prod_2_response"]
 
     def test_creative_upload_failure_wraps_exception_as_tool_error(self):
         """The try/except pattern at line 3162-3168 wraps generic exceptions

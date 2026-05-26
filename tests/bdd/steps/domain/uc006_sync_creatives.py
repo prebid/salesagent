@@ -176,7 +176,29 @@ def when_sync_creative(ctx: dict) -> None:
     if account_ref is None:
         return  # ctx["error"] already set
 
-    dispatch_request(ctx, account=account_ref, creatives=[])
+    dispatch_request(ctx, account=account_ref, creatives=[_minimal_creative_payload(ctx)])
+
+
+def _minimal_creative_payload(ctx: dict) -> dict:
+    """Return one valid static creative so transports reach account resolution."""
+    format_id = ctx.get("creative_format_id", "display_300x250")
+    return {
+        "creative_id": "bdd-account-resolution-creative",
+        "name": "BDD Account Resolution Creative",
+        "format_id": {
+            "agent_url": "https://creative.test.example.com",
+            "id": format_id,
+        },
+        "assets": {
+            "image": {
+                "asset_type": "image",
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+                "mime_type": "image/png",
+            }
+        },
+    }
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:

@@ -9,6 +9,20 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.canonical_formats import CANONICAL_DISPLAY_FORMAT_IDS, canonical_format_ref
+
+
+def _display_format_refs(*sizes: tuple[int, int]) -> list[dict[str, Any]]:
+    return [
+        canonical_format_ref(format_id, width=width, height=height)
+        for width, height in sizes
+        for format_id in CANONICAL_DISPLAY_FORMAT_IDS
+    ]
+
+
+def _video_vast_format_ref(duration_ms: int = 30000) -> dict[str, Any]:
+    return canonical_format_ref("video_vast", duration_ms=duration_ms)
+
 
 def get_default_products() -> list[dict[str, Any]]:
     """Get a list of default products that should be created for new tenants."""
@@ -21,12 +35,7 @@ def get_default_products() -> list[dict[str, Any]]:
             "delivery_type": "non_guaranteed",
             "cpm": None,
             "min_spend": 100.0,  # Use AdCP-compliant field
-            "formats": [
-                "display_300x250",  # Medium Rectangle
-                "display_728x90",  # Leaderboard
-                "display_320x50",  # Mobile Banner
-                "display_300x600",  # Half Page Ad
-            ],
+            "formats": _display_format_refs((300, 250), (728, 90), (320, 50), (300, 600)),
             "measurement": {
                 "type": "viewability_measurement",
                 "attribution": "probabilistic",
@@ -44,11 +53,7 @@ def get_default_products() -> list[dict[str, Any]]:
             "delivery_type": "guaranteed",
             "cpm": 25.0,
             "min_spend": 1000.0,
-            "formats": [
-                "display_970x250",  # Billboard
-                "display_728x90",  # Leaderboard
-                "display_320x50",  # Mobile Banner
-            ],
+            "formats": _display_format_refs((970, 250), (728, 90), (320, 50)),
             "measurement": {
                 "type": "brand_lift",
                 "attribution": "deterministic_purchase",
@@ -69,10 +74,7 @@ def get_default_products() -> list[dict[str, Any]]:
             "delivery_type": "guaranteed",
             "cpm": 15.0,
             "min_spend": 500.0,
-            "formats": [
-                "display_320x480",  # Mobile Interstitial
-                "display_300x250",  # Medium Rectangle
-            ],
+            "formats": _display_format_refs((320, 480), (300, 250)),
             "measurement": {"type": "engagement_rate", "attribution": "probabilistic", "reporting": "weekly_dashboard"},
             "creative_policy": {"co_branding": "optional", "landing_page": "any", "templates_available": False},
             "countries": None,
@@ -89,9 +91,7 @@ def get_default_products() -> list[dict[str, Any]]:
             "delivery_type": "non_guaranteed",
             "cpm": None,
             "min_spend": 1000.0,
-            "formats": [
-                "video_vast",  # VAST Video
-            ],
+            "formats": [_video_vast_format_ref()],
             "measurement": {
                 "type": "video_completion_rate",
                 "attribution": "probabilistic",
@@ -112,9 +112,7 @@ def get_default_products() -> list[dict[str, Any]]:
             "delivery_type": "non_guaranteed",
             "cpm": None,
             "min_spend": 200.0,
-            "formats": [
-                "native_infeed",  # Native In-Feed
-            ],
+            "formats": [canonical_format_ref("native_standard")],
             "measurement": {"type": "engagement_rate", "attribution": "probabilistic", "reporting": "weekly_dashboard"},
             "creative_policy": {
                 "co_branding": "optional",
@@ -138,11 +136,7 @@ def get_default_products() -> list[dict[str, Any]]:
             "delivery_type": "non_guaranteed",
             "cpm": None,
             "min_spend": 200.0,
-            "formats": [
-                "display_300x250",  # Medium Rectangle
-                "display_728x90",  # Leaderboard
-                "display_160x600",  # Wide Skyscraper
-            ],
+            "formats": _display_format_refs((300, 250), (728, 90), (160, 600)),
             "measurement": {
                 "type": "viewability_measurement",
                 "attribution": "probabilistic",
@@ -249,7 +243,7 @@ def get_industry_specific_products(industry: str) -> list[dict[str, Any]]:
                 "delivery_type": "guaranteed",
                 "cpm": 30.0,
                 "price_guidance": None,
-                "formats": ["display_728x90", "display_300x250"],
+                "formats": _display_format_refs((728, 90), (300, 250)),
                 "countries": None,
                 "targeting_template": {
                     "content_targets": {"categories": ["breaking_news"]},
@@ -266,7 +260,7 @@ def get_industry_specific_products(industry: str) -> list[dict[str, Any]]:
                 "delivery_type": "guaranteed",
                 "cpm": 40.0,
                 "price_guidance": None,
-                "formats": ["display_970x250", "display_300x600", "video_vast"],
+                "formats": _display_format_refs((970, 250), (300, 600)) + [_video_vast_format_ref()],
                 "countries": None,
                 "targeting_template": {
                     "date_targets": {"day_of_week": ["saturday", "sunday"]},
@@ -283,7 +277,7 @@ def get_industry_specific_products(industry: str) -> list[dict[str, Any]]:
                 "delivery_type": "non_guaranteed",
                 "cpm": None,
                 "price_guidance": {"min": 5.0, "max": 20.0},
-                "formats": ["display_300x250", "display_300x600"],
+                "formats": _display_format_refs((300, 250), (300, 600)),
                 "countries": None,
                 "targeting_template": {
                     "placement_targets": {"placement_types": ["video_companion"]},
@@ -300,7 +294,7 @@ def get_industry_specific_products(industry: str) -> list[dict[str, Any]]:
                 "delivery_type": "non_guaranteed",
                 "cpm": None,
                 "price_guidance": {"min": 3.0, "max": 15.0},
-                "formats": ["display_300x250", "display_728x90", "native_infeed"],
+                "formats": _display_format_refs((300, 250), (728, 90)) + [canonical_format_ref("native_standard")],
                 "countries": None,
                 "targeting_template": {
                     "audience_targets": {"segments": ["cart_abandoners", "product_viewers"]},

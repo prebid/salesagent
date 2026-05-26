@@ -74,6 +74,9 @@ def _validate_property_form(
 
         identifier_count += 1
 
+    if not identifiers and property_type == "website":
+        identifiers.append({"type": "domain", "value": publisher_domain})
+
     if not identifiers:
         return False, PROPERTY_ERROR_MESSAGES["at_least_one_identifier"], None
 

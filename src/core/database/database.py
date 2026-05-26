@@ -61,9 +61,10 @@ def init_db(exit_on_error=False):
                     enable_axe_signals=True,
                     auto_approve_format_ids=json.dumps(
                         [
-                            "display_300x250",
-                            "display_728x90",
-                            "video_30s",
+                            "display_image",
+                            "display_html",
+                            "display_js",
+                            "video_vast",
                         ]
                     ),
                     human_review_required=False,
@@ -252,7 +253,9 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_300x250",
+                                "id": "display_image",
+                                "width": 300,
+                                "height": 250,
                             }
                         ],
                         "targeting_template": {

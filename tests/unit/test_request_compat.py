@@ -147,7 +147,60 @@ class TestCatalogTranslation:
 
 
 # ---------------------------------------------------------------------------
-# 6. promoted_offerings → catalogs (top-level, get_products only)
+# 6. format_id alias → id inside format references
+# ---------------------------------------------------------------------------
+
+
+class TestFormatReferenceTranslation:
+    """Legacy format reference objects use format_id where current spec uses id."""
+
+    def test_sync_creatives_format_id_alias_normalized(self):
+        result = normalize_request_params(
+            "sync_creatives",
+            {
+                "creatives": [
+                    {
+                        "creative_id": "c1",
+                        "name": "Creative",
+                        "format_id": {
+                            "agent_url": "https://creative.adcontextprotocol.org/mcp",
+                            "format_id": "display_300x250_image",
+                        },
+                    }
+                ]
+            },
+        )
+
+        fmt = result.params["creatives"][0]["format_id"]
+        assert fmt == {
+            "agent_url": "https://creative.adcontextprotocol.org/mcp",
+            "id": "display_300x250_image",
+        }
+
+    def test_package_format_ids_alias_normalized(self):
+        result = normalize_request_params(
+            "create_media_buy",
+            {
+                "packages": [
+                    {
+                        "product_id": "p1",
+                        "format_ids": [
+                            {
+                                "agent_url": "https://creative.adcontextprotocol.org",
+                                "format_id": "display_300x250_image",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+        assert result.params["packages"][0]["format_ids"][0]["id"] == "display_300x250_image"
+        assert "format_id" not in result.params["packages"][0]["format_ids"][0]
+
+
+# ---------------------------------------------------------------------------
+# 7. promoted_offerings → catalogs (top-level, get_products only)
 # ---------------------------------------------------------------------------
 
 

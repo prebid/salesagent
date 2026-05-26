@@ -1,8 +1,8 @@
 """Unit tests for the local standard-formats catalog.
 
 Verifies:
-- SDK beta 2 canonical reference formats and legacy aliases parse as valid
-  :class:`Format` objects.
+- SDK beta.4 canonical reference formats and local canonical aliases parse as
+  valid :class:`Format` objects.
 - ``get_standard_format`` returns the cached object for known IDs and
   ``None`` for unknown IDs.
 - ``is_standard_agent`` matches the reference creative agent URL with
@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 
 from adcp import Format
 
+from src.core.canonical_formats import CANONICAL_FORMAT_IDS
 from src.core.standard_formats import (
     STANDARD_AGENT_URL,
     STANDARD_FORMAT_IDS,
@@ -28,8 +29,21 @@ from src.core.standard_formats import (
 
 
 class TestStandardFormatCatalog:
-    def test_catalog_has_sdk_reference_formats_and_legacy_aliases(self):
-        """The SDK reference catalog is available alongside legacy IDs."""
+    def test_catalog_has_sdk_reference_formats_canonical_aliases_and_legacy_aliases(self):
+        """The SDK reference catalog is available alongside local canonical and legacy IDs."""
+        sdk_expected = {
+            "display_300x250_image",
+            "display_300x250_html",
+            "display_300x250_generative",
+            "display_image",
+            "display_html",
+            "display_js",
+            "native_standard",
+            "audio_standard_30s",
+            "audio_vast",
+            "video_vast",
+            "sponsored_recommendation",
+        }
         legacy_expected = {
             "display_300x250",
             "display_728x90",
@@ -38,28 +52,17 @@ class TestStandardFormatCatalog:
             "display_320x50",
             "display_970x250",
             "video_640x480",
-            "video_1280x720",
-            "video_1920x1080",
+            "audio_15s",
             "audio_30s",
             "audio_60s",
             "native_1x1",
         }
-        sdk_expected = {
-            "display_300x250_image",
-            "display_300x250_html",
-            "display_300x250_generative",
-            "display_js",
-            "native_standard",
-            "audio_standard_30s",
-            "video_vast",
-            "sponsored_recommendation",
-        }
-        assert legacy_expected <= STANDARD_FORMAT_IDS
         assert sdk_expected <= STANDARD_FORMAT_IDS
+        assert CANONICAL_FORMAT_IDS <= STANDARD_FORMAT_IDS
+        assert legacy_expected <= STANDARD_FORMAT_IDS
 
     def test_every_entry_is_a_real_format_object(self):
-        """All catalog entries deserialize as Format objects (proves the
-        nested asset definitions match the SDK Format schema)."""
+        """All catalog entries deserialize as Format objects."""
         for fmt_id, fmt in STANDARD_FORMATS.items():
             assert isinstance(fmt, Format), f"{fmt_id} is not a Format"
             assert fmt.format_id.id == fmt_id
@@ -68,9 +71,9 @@ class TestStandardFormatCatalog:
             assert str(fmt.format_id.agent_url).rstrip("/") == STANDARD_AGENT_URL
 
     def test_get_known_format_returns_object(self):
-        fmt = get_standard_format("display_300x250")
+        fmt = get_standard_format("display_image")
         assert fmt is not None
-        assert fmt.format_id.id == "display_300x250"
+        assert fmt.format_id.id == "display_image"
         assert fmt.type == "display"
 
     def test_get_sdk_reference_format_returns_object(self):
@@ -78,6 +81,18 @@ class TestStandardFormatCatalog:
         assert fmt is not None
         assert fmt.format_id.id == "display_300x250_image"
         assert fmt.type == "display"
+
+    def test_carousel_format_uses_repeatable_asset_group(self):
+        fmt = get_standard_format("image_slideshow_5s_each")
+        assert fmt is not None
+        assert fmt.format_id.id == "image_slideshow_5s_each"
+        assert fmt.type == "display"
+        assert fmt.assets is not None
+        group = fmt.assets[0]
+        assert group.item_type == "repeatable_group"
+        assert group.asset_group_id == "slide"
+        assert group.min_count == 3
+        assert group.max_count == 8
 
     def test_get_unknown_format_returns_none(self):
         assert get_standard_format("display_1x1_unknown_size") is None
@@ -110,7 +125,7 @@ class TestExtendedFormatRegression:
     at line-item creation time.
 
     The class-level ``isinstance(fmt, Format)`` check above passes regardless
-    (Format → ExtendedFormat is a subclass relationship), so we need a
+    (Format -> ExtendedFormat is a subclass relationship), so we need a
     dedicated regression that fails if the import drifts back.
     """
 
@@ -127,41 +142,37 @@ class TestExtendedFormatRegression:
     def test_catalog_entries_expose_platform_config_attr(self):
         for fid, fmt in STANDARD_FORMATS.items():
             assert hasattr(fmt, "platform_config"), (
-                f"format {fid} missing platform_config — "
+                f"format {fid} missing platform_config - "
                 "the GAM adapter reads this attribute when building creative placeholders"
             )
 
 
 class TestRegistryShortCircuit:
     def test_get_format_short_circuits_for_standard_agent(self):
-        """Standard agent + standard format → returns from catalog
-        without calling get_formats_for_agent (the network round trip)."""
+        """Standard agent + standard format returns from catalog without a network round trip."""
         from src.core.creative_agent_registry import CreativeAgentRegistry
 
         registry = CreativeAgentRegistry()
 
         with patch.object(registry, "get_formats_for_agent", new=AsyncMock(return_value=[])) as mock_network:
-            fmt = asyncio.run(registry.get_format(STANDARD_AGENT_URL, "display_300x250"))
+            fmt = asyncio.run(registry.get_format(STANDARD_AGENT_URL, "display_image"))
             assert fmt is not None
-            assert fmt.format_id.id == "display_300x250"
-            # Network path was NOT touched.
+            assert fmt.format_id.id == "display_image"
             mock_network.assert_not_called()
 
     def test_get_format_falls_through_for_custom_agent(self):
-        """A non-standard agent_url skips the catalog and hits the
-        live registry lookup. Custom-format tenants are unaffected."""
+        """A non-standard agent_url skips the catalog and hits the live registry lookup."""
         from src.core.creative_agent_registry import CreativeAgentRegistry
 
         registry = CreativeAgentRegistry()
 
         with patch.object(registry, "get_formats_for_agent", new=AsyncMock(return_value=[])) as mock_network:
-            fmt = asyncio.run(registry.get_format("https://creative.example.com", "display_300x250"))
-            assert fmt is None  # mocked to empty
+            fmt = asyncio.run(registry.get_format("https://creative.example.com", "display_image"))
+            assert fmt is None
             mock_network.assert_called_once()
 
     def test_get_format_falls_through_for_unknown_format_on_standard_agent(self):
-        """Standard agent but unknown format ID still hits the network —
-        custom formats published by the reference agent are still discoverable."""
+        """Standard agent but unknown format ID still hits the network."""
         from src.core.creative_agent_registry import CreativeAgentRegistry
 
         registry = CreativeAgentRegistry()

@@ -380,7 +380,12 @@ class TestCreativeSchemaContract:
         test_data = {
             "creative_id": "creative_contract_test",
             "name": "Creative Contract Test",
-            "format_id": FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+            "format_id": FormatId(
+                agent_url="https://creative.adcontextprotocol.org",
+                id="display_image",
+                width=300,
+                height=250,
+            ),
             "assets": {
                 "banner_image": {
                     "url": "https://example.com/creative.jpg",
@@ -409,7 +414,12 @@ class TestCreativeSchemaContract:
         test_data = {
             "creative_id": "video_contract_test",
             "name": "Video Creative Contract Test",
-            "format_id": FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_640x480"),
+            "format_id": FormatId(
+                agent_url="https://creative.adcontextprotocol.org",
+                id="video_standard",
+                width=640,
+                height=480,
+            ),
             "assets": {
                 "video_file": {
                     "url": "https://example.com/video.mp4",

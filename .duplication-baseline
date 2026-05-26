@@ -1,6 +1,5 @@
 {
   "src": [
-    "src.adapters.broadstreet.adapter,src.core.tools.creative_formats",
     "src.adapters.gam.managers.reporting,src.services.delivery_simulator",
     "src.adapters.gam.managers.sync,src.admin.sync_api",
     "src.admin.api_schemas.tenant_management,src.admin.services.adapter_connection_tester",
@@ -44,7 +43,6 @@
     "tests.integration.test_buyer_advertiser_routing,tests.integration.test_gam_advertisers_cache",
     "tests.integration.test_buyer_routing_page,tests.integration.test_embed_breadcrumbs",
     "tests.integration.test_creative_async_lifecycle_obligations,tests.integration.test_creative_sync_processing",
-    "tests.integration.test_creative_formats_aggregation,tests.integration.test_creative_formats_validation_a",
     "tests.integration.test_database_health_integration,tests.unit.test_database_health",
     "tests.integration.test_database_integration,tests.integration.test_tenant_settings_comprehensive",
     "tests.integration.test_delivery_service_behavioral,tests.unit.test_delivery_service_behavioral",

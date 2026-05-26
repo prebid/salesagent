@@ -1342,17 +1342,19 @@ def _upgrade_legacy_format_ids(values: dict) -> dict:
 
     Shared validator used by PackageRequest, ProductFilters, and ListCreativeFormatsRequest.
     """
+    from src.core.format_cache import upgrade_legacy_format_id
+
     if not isinstance(values, dict):
         return values
 
     format_ids = values.get("format_ids")
     if format_ids and isinstance(format_ids, list):
-        upgraded = []
+        upgraded: list[Any] = []
         for fmt_id in format_ids:
-            if isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
-                upgraded.append(FormatId(**fmt_id))
-            else:
+            if isinstance(fmt_id, dict) and ("agent_url" not in fmt_id or "id" not in fmt_id):
                 upgraded.append(fmt_id)
+            else:
+                upgraded.append(upgrade_legacy_format_id(fmt_id))
         values["format_ids"] = upgraded
 
     return values
@@ -1595,6 +1597,7 @@ class MediaPackage(SalesAgentBaseModel):
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
+    implementation_config: dict[str, Any] | None = Field(default=None, exclude=True)
 
 
 class PackagePerformance(SalesAgentBaseModel):

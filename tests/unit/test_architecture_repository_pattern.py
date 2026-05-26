@@ -413,13 +413,8 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_session_json_validation.py", "test_workflow_step_comments"),
     # tests/integration/test_tool_result_format.py
     ("tests/integration/test_tool_result_format.py", "setup_test_data"),
-    # tests/integration/test_creative_formats_aggregation.py
-    ("tests/integration/test_creative_formats_aggregation.py", "test_broadstreet_formats_merged_with_agent_formats"),
-    ("tests/integration/test_creative_formats_aggregation.py", "test_broadstreet_formats_are_non_standard"),
-    # tests/integration/test_creative_formats_validation_a.py
-    ("tests/integration/test_creative_formats_validation_a.py", "test_broadstreet_formats_merged_into_response"),
-    ("tests/integration/test_creative_formats_validation_a.py", "test_broadstreet_formats_have_correct_structure"),
-    ("tests/integration/test_creative_formats_validation_a.py", "test_non_broadstreet_adapter_no_extra_formats"),
+    # tests/integration/test_creative_formats_aggregation.py — migrated to factories
+    # tests/integration/test_creative_formats_validation_a.py — migrated to factories
     # tests/integration/test_dynamic_products.py
     ("tests/integration/test_dynamic_products.py", "_ensure_tenant"),
     ("tests/integration/test_dynamic_products.py", "_create_dynamic_template"),

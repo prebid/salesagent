@@ -222,11 +222,36 @@ class BroadstreetInventoryManager(BaseInventoryManager):
             if zone.width and zone.height:
                 sizes.add((zone.width, zone.height))
 
-        # Build creative specs
+        from src.core.canonical_formats import canonical_format_ref
+
+        # Build canonical creative specs. Broadstreet templates are selected via
+        # creative asset metadata, not adapter-owned format IDs.
         creative_specs = [
-            {"format": "display", "sizes": [list(s) for s in sizes]},
-            {"format": "html", "sizes": []},  # HTML ads don't have fixed sizes
-            {"format": "text", "sizes": []},
+            {
+                "format": "display_image",
+                "format_id": canonical_format_ref("display_image"),
+                "sizes": [list(s) for s in sizes],
+            },
+            {
+                "format": "display_html",
+                "format_id": canonical_format_ref("display_html"),
+                "sizes": [list(s) for s in sizes],
+            },
+            {
+                "format": "display_js",
+                "format_id": canonical_format_ref("display_js"),
+                "sizes": [list(s) for s in sizes],
+            },
+            {
+                "format": "image_slideshow_5s_each",
+                "format_id": canonical_format_ref("image_slideshow_5s_each"),
+                "sizes": [list(s) for s in sizes],
+            },
+            {
+                "format": "native_standard",
+                "format_id": canonical_format_ref("native_standard"),
+                "sizes": [],
+            },
         ]
 
         return {

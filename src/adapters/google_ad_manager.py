@@ -393,6 +393,18 @@ class GoogleAdManager(AdServerAdapter):
             us_zip=True,  # GAM supports US ZIP targeting
         )
 
+    def get_creative_formats(self) -> list[dict[str, Any]]:
+        """Return the canonical creative formats this GAM adapter can traffic.
+
+        GAM creative/template details like native fluid sizing, custom
+        templates, and VAST routing are represented in platform_config and
+        implementation_config; they are not separate public AdCP format IDs.
+        SafeFrame behavior belongs to inventory/tag rendering capabilities.
+        """
+        from src.adapters.gam.formats import gam_supported_format_models
+
+        return [fmt.model_dump(mode="json") for fmt in gam_supported_format_models()]
+
     # Legacy properties for backward compatibility
     @property
     def GEO_COUNTRY_MAP(self):

@@ -1517,7 +1517,7 @@ def create_tenant():
                 slack_audit_webhook_url=data.get("slack_audit_webhook_url"),
                 hitl_webhook_url=data.get("hitl_webhook_url"),
                 admin_token=admin_token,
-                auto_approve_format_ids=json.dumps(data.get("auto_approve_format_ids", ["display_300x250"])),
+                auto_approve_format_ids=json.dumps(data.get("auto_approve_format_ids", ["display_image"])),
                 human_review_required=data.get("human_review_required", True),
                 policy_settings=json.dumps(data.get("policy_settings", {})),
                 created_at=datetime.now(UTC),

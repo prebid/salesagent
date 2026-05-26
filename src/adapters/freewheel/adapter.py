@@ -708,6 +708,46 @@ class FreeWheelAdapter(AdServerAdapter):
 
     # ----- creatives -----
 
+    @staticmethod
+    def _asset_vast_url(asset: dict[str, Any]) -> str | None:
+        """Return the VAST/tag URL from a canonical adapter asset payload."""
+        for key in ("vast_tag", "vast_tag_url", "creative_remote_url", "media_url", "url"):
+            value = asset.get(key)
+            if value:
+                return str(value)
+        snippet = asset.get("snippet")
+        if snippet and str(asset.get("snippet_type") or "").lower() == "vast_url":
+            return str(snippet)
+        return None
+
+    @staticmethod
+    def _asset_duration_seconds(asset: dict[str, Any]) -> int | None:
+        """Return an integer duration in seconds from adapter asset metadata."""
+        duration = asset.get("duration_seconds", asset.get("duration"))
+        if duration is not None:
+            return int(float(duration))
+        format_ref = asset.get("format_id")
+        if isinstance(format_ref, dict) and format_ref.get("duration_ms") is not None:
+            return int(float(format_ref["duration_ms"]) / 1000.0)
+        return None
+
+    def _creative_renditions(self, asset: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Build inline FreeWheel renditions for the adapter's canonical VAST formats."""
+        vast_url = self._asset_vast_url(asset)
+        if not vast_url:
+            return None
+        rendition: dict[str, Any] = {
+            "uri": vast_url,
+            "content_type": asset.get("content_type") or "application/xml",
+            "vast_rendition": True,
+            "https_compatibility": "compatible",
+        }
+        if asset.get("width") is not None:
+            rendition["width"] = int(asset["width"])
+        if asset.get("height") is not None:
+            rendition["height"] = int(asset["height"])
+        return [rendition]
+
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
@@ -723,9 +763,11 @@ class FreeWheelAdapter(AdServerAdapter):
         """
         if self.dry_run:
             for asset in assets:
+                renditions = self._creative_renditions(asset)
                 self.log(
                     f"Would POST {self.base_url}/services/v4/creative_resources "
-                    f"name={asset.get('name')} advertiser_id={self.advertiser_id}"
+                    f"name={asset.get('name')} advertiser_id={self.advertiser_id} "
+                    f"renditions={renditions or []}"
                 )
                 self.log(
                     f"  Then POST creative_instances for ad_unit_nodes under {asset.get('package_assignments', [])}"
@@ -735,23 +777,38 @@ class FreeWheelAdapter(AdServerAdapter):
         assert self._client is not None
         statuses: list[AssetStatus] = []
         for asset in assets:
+            creative_id = str(asset.get("creative_id") or "")
+            renditions = self._creative_renditions(asset)
+            if not creative_id:
+                logger.warning("FreeWheel asset missing 'creative_id'; skipping")
+                statuses.append(AssetStatus(creative_id="", status="failed"))
+                continue
+            if not renditions:
+                logger.warning("FreeWheel asset %s missing VAST/tag URL; skipping", creative_id)
+                statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
+                continue
             try:
-                created = self._client.creatives.create_creative(
-                    name=asset.get("name") or f"adcp-{asset['creative_id']}",
-                    advertiser_ids=[int(self.advertiser_id)] if self.advertiser_id else None,
-                    base_ad_unit_id=asset.get("base_ad_unit_id"),
-                    external_id=asset["creative_id"],
-                )
+                create_kwargs: dict[str, Any] = {
+                    "name": asset.get("name") or f"adcp-{creative_id}",
+                    "advertiser_ids": [int(self.advertiser_id)] if self.advertiser_id else None,
+                    "base_ad_unit_id": asset.get("base_ad_unit_id"),
+                    "external_id": creative_id,
+                    "renditions": renditions,
+                }
+                duration = self._asset_duration_seconds(asset)
+                if duration is not None:
+                    create_kwargs["duration"] = duration
+                created = self._client.creatives.create_creative(**create_kwargs)
                 # Echo the FW id back so associate_creatives can use it
                 # as platform_creative_ids[] input.
                 statuses.append(AssetStatus(creative_id=str(created.id), status="approved"))
             except FreeWheelError as exc:
                 logger.warning(
                     "FreeWheel creative_resource create failed for asset %s: %s",
-                    asset.get("creative_id"),
+                    creative_id,
                     exc,
                 )
-                statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+                statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
         return statuses
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:

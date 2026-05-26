@@ -461,6 +461,20 @@ class TestTemplateAdvertisements:
         assert is_template is True
         assert template_type == "gallery"
 
+    def test_is_template_ad_cube_from_canonical_slideshow(self, manager):
+        """Canonical six-frame slideshow maps to Broadstreet cube rendering."""
+        asset = {
+            "format_id": {
+                "agent_url": "https://creative.adcontextprotocol.org",
+                "id": "image_slideshow_5s_each",
+            },
+            "assets": {f"slide_{i}_image": {"url": f"https://cdn.example.com/{i}.png"} for i in range(6)},
+        }
+        is_template, template_type = manager.is_template_ad(asset)
+
+        assert is_template is True
+        assert template_type == "cube_3d"
+
     def test_is_template_ad_standard(self, manager):
         """Test standard ad is not detected as template."""
         asset = {"media_url": "https://banner.png"}
@@ -487,6 +501,25 @@ class TestTemplateAdvertisements:
         assert params["back_image"] == "https://back.png"
         assert params["front_caption"] == "Front side"
         assert params["url"] == "https://example.com"
+
+    def test_build_template_source_params_cube_from_canonical_slides(self, manager):
+        """Canonical slideshow assets are translated to Broadstreet cube faces."""
+        asset = {
+            "assets": {
+                **{f"slide_{i}_image": {"url": f"https://cdn.example.com/{i}.png"} for i in range(6)},
+                "slide_0_caption": {"content": "Front side"},
+                "landing_url": {"url": "https://example.com"},
+                "brand_logo": {"url": "https://cdn.example.com/logo.png"},
+            }
+        }
+        params = manager._build_template_source_params("cube_3d", asset)
+
+        assert params["front_image"] == "https://cdn.example.com/0.png"
+        assert params["back_image"] == "https://cdn.example.com/1.png"
+        assert params["bottom_image"] == "https://cdn.example.com/5.png"
+        assert params["front_caption"] == "Front side"
+        assert params["url"] == "https://example.com"
+        assert params["logo"] == "https://cdn.example.com/logo.png"
 
     def test_build_template_source_params_youtube(self, manager):
         """Test building YouTube template source params."""

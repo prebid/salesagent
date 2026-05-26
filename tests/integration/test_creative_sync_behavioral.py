@@ -256,7 +256,7 @@ class TestCreativeValidation:
             assert result.action != CreativeAction.failed
 
     def test_adapter_format_skips_registry_validation(self, integration_db):
-        """Covers: UC-006-CREATIVE-FORMAT-VALIDATION-02 — adapter:// agent_url skips external format lookup."""
+        """Covers: UC-006-CREATIVE-FORMAT-VALIDATION-02 — non-HTTP agent_url skips external format lookup."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -265,7 +265,7 @@ class TestCreativeValidation:
                 creatives=[
                     _make_creative_asset(
                         creative_id="c_adapter",
-                        format_id=AdcpFormatId(agent_url="broadstreet://default", id="broadstreet_billboard"),
+                        format_id=AdcpFormatId(agent_url="adapter-test://default", id="legacy_adapter_format"),
                     )
                 ]
             )
@@ -976,7 +976,7 @@ class TestSyncExtensions:
         assert pkg_id in result.assignment_errors
 
     def test_adapter_format_skips_registry(self, integration_db):
-        """Covers: UC-006-EXT-H-02 — adapter:// agent_url bypasses external format lookup."""
+        """Covers: UC-006-EXT-H-02 — non-HTTP agent_url bypasses external format lookup."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -985,7 +985,7 @@ class TestSyncExtensions:
                 creatives=[
                     _make_creative_asset(
                         creative_id="c_adapter",
-                        format_id=AdcpFormatId(agent_url="broadstreet://default", id="billboard"),
+                        format_id=AdcpFormatId(agent_url="adapter-test://default", id="legacy_adapter_format"),
                     )
                 ],
             )

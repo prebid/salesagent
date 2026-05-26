@@ -5,6 +5,8 @@ AdCPCallContextBuilder.build() does in production, but without needing
 a Starlette request object.
 """
 
+import uuid
+
 from a2a.server.context import ServerCallContext
 
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
@@ -28,3 +30,19 @@ def make_a2a_context(
     """
     auth_ctx = AuthContext(auth_token=auth_token, headers=headers or {})
     return ServerCallContext(state={AUTH_CONTEXT_STATE_KEY: auth_ctx})
+
+
+def make_a2a_skill_message(skill: str, parameters: dict) -> dict:
+    """Build an A2A JSON-RPC message/send body for explicit skill calls."""
+    message = {
+        "messageId": str(uuid.uuid4()),
+        "contextId": str(uuid.uuid4()),
+        "role": "user",
+    }
+    message["parts"] = [{"kind": "data", "data": {"skill": skill, "parameters": parameters}}]
+    return {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "message/send",
+        "params": {"message": message},
+    }

@@ -126,6 +126,9 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
             format_entry["width"] = int(fmt["width"])
         if fmt.get("height") is not None:
             format_entry["height"] = int(fmt["height"])
+        for key in ("min_width", "max_width", "min_height", "max_height"):
+            if fmt.get(key) is not None:
+                format_entry[key] = int(fmt[key])
         if fmt.get("duration_ms") is not None:
             format_entry["duration_ms"] = float(fmt["duration_ms"])
         entries.append(format_entry)

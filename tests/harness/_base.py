@@ -13,8 +13,8 @@ Subclasses override:
     _configure_mocks(): None           -- wire mock defaults
     call_impl(**kwargs): Any           -- call production function
 
-Multi-transport support: subclasses may override ``call_mcp(**kwargs)``
-to dispatch through the in-process MCP server (``Transport.MCP``).
+Multi-transport support: subclasses may override ``call_mcp(**kwargs)`` or
+``call_a2a(**kwargs)`` to dispatch through the in-process protocol servers.
 ``Transport.IMPL`` calls ``call_impl`` directly.
 """
 
@@ -107,7 +107,17 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
     """
     import ast
 
+    import httpx
     from fastmcp.exceptions import ToolError
+
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 401:
+        message = "Authentication failed: a valid ADCP auth token is required."
+        return _adcp_error_from_code(
+            "AUTH_TOKEN_INVALID",
+            message,
+            recovery="correctable",
+            details={"suggestion": message},
+        )
 
     if not isinstance(exc, ToolError):
         return exc
@@ -136,6 +146,19 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
             return _adcp_error_from_code(error_code, message, recovery, details)
     except (ValueError, SyntaxError):
         pass
+
+    # adcp.server's platform dispatcher surfaces AdcpError to MCP clients as
+    # ToolError("CODE: message"). Normalize that newer wire shape too so
+    # transport-agnostic BDD assertions can inspect error_code consistently.
+    if ":" in error_str:
+        code, message = error_str.split(":", 1)
+        code = code.strip()
+        if code.isupper() and all(char.isalpha() or char == "_" for char in code):
+            return _adcp_error_from_code(
+                code,
+                message.strip(),
+                details={"suggestion": message.strip()},
+            )
 
     # Fallback: try extract_error_info (handles direct ToolError construction)
     from src.core.tool_error_logging import extract_error_info
@@ -257,7 +280,7 @@ class BaseTestEnv:
         identity has no tenant_id (auth-rejection tests that test the
         missing-tenant code path).
         """
-        if mcp_identity is None or not mcp_identity.tenant_id:
+        if mcp_identity is None or not mcp_identity.tenant_id or not mcp_identity.principal_id:
             return None
 
         from sqlalchemy import select
@@ -378,6 +401,17 @@ class BaseTestEnv:
         """
         raise NotImplementedError(
             f"{type(self).__name__} does not implement call_mcp(). Override to enable Transport.MCP dispatch."
+        )
+
+    def call_a2a(self, **kwargs: Any) -> Any:
+        """Call an A2A skill through the production JSON-RPC surface.
+
+        Override in subclasses that support ``Transport.A2A``. The helper
+        method ``_run_a2a_client`` below handles the shared ASGI transport,
+        auth headers, response extraction, and AdCP error reconstruction.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement call_a2a(). Override to enable Transport.A2A dispatch."
         )
 
     def _run_mcp_client(
@@ -507,11 +541,13 @@ class BaseTestEnv:
             faulthandler.dump_traceback_later(hang_dump_after, file=sys.stderr, repeat=False)
         try:
             try:
+                if mcp_identity is None:
+                    return run_on_app_loop(_factory)
                 if not auth_token:
                     # Unit mode: inject identity at the wrapper layer, since no
                     # real Principal row exists for the bearer middleware to find.
                     with patch(
-                        "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                        "src.core.transport_helpers.resolve_identity_from_context",
                         return_value=mcp_identity,
                     ):
                         return run_on_app_loop(_factory)
@@ -521,6 +557,107 @@ class BaseTestEnv:
         finally:
             if hang_dump_after > 0:
                 faulthandler.cancel_dump_traceback_later()
+
+    def _run_a2a_client(
+        self,
+        skill_name: str,
+        response_cls: type,
+        **kwargs: Any,
+    ) -> Any:
+        """A2A dispatch via httpx ``ASGITransport`` against ``core.main.build_app()``."""
+        import httpx
+
+        from tests.a2a_helpers import make_a2a_skill_message
+        from tests.harness._asgi_app import run_on_app_loop
+        from tests.harness.transport import Transport
+
+        self._commit_factory_data()
+
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        a2a_identity = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
+
+        req = kwargs.pop("req", None)
+        if req is not None and hasattr(req, "model_dump"):
+            req_fields = req.model_dump(exclude_none=True)
+            parameters = {**req_fields, **kwargs}
+        else:
+            parameters = dict(kwargs)
+
+        auth_token = a2a_identity.auth_token if a2a_identity else None
+        if not auth_token and self.use_real_db and self._session is not None:
+            auth_token = self._ensure_principal_for_mcp(a2a_identity)
+
+        request_headers = {
+            "Authorization": f"Bearer {auth_token or 'test-stub-token'}",
+            "Content-Type": "application/json",
+        }
+        if a2a_identity and a2a_identity.tenant_id:
+            request_headers["x-adcp-tenant"] = a2a_identity.tenant_id
+
+        body = make_a2a_skill_message(skill_name, self._jsonable(parameters))
+
+        def _factory(app: Any):
+            async def _call() -> Any:
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                    timeout=30.0,
+                ) as client:
+                    response = await client.post("/", json=body, headers=request_headers)
+                    response.raise_for_status()
+                    payload = response.json()
+
+                data = self._extract_a2a_data(payload)
+                adcp_error = data.get("adcp_error")
+                if adcp_error:
+                    raise _adcp_error_from_code(
+                        str(adcp_error.get("code") or "INTERNAL_ERROR"),
+                        str(adcp_error.get("message") or adcp_error.get("code") or "A2A request failed"),
+                        adcp_error.get("recovery"),
+                        adcp_error.get("details") if isinstance(adcp_error.get("details"), dict) else None,
+                    )
+                return response_cls(**data)
+
+            return _call()
+
+        return run_on_app_loop(_factory)
+
+    @classmethod
+    def _jsonable(cls, value: Any) -> Any:
+        """Convert test request payloads to JSON-compatible primitives."""
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json", exclude_none=True)
+        if isinstance(value, dict):
+            return {key: cls._jsonable(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [cls._jsonable(item) for item in value]
+        if isinstance(value, tuple):
+            return [cls._jsonable(item) for item in value]
+        return value
+
+    @staticmethod
+    def _extract_a2a_data(body: dict[str, Any]) -> dict[str, Any]:
+        """Extract the first A2A DataPart payload from a JSON-RPC response."""
+        if "error" in body:
+            error = body["error"]
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            raise RuntimeError(f"A2A JSON-RPC error: {message}")
+
+        result = body.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"A2A response missing result object: {body!r}")
+
+        artifacts = result.get("artifacts") or []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            for part in artifact.get("parts") or []:
+                if isinstance(part, dict) and part.get("kind") == "data" and isinstance(part.get("data"), dict):
+                    return part["data"]
+
+        raise RuntimeError(f"A2A response missing DataPart payload: {body!r}")
 
     def _run_mcp_wrapper(
         self,

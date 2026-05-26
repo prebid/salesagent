@@ -34,6 +34,7 @@ _CAPABILITY_KINDS = {
 }
 
 _SAFEFRAME_MODES = {"unknown", "supported", "required", "disabled"}
+_SAFEFRAME_EXPANSION_MODES = ("overlay", "push")
 _RENDER_MODES = ("image", "html", "js", "vast")
 _TARGETING_VALUES_LIVE_FETCH_RATE: dict[str, list[float]] = {}
 _TARGETING_VALUES_LIVE_FETCH_WINDOW_SECONDS = 60.0
@@ -545,6 +546,10 @@ def _capabilities_from_form() -> dict:
         safeframe = "unknown"
 
     render_modes = {mode: request.form.get(f"render_{mode}") == "on" for mode in _RENDER_MODES}
+    safeframe_config = {
+        f"allow_{mode}_expansion": request.form.get(f"safeframe_allow_{mode}_expansion") == "on"
+        for mode in _SAFEFRAME_EXPANSION_MODES
+    }
     dimensions = {
         "min_width": _int_field("min_width"),
         "max_width": _int_field("max_width"),
@@ -556,6 +561,7 @@ def _capabilities_from_form() -> dict:
         "slot_kind": slot_kind,
         "render_modes": render_modes,
         "safeframe": safeframe,
+        "safeframe_config": safeframe_config,
         "dimensions": {key: value for key, value in dimensions.items() if value is not None},
         "notes": (request.form.get("notes") or "").strip(),
     }
@@ -612,6 +618,7 @@ def edit_inventory_capabilities(tenant_id: str, inventory_type: str, inventory_i
             capabilities=capabilities,
             capability_kinds=_CAPABILITY_KINDS,
             safeframe_modes=sorted(_SAFEFRAME_MODES),
+            safeframe_expansion_modes=_SAFEFRAME_EXPANSION_MODES,
             render_modes=_RENDER_MODES,
         )
 
@@ -950,12 +957,12 @@ def analyze_ad_server_inventory(tenant_id):
                 {"id": "travel_enthusiasts", "name": "Travel Enthusiasts", "size": 750000},
             ],
             "formats": [
-                {"id": "display_728x90", "name": "Leaderboard", "dimensions": "728x90"},
-                {"id": "display_300x250", "name": "Medium Rectangle", "dimensions": "300x250"},
+                {"id": "display_image", "name": "Display Image", "dimensions": "728x90"},
+                {"id": "display_image", "name": "Display Image", "dimensions": "300x250"},
             ],
             "placements": [
-                {"id": "homepage_top", "name": "Homepage Top", "formats": ["display_728x90"]},
-                {"id": "article_sidebar", "name": "Article Sidebar", "formats": ["display_300x250"]},
+                {"id": "homepage_top", "name": "Homepage Top", "formats": ["display_image"]},
+                {"id": "article_sidebar", "name": "Article Sidebar", "formats": ["display_image"]},
             ],
         }
 

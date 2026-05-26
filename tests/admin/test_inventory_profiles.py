@@ -5,6 +5,7 @@ Requires PostgreSQL (integration_db fixture).
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy import delete, select
@@ -21,6 +22,15 @@ app = create_app()
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
 
 _TENANT_ID = "inv_prof_test_tenant"
+
+
+def test_inventory_profile_editor_derives_native_and_olv_formats_client_side():
+    template = Path("templates/edit_inventory_profile.html").read_text()
+
+    assert "slotKind === 'native'" in template
+    assert "native_standard" in template
+    assert "slotKind === 'olv'" in template
+    assert "GAM_CANONICAL_VIDEO_FORMAT_IDS" in template
 
 
 @pytest.fixture
@@ -579,6 +589,7 @@ class TestInventoryCapabilities:
                 "render_image": "on",
                 "render_html": "on",
                 "safeframe": "supported",
+                "safeframe_allow_overlay_expansion": "on",
                 "notes": "Responsive display slot.",
             },
             follow_redirects=False,
@@ -604,6 +615,10 @@ class TestInventoryCapabilities:
         }
         assert capabilities["render_modes"] == {"image": True, "html": True, "js": False, "vast": False}
         assert capabilities["safeframe"] == "supported"
+        assert capabilities["safeframe_config"] == {
+            "allow_overlay_expansion": True,
+            "allow_push_expansion": False,
+        }
 
 
 class TestInventoryProfileDelete:

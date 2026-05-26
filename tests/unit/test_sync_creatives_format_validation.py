@@ -84,9 +84,9 @@ class TestSyncCreativesFormatValidation:
     def mock_format_spec(self):
         """Mock format specification from creative agent."""
         format_spec = Mock()
-        format_spec.format_id = "display_300x250_image"
+        format_spec.format_id = "display_image"
         format_spec.agent_url = "https://creative.adcontextprotocol.org"
-        format_spec.name = "Medium Rectangle - Image"
+        format_spec.name = "Display Image"
         return format_spec
 
     def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
@@ -157,7 +157,7 @@ class TestSyncCreativesFormatValidation:
             assert len(response.creatives[0].errors) == 1
 
             error_msg = response.creatives[0].errors[0].message
-            assert "Unknown format 'display_300x250_image'" in error_msg
+            assert "Unknown format 'display_image'" in error_msg
             assert "https://creative.adcontextprotocol.org" in error_msg
             assert "list_creative_formats" in error_msg  # Helpful suggestion
 
@@ -200,8 +200,8 @@ class TestSyncCreativesFormatValidation:
             assert "Connection refused" in error_msg  # Original error included
 
     def test_format_validation_with_string_format_id(self, identity, mock_tenant, mock_format_spec):
-        """Test that string format_ids are rejected (FormatId object required)."""
-        # Creative with string format_id (legacy format - no longer supported)
+        """Test that legacy string format_ids are accepted and normalized."""
+        # Creative with string format_id (legacy compatibility input)
         creative_dict = {
             "creative_id": "creative_456",
             "name": "Legacy Creative",
@@ -243,12 +243,14 @@ class TestSyncCreativesFormatValidation:
             # Execute
             response = _sync_creatives_impl(creatives=[creative_dict], identity=identity)
 
-            # Verify creative failed validation (string format_id rejected by schema)
-            # AdCP spec requires format_id to be a FormatId object with agent_url and id
+            # Verify creative was accepted through the backwards-compatibility path.
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == CreativeAction.created
             assert response.creatives[0].creative_id == "creative_456"
-            # Error message will be from Pydantic validation, not our format validation
+
+            create_kwargs = mock_creative_repo.create.call_args.kwargs
+            assert create_kwargs["format"] == "display_image"
+            assert create_kwargs["format_parameters"] == {"width": 300, "height": 250}
 
     def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):
         """Test that format validation works correctly with multiple creatives."""
@@ -314,7 +316,7 @@ class TestSyncCreativesFormatValidation:
 
             # Mock get_format to return format_spec for valid format, None for invalid
             async def mock_get_format(agent_url, format_id):
-                if format_id == "display_300x250_image":
+                if format_id == "display_image":
                     return mock_format_spec
                 return None
 

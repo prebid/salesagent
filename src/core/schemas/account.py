@@ -9,6 +9,7 @@ beads: salesagent-x79
 import uuid
 from typing import Any
 
+from adcp.types import Error, Setup
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
@@ -17,7 +18,8 @@ from adcp.types.generated_poc.account.list_accounts_response import Account as L
 from adcp.types.generated_poc.account.sync_accounts_response import (
     SyncAccountsResponse1 as LibrarySyncAccountsSuccess,
 )
-from pydantic import ConfigDict, Field
+from adcp.types.generated_poc.core.brand_ref import BrandReference
+from pydantic import ConfigDict, Field, field_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import NestedModelSerializerMixin
@@ -36,6 +38,14 @@ class Account(LibraryAccountDomain):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Keep optional account fields visible in default serialized output."""
+        result = super().model_dump(**kwargs)
+        if not kwargs.get("exclude_none"):
+            for field in ("advertiser", "rate_card", "payment_terms"):
+                result.setdefault(field, getattr(self, field, None))
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +100,7 @@ class SyncResponseAccount(AdCPBaseModel):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    brand: Any
+    brand: BrandReference
     operator: str
     action: str
     status: str
@@ -98,8 +108,8 @@ class SyncResponseAccount(AdCPBaseModel):
     name: str | None = None
     billing: str | None = None
     sandbox: bool | None = None
-    errors: list[Any] | None = None
-    setup: Any | None = None
+    errors: list[Error] | None = None
+    setup: Setup | None = None
     notification_configs: list[Any] | None = None
 
 
@@ -111,6 +121,15 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    @field_validator("accounts", mode="after")
+    @classmethod
+    def _coerce_accounts_to_local_schema(cls, accounts: list[LibraryAccountDomain]) -> list[LibraryAccountDomain]:
+        """Use the local Account subclass so nested dumps include stable optional keys."""
+        return [
+            account if isinstance(account, Account) else Account.model_validate(account.model_dump())
+            for account in accounts
+        ]
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

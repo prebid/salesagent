@@ -110,6 +110,22 @@
                     </div>
 
                     <div class="mb-3">
+                        <label class="form-label">SafeFrame expansion</label>
+                        {% set sf_config = capabilities.get('safeframe_config') or {} %}
+                        <div class="d-flex flex-wrap gap-3">
+                            {% for mode in safeframe_expansion_modes %}
+                                {% set field = 'allow_' ~ mode ~ '_expansion' %}
+                                <label class="form-check">
+                                    <input class="form-check-input" type="checkbox"
+                                           name="safeframe_allow_{{ mode }}_expansion"
+                                           {% if sf_config.get(field) %}checked{% endif %}>
+                                    <span class="form-check-label">{{ mode | title }} expansion</span>
+                                </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
                         <label class="form-label" for="notes">Notes</label>
                         <textarea class="form-control" id="notes" name="notes" rows="3">{{ capabilities.get('notes') or '' }}</textarea>
                     </div>

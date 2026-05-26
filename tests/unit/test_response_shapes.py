@@ -767,7 +767,9 @@ class TestListCreativesResponseShape:
         fid = data["creatives"][0]["format_id"]
         assert_field_type(fid, "id", str)
         assert_field_type(fid, "agent_url", str)
-        assert fid["id"] == "video_1920x1080"
+        assert fid["id"] == "video_standard"
+        assert fid["width"] == 1920
+        assert fid["height"] == 1080
 
 
 # ===========================================================================

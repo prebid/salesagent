@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import UTC, datetime
 
 
 class WebhookAuthenticator:
@@ -42,9 +43,17 @@ class WebhookAuthenticator:
         # Generate HMAC-SHA256 signature
         signature = hmac.new(secret.encode("utf-8"), signed_payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
+        adcp_timestamp = datetime.now(UTC).isoformat()
+        adcp_signed_payload = f"{adcp_timestamp}.{payload_str}"
+        adcp_signature = hmac.new(
+            secret.encode("utf-8"), adcp_signed_payload.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+
         return {
             "X-Webhook-Signature": f"sha256={signature}",
             "X-Webhook-Timestamp": timestamp,
+            "X-ADCP-Signature": f"sha256={adcp_signature}",
+            "X-ADCP-Timestamp": adcp_timestamp,
         }
 
     @staticmethod

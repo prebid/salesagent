@@ -11,10 +11,15 @@ Run with:
     uv run pytest tests/e2e/test_gam_real.py -v
 """
 
+import os
+import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
+from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
+from src.core.schemas import FormatId, MediaPackage
 from tests.e2e.conftest import (
     GAM_TEST_AD_UNIT_IDS,
     GAM_TEST_ADVERTISER_ID,
@@ -185,6 +190,182 @@ class TestGAMAdapter:
                 break
 
         assert test_advertiser is not None, "Test advertiser not found via adapter.get_advertisers()"
+
+
+@pytest.mark.requires_gam
+class TestGAMCanonicalCreativeTrafficking:
+    """Smoke-test canonical display creatives against the real GAM test network.
+
+    Gated by GAM_RUN_TRAFFICKING_TESTS=true because it creates real GAM orders,
+    line items, creatives, and LICAs before archiving the order.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _require_trafficking_opt_in(self):
+        if os.getenv("GAM_RUN_TRAFFICKING_TESTS", "").lower() != "true":
+            pytest.skip("Set GAM_RUN_TRAFFICKING_TESTS=true to create real GAM test trafficking objects")
+
+    def _make_adapter(self, gam_service_account_json):
+        from src.adapters.google_ad_manager import GoogleAdManager
+
+        principal = MagicMock()
+        principal.tenant_id = "e2e_test"
+        principal.principal_id = "e2e_test_principal"
+        principal.platform_mappings = {"gam_advertiser_id": GAM_TEST_ADVERTISER_ID}
+
+        return GoogleAdManager(
+            config={"service_account_json": gam_service_account_json, "network_code": GAM_TEST_NETWORK_CODE},
+            principal=principal,
+            network_code=GAM_TEST_NETWORK_CODE,
+            advertiser_id=GAM_TEST_ADVERTISER_ID,
+            tenant_id="e2e_test",
+            naming_templates=("TEST Canonical Creative {media_buy_id}", "{product_name}"),
+        )
+
+    def test_canonical_display_creatives_create_and_associate(self, gam_service_account_json):
+        """Create line items from canonical formats, then create and associate creatives."""
+        adapter = self._make_adapter(gam_service_account_json)
+        suffix = uuid.uuid4().hex[:8]
+        start = datetime.now(UTC) + timedelta(days=1)
+        end = start + timedelta(days=3)
+
+        order_id = adapter.orders_manager.create_order(
+            order_name=f"TEST Canonical Creatives {suffix}",
+            total_budget=3.00,
+            start_time=start,
+            end_time=end,
+            currency="USD",
+            po_number=f"CANON-{suffix}",
+        )
+
+        packages = [
+            MediaPackage(
+                package_id=f"pkg_prod_gamcanonimg_{suffix}_1",
+                product_id="prod_gamcanonimg",
+                name="Canonical Display Image",
+                delivery_type="non_guaranteed",
+                impressions=1000,
+                budget=1.00,
+                format_ids=[
+                    FormatId(
+                        agent_url=DEFAULT_CREATIVE_AGENT_URL,
+                        id="display_image",
+                        width=300,
+                        height=250,
+                    )
+                ],
+            ),
+            MediaPackage(
+                package_id=f"pkg_prod_gamcanonhtml_{suffix}_2",
+                product_id="prod_gamcanonhtml",
+                name="Canonical Display HTML",
+                delivery_type="non_guaranteed",
+                impressions=1000,
+                budget=1.00,
+                format_ids=[
+                    FormatId(
+                        agent_url=DEFAULT_CREATIVE_AGENT_URL,
+                        id="display_html",
+                        width=300,
+                        height=250,
+                    )
+                ],
+            ),
+            MediaPackage(
+                package_id=f"pkg_prod_gamcanonjs_{suffix}_3",
+                product_id="prod_gamcanonjs",
+                name="Canonical Display JS",
+                delivery_type="non_guaranteed",
+                impressions=1000,
+                budget=1.00,
+                format_ids=[
+                    FormatId(
+                        agent_url=DEFAULT_CREATIVE_AGENT_URL,
+                        id="display_js",
+                        width=300,
+                        height=250,
+                    )
+                ],
+            ),
+        ]
+
+        products_map = {
+            pkg.package_id: {
+                "product_id": pkg.product_id,
+                "delivery_type": "non_guaranteed",
+                "implementation_config": {
+                    "targeted_ad_unit_ids": [GAM_TEST_AD_UNIT_IDS[0]],
+                    "include_descendants": True,
+                    "supported_format_types": ["display"],
+                    "primary_goal_type": "LIFETIME",
+                    "primary_goal_unit_type": "IMPRESSIONS",
+                    "creative_rotation_type": "EVEN",
+                    "delivery_rate_type": "EVENLY",
+                },
+            }
+            for pkg in packages
+        }
+        package_pricing_info = {
+            pkg.package_id: {
+                "pricing_model": "cpm",
+                "rate": 1.00,
+                "currency": "USD",
+                "is_fixed": True,
+                "bid_price": None,
+            }
+            for pkg in packages
+        }
+
+        try:
+            line_item_ids = adapter.orders_manager.create_line_items(
+                order_id=order_id,
+                packages=packages,
+                start_time=start,
+                end_time=end,
+                products_map=products_map,
+                tenant_id=None,
+                order_name=f"TEST Canonical Creatives {suffix}",
+                package_pricing_info=package_pricing_info,
+                line_item_name_template="{product_name}",
+            )
+            assert len(line_item_ids) == len(packages)
+
+            assets = [
+                {
+                    "creative_id": f"canon_img_{suffix}",
+                    "name": "Canonical Image Creative",
+                    "format": "display_image",
+                    "url": "https://www.gstatic.com/webp/gallery/1.sm.jpg",
+                    "click_url": "https://example.com/",
+                    "width": 300,
+                    "height": 250,
+                    "package_assignments": [packages[0].package_id],
+                },
+                {
+                    "creative_id": f"canon_html_{suffix}",
+                    "name": "Canonical HTML Creative",
+                    "format": "display_html",
+                    "media_data": "<div style='width:300px;height:250px;background:#111;color:#fff'>Test</div>",
+                    "width": 300,
+                    "height": 250,
+                    "package_assignments": [packages[1].package_id],
+                },
+                {
+                    "creative_id": f"canon_js_{suffix}",
+                    "name": "Canonical JS Creative",
+                    "format": "display_js",
+                    "snippet": "<script>document.write('<div style=\"width:300px;height:250px\">Test</div>')</script>",
+                    "snippet_type": "javascript",
+                    "width": 300,
+                    "height": 250,
+                    "package_assignments": [packages[2].package_id],
+                },
+            ]
+            statuses = adapter.add_creative_assets(order_id, assets, datetime.now(UTC))
+
+            assert [status.status for status in statuses] == ["approved", "approved", "approved"]
+        finally:
+            adapter.archive_order(order_id)
 
 
 @pytest.mark.requires_gam

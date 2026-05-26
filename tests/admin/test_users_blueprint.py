@@ -243,7 +243,7 @@ class TestEnableSetupMode:
 
     def test_enables_setup_mode(self, client, factory_session):
         tenant = TenantFactory(auth_setup_mode=False)
-        _auth_session(client, tenant.tenant_id)
+        _auth_session(client, tenant.tenant_id, auth_method="oidc")
 
         response = client.post(f"/tenant/{tenant.tenant_id}/users/enable-setup-mode")
         assert response.status_code == 200
@@ -256,7 +256,7 @@ class TestEnableSetupMode:
     def test_returns_404_for_unknown_tenant(self, client, factory_session):
         # Auth the session against a real tenant (super-admin bypasses tenant scoping).
         tenant = TenantFactory()
-        _auth_session(client, tenant.tenant_id)
+        _auth_session(client, tenant.tenant_id, auth_method="oidc")
 
         response = client.post("/tenant/nonexistent_tenant_id/users/enable-setup-mode")
         assert response.status_code == 404

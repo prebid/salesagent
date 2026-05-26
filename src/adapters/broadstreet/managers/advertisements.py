@@ -43,6 +43,52 @@ FORMAT_TO_AD_TYPE = {
 }
 
 
+def _format_id_value(asset: dict[str, Any]) -> str | None:
+    """Extract a creative's canonical format ID from common wire shapes."""
+    format_id = asset.get("format_id")
+    if isinstance(format_id, dict):
+        return format_id.get("id")
+    if format_id is not None and hasattr(format_id, "id"):
+        return str(format_id.id)
+    legacy_format = asset.get("format")
+    return str(legacy_format) if legacy_format else None
+
+
+def _asset_entry(asset: dict[str, Any], key: str) -> Any:
+    """Return asset value from top-level or nested AdCP manifest assets."""
+    if key in asset:
+        return asset[key]
+    nested_assets = asset.get("assets")
+    if isinstance(nested_assets, dict):
+        return nested_assets.get(key)
+    return None
+
+
+def _asset_value(value: Any) -> Any:
+    """Extract the usable scalar value from an AdCP asset object/dict."""
+    if isinstance(value, dict):
+        for key in ("url", "content", "text", "value", "media_url"):
+            if value.get(key):
+                return value[key]
+        return None
+    return value
+
+
+def _indexed_group_values(asset: dict[str, Any], group_id: str, field_id: str) -> list[Any]:
+    """Extract values following AdCP repeatable group keys, e.g. slide_0_image."""
+    values: list[Any] = []
+    index = 0
+    while True:
+        value = _asset_entry(asset, f"{group_id}_{index}_{field_id}")
+        if value is None:
+            break
+        extracted = _asset_value(value)
+        if extracted:
+            values.append(extracted)
+        index += 1
+    return values
+
+
 class AdvertisementInfo:
     """Tracks advertisement state."""
 
@@ -202,15 +248,17 @@ class BroadstreetAdvertisementManager:
 
         if template_type == "cube_3d":
             # 3D Cube needs 6 face images + optional captions
-            # First try explicit face_image fields, then fall back to images array
-            images_list = asset.get("images", [])
+            # First try explicit face_image fields, then fall back to canonical
+            # repeatable slideshow assets, then to a legacy images array.
+            images_list = _indexed_group_values(asset, "slide", "image") or asset.get("images", [])
             faces = ["front", "back", "left", "right", "top", "bottom"]
 
             for i, face in enumerate(faces):
                 image_key = f"{face}_image"
                 # Use explicit field if provided
-                if asset.get(image_key):
-                    params[image_key] = asset[image_key]
+                explicit_value = _asset_value(_asset_entry(asset, image_key))
+                if explicit_value:
+                    params[image_key] = explicit_value
                 # Fall back to images array if available
                 elif isinstance(images_list, list) and len(images_list) > i:
                     img = images_list[i]
@@ -219,16 +267,24 @@ class BroadstreetAdvertisementManager:
                     )
 
             # Optional captions
+            slide_captions = _indexed_group_values(asset, "slide", "caption")
             for face in faces:
                 caption_key = f"{face}_caption"
-                if asset.get(caption_key):
-                    params[caption_key] = asset[caption_key]
+                caption_value = _asset_value(_asset_entry(asset, caption_key))
+                if caption_value:
+                    params[caption_key] = caption_value
+                elif slide_captions and len(slide_captions) > faces.index(face):
+                    params[caption_key] = slide_captions[faces.index(face)]
 
             # Optional settings
-            if asset.get("click_url"):
-                params["url"] = asset["click_url"]
-            if asset.get("logo"):
-                params["logo"] = asset["logo"]
+            click_url = _asset_value(_asset_entry(asset, "click_url")) or _asset_value(
+                _asset_entry(asset, "landing_url")
+            )
+            if click_url:
+                params["url"] = click_url
+            logo = _asset_value(_asset_entry(asset, "logo")) or _asset_value(_asset_entry(asset, "brand_logo"))
+            if logo:
+                params["logo"] = logo
             if asset.get("auto_rotate_ms"):
                 params["timeout"] = asset["auto_rotate_ms"]
 
@@ -244,7 +300,7 @@ class BroadstreetAdvertisementManager:
 
         elif template_type == "gallery":
             # Image gallery/slideshow
-            images = asset.get("images", [])
+            images = asset.get("images", []) or _indexed_group_values(asset, "slide", "image")
             if isinstance(images, list):
                 for i, img in enumerate(images):
                     if isinstance(img, str):
@@ -252,7 +308,7 @@ class BroadstreetAdvertisementManager:
                     elif isinstance(img, dict):
                         params[f"image_{i + 1}"] = img.get("url") or img.get("media_url")
             # Captions
-            captions = asset.get("captions", [])
+            captions = asset.get("captions", []) or _indexed_group_values(asset, "slide", "caption")
             if isinstance(captions, list):
                 for i, caption in enumerate(captions):
                     if caption:
@@ -300,10 +356,18 @@ class BroadstreetAdvertisementManager:
         if template_type and template_type in BROADSTREET_TEMPLATES:
             return True, template_type
 
+        canonical_format_id = _format_id_value(asset)
+        if canonical_format_id == "image_slideshow_5s_each":
+            slide_images = _indexed_group_values(asset, "slide", "image")
+            if len(slide_images) == 6:
+                return True, "cube_3d"
+            if len(slide_images) > 1:
+                return True, "gallery"
+
         # Auto-detect from content
         # 3D Cube: Has 6 face images
         face_images = ["front_image", "back_image", "left_image", "right_image", "top_image", "bottom_image"]
-        if all(asset.get(f) for f in face_images):
+        if all(_asset_entry(asset, f) for f in face_images):
             return True, "cube_3d"
 
         # YouTube: Has youtube_url or video_url with youtube in it

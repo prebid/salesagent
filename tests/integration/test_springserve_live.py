@@ -330,3 +330,62 @@ class TestCreativeRoundTrip:
                     client.campaigns.delete(campaign.id)
                 except SpringServeError as exc:
                     logger.warning("cleanup: failed to delete campaign %s: %s", campaign.id, exc)
+
+
+class TestAudioVastTagRoundTrip:
+    """Live audio path -- SpringServe Demand Tag passthrough to an audio VAST URL."""
+
+    SAMPLE_AUDIO_VAST_URL = "https://samplelib.com/vast/sample-vast-audio.xml"
+
+    def test_create_audio_tag_with_vast_endpoint_url(
+        self, client: SpringServeClient, demand_partner_id: int, smoke_label: str
+    ):
+        from src.adapters.springserve import SpringServeForbiddenError
+
+        start = datetime.now(UTC) + timedelta(days=7)
+        end = start + timedelta(days=14)
+        campaign = None
+        demand_tag = None
+        try:
+            try:
+                campaign = client.campaigns.create(
+                    name=f"{smoke_label}_audio_tag",
+                    demand_partner_id=demand_partner_id,
+                    is_active=False,
+                    secondary_code=smoke_label,
+                    rate_currency="EUR",
+                )
+            except SpringServeForbiddenError as exc:
+                pytest.skip(
+                    f"SpringServe POST /campaigns scope not granted ({exc.status_code}); "
+                    "see TestWriteRoundTrip for the scope-grant ask."
+                )
+
+            demand_tag = client.demand_tags.create(
+                name=f"{smoke_label}_audio_dt",
+                campaign_id=campaign.id,
+                demand_partner_id=demand_partner_id,
+                start_date=start,
+                end_date=end,
+                format="audio",
+                rate=0.01,
+                rate_currency="EUR",
+                is_active=False,
+                secondary_code="pkg_audio_vast_smoke",
+                demand_class="tag",
+                vast_endpoint_url=self.SAMPLE_AUDIO_VAST_URL,
+            )
+            refetched = client.demand_tags.get(demand_tag.id)
+            assert refetched.id == demand_tag.id
+            assert refetched.format == "audio"
+        finally:
+            if demand_tag is not None:
+                try:
+                    client.demand_tags.delete(demand_tag.id)
+                except SpringServeError as exc:
+                    logger.warning("cleanup: failed to delete demand_tag %s: %s", demand_tag.id, exc)
+            if campaign is not None:
+                try:
+                    client.campaigns.delete(campaign.id)
+                except SpringServeError as exc:
+                    logger.warning("cleanup: failed to delete campaign %s: %s", campaign.id, exc)

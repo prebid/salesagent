@@ -462,6 +462,13 @@ function formatCapabilities(capabilities) {
     if (capabilities.safeframe && capabilities.safeframe !== 'unknown') {
         parts.push(`SafeFrame ${capabilities.safeframe}`);
     }
+    const safeframeConfig = capabilities.safeframe_config || {};
+    const expansionModes = [];
+    if (safeframeConfig.allow_overlay_expansion) expansionModes.push('overlay');
+    if (safeframeConfig.allow_push_expansion) expansionModes.push('push');
+    if (expansionModes.length) {
+        parts.push(`expands ${expansionModes.join('/')}`);
+    }
     return parts.join(' · ');
 }
 

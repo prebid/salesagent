@@ -10,7 +10,7 @@ import pytest
 from src.adapters import get_adapter_default_channels, get_adapter_schemas
 from src.adapters.springserve import SpringServeAdapter
 from src.adapters.springserve.schemas import SpringServeConnectionConfig, SpringServeProductConfig
-from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, FormatId
 from tests.helpers.adapter_test_helpers import (
     invoke_create_media_buy,
     make_sample_create_request,
@@ -89,12 +89,10 @@ class TestCapabilities:
     def test_creative_formats_include_video_and_audio(self, mock_principal):
         adapter = self._dry_run_adapter(mock_principal)
         formats = adapter.get_creative_formats()
-        # Six video + four audio
         format_ids = [f["format_id"]["id"] for f in formats]
-        assert "springserve_video_15s_pre_roll" in format_ids
-        assert "springserve_video_30s_post_roll" in format_ids
-        assert "springserve_audio_15s_pre_roll" in format_ids
-        assert "springserve_audio_30s_mid_roll" in format_ids
+        assert format_ids.count("video_vast") == 2
+        assert format_ids.count("audio_vast") == 2
+        assert {f["format_id"]["duration_ms"] for f in formats} == {15000, 30000}
 
         video_types = {f["type"] for f in formats}
         assert video_types == {"video", "audio"}
@@ -230,7 +228,7 @@ class TestLiveCreateMediaBuy:
 
         adapter = self._adapter_with_mock_client(mock_principal)
         sample_packages[0] = sample_packages[0].model_copy(
-            update={"format_ids": [FormatId(agent_url="springserve://default", id="springserve_audio_30s_pre_roll")]}
+            update={"format_ids": [FormatId(agent_url="https://creative.adcontextprotocol.org", id="audio_vast")]}
         )
         invoke_create_media_buy(adapter, sample_request, sample_packages)
 
@@ -383,13 +381,37 @@ class TestLiveCreateMediaBuy:
         kw = adapter._client.demand_tags.create.call_args.kwargs
         assert kw["demand_class"] == "tag"
 
+    def test_demand_class_tag_passes_vast_endpoint_url_from_package_config(
+        self, mock_principal, sample_request, sample_packages
+    ):
+        adapter = self._adapter_with_mock_client(mock_principal, demand_class="tag")
+        sample_packages[0] = sample_packages[0].model_copy(
+            update={
+                "format_ids": [FormatId(agent_url="https://creative.adcontextprotocol.org", id="audio_vast")],
+                "implementation_config": {
+                    "springserve": {
+                        "extra_demand_tag_fields": {"vast_endpoint_url": "https://ads.example.com/audio-vast.xml"}
+                    }
+                },
+            }
+        )
+        invoke_create_media_buy(adapter, sample_request, sample_packages)
+
+        kw = adapter._client.demand_tags.create.call_args.kwargs
+        assert kw["format"] == "audio"
+        assert kw["vast_endpoint_url"] == "https://ads.example.com/audio-vast.xml"
+
 
 class TestLiveCreatives:
     """Stage 3 creative upload + binding."""
 
-    def _adapter(self, mock_principal):
+    _PUBLIC_DNS_RESULT = [(None, None, None, "", ("93.184.216.34", 443))]
+
+    def _adapter(self, mock_principal, **config_overrides):
+        config = {"api_token": "tok"}
+        config.update(config_overrides)
         adapter = SpringServeAdapter(
-            config={"api_token": "tok"},
+            config=config,
             principal=mock_principal,
             dry_run=False,
             tenant_id="tenant_ss_1",
@@ -397,24 +419,55 @@ class TestLiveCreatives:
         adapter._client = MagicMock()
         return adapter
 
+    def test_stored_audio_creative_builds_adapter_payload_without_dimensions(self):
+        from types import SimpleNamespace
+
+        from src.core.helpers.creative_helpers import (
+            adapter_asset_requires_dimensions,
+            build_adapter_asset_from_stored_creative,
+        )
+
+        creative = SimpleNamespace(
+            creative_id="talpa_audio_1",
+            name="Talpa Audio 30s",
+            agent_url="https://creative.adcontextprotocol.org",
+            format="audio_30s",
+            format_parameters={"duration_ms": 30000},
+            data={"assets": {"audio_file": {"asset_type": "audio", "url": "https://cdn.example.com/spot.mp3"}}},
+        )
+
+        asset = build_adapter_asset_from_stored_creative(creative, package_id="pkg_audio", format_spec=None)
+
+        assert asset["format_id"] == {
+            "agent_url": "https://creative.adcontextprotocol.org",
+            "id": "audio_30s",
+            "duration_ms": 30000,
+        }
+        assert asset["url"] == "https://cdn.example.com/spot.mp3"
+        assert asset["asset_type"] == "audio"
+        assert asset["content_type"] == "audio/mpeg"
+        assert asset["duration_seconds"] == 30
+        assert adapter_asset_requires_dimensions("springserve", asset) is False
+
     def test_add_creative_assets_posts_video(self, mock_principal):
         adapter = self._adapter(mock_principal)
         adapter._client.creatives.create.return_value = MagicMock(id=1182735)
 
-        statuses = adapter.add_creative_assets(
-            "springserve_900001",
-            [
-                {
-                    "creative_id": "adcp_creative_1",
-                    "name": "Spot 15s",
-                    "url": "https://cdn.example.com/spot.mp4",
-                    "duration_seconds": 15,
-                    "width": 1920,
-                    "height": 1080,
-                }
-            ],
-            today=datetime.now(UTC),
-        )
+        with patch("socket.getaddrinfo", return_value=self._PUBLIC_DNS_RESULT):
+            statuses = adapter.add_creative_assets(
+                "springserve_900001",
+                [
+                    {
+                        "creative_id": "adcp_creative_1",
+                        "name": "Spot 15s",
+                        "url": "https://cdn.example.com/spot.mp4",
+                        "duration_seconds": 15,
+                        "width": 1920,
+                        "height": 1080,
+                    }
+                ],
+                today=datetime.now(UTC),
+            )
 
         adapter._client.creatives.create.assert_called_once_with(
             name="Spot 15s",
@@ -432,42 +485,88 @@ class TestLiveCreatives:
         assert statuses[0].creative_id == "1182735"
         assert statuses[0].status == "approved"
 
-    def test_add_creative_assets_audio_format_id_routes_audio(self, mock_principal):
+    def test_add_creative_assets_audio_format_id_requires_tag_mode(self, mock_principal):
         adapter = self._adapter(mock_principal)
         adapter._client.creatives.create.return_value = MagicMock(id=1182999)
 
-        adapter.add_creative_assets(
+        statuses = adapter.add_creative_assets(
             "springserve_900001",
             [
                 {
                     "creative_id": "adcp_audio_1",
                     "name": "Audio Spot",
                     "url": "https://cdn.example.com/spot.mp3",
-                    "format_id": {"id": "springserve_audio_30s_pre_roll", "agent_url": "springserve://t"},
+                    "format_id": {"id": "audio_30s", "agent_url": "https://creative.adcontextprotocol.org"},
                 }
             ],
             today=datetime.now(UTC),
         )
 
-        kw = adapter._client.creatives.create.call_args.kwargs
-        assert kw["creative_format"] == "audio"
-        assert kw["creative_content_type"] == "audio/mpeg"
+        adapter._client.creatives.create.assert_not_called()
+        assert statuses[0].status == "failed"
+        assert "hosted audio upload is not supported" in statuses[0].message
 
-    def test_add_creative_assets_audio_mime_hint_routes_audio(self, mock_principal):
+    def test_add_creative_assets_audio_format_string_requires_tag_mode(self, mock_principal):
+        """The media-buy upload bridge passes both ``format`` and structured
+        ``format_id``; SpringServe must honor either shape."""
+        adapter = self._adapter(mock_principal)
+        adapter._client.creatives.create.return_value = MagicMock(id=1183000)
+
+        statuses = adapter.add_creative_assets(
+            "springserve_900001",
+            [
+                {
+                    "creative_id": "adcp_audio_2",
+                    "name": "Audio Spot",
+                    "url": "https://cdn.example.com/spot.mp3",
+                    "format": "audio_30s",
+                    "asset_type": "audio",
+                    "content_type": "audio/mpeg",
+                    "duration_seconds": 30,
+                }
+            ],
+            today=datetime.now(UTC),
+        )
+
+        adapter._client.creatives.create.assert_not_called()
+        assert statuses[0].status == "failed"
+        assert "hosted audio upload is not supported" in statuses[0].message
+
+    def test_add_creative_assets_audio_mime_hint_requires_tag_mode(self, mock_principal):
         """If the asset itself carries an audio/* content_type, route to audio
         even without a format_id hint."""
         adapter = self._adapter(mock_principal)
         adapter._client.creatives.create.return_value = MagicMock(id=1)
 
-        adapter.add_creative_assets(
+        statuses = adapter.add_creative_assets(
             "springserve_900001",
             [{"creative_id": "c1", "url": "https://x", "content_type": "audio/mp4"}],
             today=datetime.now(UTC),
         )
 
-        kw = adapter._client.creatives.create.call_args.kwargs
-        assert kw["creative_format"] == "audio"
-        assert kw["creative_content_type"] == "audio/mp4"
+        adapter._client.creatives.create.assert_not_called()
+        assert statuses[0].status == "failed"
+        assert "hosted audio upload is not supported" in statuses[0].message
+
+    def test_add_creative_assets_tag_mode_validates_url_without_upload(self, mock_principal):
+        adapter = self._adapter(mock_principal, demand_class="tag")
+
+        with patch("socket.getaddrinfo", return_value=self._PUBLIC_DNS_RESULT):
+            statuses = adapter.add_creative_assets(
+                "springserve_900001",
+                [
+                    {
+                        "creative_id": "adcp_audio_vast_1",
+                        "url": "https://ads.example.com/audio-vast.xml",
+                        "format_id": {"id": "audio_vast", "agent_url": "https://creative.adcontextprotocol.org"},
+                    }
+                ],
+                today=datetime.now(UTC),
+            )
+
+        adapter._client.creatives.create.assert_not_called()
+        assert statuses[0].status == "approved"
+        assert "demand_class=tag" in statuses[0].message
 
     def test_add_creative_assets_missing_url_marks_failed(self, mock_principal):
         adapter = self._adapter(mock_principal)
@@ -485,14 +584,15 @@ class TestLiveCreatives:
         adapter = self._adapter(mock_principal)
         adapter._client.creatives.create.return_value = MagicMock(id=1)
 
-        statuses = adapter.add_creative_assets(
-            "springserve_900001",
-            [
-                {"url": "https://x/spot.mp4"},  # missing creative_id
-                {"creative_id": "good", "url": "https://cdn.example.com/spot.mp4"},
-            ],
-            today=datetime.now(UTC),
-        )
+        with patch("socket.getaddrinfo", return_value=self._PUBLIC_DNS_RESULT):
+            statuses = adapter.add_creative_assets(
+                "springserve_900001",
+                [
+                    {"url": "https://x/spot.mp4"},  # missing creative_id
+                    {"creative_id": "good", "url": "https://cdn.example.com/spot.mp4"},
+                ],
+                today=datetime.now(UTC),
+            )
 
         # Bad asset fails fast with empty id; good asset is uploaded normally.
         assert statuses[0].status == "failed"

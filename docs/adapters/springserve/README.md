@@ -65,12 +65,15 @@ Two paths, exactly one required:
 
 ## Audio support
 
-Audio is a first-class concern on SpringServe — Magnite's iHeartMedia
-broadcast / streaming / podcast marketplace runs on the same demand-tag
-API surface as video, with audio MIME types (`audio/mp4`, `audio/mpeg`,
-≤500 MB) on the creative records. The adapter does not bifurcate; one
-SpringServe connection handles both, with the AdCP `Format.type`
-discrimination (`video` vs `audio`) driving creative MIME negotiation.
+Audio tag delivery is exposed as the canonical `audio_vast` format. In
+`demand_class=tag` mode, `create_media_buy` requires each package to carry
+exactly one assigned VAST/DAAST creative; the adapter injects that creative's
+URL into SpringServe's `vast_endpoint_url` before creating the Demand Tag.
+
+Hosted audio (`audio/mp4`, `audio/mpeg`, ≤500 MB) is not buyer-facing yet.
+SpringServe's API shape suggests hosted audio can live on the same creative
+records as video, but we keep `audio_15s` / `audio_30s` / `audio_60s` hidden
+until upload and bind behavior is proven against a live account.
 
 ## Scope coverage (live probe, 2026-05-14)
 

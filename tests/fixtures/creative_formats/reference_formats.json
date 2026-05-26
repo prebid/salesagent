@@ -1,5 +1,18 @@
 {
   "formats": {
+    "audio_15s": "https://creative.adcontextprotocol.org",
+    "audio_30s": "https://creative.adcontextprotocol.org",
+    "audio_60s": "https://creative.adcontextprotocol.org",
+    "display_html": "https://creative.adcontextprotocol.org",
+    "display_image": "https://creative.adcontextprotocol.org",
+    "display_js": "https://creative.adcontextprotocol.org",
+    "image_slideshow_5s_each": "https://creative.adcontextprotocol.org",
+    "mobile_story_vertical": "https://creative.adcontextprotocol.org",
+    "native_standard": "https://creative.adcontextprotocol.org",
+    "product_carousel_display": "https://creative.adcontextprotocol.org",
+    "video_playlist_6s_bumpers": "https://creative.adcontextprotocol.org",
+    "video_standard": "https://creative.adcontextprotocol.org",
+    "video_vast": "https://creative.adcontextprotocol.org",
     "display_300x250": "https://creative.adcontextprotocol.org",
     "display_728x90": "https://creative.adcontextprotocol.org",
     "display_160x600": "https://creative.adcontextprotocol.org",
@@ -9,8 +22,6 @@
     "video_640x480": "https://creative.adcontextprotocol.org",
     "video_1280x720": "https://creative.adcontextprotocol.org",
     "video_1920x1080": "https://creative.adcontextprotocol.org",
-    "audio_30s": "https://creative.adcontextprotocol.org",
-    "audio_60s": "https://creative.adcontextprotocol.org",
     "native_1x1": "https://creative.adcontextprotocol.org"
   },
   "cached_at": "2025-10-13T20:00:00Z",

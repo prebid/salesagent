@@ -8,7 +8,6 @@
  * - Template-based selection mapped to creative agent format IDs
  * - Size parameters stored in FormatId: {agent_url, id, width, height, duration_ms}
  * - Auto-populate sizes from inventory metadata
- * - Backward compatible with legacy format_ids
  * - Support for custom formats from tenant creative agents
  *
  * @see https://github.com/prebid/salesagent/issues/782
@@ -38,7 +37,10 @@ function escapeHtml(str) {
  * - video_standard: accepts duration
  * - video_vast: accepts duration - VAST redirect
  * - video_dimensions: accepts dimensions
+ * - audio_vast: VAST/DAAST audio tag creatives
+ * - audio_15s, audio_30s, audio_60s: hosted audio creatives
  * - native_standard: no parameters
+ * - product_carousel_display, image_slideshow_5s_each: carousel/multi-asset display
  *
  * Note: "display" and "video" templates are virtual templates that expand to
  * multiple format types so products accept any creative variation.
@@ -54,6 +56,7 @@ const FORMAT_TEMPLATES = {
         parameterType: "dimensions",  // width/height
         // Maps to these actual creative agent format IDs
         expandsTo: ["display_image", "display_html", "display_js"],
+        supportedAdapters: ["mock", "gam", "google_ad_manager", "broadstreet"],
         commonSizes: [
             { width: 300, height: 250, name: "Medium Rectangle" },
             { width: 728, height: 90, name: "Leaderboard" },
@@ -77,6 +80,11 @@ const FORMAT_TEMPLATES = {
         parameterType: "duration",  // duration_ms parameter
         // Maps to these actual creative agent format IDs
         expandsTo: ["video_standard", "video_vast"],
+        adapterExpandsTo: {
+            springserve: ["video_vast"],
+            freewheel: ["video_vast"]
+        },
+        supportedAdapters: ["mock", "gam", "google_ad_manager", "springserve", "freewheel"],
         commonDurations: [
             { ms: 6000, name: "6s (Bumper)" },
             { ms: 15000, name: "15s (Standard)" },
@@ -91,9 +99,88 @@ const FORMAT_TEMPLATES = {
         description: "Native content ads that match the look of the site",
         type: "native",
         parameterType: "none",  // No dimension parameters
+        supportedAdapters: ["mock", "gam", "google_ad_manager", "broadstreet"],
         gamSupported: true
+    },
+    product_carousel_display: {
+        id: "product_carousel_display",
+        name: "Product Carousel",
+        description: "Multi-card display carousel with image/text assets",
+        type: "display",
+        parameterType: "none",
+        supportedAdapters: ["mock", "gam", "google_ad_manager"],
+        gamSupported: true
+    },
+    image_slideshow_5s_each: {
+        id: "image_slideshow_5s_each",
+        name: "Image Slideshow",
+        description: "Multi-image carousel or slideshow creative",
+        type: "display",
+        parameterType: "none",
+        supportedAdapters: ["mock", "gam", "google_ad_manager", "broadstreet"],
+        gamSupported: true
+    },
+    mobile_story_vertical: {
+        id: "mobile_story_vertical",
+        name: "Mobile Story",
+        description: "Vertical multi-frame story creative",
+        type: "display",
+        parameterType: "none",
+        supportedAdapters: ["mock", "gam", "google_ad_manager"],
+        gamSupported: true
+    },
+    video_playlist_6s_bumpers: {
+        id: "video_playlist_6s_bumpers",
+        name: "Video Playlist",
+        description: "Sequence of short video bumper clips",
+        type: "video",
+        parameterType: "none",
+        supportedAdapters: ["mock", "gam", "google_ad_manager"],
+        gamSupported: true
+    },
+    audio_vast: {
+        id: "audio_vast",
+        name: "Audio VAST",
+        description: "Audio VAST/DAAST tag for streaming and podcast inventory",
+        type: "audio",
+        parameterType: "none",
+        supportedAdapters: ["mock", "springserve"],
+        gamSupported: false
+    },
+    audio_15s: {
+        id: "audio_15s",
+        name: "Audio 15s",
+        description: "Audio-only ads for podcasts and streaming",
+        type: "audio",
+        parameterType: "none",
+        supportedAdapters: ["mock"],
+        gamSupported: false
+    },
+    audio_30s: {
+        id: "audio_30s",
+        name: "Audio 30s",
+        description: "Audio-only ads for podcasts and streaming",
+        type: "audio",
+        parameterType: "none",
+        supportedAdapters: ["mock"],
+        gamSupported: false
+    },
+    audio_60s: {
+        id: "audio_60s",
+        name: "Audio 60s",
+        description: "Audio-only ads for podcasts and streaming",
+        type: "audio",
+        parameterType: "none",
+        supportedAdapters: ["mock"],
+        gamSupported: false
     }
 };
+
+function normalizeAdapterType(adapterType) {
+    const normalized = adapterType === 'google_ad_manager' ? 'gam' : (adapterType || 'mock');
+    const knownAdapters = new Set(['mock', 'gam', 'broadstreet', 'springserve', 'freewheel']);
+    return knownAdapters.has(normalized) ? normalized : 'mock';
+}
 
 /**
  * Default creative agent URL for AdCP reference formats.
@@ -118,7 +205,7 @@ class FormatTemplatePicker {
         this.containerId = options.containerId;
         this.hiddenInputId = options.hiddenInputId;
         this.tenantId = options.tenantId;
-        this.adapterType = options.adapterType || 'mock';
+        this.adapterType = normalizeAdapterType(options.adapterType || 'mock');
         this.scriptRoot = options.scriptRoot || '';
         this.onSelectionChange = options.onSelectionChange || (() => {});
 
@@ -408,7 +495,7 @@ class FormatTemplatePicker {
 
             // Get the actual format IDs to emit
             // Templates with expandsTo emit multiple format IDs per size
-            const formatIds = template.expandsTo || [templateId];
+            const formatIds = this._formatIdsForTemplate(template, templateId);
 
             if (params.size === 0) {
                 // Template selected but no sizes - include without params
@@ -465,15 +552,24 @@ class FormatTemplatePicker {
         this.onSelectionChange(formats);
     }
 
+    _formatIdsForTemplate(template, templateId) {
+        if (template.adapterExpandsTo && template.adapterExpandsTo[this.adapterType]) {
+            return template.adapterExpandsTo[this.adapterType];
+        }
+        return template.expandsTo || [templateId];
+    }
+
+    _templateSupportsAdapter(template) {
+        return !template.supportedAdapters || template.supportedAdapters.includes(this.adapterType);
+    }
+
     /**
      * Render the picker UI.
      */
     render() {
         const isGAM = this.adapterType === 'gam';
-
-        // Filter templates for GAM (no audio)
         const availableTemplates = Object.values(FORMAT_TEMPLATES).filter(t =>
-            !isGAM || t.gamSupported
+            (!isGAM || t.gamSupported) && this._templateSupportsAdapter(t)
         );
 
         let html = `

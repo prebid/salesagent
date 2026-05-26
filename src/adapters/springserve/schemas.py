@@ -176,10 +176,10 @@ class SpringServeProductConfig(BaseProductConfig):
         description="Content genre IDs/labels (verify exact field name in Stage 2)",
     )
 
-    # Note: audio vs video is determined by the Product's ``format_ids`` --
-    # ``springserve_audio_*`` formats route to audio creative MIME types,
-    # ``springserve_video_*`` formats route to video. No denormalised flag
-    # on the adapter config (Stage 3 wires the MIME negotiation).
+    # Note: audio vs video is determined by the Product's canonical
+    # ``format_ids``. Audio formats route to audio creative MIME types; other
+    # supported formats route to video. No denormalised flag on the adapter
+    # config (Stage 3 wires the MIME negotiation).
 
     # Pricing / priority
     priority: int | None = Field(

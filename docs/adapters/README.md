@@ -69,6 +69,13 @@ gotchas. FreeWheel is the reference implementation.
 > Triton Digital is currently parked while their APIs aren't production-ready.
 > Source remains under `src/adapters/triton/`; restoring is a one-commit revert.
 
+## Creative Formats
+
+All adapters should advertise canonical AdCP creative formats to buyers and map
+ad-server-specific variants internally. See the
+[creative format contract](creative-format-contract.md) for the current mapping
+rules and adapter coverage.
+
 ## Multi-Tenant Considerations
 
 In multi-tenant mode, each tenant can have their own adapter configuration:

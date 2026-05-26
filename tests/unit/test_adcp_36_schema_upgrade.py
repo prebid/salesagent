@@ -41,7 +41,9 @@ class TestCreativeListingBoundary:
         )
         assert c.creative_id == "c1"
         assert c.name == "Test Creative"
-        assert c.format_id.id == "display_300x250"
+        assert c.format_id.id == "display_image"
+        assert c.format_id.width == 300
+        assert c.format_id.height == 250
 
     def test_creative_variants_silently_stripped(self):
         """``variants`` belongs to the delivery-response Creative variant, not

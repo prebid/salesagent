@@ -43,8 +43,12 @@ def test_list_creative_formats_request_with_all_params():
         max_height=480,
     )
     assert len(req.format_ids) == 2
-    assert req.format_ids[0].id == "video_16x9"
-    assert req.format_ids[1].id == "video_4x3"
+    assert req.format_ids[0].id == "video_standard"
+    assert req.format_ids[0].width == 16
+    assert req.format_ids[0].height == 9
+    assert req.format_ids[1].id == "video_standard"
+    assert req.format_ids[1].width == 4
+    assert req.format_ids[1].height == 3
     assert req.is_responsive is True
     assert req.name_search == "video"
     assert req.min_width == 640

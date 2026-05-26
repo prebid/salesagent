@@ -36,7 +36,10 @@ def test_convert_image_creative_from_assets():
 
     assert adapter_asset["creative_id"] == "test_123"
     assert adapter_asset["name"] == "Test Banner"
-    assert adapter_asset["format"] == "display_300x250"
+    assert adapter_asset["format"] == "display_image"
+    assert adapter_asset["format_id"]["id"] == "display_image"
+    assert adapter_asset["format_id"]["width"] == 300
+    assert adapter_asset["format_id"]["height"] == 250
     assert adapter_asset["media_url"] == "https://example.com/banner.jpg"
     assert adapter_asset["url"] == "https://example.com/banner.jpg"
     assert adapter_asset["click_url"] == "https://example.com/landing"

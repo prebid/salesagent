@@ -6,16 +6,7 @@ implementation pattern from CLAUDE.md.
 
 import logging
 import time
-from typing import Any
 
-from adcp.types import (
-    AudioFormatAsset,
-    HtmlFormatAsset,
-    ImageFormatAsset,
-    TextFormatAsset,
-    UrlFormatAsset,
-    VideoFormatAsset,
-)
 from adcp.types import Format as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
 
@@ -41,53 +32,9 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
 
 
 from src.core.audit_logger import get_audit_logger
+from src.core.format_cache import canonical_format_matches
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
-
-
-def _infer_asset_type(asset_id: str) -> str:
-    """Infer asset type from asset ID naming convention.
-
-    Args:
-        asset_id: Asset identifier (e.g., "front_image", "youtube_url", "headline")
-
-    Returns:
-        Asset type string (image, video, text, url)
-    """
-    asset_lower = asset_id.lower()
-    if "image" in asset_lower or "logo" in asset_lower:
-        return "image"
-    elif "video" in asset_lower or "youtube" in asset_lower:
-        return "video"
-    elif "url" in asset_lower or "click" in asset_lower:
-        return "url"
-    elif "html" in asset_lower:
-        return "html"
-    else:
-        return "text"  # Default to text for headlines, body, captions, etc.
-
-
-# Each adcp Assets variant uses a Literal discriminator for asset_type.
-# Map asset type strings to the correct class.
-_ASSET_TYPE_TO_CLASS: dict[str, type] = {
-    "image": ImageFormatAsset,
-    "video": VideoFormatAsset,
-    "audio": AudioFormatAsset,
-    "text": TextFormatAsset,
-    "html": HtmlFormatAsset,
-    "url": UrlFormatAsset,
-}
-
-
-def _make_asset(asset_id: str, asset_type: str, required: bool) -> Any:
-    """Build the correct FormatAsset variant for a given asset type string."""
-    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
-    return cls(
-        item_type="individual",
-        asset_id=asset_id,
-        asset_type=asset_type,
-        required=required,
-    )
 
 
 def _list_creative_formats_impl(
@@ -157,8 +104,9 @@ def _list_creative_formats_impl(
     formats = fetch_result.formats
     agent_errors = fetch_result.errors
 
-    # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
-    # Check adapter type from tenant config and load formats without instantiating the full adapter
+    # Add adapter-supported canonical formats when Broadstreet is acting as both
+    # sales and creative agent. Broadstreet-specific templates are not separate
+    # AdCP format IDs; they are creative asset metadata handled by the adapter.
     try:
         from src.core.database.repositories.uow import TenantConfigUoW
 
@@ -168,57 +116,30 @@ def _list_creative_formats_impl(
             adapter_type = config_row.adapter_type if config_row else None
 
             if adapter_type == "broadstreet":
-                # Import Broadstreet templates and convert to formats
-                from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-                from src.core.schemas import Format, FormatId, url
+                from src.adapters.broadstreet.formats import broadstreet_creative_format_models
 
-                agent_url = f"broadstreet://{tenant['tenant_id']}"
-
-                for template_id, template in BROADSTREET_TEMPLATES.items():
-                    try:
-                        format_id = FormatId(
-                            id=f"broadstreet_{template_id}",
-                            agent_url=url(agent_url),
-                        )
-
-                        # Build assets list using the correct Assets variant per type
-                        assets_list: list[Any] = []
-                        for asset_id in template.get("required_assets", []):
-                            asset_type = _infer_asset_type(asset_id)
-                            assets_list.append(_make_asset(asset_id, asset_type, required=True))
-                        for asset_id in template.get("optional_assets", []):
-                            asset_type = _infer_asset_type(asset_id)
-                            assets_list.append(_make_asset(asset_id, asset_type, required=False))
-
-                        fmt = Format(
-                            format_id=format_id,
-                            name=str(template["name"]),
-                            description=str(template["description"]) if template.get("description") else None,
-                            assets=assets_list if assets_list else None,
-                            is_standard=False,
-                            platform_config=None,
-                            category=None,
-                            requirements=None,
-                            iab_specification=None,
-                            accepts_3p_tags=None,
-                        )
-                        formats.append(fmt)
-                    except Exception as e:
-                        logger.warning(f"Failed to parse Broadstreet template {template_id}: {e}")
+                existing_keys = {(str(f.format_id.agent_url).rstrip("/"), f.format_id.id) for f in formats}
+                added_count = 0
+                for fmt in broadstreet_creative_format_models():
+                    key = (str(fmt.format_id.agent_url).rstrip("/"), fmt.format_id.id)
+                    if key in existing_keys:
                         continue
+                    formats.append(fmt)
+                    existing_keys.add(key)
+                    added_count += 1
 
-                logger.info(f"Added {len(BROADSTREET_TEMPLATES)} Broadstreet formats")
+                logger.info("Added %s Broadstreet canonical formats", added_count)
     except Exception as e:
         # Don't fail if adapter formats can't be retrieved
         logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
     if req.format_ids:
-        # Filter to only the specified format IDs
-        # Extract the 'id' field from each FormatId object
-        format_ids_set = {fmt.id for fmt in req.format_ids}
-        # Compare format_id.id (handle both FormatId objects and strings)
-        formats = [f for f in formats if f.format_id.id in format_ids_set]
+        formats = [
+            f
+            for f in formats
+            if any(canonical_format_matches(requested_format_id, f.format_id) for requested_format_id in req.format_ids)
+        ]
 
     # Helper functions to extract properties from Format structure per AdCP spec
     def is_format_responsive(f) -> bool:
@@ -407,9 +328,9 @@ def _list_creative_formats_impl(
         details={
             "format_count": len(page_formats),
             "total_count": total_count,
-            "standard_formats": len([f for f in page_formats if f.is_standard]),
-            "custom_formats": len([f for f in page_formats if not f.is_standard]),
-            "format_count_standard": len([f for f in page_formats if f.is_standard]),
+            "standard_formats": len([f for f in page_formats if getattr(f, "is_standard", False)]),
+            "custom_formats": len([f for f in page_formats if not getattr(f, "is_standard", False)]),
+            "format_count_standard": len([f for f in page_formats if getattr(f, "is_standard", False)]),
         },
     )
 

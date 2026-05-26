@@ -48,7 +48,9 @@ def test_creative_upgrades_string_format():
     # Should be automatically upgraded to FormatId object
     assert isinstance(creative.format, FormatId)
     assert isinstance(creative.format_id, FormatId), "format_id is now a FormatId object (library pattern)"
-    assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
+    assert creative.format_id.id == "display_image", "Legacy fixed-size display ID is canonicalized"
+    assert creative.format_id.width == 300
+    assert creative.format_id.height == 250
     assert (
         str(creative.format_agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
     )  # AnyUrl adds trailing slash
@@ -76,7 +78,9 @@ def test_creative_accepts_format_id_object():
     )
     assert isinstance(creative.format, FormatId)
     assert isinstance(creative.format_id, FormatId), "format_id is now a FormatId object (library pattern)"
-    assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
+    assert creative.format_id.id == "display_image", "Legacy fixed-size display ID is canonicalized"
+    assert creative.format_id.width == 300
+    assert creative.format_id.height == 250
     assert (
         str(creative.format_agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
     )  # AnyUrl adds trailing slash
@@ -102,7 +106,9 @@ def test_creative_from_dict_with_format_id_object():
         "updated_date": datetime.now(),
     }
     creative = Creative(**data)
-    assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
+    assert creative.format_id.id == "display_image", "Legacy fixed-size display ID is canonicalized"
+    assert creative.format_id.width == 300
+    assert creative.format_id.height == 250
     assert (
         str(creative.format_agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
     )  # AnyUrl adds trailing slash
@@ -130,7 +136,9 @@ def test_creative_upgrades_dict_without_agent_url():
     # Should be automatically upgraded with default agent_url
     assert isinstance(creative.format, FormatId)
     assert isinstance(creative.format_id, FormatId), "format_id is now a FormatId object (library pattern)"
-    assert creative.format_id.id == "display_300x250", "Access string ID via format_id.id"
+    assert creative.format_id.id == "display_image", "Legacy fixed-size display ID is canonicalized"
+    assert creative.format_id.width == 300
+    assert creative.format_id.height == 250
     assert (
         str(creative.format_agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
     )  # AnyUrl adds trailing slash

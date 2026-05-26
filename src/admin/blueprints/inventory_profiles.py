@@ -17,8 +17,14 @@ from collections.abc import Sequence
 from flask import Blueprint, Flask, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, select
 
+from src.adapters.gam.formats import canonical_format_dict
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.canonical_formats import (
+    CANONICAL_DISPLAY_FORMAT_IDS,
+    DEFAULT_CREATIVE_AGENT_URL,
+    DISPLAY_FORMAT_LABELS,
+)
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AuthorizedProperty,
@@ -35,13 +41,8 @@ logger = logging.getLogger(__name__)
 inventory_profiles_bp = Blueprint("inventory_profiles", __name__)
 TAG_PATTERN = re.compile(r"^[a-z0-9_]+$")
 INVENTORY_PICKER_LIMIT = 200
-DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
-GAM_CANONICAL_DISPLAY_FORMAT_IDS = ("display_image", "display_html", "display_js")
-GAM_CANONICAL_DISPLAY_FORMAT_LABELS = {
-    "display_image": "image",
-    "display_html": "HTML5",
-    "display_js": "JS",
-}
+GAM_CANONICAL_DISPLAY_FORMAT_IDS = CANONICAL_DISPLAY_FORMAT_IDS
+GAM_CANONICAL_DISPLAY_FORMAT_LABELS = DISPLAY_FORMAT_LABELS
 GAM_SPECIAL_SIZE = (1, 1)
 
 
@@ -148,6 +149,22 @@ def _fixed_display_format_ids_for_capabilities(metadata: dict) -> list[str]:
     return _display_format_ids_for_capabilities(metadata)
 
 
+def _native_formats_for_capabilities(metadata: dict) -> list[dict]:
+    if _capability_slot_kind(metadata) != "native":
+        return []
+    return [canonical_format_dict("native_standard")]
+
+
+def _video_formats_for_capabilities(metadata: dict, size: tuple[int, int] | None = None) -> list[dict]:
+    if _capability_slot_kind(metadata) != "olv":
+        return []
+    params = {"width": size[0], "height": size[1]} if size else {}
+    return [
+        canonical_format_dict("video_standard", **params),
+        canonical_format_dict("video_vast", **params),
+    ]
+
+
 def _responsive_display_formats(metadata: dict) -> list[dict]:
     capabilities = _adcp_inventory_capabilities(metadata)
     slot_kind = _capability_slot_kind(metadata)
@@ -230,6 +247,19 @@ def _responsive_format_key(fmt: dict) -> tuple:
     )
 
 
+def _format_key(fmt: dict) -> tuple:
+    return (
+        fmt.get("id"),
+        fmt.get("width"),
+        fmt.get("height"),
+        fmt.get("duration_ms"),
+        fmt.get("min_width"),
+        fmt.get("max_width"),
+        fmt.get("min_height"),
+        fmt.get("max_height"),
+    )
+
+
 def _unclassified_gam_special_size_units(session, tenant_id: str, inventory_config: dict) -> list[dict]:
     """Selected synced ad units with GAM ``1x1`` special sizes needing setup."""
     unclassified = []
@@ -262,6 +292,8 @@ def _derive_canonical_format_ids_from_inventory(session, tenant_id: str, invento
 
     selected_ad_units = _selected_gam_ad_units_with_capability_metadata(session, tenant_id, inventory_config)
     fixed_formats: set[tuple[str, int, int]] = set()
+    native_formats_by_id: dict[str, dict] = {}
+    video_formats_by_key: dict[tuple, dict] = {}
     responsive_formats_by_key: dict[tuple, dict] = {}
 
     for ad_unit, capability_metadata in selected_ad_units:
@@ -271,9 +303,17 @@ def _derive_canonical_format_ids_from_inventory(session, tenant_id: str, invento
             if not parsed:
                 continue
             if _is_gam_special_size(parsed):
+                for fmt in _native_formats_for_capabilities(capability_metadata):
+                    native_formats_by_id.setdefault(fmt["id"], fmt)
+                for fmt in _video_formats_for_capabilities(capability_metadata):
+                    video_formats_by_key.setdefault(_format_key(fmt), fmt)
                 for fmt in _responsive_display_formats(capability_metadata):
                     responsive_formats_by_key.setdefault(_responsive_format_key(fmt), fmt)
                 continue
+            for fmt in _native_formats_for_capabilities(capability_metadata):
+                native_formats_by_id.setdefault(fmt["id"], fmt)
+            for fmt in _video_formats_for_capabilities(capability_metadata, parsed):
+                video_formats_by_key.setdefault(_format_key(fmt), fmt)
             for format_id in _fixed_display_format_ids_for_capabilities(capability_metadata):
                 fixed_formats.add((format_id, parsed[0], parsed[1]))
 
@@ -286,6 +326,8 @@ def _derive_canonical_format_ids_from_inventory(session, tenant_id: str, invento
         }
         for format_id, width, height in sorted(fixed_formats, key=lambda item: (item[1], item[2], item[0]))
     ]
+    formats.extend(native_formats_by_id[key] for key in sorted(native_formats_by_id))
+    formats.extend(video_formats_by_key[key] for key in sorted(video_formats_by_key))
     formats.extend(responsive_formats_by_key[key] for key in sorted(responsive_formats_by_key))
     return formats
 

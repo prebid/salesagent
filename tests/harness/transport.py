@@ -1,10 +1,7 @@
 """Transport enum and TransportResult for multi-transport behavioral tests.
 
-Defines the dispatch transports (IMPL, MCP) and a frozen result
+Defines the dispatch transports (IMPL, MCP, A2A) and a frozen result
 container that separates transport-specific envelope from shared payload.
-
-A2A is no longer dispatched in-process — the framework's
-``adcp.server.serve(transport="a2a")`` owns that surface.
 
 REST is no longer a transport — the legacy FastAPI app was deleted in
 the kill-nginx cutover. Tools are now reachable only through MCP and
@@ -32,12 +29,14 @@ class Transport(str, Enum):
 
     IMPL = "impl"  # Direct _impl() call
     MCP = "mcp"  # httpx ASGITransport → FastMCP wrapper → _impl()
+    A2A = "a2a"  # httpx ASGITransport → A2A JSON-RPC → _impl()
 
 
 # Maps Transport → ResolvedIdentity.protocol value
 TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.IMPL: "mcp",  # _impl doesn't inspect protocol; keep default
     Transport.MCP: "mcp",
+    Transport.A2A: "a2a",
 }
 
 

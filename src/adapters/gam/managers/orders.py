@@ -508,6 +508,7 @@ class GAMOrdersManager:
             creative_placeholders: list[dict[str, Any]] = []
 
             if package.format_ids:
+                from src.adapters.gam.formats import build_gam_creative_placeholder, gam_format_type
                 from src.core.format_resolver import get_format
 
                 # Validate format types against product supported types
@@ -516,12 +517,19 @@ class GAMOrdersManager:
                 for format_id_obj in package.format_ids:
                     # format_id_obj is a FormatId object with agent_url and id fields
                     # Extract the ID string and agent_url for format lookup
-                    format_id_str = format_id_obj.id
-                    agent_url = format_id_obj.agent_url
+                    from src.core.format_cache import upgrade_legacy_format_id
+
+                    format_id_payload = (
+                        format_id_obj.model_dump() if hasattr(format_id_obj, "model_dump") else format_id_obj
+                    )
+                    canonical_format_id = upgrade_legacy_format_id(format_id_payload)
+                    format_id_str = canonical_format_id.id
+                    agent_url = canonical_format_id.agent_url
+                    agent_url_str = str(agent_url).rstrip("/") if agent_url else None
 
                     # Use format resolver to support custom formats and product overrides
                     # Include agent_url in format strings for clarity (different agents may have same format IDs)
-                    format_display = f"{agent_url}/{format_id_str}" if agent_url else format_id_str
+                    format_display = f"{agent_url_str}/{format_id_str}" if agent_url_str else format_id_str
 
                     try:
                         # Pass product_id (not package_id) to enable format_overrides lookup
@@ -529,26 +537,20 @@ class GAMOrdersManager:
                             package.product_id if hasattr(package, "product_id") else package.package_id
                         )
                         format_obj = get_format(
-                            format_id_str, agent_url=agent_url, tenant_id=tenant_id, product_id=product_id_for_format
+                            format_id_str,
+                            agent_url=agent_url_str,
+                            tenant_id=tenant_id,
+                            product_id=product_id_for_format,
                         )
                     except (ValueError, AdCPNotFoundError, AdCPAdapterError) as e:
                         error_msg = f"Format lookup failed for '{format_display}': {e}"
                         log(f"[red]Error: {error_msg}[/red]")
                         raise ValueError(error_msg) from e
 
-                    # Check if format type is supported by product
-                    # adcp 3.12: Format.type removed. Infer from format_id string.
-                    fid_str = (
-                        format_obj.format_id.id if hasattr(format_obj.format_id, "id") else str(format_obj.format_id)
-                    )
-                    if "video" in fid_str:
-                        format_type_str = "video"
-                    elif "native" in fid_str:
-                        format_type_str = "native"
-                    elif "audio" in fid_str:
-                        format_type_str = "audio"
-                    else:
-                        format_type_str = "display"
+                    # Check if format type is supported by product. GAM maps from
+                    # canonical AdCP format IDs to its own creative types in
+                    # src.adapters.gam.formats.
+                    format_type_str = gam_format_type(format_id_str)
                     if format_type_str not in supported_format_types:
                         error_msg = (
                             f"Format '{format_display}' (type: {format_type_str}) is not supported by product {package.package_id}. "
@@ -569,93 +571,23 @@ class GAMOrdersManager:
                         log(f"[red]Error: {error_msg}[/red]")
                         raise ValueError(error_msg)
 
-                    # Check if format has GAM-specific config
-                    platform_cfg = format_obj.platform_config or {}
-                    gam_cfg = platform_cfg.get("gam", {})
-                    placeholder_cfg = gam_cfg.get("creative_placeholder", {})
-
-                    # Build creative placeholder
-                    placeholder: dict[str, Any] = {
-                        "expectedCreativeCount": 1,
-                    }
-
-                    # Check for GAM custom creative template (1x1 placeholder)
-                    if "creative_template_id" in placeholder_cfg:
-                        # Use 1x1 placeholder with custom template
-                        placeholder["size"] = {
-                            "width": 1,
-                            "height": 1,
-                            "isAspectRatio": False,
-                        }
-                        placeholder["creativeTemplateId"] = placeholder_cfg["creative_template_id"]
-                        log(
-                            f"  Custom template placeholder: 1x1 with template_id={placeholder_cfg['creative_template_id']}"
+                    try:
+                        placeholder = build_gam_creative_placeholder(
+                            canonical_format_id,
+                            format_obj=format_obj,
+                            impl_config=impl_config,
                         )
+                    except ValueError as e:
+                        error_msg = f"Format '{format_display}' cannot be trafficked in GAM: {e}"
+                        log(f"[red]Error: {error_msg}[/red]")
+                        raise ValueError(error_msg) from e
 
-                    else:
-                        # Use platform config if available, otherwise fall back to requirements
-                        if placeholder_cfg:
-                            width = placeholder_cfg.get("width")
-                            height = placeholder_cfg.get("height")
-                            creative_size_type = placeholder_cfg.get("creative_size_type", "PIXEL")
-                        else:
-                            # Fallback to requirements (legacy formats)
-                            requirements = format_obj.requirements or {}
-                            width = requirements.get("width")
-                            height = requirements.get("height")
-                            # Infer creative size type from format_id name since Format.type was removed in adcp 3.12
-                            creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
-
-                        # Check FormatId parameters (AdCP 2.5 parameterized formats)
-                        # The buyer can specify width/height directly in the FormatId object
-                        if not (width and height):
-                            # Handle both FormatId objects and dicts (from database JSONB)
-                            if hasattr(format_id_obj, "width") and hasattr(format_id_obj, "height"):
-                                if format_id_obj.width and format_id_obj.height:
-                                    width = format_id_obj.width
-                                    height = format_id_obj.height
-                                    log(f"  [blue]Using dimensions from FormatId parameters: {width}x{height}[/blue]")
-                            elif isinstance(format_id_obj, dict):
-                                # Fallback for dict format (shouldn't happen after fix, but defensive)
-                                dict_width = format_id_obj.get("width")
-                                dict_height = format_id_obj.get("height")
-                                if dict_width and dict_height:
-                                    width = int(dict_width)
-                                    height = int(dict_height)
-                                    log(f"  [blue]Using dimensions from FormatId dict: {width}x{height}[/blue]")
-
-                        # Last resort: Try to extract dimensions from format_id (e.g., "display_970x250_image")
-                        if not (width and height):
-                            import re
-
-                            match = re.search(r"(\d+)x(\d+)", format_id_str)
-                            if match:
-                                width = int(match.group(1))
-                                height = int(match.group(2))
-                                log(f"  [yellow]Extracted dimensions from format ID: {width}x{height}[/yellow]")
-
-                        if width and height:
-                            placeholder["size"] = {"width": width, "height": height}
-                            placeholder["creativeSizeType"] = creative_size_type
-
-                            # Log video-specific info
-                            if "video" in format_id_str.lower():
-                                aspect_ratio = (
-                                    format_obj.requirements.get("aspect_ratio", "unknown")
-                                    if format_obj.requirements
-                                    else "unknown"
-                                )
-                                log(f"  Video placeholder: {width}x{height} ({aspect_ratio} aspect ratio)")
-                        else:
-                            # For formats without dimensions
-                            error_msg = (
-                                f"Format '{format_display}' has no width/height configuration for GAM. "
-                                f"For parameterized formats like 'display_image', specify width/height in the FormatId "
-                                f"(e.g., {{'id': 'display_image', 'width': 300, 'height': 250}}), "
-                                f"or add 'platform_config.gam.creative_placeholder' to the format definition."
-                            )
-                            log(f"[red]Error: {error_msg}[/red]")
-                            raise ValueError(error_msg)
+                    size = placeholder.get("size") or {}
+                    log(
+                        "  GAM placeholder: "
+                        f"{size.get('width')}x{size.get('height')} "
+                        f"({placeholder.get('creativeSizeType', 'PIXEL')}) for {format_id_str}"
+                    )
 
                     creative_placeholders.append(placeholder)
 

@@ -249,6 +249,27 @@ class TestBaseClassContract:
         assert result.payload.ok is True
         assert result.envelope.get("transport") == "mcp"
 
+    def test_call_via_a2a_routes_through_call_a2a(self):
+        """call_via(Transport.A2A) dispatches through A2aDispatcher → call_a2a."""
+
+        from pydantic import BaseModel
+
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        class _Resp(BaseModel):
+            ok: bool = True
+
+        class _TestEnv(BaseTestEnv):
+            def call_a2a(self, **kwargs):
+                return _Resp()
+
+        env = _TestEnv()
+        result = env.call_via(Transport.A2A)
+        assert result.is_success
+        assert result.payload.ok is True
+        assert result.envelope.get("transport") == "a2a"
+
     def test_call_via_impl_uses_call_impl(self):
         """call_via(Transport.IMPL) routes through call_impl."""
         from tests.harness._base import BaseTestEnv

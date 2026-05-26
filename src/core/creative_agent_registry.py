@@ -140,20 +140,9 @@ def _get_mock_formats() -> list[Format]:
     These formats match what the real creative agent returns, but without
     making external HTTP calls. Used in CI to avoid timeouts.
     """
-    # Create mock formats using our Format class (which includes is_standard field)
-    return [
-        _create_mock_format("display_300x250_image", "Medium Rectangle", "image"),
-        _create_mock_format("display_728x90_image", "Leaderboard", "image"),
-        _create_mock_format("display_300x600_image", "Half Page", "image"),
-        _create_mock_format("display_160x600_image", "Wide Skyscraper", "image"),
-        _create_mock_format("display_320x50_image", "Mobile Leaderboard", "image"),
-        _create_mock_format("video_standard", "Standard Video", "video"),
-        _create_mock_format("video_standard_30s", "Standard Video 30s", "video"),
-        _create_mock_format("video_vast", "VAST Video", "video"),
-        _create_mock_format("display_image", "Display Image", "image"),
-        _create_mock_format("display_html", "Display HTML", "image"),
-        _create_mock_format("display_js", "Display JavaScript", "image"),
-    ]
+    from src.core.standard_formats import STANDARD_FORMATS
+
+    return list(STANDARD_FORMATS.values())
 
 
 @dataclass

@@ -444,6 +444,7 @@ const SCRIPT_ROOT = '{{ request.script_root }}' || '';
 const DEFAULT_PUBLISHER_DOMAIN = {{ (tenant.primary_domain or '') | tojson }};
 const DEFAULT_CREATIVE_AGENT_URL = 'https://creative.adcontextprotocol.org';
 const GAM_CANONICAL_DISPLAY_FORMAT_IDS = ['display_image', 'display_html', 'display_js'];
+const GAM_CANONICAL_VIDEO_FORMAT_IDS = ['video_standard', 'video_vast'];
 
 // Base path for the Reuse page; picker rows and selected chips append
 // ``?item=<id>&kind=<kind>``. (#542)
@@ -1339,6 +1340,31 @@ function fixedDisplayFormatIdsForCapabilities(capabilities) {
 function addRowCanonicalFormats(row, formats, fallbackCapabilities = null) {
     if (!row) return;
     const capabilities = rowCapabilities(row, fallbackCapabilities);
+    const slotKind = capabilitySlotKind(capabilities);
+    if (slotKind === 'native') {
+        formats.push(canonicalFormatRef('native_standard'));
+        return;
+    }
+    if (slotKind === 'olv') {
+        const sizes = (row.sizes || []).map(sizeFromValue).filter(size => size && size !== '1x1');
+        if (sizes.length === 0) {
+            GAM_CANONICAL_VIDEO_FORMAT_IDS.forEach(formatId => formats.push(canonicalFormatRef(formatId)));
+            return;
+        }
+        sizes.forEach(size => {
+            const [width, height] = size.split('x').map(Number);
+            GAM_CANONICAL_VIDEO_FORMAT_IDS.forEach(formatId => {
+                const ref = canonicalFormatRef(formatId);
+                formats.push({
+                    agent_url: ref.agent_url,
+                    id: ref.id,
+                    width,
+                    height,
+                });
+            });
+        });
+        return;
+    }
     (row.sizes || []).forEach(size => {
         const parsed = sizeFromValue(size);
         if (!parsed) return;
@@ -1429,6 +1455,7 @@ function deriveCanonicalFormatsFromInventory() {
             format.max_width || null,
             format.min_height || null,
             format.max_height || null,
+            format.duration_ms || null,
         ]);
         if (seen.has(key)) return false;
         seen.add(key);

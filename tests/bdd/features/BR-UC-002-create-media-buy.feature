@@ -1089,7 +1089,7 @@ Feature: BR-UC-002 Create Media Buy
       | missing_account              | error INVALID_REQUEST with suggestion             |
       | invalid_oneOf_both           | error INVALID_REQUEST with suggestion             |
       | explicit_not_found           | error ACCOUNT_NOT_FOUND terminal                  |
-      | natural_key_not_found        | error ACCOUNT_NOT_FOUND terminal                  |
+      | natural_key_not_found        | error TENANT_NOT_ACTIVATED terminal               |
       | natural_key_ambiguous        | error ACCOUNT_AMBIGUOUS correctable               |
       | account_setup_required       | error ACCOUNT_SETUP_REQUIRED correctable           |
       | account_payment_required     | error ACCOUNT_PAYMENT_REQUIRED terminal            |
@@ -1521,7 +1521,7 @@ Feature: BR-UC-002 Create Media Buy
       | account_id present + account exists + active         | acc-001 active           | account resolution succeeds                      |
       | account_id present + not found                       | acc-bad not-found        | error ACCOUNT_NOT_FOUND terminal                 |
       | brand + operator present + single match + active     | brand+op single match    | account resolution succeeds                      |
-      | brand + operator present + no match                  | brand+op no match        | error ACCOUNT_NOT_FOUND terminal                 |
+      | brand + operator present + no match                  | brand+op no match        | error TENANT_NOT_ACTIVATED terminal              |
       | brand + operator present + multiple matches          | brand+op multi match     | error ACCOUNT_AMBIGUOUS correctable              |
       | account resolved + setup incomplete                  | acc setup-needed         | error ACCOUNT_SETUP_REQUIRED correctable          |
       | account resolved + payment due                       | acc payment-due          | error ACCOUNT_PAYMENT_REQUIRED terminal           |

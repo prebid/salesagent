@@ -8,6 +8,10 @@ publisher API. Skipped by default; runs only when both env vars are set:
     FREEWHEEL_TEST_API_KEY
     FREEWHEEL_TEST_ADVERTISER_ID
 
+The creative trafficking write cycle additionally needs:
+
+    FREEWHEEL_TEST_AD_UNIT_NODE_ID
+
 Run with::
 
     uv run pytest tests/integration/test_freewheel_live.py -m live -v
@@ -32,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 API_TOKEN_ENV = "FREEWHEEL_TEST_API_KEY"
 ADVERTISER_ID_ENV = "FREEWHEEL_TEST_ADVERTISER_ID"
+AD_UNIT_NODE_ID_ENV = "FREEWHEEL_TEST_AD_UNIT_NODE_ID"
 
 pytestmark = pytest.mark.live
 
@@ -52,6 +57,11 @@ def client() -> FreeWheelClient:
 @pytest.fixture(scope="module")
 def advertiser_id() -> int:
     return int(_require_env(ADVERTISER_ID_ENV))
+
+
+@pytest.fixture(scope="module")
+def ad_unit_node_id() -> int:
+    return int(_require_env(AD_UNIT_NODE_ID_ENV))
 
 
 @pytest.fixture
@@ -146,3 +156,62 @@ class TestWriteRoundTrip:
                     logger.info("Deleted %s %s", entity_kind, entity_id)
                 except FreeWheelError as exc:
                     logger.warning("Failed to delete %s %s: %s", entity_kind, entity_id, exc)
+
+
+class TestCreativeTraffickingRoundTrip:
+    """Create a VAST creative_resource, bind it to an ad_unit_node, then clean up."""
+
+    SAMPLE_VAST_URL = "https://samplelib.com/vast/sample-vast-2.0-inline-linear.xml"
+
+    def test_create_bind_unbind_delete_cycle(
+        self,
+        client: FreeWheelClient,
+        advertiser_id: int,
+        ad_unit_node_id: int,
+        probe_label: str,
+    ):
+        creative_id: int | None = None
+        instance_id: int | None = None
+
+        try:
+            creative = client.creatives.create_creative(
+                name=probe_label,
+                advertiser_ids=[advertiser_id],
+                external_id=probe_label,
+                renditions=[
+                    {
+                        "uri": self.SAMPLE_VAST_URL,
+                        "content_type": "application/xml",
+                        "vast_rendition": True,
+                        "https_compatibility": "compatible",
+                    }
+                ],
+                duration=15,
+            )
+            creative_id = creative.id
+            assert creative.id > 0
+            logger.info("Created creative_resource %s", creative.id)
+
+            binding = client.creatives.create_creative_instance(
+                ad_unit_node_id=ad_unit_node_id,
+                creative_id=creative.id,
+                tracking_name=probe_label,
+            )
+            instance_id = int(binding["id"])
+            assert int(binding["creative_id"]) == creative.id
+            assert int(binding["ad_id"]) == ad_unit_node_id
+            logger.info("Created creative_instance %s", instance_id)
+
+        finally:
+            if instance_id is not None:
+                try:
+                    client.creatives.delete_creative_instance(instance_id)
+                    logger.info("Deleted creative_instance %s", instance_id)
+                except FreeWheelError as exc:
+                    logger.warning("Failed to delete creative_instance %s: %s", instance_id, exc)
+            if creative_id is not None:
+                try:
+                    client.creatives.delete_creative(creative_id)
+                    logger.info("Deleted creative_resource %s", creative_id)
+                except FreeWheelError as exc:
+                    logger.warning("Failed to delete creative_resource %s: %s", creative_id, exc)

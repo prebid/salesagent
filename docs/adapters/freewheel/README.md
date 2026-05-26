@@ -119,7 +119,7 @@ when a principal has no explicit mapping.
 | **Custom targeting** | Yes (key-value) |
 | **Inventory sync** | Yes (entire taxonomy walked into local cache) |
 | **AI inventory discovery** | Yes (`get_available_inventory()` reads from cache) |
-| **Creative formats** | 6 canonical VAST video formats (15s/30s × pre/mid/post-roll) |
+| **Creative formats** | Canonical VAST video formats |
 | **Webhooks** | No (FW v4 webhooks endpoint exists; scope grant pending) |
 | **Realtime reporting** | No (Query Reporting API is a separate surface; scope grant pending) |
 
@@ -153,7 +153,7 @@ targeting via the Publisher API. Use Nielsen DMA (`geo_metros`) or
 | `get_media_buy_delivery` | 🟡 wired | Reads from `freewheel_placement_stats` cache; populated by the Reporting sync once scope arrives. Empty cache → zeros. |
 | `get_packages_snapshot` | 🟡 wired | Same cache as above; missing rows → `None`. |
 | `get_available_inventory` | ✅ live | Surfaces synced cache: placements (ad_unit_packages), ad_units (sites + sections), targeting groups, creative specs |
-| `get_creative_formats` | ✅ static | 6 canonical VAST video formats |
+| `get_creative_formats` | ✅ static | Canonical VAST video formats |
 
 ## Provisioning
 

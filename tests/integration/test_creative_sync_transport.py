@@ -27,7 +27,7 @@ from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 
-ALL_TRANSPORTS = [Transport.IMPL, Transport.MCP]
+ALL_TRANSPORTS = [Transport.IMPL, Transport.MCP, Transport.A2A]
 
 
 @pytest.mark.requires_db
@@ -121,6 +121,7 @@ class TestSyncCreativeCreateTransport:
 
 DEFAULT_AGENT_URL = "https://example.com/agent"
 DEFAULT_FORMAT_ID = {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL}
+REFERENCE_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
 def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
@@ -133,6 +134,44 @@ def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
     }
     defaults.update(overrides)
     return defaults
+
+
+@pytest.mark.requires_db
+class TestSyncCreativesVersionCompatibility:
+    """Buyer wire-shape compatibility for AdCP 3.0/3.1-era clients."""
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    @pytest.mark.parametrize(
+        ("label", "format_id"),
+        [
+            ("3.0 legacy string", "display_300x250_image"),
+            (
+                "3.0 legacy dict key with mcp URL",
+                {"agent_url": f"{REFERENCE_AGENT_URL}/mcp", "format_id": "display_300x250_image"},
+            ),
+            (
+                "3.1 canonical structured",
+                {"agent_url": REFERENCE_AGENT_URL, "id": "display_image", "width": 300, "height": 250},
+            ),
+        ],
+    )
+    def test_legacy_and_canonical_format_shapes_sync(self, integration_db, transport, label, format_id):
+        """Legacy and canonical format references create creatives on every transport."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            result = env.call_via(
+                transport,
+                creatives=[
+                    _creative(
+                        creative_id=f"c_compat_{transport.value}_{label.replace(' ', '_')}",
+                        format_id=format_id,
+                    )
+                ],
+            )
+
+        assert result.is_success, f"{label} over {transport.value} failed: {result.error}"
+        assert len(result.payload.creatives) == 1
+        assert result.payload.creatives[0].action == CreativeAction.created
 
 
 @pytest.mark.requires_db
@@ -243,11 +282,9 @@ class TestSyncStrictModeAbortTransport:
 
         assert result.is_error, "Strict mode should error on missing package"
         # Each transport surfaces the typed error in its own envelope:
-        # ``IMPL`` re-raises the impl's ``AdCPNotFoundError`` verbatim,
-        # while ``MCP`` translates it into a ``NOT_FOUND``-coded
-        # ``ToolError`` on the JSON-RPC wire (per
-        # ``core/platforms/_delegate.py:_translate_adcp_error``).
-        if transport == Transport.IMPL:
+        # ``IMPL`` and A2A reconstruct the ``AdCPNotFoundError`` class,
+        # while ``MCP`` exposes the ``NOT_FOUND`` code in ToolError text.
+        if transport in (Transport.IMPL, Transport.A2A):
             assert isinstance(result.error, AdCPNotFoundError)
         else:
             assert "NOT_FOUND" in str(result.error), (
@@ -695,7 +732,7 @@ class TestFormatValidationAdapter:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_adapter_format_skips_registry(self, integration_db, transport):
-        """Non-HTTP agent_url (adapter://) bypasses registry.get_format check."""
+        """Non-HTTP agent_url bypasses registry.get_format check."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
@@ -705,7 +742,7 @@ class TestFormatValidationAdapter:
                     {
                         "creative_id": "c_adapter_fmt",
                         "name": "Adapter Format Creative",
-                        "format_id": {"id": "billboard", "agent_url": "broadstreet://default"},
+                        "format_id": {"id": "legacy_adapter_format", "agent_url": "adapter-test://default"},
                         "assets": {"banner": {"url": "https://example.com/ad.png"}},
                     }
                 ],

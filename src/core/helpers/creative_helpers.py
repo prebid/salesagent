@@ -213,7 +213,8 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
     # Base asset object with common fields
     # Note: creative.format_id returns string via FormatId.__str__() (returns just the id field)
     # creative.format is the actual FormatId object
-    format_str = str(creative.format_id)  # Convert FormatId to string ID
+    format_id_obj = creative.format_id
+    format_str = str(format_id_obj)  # Convert FormatId to string ID
 
     asset: dict[str, Any] = {
         "creative_id": creative.creative_id,
@@ -221,10 +222,19 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
         "format": format_str,  # Adapter expects string format ID
         "package_assignments": package_assignments,
     }
+    if format_id_obj is not None:
+        asset["format_id"] = _format_ref_dict(
+            str(format_id_obj.agent_url),
+            format_id_obj.id,
+            {
+                "width": format_id_obj.width,
+                "height": format_id_obj.height,
+                "duration_ms": format_id_obj.duration_ms,
+            },
+        )
 
     # Extract dimensions from FormatId parameters (AdCP 2.5 format templates)
     # This is the primary source of truth for parameterized formats
-    format_id_obj = creative.format_id
     if format_id_obj is not None:
         if format_id_obj.width is not None:
             asset["width"] = format_id_obj.width
@@ -233,6 +243,7 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
         if format_id_obj.duration_ms is not None:
             # Convert to seconds for adapter compatibility
             asset["duration"] = format_id_obj.duration_ms / 1000.0
+            asset["duration_seconds"] = format_id_obj.duration_ms / 1000.0
 
     # Extract data from assets dict (AdCP v1 spec)
     assets_dict = creative.assets if isinstance(creative.assets, dict) else {}
@@ -300,6 +311,7 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
             # Extract VAST duration if present (duration_ms → seconds)
             if "duration_ms" in primary_asset:
                 asset["duration"] = primary_asset["duration_ms"] / 1000.0
+                asset["duration_seconds"] = primary_asset["duration_ms"] / 1000.0
 
         elif "content" in primary_asset and "url" not in primary_asset:
             # HTML or JavaScript asset (has content, no url)
@@ -324,6 +336,11 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
             # Extract video duration (duration_ms → seconds)
             if "duration_ms" in primary_asset:
                 asset["duration"] = primary_asset["duration_ms"] / 1000.0
+                asset["duration_seconds"] = primary_asset["duration_ms"] / 1000.0
+
+    content_type = _infer_creative_content_type(format_str, getattr(creative, "assets", None), asset)
+    if content_type:
+        asset["content_type"] = content_type
 
     # Extract click URL from assets (URL asset with url_type="clickthrough")
     for _role, asset_data in assets_dict.items():
@@ -382,6 +399,132 @@ def _convert_creative_to_adapter_asset(creative: Creative, package_assignments: 
         asset["delivery_settings"] = {"tracking_urls": tracking_urls}
 
     return asset
+
+
+def _format_ref_dict(agent_url: str, format_id: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return a JSON-safe FormatId dict with optional parameter fields."""
+    ref: dict[str, Any] = {"agent_url": agent_url, "id": format_id}
+    for key in ("width", "height", "duration_ms"):
+        if parameters and parameters.get(key) is not None:
+            ref[key] = parameters[key]
+    return ref
+
+
+def _media_asset_type_from_assets(assets: Any) -> str | None:
+    if not isinstance(assets, dict):
+        return None
+    for asset in assets.values():
+        if not isinstance(asset, dict):
+            continue
+        asset_type = str(asset.get("asset_type") or "").lower()
+        if asset_type in {"audio", "video", "image", "javascript", "html", "vast"}:
+            return asset_type
+        content_type = str(asset.get("content_type") or "").lower()
+        if content_type.startswith("audio/"):
+            return "audio"
+        if content_type.startswith("video/"):
+            return "video"
+    return None
+
+
+def _infer_creative_asset_type(format_id: str, assets: Any, creative_data: dict[str, Any]) -> str:
+    explicit = str(creative_data.get("asset_type") or "").lower()
+    if explicit:
+        return explicit
+    asset_type = _media_asset_type_from_assets(assets)
+    if asset_type:
+        return asset_type
+    if "vast" in format_id.lower():
+        return "vast"
+    if "audio" in format_id.lower():
+        return "audio"
+    if "video" in format_id.lower():
+        return "video"
+    if "js" in format_id.lower() or "javascript" in format_id.lower():
+        return "javascript"
+    if "html" in format_id.lower():
+        return "html"
+    return "image"
+
+
+def _infer_creative_content_type(format_id: str, assets: Any, creative_data: dict[str, Any]) -> str | None:
+    explicit = creative_data.get("content_type") or creative_data.get("mime_type")
+    if explicit:
+        return str(explicit)
+    if isinstance(assets, dict):
+        for asset in assets.values():
+            if isinstance(asset, dict):
+                content_type = asset.get("content_type") or asset.get("mime_type")
+                if content_type:
+                    return str(content_type)
+    if format_id == "video_vast" or "vast" in format_id.lower():
+        return "application/xml"
+    asset_type = _infer_creative_asset_type(format_id, assets, creative_data)
+    if asset_type == "audio":
+        return "audio/mpeg"
+    if asset_type == "video":
+        return "video/mp4"
+    return None
+
+
+def build_adapter_asset_from_stored_creative(
+    creative: Any,
+    *,
+    package_id: str,
+    format_spec: Any | None,
+) -> dict[str, Any]:
+    """Build an adapter upload payload from a stored creative row.
+
+    The payload preserves structured canonical format metadata so adapters
+    with non-display semantics (SpringServe audio, FreeWheel VAST) can choose
+    the correct upstream creative surface.
+    """
+    creative_data = creative.data or {}
+    format_parameters = creative.format_parameters if isinstance(creative.format_parameters, dict) else {}
+    format_id = str(creative.format)
+    format_ref = _format_ref_dict(str(creative.agent_url), format_id, format_parameters)
+    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
+    click_url = extract_click_url(creative_data, format_spec)
+    impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
+    duration_ms = format_parameters.get("duration_ms")
+    duration_seconds = float(duration_ms) / 1000.0 if duration_ms is not None else creative_data.get("duration_seconds")
+    assets = creative_data.get("assets")
+    asset_type = _infer_creative_asset_type(format_id, assets, creative_data)
+    content_type = _infer_creative_content_type(format_id, assets, creative_data)
+
+    asset: dict[str, Any] = {
+        "creative_id": creative.creative_id,
+        "package_assignments": [package_id],
+        "format": format_id,
+        "format_id": format_ref,
+        "format_parameters": format_parameters or None,
+        "width": width,
+        "height": height,
+        "url": url,
+        "click_url": click_url,
+        "asset_type": asset_type,
+        "name": creative.name or f"Creative {creative.creative_id}",
+    }
+    if content_type:
+        asset["content_type"] = content_type
+    if duration_seconds is not None:
+        asset["duration_seconds"] = duration_seconds
+        asset["duration"] = duration_seconds
+    if impression_tracker_url:
+        asset["delivery_settings"] = {"tracking_urls": {"impression": [impression_tracker_url]}}
+    return asset
+
+
+def adapter_asset_requires_dimensions(adapter_name: str, asset: dict[str, Any]) -> bool:
+    """Return whether a pre-synced creative upload must have width/height."""
+    if adapter_name in {"springserve", "freewheel"}:
+        return False
+    format_ref = asset.get("format_id")
+    format_id = str(format_ref.get("id") if isinstance(format_ref, dict) else asset.get("format") or "")
+    asset_type = str(asset.get("asset_type") or "").lower()
+    if asset_type == "audio" or "audio" in format_id.lower() or format_id == "video_vast":
+        return False
+    return True
 
 
 def _detect_snippet_type(snippet: str) -> str:
@@ -607,8 +750,8 @@ def process_and_upload_package_creatives(
 # - audio: audio_file
 # NOT included:
 # - url: Used for clickthrough URLs and trackers (url_type field distinguishes them)
-# - html/javascript/vast/text: These have 'content' field, not 'url' field
-MEDIA_ASSET_TYPES = {"image", "video", "audio"}
+# - html/javascript/text: These have 'content' field, not 'url' field
+MEDIA_ASSET_TYPES = {"image", "video", "audio", "vast"}
 
 # Known media asset IDs for fallback when format spec is not available
 # Based on AdCP creative agent format specs + common conventions
@@ -625,6 +768,9 @@ MEDIA_ASSET_FALLBACK_IDS = {
     "video_file",
     # audio assets
     "audio_file",
+    # VAST tag assets
+    "vast_tag",
+    "vast_tag_url",
     # common conventions
     "main",
     "image",

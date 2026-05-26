@@ -47,7 +47,19 @@ class McpDispatcher:
         return TransportResult(payload=payload, envelope={"transport": "mcp"})
 
 
-DISPATCHERS: dict[Transport, ImplDispatcher | McpDispatcher] = {
+class A2aDispatcher:
+    """Dispatch via in-process A2A JSON-RPC against build_app()."""
+
+    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+        try:
+            payload = env.call_a2a(**kwargs)
+        except Exception as exc:
+            return TransportResult(error=exc)
+        return TransportResult(payload=payload, envelope={"transport": "a2a"})
+
+
+DISPATCHERS: dict[Transport, ImplDispatcher | McpDispatcher | A2aDispatcher] = {
     Transport.IMPL: ImplDispatcher(),
     Transport.MCP: McpDispatcher(),
+    Transport.A2A: A2aDispatcher(),
 }

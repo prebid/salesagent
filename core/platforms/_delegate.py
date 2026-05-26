@@ -57,6 +57,7 @@ from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from src.core.tools.products import _get_products_impl
 from src.core.tools.signals import _get_signals_impl
+from src.core.transport_helpers import enrich_identity_with_account
 
 logger = logging.getLogger(__name__)
 
@@ -680,6 +681,7 @@ async def _delegate_sync_creatives(req: Any, ctx: RequestContext[Any]) -> dict[s
     # the assignment loop never raises ``AdCPNotFoundError``.
     raw_mode = body.get("validation_mode")
     validation_mode_str = getattr(raw_mode, "value", raw_mode) or "strict"
+    identity = enrich_identity_with_account(identity, body.get("account"))
     response = await asyncio.to_thread(
         _sync_creatives_impl,
         creatives=body.get("creatives") or [],

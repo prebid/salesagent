@@ -290,6 +290,7 @@ def resolve_advertiser_for_buy(
             "brand_house": brand_house,
             "brand_id": brand_id,
             "tenant_id": tenant_id,
+            "suggestion": "Ask the publisher to set a default advertiser or add an advertiser routing rule.",
         },
     )
 

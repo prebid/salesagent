@@ -105,8 +105,8 @@ def _validate_creative_input(
     agent_url = str(format_value.agent_url)
     format_id = format_value.id
 
-    # Skip external validation for adapter-provided formats (non-HTTP URLs)
-    # These formats are served by the adapter itself (e.g., broadstreet://default)
+    # Skip external validation for adapter-provided formats (non-HTTP URLs).
+    # These formats are served by an adapter-specific creative surface.
     # and validation is handled internally by the adapter
     is_adapter_format = not agent_url.startswith(("http://", "https://"))
 

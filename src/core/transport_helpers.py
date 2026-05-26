@@ -149,6 +149,11 @@ def enrich_identity_with_account(
     if identity.tenant_id is None:
         return identity
 
+    if isinstance(account_ref, dict):
+        from adcp.types import AccountReference
+
+        account_ref = AccountReference.model_validate(account_ref)
+
     from src.core.database.repositories.uow import AccountUoW
     from src.core.helpers.account_helpers import resolve_account
 

@@ -52,6 +52,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         "client": "src.services.webhook_delivery_service.httpx.Client",
         "sleep": "src.services.webhook_delivery_service.time.sleep",
         "random": "src.services.webhook_delivery_service.random.uniform",
+        "validate": "src.services.webhook_delivery_service.WebhookURLValidator.validate_delivery_url",
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -61,6 +62,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
+        self.mock["validate"].return_value = (True, None)
 
         # httpx.Client: 200 OK by default
         self.set_http_response(200)

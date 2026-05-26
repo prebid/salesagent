@@ -217,7 +217,7 @@ class SpringServeAdapter(AdServerAdapter):
             ),
             (
                 "videos_read",
-                "Read/upload video & audio creatives",
+                "Read/upload hosted video creatives",
                 "GET",
                 "/videos?per_page=1",
                 True,
@@ -271,13 +271,13 @@ class SpringServeAdapter(AdServerAdapter):
         ``display``) from the AdCP Package's ``format_ids``.
 
         SpringServe encodes media type as a string on the demand tag, not
-        as a separate field. We discriminate by the ``springserve_audio_*``
-        vs ``springserve_video_*`` format id prefixes from our static
-        format declarations.
+        as a separate field. We discriminate from canonical AdCP format IDs:
+        audio formats route to audio, all other supported formats route to
+        video.
         """
         for fid in package.format_ids or []:
             fmt_id = fid.id if hasattr(fid, "id") else str(fid)
-            if fmt_id.startswith("springserve_audio") or "audio" in fmt_id.lower():
+            if "audio" in fmt_id.lower():
                 return "audio"
         return "video"
 
@@ -430,17 +430,41 @@ class SpringServeAdapter(AdServerAdapter):
     def _asset_media_type(asset: dict[str, Any]) -> tuple[str, str]:
         """Return ``(creative_format, creative_content_type)`` for an asset.
 
-        Routing is driven by the AdCP Format id prefix (``springserve_audio_*``
-        vs ``springserve_video_*``) when present, falling back to the asset's
-        own ``content_type`` hint, then to video/mp4 as a safe default.
+        Routing is driven by the AdCP Format id when present, falling back to
+        the asset's own ``content_type`` hint, then to video/mp4 as a safe
+        default.
         """
-        fid = (asset.get("format_id") or {}).get("id") if isinstance(asset.get("format_id"), dict) else None
-        is_audio = (isinstance(fid, str) and "audio" in fid.lower()) or str(
-            asset.get("content_type", "")
-        ).lower().startswith("audio/")
+        format_ref = asset.get("format_id")
+        fid = format_ref.get("id") if isinstance(format_ref, dict) else asset.get("format")
+        content_type = str(asset.get("content_type", "")).lower()
+        asset_type = str(asset.get("asset_type", "")).lower()
+        fid_str = fid.lower() if isinstance(fid, str) else ""
+        is_audio = ("audio" in fid_str) or asset_type == "audio" or content_type.startswith("audio/")
         if is_audio:
             return "audio", str(asset.get("content_type") or "audio/mpeg")
         return "video", str(asset.get("content_type") or "video/mp4")
+
+    @staticmethod
+    def _asset_remote_url(asset: dict[str, Any]) -> Any:
+        """Return the remote media/VAST URL from supported adapter asset shapes."""
+        return (
+            asset.get("vast_tag")
+            or asset.get("vast_tag_url")
+            or asset.get("url")
+            or asset.get("media_url")
+            or asset.get("creative_remote_url")
+        )
+
+    @staticmethod
+    def _hosted_audio_unsupported_status(creative_id: str) -> AssetStatus:
+        return AssetStatus(
+            creative_id=creative_id,
+            status="failed",
+            message=(
+                "SpringServe hosted audio upload is not supported; configure demand_class=tag "
+                "and use an audio_vast creative."
+            ),
+        )
 
     @staticmethod
     def _validate_creative_remote_url(url: str) -> str | None:
@@ -453,6 +477,8 @@ class SpringServeAdapter(AdServerAdapter):
         etc) and any URL whose hostname resolves to loopback or RFC1918
         private space before the POST.
         """
+        import ipaddress
+        import socket
         from urllib.parse import urlparse
 
         parsed = urlparse(url)
@@ -461,58 +487,103 @@ class SpringServeAdapter(AdServerAdapter):
         host = (parsed.hostname or "").lower()
         if not host:
             return "Asset URL is missing a hostname"
-        # Cheap private-host check -- avoids a DNS round-trip for the common cases.
-        if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-            return f"Asset URL host {host!r} is not routable from SpringServe"
-        if host.startswith(("10.", "192.168.", "169.254.", "172.16.", "172.17.", "172.18.", "172.19.")):
-            return f"Asset URL host {host!r} is in RFC1918 private space"
+
+        def _blocked_ip_error(ip_text: str) -> str | None:
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                return None
+            if not ip.is_global:
+                return f"Asset URL host {host!r} resolves to non-public address {ip_text}"
+            return None
+
+        literal_error = _blocked_ip_error(host.strip("[]"))
+        if literal_error:
+            return literal_error
+
+        try:
+            addr_infos = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            return f"Asset URL host {host!r} could not be resolved: {exc}"
+
+        for *_, sockaddr in addr_infos:
+            resolved_ip = sockaddr[0]
+            resolved_error = _blocked_ip_error(str(resolved_ip))
+            if resolved_error:
+                return resolved_error
         return None
 
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
-        """POST each asset to /videos and return AssetStatus with the SS id.
+        """POST each hosted video asset to /videos and return AssetStatus.
 
-        Audio routing is driven by ``format_id`` -- ``springserve_audio_*``
-        format ids produce audio creatives with the matching MIME type.
-        AdCP buyers provide a ``url`` or ``media_url`` pointing at the
-        hosted asset; SpringServe pulls it during ingest.
+        ``demand_class=tag`` tenants carry buyer-supplied VAST/audio URLs on
+        the Demand Tag itself as ``vast_endpoint_url``. There is no separate
+        creative upload or binding step for that path.
 
         Each asset is reported individually. A bad asset (missing
         ``creative_id``, missing URL, non-https URL, SpringServe rejection)
         produces a ``failed`` AssetStatus for that asset only -- the loop
         continues with the remaining assets.
         """
+        if self.demand_class == "tag":
+            tag_statuses: list[AssetStatus] = []
+            for asset in assets:
+                creative_id = str(asset.get("creative_id") or "")
+                remote_url = self._asset_remote_url(asset)
+                if not creative_id or not remote_url:
+                    tag_statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
+                    continue
+                url_error = self._validate_creative_remote_url(str(remote_url))
+                tag_statuses.append(
+                    AssetStatus(
+                        creative_id=creative_id,
+                        status="failed" if url_error else "approved",
+                        message=url_error or "demand_class=tag carries the VAST URL on the demand tag",
+                    )
+                )
+            return tag_statuses
+
         if self.dry_run:
+            dry_run_statuses: list[AssetStatus] = []
             for asset in assets:
                 media_format, content_type = self._asset_media_type(asset)
+                creative_id = str(asset.get("creative_id") or "")
+                if media_format == "audio":
+                    dry_run_statuses.append(self._hosted_audio_unsupported_status(creative_id))
+                    continue
                 self.log(
                     f"Would POST {self.base_url}/videos name={asset.get('name')} "
                     f"format={media_format} content_type={content_type} "
-                    f"remote_url={asset.get('url') or asset.get('media_url')}"
+                    f"remote_url={self._asset_remote_url(asset)}"
                 )
-            return [AssetStatus(creative_id=str(a.get("creative_id") or ""), status="approved") for a in assets]
+                dry_run_statuses.append(AssetStatus(creative_id=creative_id, status="approved"))
+            return dry_run_statuses
 
         assert self._client is not None
         assert self.demand_partner_id is not None
-        statuses: list[AssetStatus] = []
+        live_statuses: list[AssetStatus] = []
         for asset in assets:
             creative_id = str(asset.get("creative_id") or "")
             if not creative_id:
                 logger.warning("SpringServe asset missing 'creative_id'; skipping")
-                statuses.append(AssetStatus(creative_id="", status="failed"))
+                live_statuses.append(AssetStatus(creative_id="", status="failed"))
                 continue
-            remote_url = asset.get("url") or asset.get("media_url") or asset.get("creative_remote_url")
+            remote_url = self._asset_remote_url(asset)
             if not remote_url:
                 logger.warning("SpringServe asset %s missing remote URL (need 'url' or 'media_url')", creative_id)
-                statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
+                live_statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
+                continue
+            media_format, content_type = self._asset_media_type(asset)
+            if media_format == "audio":
+                live_statuses.append(self._hosted_audio_unsupported_status(creative_id))
                 continue
             url_error = self._validate_creative_remote_url(str(remote_url))
             if url_error:
                 logger.warning("SpringServe asset %s rejected: %s", creative_id, url_error)
-                statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
+                live_statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
                 continue
-            media_format, content_type = self._asset_media_type(asset)
             try:
                 created = self._client.creatives.create(
                     name=asset.get("name") or f"adcp-{creative_id}",
@@ -526,11 +597,11 @@ class SpringServeAdapter(AdServerAdapter):
                     creative_landing_page_url=asset.get("landing_page_url"),
                     secondary_code=creative_id,
                 )
-                statuses.append(AssetStatus(creative_id=str(created.id), status="approved"))
+                live_statuses.append(AssetStatus(creative_id=str(created.id), status="approved"))
             except SpringServeError as exc:
                 logger.warning("SpringServe creative create failed for asset %s: %s", creative_id, exc)
-                statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
-        return statuses
+                live_statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
+        return live_statuses
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:
         """Bind SpringServe creatives to demand tags.

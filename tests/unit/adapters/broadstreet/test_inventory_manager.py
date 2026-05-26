@@ -178,9 +178,15 @@ class TestBroadstreetInventoryManager:
 
         # Check creative specs
         formats = [spec["format"] for spec in response["creative_specs"]]
-        assert "display" in formats
-        assert "html" in formats
-        assert "text" in formats
+        assert "display_image" in formats
+        assert "display_html" in formats
+        assert "display_js" in formats
+        assert "image_slideshow_5s_each" in formats
+        assert "native_standard" in formats
+        assert all(
+            spec["format_id"]["agent_url"] == "https://creative.adcontextprotocol.org"
+            for spec in response["creative_specs"]
+        )
 
     def test_sync_zones_to_products(self, manager):
         """Test generating product suggestions from zones."""

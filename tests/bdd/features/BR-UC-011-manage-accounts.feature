@@ -220,12 +220,12 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-sync-update @sync @upsert @partition
   Scenario: Sync updates existing account -- all_updated
     Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    And an account for brand domain "acme-corp.com" already exists with billing "operator" and payment_terms "net_30"
     When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain    | operator      | billing |
-    | acme-corp.com   | acme-corp.com | agent   |
+    | brand.domain    | operator      | billing  | payment_terms |
+    | acme-corp.com   | acme-corp.com | operator | net_60        |
     Then the account for brand domain "acme-corp.com" has action "updated"
-    And the account billing is "agent"
+    And the account billing is "operator"
 
   @T-UC-011-sync-unchanged @sync @upsert @partition
   Scenario: Sync unchanged account is idempotent -- all_unchanged
@@ -254,11 +254,11 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-sync-mixed @sync @upsert @partition
   Scenario: Sync mixed_results -- created and updated in same request (all different actions)
     Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "existing-brand.com" already exists with billing "operator"
+    And an account for brand domain "existing-brand.com" already exists with billing "operator" and payment_terms "net_30"
     When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain        | operator            | billing  |
-    | new-brand.com       | new-brand.com       | operator |
-    | existing-brand.com  | existing-brand.com  | agent    |
+    | brand.domain        | operator            | billing  | payment_terms |
+    | new-brand.com       | new-brand.com       | operator | net_30        |
+    | existing-brand.com  | existing-brand.com  | operator | net_60        |
     Then the account for brand domain "new-brand.com" has action "created"
     And the account for brand domain "existing-brand.com" has action "updated"
 
@@ -328,10 +328,11 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary
   Scenario: Sync partial_failure -- success_partial_failure with action=failed (action=failed with errors)
     Given the Buyer Agent has an authenticated connection
+    And the seller supports "operator" billing but not "agent" billing
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain        | operator            | billing  |
     | acme-corp.com       | acme-corp.com       | operator |
-    | invalid-brand.test  | invalid-brand.test  | operator |
+    | invalid-brand.test  | invalid-brand.test  | agent    |
     Then the response is a success variant with accounts array
     And the account for brand domain "acme-corp.com" has action "created"
     And the account for brand domain "invalid-brand.test" has action "failed"
@@ -728,13 +729,13 @@ Feature: BR-UC-011 Manage Accounts
     # POST-F3: suggestion field present
 
   @T-UC-011-sync-update-billing @sync @upsert @partition
-  Scenario: Sync update billing on existing account
+  Scenario: Sync billing party change creates a scoped account
     Given the Buyer Agent has an authenticated connection
     And an account for brand domain "acme-corp.com" already exists with billing "operator"
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing |
     | acme-corp.com   | acme-corp.com | agent   |
-    Then the account for brand domain "acme-corp.com" has action "updated"
+    Then the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "agent"
 
   @T-UC-011-sync-update-payment-terms @sync @upsert @partition
@@ -792,10 +793,10 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-sync-immutable-preserved @sync @upsert @invariant @hand-authored
   Scenario: Sync update preserves immutable fields (name, advertiser, rate_card)
     Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    And an account for brand domain "acme-corp.com" already exists with billing "operator" and payment_terms "net_30"
     When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain    | operator      | billing |
-    | acme-corp.com   | acme-corp.com | agent   |
+    | brand.domain    | operator      | billing  | payment_terms |
+    | acme-corp.com   | acme-corp.com | operator | net_60        |
     Then the account for brand domain "acme-corp.com" has action "updated"
     And the account name in the database is unchanged from the original
     And the account rate_card in the database is unchanged from the original
@@ -803,10 +804,10 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-sync-no-dup-access @sync @invariant @hand-authored
   Scenario: Re-syncing an existing account does not duplicate access grants
     Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "resync.com" already exists with billing "operator"
+    And an account for brand domain "resync.com" already exists with billing "operator" and payment_terms "net_30"
     When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain | operator    | billing |
-    | resync.com   | resync.com  | agent   |
+    | brand.domain | operator    | billing  | payment_terms |
+    | resync.com   | resync.com  | operator | net_60        |
     Then the account for brand domain "resync.com" has action "updated"
     And the agent has exactly one access grant for brand domain "resync.com"
 
@@ -821,7 +822,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the list includes an account with brand domain "new-brand.com"
 
   @T-UC-011-dryrun-update @sync @dry-run @upsert @partition
-  Scenario: Dry-run detects billing change on existing account
+  Scenario: Dry-run previews billing party change as a scoped account
     Given the Buyer Agent has an authenticated connection
     And an account for brand domain "preview.com" already exists with billing "operator"
     When the Buyer Agent sends a sync_accounts request with dry_run true and:
@@ -829,7 +830,7 @@ Feature: BR-UC-011 Manage Accounts
     | preview.com  | preview.com | agent   |
     Then the response is a success variant
     And the response includes dry_run true
-    And the account for brand domain "preview.com" has action "updated"
+    And the account for brand domain "preview.com" has action "created"
     And no accounts were actually modified for brand domain "preview.com"
 
   @T-UC-011-dryrun-unchanged @sync @dry-run @upsert @partition

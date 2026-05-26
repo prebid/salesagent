@@ -167,6 +167,9 @@ def get_format_templates():
         JSON object with templates and common sizes from GAM_STANDARD_SIZES
     """
     adapter_type = request.args.get("adapter_type", "mock")
+    normalized_adapter_type = "gam" if adapter_type == "google_ad_manager" else adapter_type
+    if normalized_adapter_type not in {"mock", "gam", "broadstreet", "springserve", "freewheel"}:
+        normalized_adapter_type = "mock"
 
     # Import GAM standard sizes for common size quick-picks
     try:
@@ -176,51 +179,104 @@ def get_format_templates():
 
     # Format templates definition
     templates = {
-        "display_static": {
-            "id": "display_static",
-            "name": "Static Display",
+        "display": {
+            "id": "display",
+            "name": "Display",
             "description": "Display banner ads (image, JS, or HTML5 - auto-detected at upload)",
             "type": "display",
             "parameter_type": "dimensions",
+            "expands_to": ["display_image", "display_html", "display_js"],
+            "supported_adapters": ["mock", "gam", "google_ad_manager", "broadstreet"],
             "gam_supported": True,
         },
-        "video_hosted": {
-            "id": "video_hosted",
-            "name": "Hosted Video",
-            "description": "Video ads hosted on creative agent (MP4, WebM)",
+        "video": {
+            "id": "video",
+            "name": "Video",
+            "description": "Video ads (hosted or VAST - auto-detected at upload)",
             "type": "video",
-            "parameter_type": "both",
+            "parameter_type": "duration",
+            "expands_to": ["video_standard", "video_vast"],
+            "adapter_expands_to": {
+                "springserve": ["video_vast"],
+                "freewheel": ["video_vast"],
+            },
+            "supported_adapters": ["mock", "gam", "google_ad_manager", "springserve", "freewheel"],
             "gam_supported": True,
         },
-        "video_vast": {
-            "id": "video_vast",
-            "name": "VAST Tag",
-            "description": "Video ads served via VAST XML redirect",
-            "type": "video",
-            "parameter_type": "both",
-            "gam_supported": True,
-        },
-        "native": {
-            "id": "native",
-            "name": "Native Ad",
+        "native_standard": {
+            "id": "native_standard",
+            "name": "Native",
             "description": "Native content ads that match the look of the site",
             "type": "native",
             "parameter_type": "none",
+            "supported_adapters": ["mock", "gam", "google_ad_manager", "broadstreet"],
             "gam_supported": True,
         },
-        "audio": {
-            "id": "audio",
-            "name": "Audio Ad",
-            "description": "Audio-only ads for podcasts and streaming",
+        "product_carousel_display": {
+            "id": "product_carousel_display",
+            "name": "Product Carousel",
+            "description": "Multi-card display carousel with image/text assets",
+            "type": "display",
+            "parameter_type": "none",
+            "supported_adapters": ["mock", "gam", "google_ad_manager"],
+            "gam_supported": True,
+        },
+        "image_slideshow_5s_each": {
+            "id": "image_slideshow_5s_each",
+            "name": "Image Slideshow",
+            "description": "Multi-image carousel or slideshow creative",
+            "type": "display",
+            "parameter_type": "none",
+            "supported_adapters": ["mock", "gam", "google_ad_manager", "broadstreet"],
+            "gam_supported": True,
+        },
+        "mobile_story_vertical": {
+            "id": "mobile_story_vertical",
+            "name": "Mobile Story",
+            "description": "Vertical multi-frame story creative",
+            "type": "display",
+            "parameter_type": "none",
+            "supported_adapters": ["mock", "gam", "google_ad_manager"],
+            "gam_supported": True,
+        },
+        "video_playlist_6s_bumpers": {
+            "id": "video_playlist_6s_bumpers",
+            "name": "Video Playlist",
+            "description": "Sequence of short video bumper clips",
+            "type": "video",
+            "parameter_type": "none",
+            "supported_adapters": ["mock", "gam", "google_ad_manager"],
+            "gam_supported": True,
+        },
+        "audio_vast": {
+            "id": "audio_vast",
+            "name": "Audio VAST",
+            "description": "Audio VAST/DAAST tag for streaming and podcast inventory",
             "type": "audio",
-            "parameter_type": "duration",
+            "parameter_type": "none",
+            "supported_adapters": ["mock", "springserve"],
             "gam_supported": False,
+        },
+        **{
+            audio_id: {
+                "id": audio_id,
+                "name": f"Audio {audio_id.removeprefix('audio_')}",
+                "description": "Hosted audio asset for podcasts and streaming",
+                "type": "audio",
+                "parameter_type": "none",
+                "supported_adapters": ["mock"],
+                "gam_supported": False,
+            }
+            for audio_id in ("audio_15s", "audio_30s", "audio_60s")
         },
     }
 
-    # Filter for GAM adapter (no audio support)
-    if adapter_type == "gam":
-        templates = {k: v for k, v in templates.items() if v.get("gam_supported", True)}
+    templates = {
+        k: v
+        for k, v in templates.items()
+        if (normalized_adapter_type != "gam" or v.get("gam_supported", True))
+        and normalized_adapter_type in v.get("supported_adapters", [normalized_adapter_type])
+    }
 
     # Convert GAM_STANDARD_SIZES to list format
     common_sizes = []

@@ -142,6 +142,18 @@ class PackageDelivery(SalesAgentBaseModel):
         None,
         description="Placement-level delivery breakdown (populated when reporting_dimensions includes 'placement')",
     )
+    by_device_type: list[dict[str, Any]] | None = Field(
+        None,
+        description="Device-type delivery breakdown (populated when reporting_dimensions includes 'device_type')",
+    )
+    by_device_type_truncated: bool | None = Field(
+        None, description="Whether by_device_type was truncated for this package"
+    )
+    by_geo: list[dict[str, Any]] | None = Field(
+        None,
+        description="Geographic delivery breakdown (populated when reporting_dimensions includes 'geo')",
+    )
+    by_geo_truncated: bool | None = Field(None, description="Whether by_geo was truncated for this package")
 
 
 class DailyBreakdown(SalesAgentBaseModel):
@@ -251,6 +263,12 @@ class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuy
     aggregated_totals: AggregatedTotals = Field(..., description="Combined metrics across all returned media buys")
     media_buy_deliveries: SchemaVariant[list[MediaBuyDeliveryData]] = Field(
         ..., description="Array of delivery data for each media buy"
+    )
+    by_device_type_truncated: bool | None = Field(
+        None, description="True when any requested device_type package breakdown was truncated"
+    )
+    by_geo_truncated: bool | None = Field(
+        None, description="True when any requested geo package breakdown was truncated"
     )
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:

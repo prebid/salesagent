@@ -5,6 +5,7 @@ from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
+from src.core.format_cache import canonical_format_identity
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.media_buy_create import _status_after_creative_attachment
 
@@ -91,36 +92,33 @@ def _process_assignments(
                         product = assignment_repo.get_product_by_id(product_id)
 
                         if product and product.format_ids:
-                            # Build set of supported formats (agent_url, format_id) tuples
-                            supported_formats: set[tuple[str, str]] = set()
+                            # Build set of supported canonical format identities.
+                            # Older persisted products may still carry legacy
+                            # reference-agent IDs like display_300x250; compare
+                            # them as display_image + width/height so canonical
+                            # migration does not collapse all display sizes.
+                            supported_formats: set[tuple[str, str, int | None, int | None, int | None]] = set()
                             for fmt in product.format_ids:
                                 if isinstance(fmt, dict):
                                     agent_url_val = fmt.get("agent_url")
                                     format_id_val = fmt.get("id") or fmt.get("format_id")
                                     if agent_url_val and format_id_val:
-                                        supported_formats.add((str(agent_url_val), str(format_id_val)))
+                                        supported_formats.add(canonical_format_identity(fmt))
 
                             # Check creative format against supported formats
                             creative_agent_url = db_creative_result.agent_url
                             creative_format_id = db_creative_result.format
-
-                            # Allow /mcp URL variant (creative agent may return format with /mcp suffix)
-                            def normalize_url(url: str | None) -> str | None:
-                                if not url:
-                                    return None
-                                return url.rstrip("/").removesuffix("/mcp")
-
-                            normalized_creative_url = normalize_url(creative_agent_url)
-                            is_supported = False
-
-                            for supported_url, supported_format_id in supported_formats:
-                                normalized_supported_url = normalize_url(supported_url)
-                                if (
-                                    normalized_creative_url == normalized_supported_url
-                                    and creative_format_id == supported_format_id
-                                ):
-                                    is_supported = True
-                                    break
+                            format_parameters = getattr(db_creative_result, "format_parameters", None)
+                            if not isinstance(format_parameters, dict):
+                                format_parameters = {}
+                            creative_identity = canonical_format_identity(
+                                {
+                                    "agent_url": creative_agent_url,
+                                    "id": creative_format_id,
+                                    **format_parameters,
+                                }
+                            )
+                            is_supported = creative_identity in supported_formats
 
                             if not supported_formats:
                                 # Product has no format restrictions - allow all
@@ -134,7 +132,10 @@ def _process_assignments(
                                     else creative_format_id
                                 )
                                 supported_formats_display = ", ".join(
-                                    [f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in supported_formats]
+                                    [
+                                        f"{url}/{fmt_id}" + (f" {width}x{height}" if width and height else "")
+                                        for url, fmt_id, width, height, _duration_ms in supported_formats
+                                    ]
                                 )
                                 error_msg = (
                                     f"Creative {creative_id} format '{creative_format_display}' "

@@ -60,7 +60,18 @@ class TestAddCreativeAssetsLive:
 
         statuses = adapter.add_creative_assets(
             "freewheel_io_777",
-            [{"creative_id": "adcp_cr_1", "name": "Brand Spot"}],
+            [
+                {
+                    "creative_id": "adcp_cr_1",
+                    "name": "Brand Spot",
+                    "url": "https://ads.example.com/vast.xml",
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": "video_vast",
+                        "duration_ms": 30000,
+                    },
+                }
+            ],
             datetime.now(UTC),
         )
 
@@ -76,6 +87,15 @@ class TestAddCreativeAssetsLive:
             advertiser_ids=[1356511],
             base_ad_unit_id=None,
             external_id="adcp_cr_1",  # AdCP id stamped onto FW external_id for lineage
+            renditions=[
+                {
+                    "uri": "https://ads.example.com/vast.xml",
+                    "content_type": "application/xml",
+                    "vast_rendition": True,
+                    "https_compatibility": "compatible",
+                }
+            ],
+            duration=30,
         )
 
     def test_returns_failed_when_fw_errors(self, mock_principal):
@@ -85,7 +105,7 @@ class TestAddCreativeAssetsLive:
 
         statuses = adapter.add_creative_assets(
             "freewheel_io_777",
-            [{"creative_id": "adcp_cr_1", "name": "Brand Spot"}],
+            [{"creative_id": "adcp_cr_1", "name": "Brand Spot", "url": "https://ads.example.com/vast.xml"}],
             datetime.now(UTC),
         )
 

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then
 
+from tests.bdd.steps.generic._values import enum_value
+
 # ── Response status ──────────────────────────────────────────────────
 
 
@@ -24,7 +26,7 @@ def then_response_status(ctx: dict, status: str) -> None:
 
     # If response has an explicit status field, check it directly
     if hasattr(resp, "status"):
-        actual = resp.status
+        actual = enum_value(resp.status)
         assert actual == status, f"Expected status '{status}', got '{actual}'"
         return
 

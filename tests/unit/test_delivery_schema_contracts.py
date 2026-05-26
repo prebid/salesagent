@@ -106,6 +106,10 @@ class TestPackageDeliveryFields:
         "rate",
         "currency",
         "by_placement",
+        "by_device_type",
+        "by_device_type_truncated",
+        "by_geo",
+        "by_geo_truncated",
     }
 
     def test_field_names(self):

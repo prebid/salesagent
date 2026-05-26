@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Authorized Properties - {{ tenant.name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-lg-8">
+            <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+                <h2 class="sa-page-header__title">Upload Authorized Properties</h2>
+                <div class="sa-page-header__actions">
+                    <a href="{{ url_for('authorized_properties.list_authorized_properties', tenant_id=tenant.tenant_id) }}"
+                       class="btn btn-ghost">
+                        <i class="fas fa-arrow-left"></i> Back to Authorized Properties
+                    </a>
+                </div>
+            </header>
+
+            <div class="sa-card">
+                <div class="card-body">
+                    <form method="POST" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label for="file" class="form-label">JSON or CSV file</label>
+                            <input class="form-control" type="file" id="file" name="file" accept=".json,.csv" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-upload"></i> Upload
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

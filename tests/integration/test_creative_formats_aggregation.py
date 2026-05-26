@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import pytest
 
+from src.adapters.broadstreet.formats import BROADSTREET_CANONICAL_FORMAT_IDS
+from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
 from src.core.schemas import Format, FormatId, ListCreativeFormatsResponse
-from tests.factories import TenantFactory
+from tests.factories import AdapterConfigFactory, TenantFactory
 from tests.harness import CreativeFormatsEnv
 from tests.harness.transport import Transport
 
@@ -17,8 +19,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 ALL_TRANSPORTS = [Transport.IMPL, Transport.MCP]
 
-DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
+DEFAULT_AGENT_URL = DEFAULT_CREATIVE_AGENT_URL
 CUSTOM_AGENT_URL = "https://custom-dco.example.com"
+BROADSTREET_CANONICAL_FORMAT_SET = set(BROADSTREET_CANONICAL_FORMAT_IDS)
 
 
 def _make_format(
@@ -35,6 +38,11 @@ def _make_format(
         name=name,
         is_standard=is_standard,
     )
+
+
+def _broadstreet_canonical_formats(formats: list[Format]) -> list[Format]:
+    """Return the canonical reference-agent formats Broadstreet contributes."""
+    return [fmt for fmt in formats if fmt.format_id.id in BROADSTREET_CANONICAL_FORMAT_SET]
 
 
 # ---------------------------------------------------------------------------
@@ -165,21 +173,17 @@ class TestMultiAgentAggregation:
 
 
 class TestAdapterFormatsMerged:
-    """UC-005-MAIN-MCP-03: adapter-specific formats merged alongside agent formats.
+    """UC-005-MAIN-MCP-03: adapter-supported canonical formats merged alongside agent formats.
 
     Covers: UC-005-MAIN-MCP-03
 
-    When the tenant has an adapter (Broadstreet) that provides templates,
-    those are merged into the aggregated format list alongside creative
-    agent formats.
+    When the tenant has a Broadstreet adapter, the canonical formats supported
+    by Broadstreet are merged into the aggregated format list alongside
+    creative agent formats.
     """
 
     def test_broadstreet_formats_merged_with_agent_formats(self, integration_db):
-        """UC-005-MAIN-MCP-03: Broadstreet adapter formats merged alongside agent formats."""
-        from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import AdapterConfig
-
+        """UC-005-MAIN-MCP-03: Broadstreet canonical formats merged alongside agent formats."""
         agent_format = _make_format(
             DEFAULT_AGENT_URL,
             "display_300x250",
@@ -187,16 +191,8 @@ class TestAdapterFormatsMerged:
         )
 
         with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-
-            # Create Broadstreet adapter config in DB
-            with get_db_session() as session:
-                config = AdapterConfig(
-                    tenant_id="test_tenant",
-                    adapter_type="broadstreet",
-                )
-                session.add(config)
-                session.commit()
+            tenant = TenantFactory(tenant_id="test_tenant")
+            AdapterConfigFactory(tenant=tenant, adapter_type="broadstreet")
 
             env.set_registry_formats([agent_format])
             response = env.call_impl()
@@ -207,33 +203,25 @@ class TestAdapterFormatsMerged:
         format_ids = {f.format_id.id for f in response.formats}
         assert "display_300x250" in format_ids
 
-        # Broadstreet formats present
-        broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
-        assert len(broadstreet_formats) == len(BROADSTREET_TEMPLATES)
+        # Broadstreet-supported canonical formats present
+        broadstreet_formats = _broadstreet_canonical_formats(response.formats)
+        assert {f.format_id.id for f in broadstreet_formats} == BROADSTREET_CANONICAL_FORMAT_SET
+        assert all(str(f.format_id.agent_url).rstrip("/") == DEFAULT_AGENT_URL for f in broadstreet_formats)
 
-        # Total = agent formats + adapter formats
-        assert len(response.formats) == 1 + len(BROADSTREET_TEMPLATES)
+        # Total = agent formats + Broadstreet-supported canonical formats
+        assert len(response.formats) == 1 + len(BROADSTREET_CANONICAL_FORMAT_IDS)
 
-    def test_broadstreet_formats_are_non_standard(self, integration_db):
-        """UC-005-MAIN-MCP-03: Broadstreet adapter formats marked as non-standard."""
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import AdapterConfig
-
+    def test_broadstreet_formats_are_canonical_reference_agent_formats(self, integration_db):
+        """UC-005-MAIN-MCP-03: Broadstreet adapter contributes canonical reference-agent formats."""
         with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-
-            with get_db_session() as session:
-                config = AdapterConfig(
-                    tenant_id="test_tenant",
-                    adapter_type="broadstreet",
-                )
-                session.add(config)
-                session.commit()
+            tenant = TenantFactory(tenant_id="test_tenant")
+            AdapterConfigFactory(tenant=tenant, adapter_type="broadstreet")
 
             env.set_registry_formats([])
             response = env.call_impl()
 
-        broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
-        assert len(broadstreet_formats) > 0
+        broadstreet_formats = _broadstreet_canonical_formats(response.formats)
+        assert {f.format_id.id for f in broadstreet_formats} == BROADSTREET_CANONICAL_FORMAT_SET
         for fmt in broadstreet_formats:
-            assert fmt.is_standard is False
+            assert str(fmt.format_id.agent_url).rstrip("/") == DEFAULT_AGENT_URL
+            assert not fmt.format_id.id.startswith("broadstreet_")

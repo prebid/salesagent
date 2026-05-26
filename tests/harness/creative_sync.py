@@ -205,3 +205,13 @@ class CreativeSyncEnv(IntegrationEnv):
             kwargs["account"] = {"account_id": f"{self._tenant_id}:{self._principal_id}"}
         kwargs.setdefault("idempotency_key", f"idem-test-{uuid.uuid4().hex}")
         return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)
+
+    def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
+        """Call sync_creatives via A2A JSON-RPC — full pipeline dispatch."""
+        import uuid
+
+        kwargs.setdefault("creatives", [])
+        if "account" not in kwargs:
+            kwargs["account"] = {"account_id": f"{self._tenant_id}:{self._principal_id}"}
+        kwargs.setdefault("idempotency_key", f"idem-test-{uuid.uuid4().hex}")
+        return self._run_a2a_client("sync_creatives", SyncCreativesResponse, **kwargs)

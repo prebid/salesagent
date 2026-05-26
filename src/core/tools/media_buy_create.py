@@ -50,6 +50,58 @@ from src.core.exceptions import (
 _MIN_SUPPORTED_VARIANCE_PERCENT = 5.0
 
 
+def _format_ref_display(format_ref: Any) -> str:
+    agent_url = getattr(format_ref, "agent_url", None)
+    fmt_id = getattr(format_ref, "id", None)
+    if isinstance(format_ref, dict):
+        agent_url = format_ref.get("agent_url")
+        fmt_id = format_ref.get("id", format_ref.get("format_id"))
+    if not fmt_id:
+        fmt_id = str(format_ref)
+    if not agent_url:
+        return str(fmt_id)
+    return f"{str(agent_url).rstrip('/')}/{fmt_id}"
+
+
+def _matching_supported_format(requested_format: Any, supported_formats: list[Any]) -> Any | None:
+    for supported_format in supported_formats:
+        if canonical_format_matches(requested_format, supported_format):
+            return supported_format
+    return None
+
+
+def _format_params(format_ref: Any) -> tuple[int | None, int | None, float | None]:
+    fmt = upgrade_legacy_format_id(format_ref)
+    return (
+        fmt.width,
+        fmt.height,
+        fmt.duration_ms,
+    )
+
+
+def _uploaded_platform_creative_id(upload_result: Any, creative_id: str) -> str:
+    if not upload_result:
+        raise AdCPAdapterError(
+            f"Failed to upload creative {creative_id} to adapter: adapter returned no upload status",
+            details={"error_code": "CREATIVE_UPLOAD_FAILED"},
+        )
+
+    uploaded_status = upload_result[0]
+    status = str(getattr(uploaded_status, "status", "") or "").lower()
+    platform_creative_id = getattr(uploaded_status, "creative_id", None)
+    if status != "approved" or not platform_creative_id:
+        message = getattr(uploaded_status, "message", None)
+        detail = f" status={status or 'missing'}"
+        if message:
+            detail += f": {message}"
+        raise AdCPAdapterError(
+            f"Failed to upload creative {creative_id} to adapter:{detail}",
+            details={"error_code": "CREATIVE_UPLOAD_FAILED"},
+        )
+
+    return str(platform_creative_id)
+
+
 def _validate_measurement_terms(req: "CreateMediaBuyRequest") -> None:
     """Reject buyer-proposed measurement_terms the seller cannot honor.
 
@@ -166,10 +218,13 @@ from src.core.database.models import MediaBuy
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.embedded_runtime import publisher_owns_campaign_approval
+from src.core.format_cache import canonical_format_matches, upgrade_legacy_format_id
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
     _convert_creative_to_adapter_asset,
+    adapter_asset_requires_dimensions,
+    build_adapter_asset_from_stored_creative,
     extract_click_url,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
@@ -455,6 +510,10 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
         return None
 
 
+def _dict_implementation_config(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _detect_overbook_warnings(
     *,
     adapter: Any,
@@ -580,6 +639,26 @@ def _detect_overbook_warnings(
     ]
 
 
+def _creative_ids_for_packages(packages: list[MediaPackage]) -> set[str]:
+    all_creative_ids: set[str] = set()
+    for package in packages:
+        pkg_creative_ids = _get_requested_creative_ids(package)
+        if pkg_creative_ids:
+            all_creative_ids.update(pkg_creative_ids)
+    return all_creative_ids
+
+
+def _load_creatives_by_id(session: "Session", tenant_id: str, creative_ids: set[str]) -> dict[str, Any]:
+    if not creative_ids:
+        return {}
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as DBCreative
+
+    stmt = select(DBCreative).where(DBCreative.tenant_id == tenant_id, DBCreative.creative_id.in_(list(creative_ids)))
+    return {str(creative.creative_id): creative for creative in session.scalars(stmt).all()}
+
+
 def _validate_creatives_before_adapter_call(
     packages: list[MediaPackage],
     tenant_id: str,
@@ -602,27 +681,15 @@ def _validate_creatives_before_adapter_call(
     """
     from sqlalchemy import select
 
-    from src.core.database.models import Creative as DBCreative
-
     if session is None:
         raise ValueError("session is required for _validate_creatives_before_adapter_call")
 
-    # Collect all creative IDs from all packages
-    all_creative_ids = set()
-    for package in packages:
-        pkg_creative_ids = _get_requested_creative_ids(package)
-        if pkg_creative_ids:
-            all_creative_ids.update(pkg_creative_ids)
-
+    all_creative_ids = _creative_ids_for_packages(packages)
     if not all_creative_ids:
-        # No creatives to validate
         return
 
-    # Fetch all creatives in one query
-    stmt = select(DBCreative).where(
-        DBCreative.tenant_id == tenant_id, DBCreative.creative_id.in_(list(all_creative_ids))
-    )
-    creatives_list = list(session.scalars(stmt).all())
+    creatives_by_id = _load_creatives_by_id(session, tenant_id, all_creative_ids)
+    creatives_list = list(creatives_by_id.values())
 
     # Validate each creative has required fields
     validation_errors = []
@@ -661,13 +728,16 @@ def _validate_creatives_before_adapter_call(
         # Only validate reference creatives (formats we can directly use)
         # Extract URL and dimensions using shared helper
         url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
+        format_id = str(creative.format or "")
+        format_type = str(getattr(format_spec, "type", "") or "").lower()
+        requires_dimensions = format_type not in {"audio"} and "vast" not in format_id.lower()
 
         if not url:
             validation_errors.append(
                 f"Reference creative {creative.creative_id} (format={creative.format}) "
                 f"missing required URL field in assets"
             )
-        if not width or not height:
+        if requires_dimensions and (not width or not height):
             validation_errors.append(
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
@@ -738,6 +808,140 @@ def _validate_creatives_before_adapter_call(
         raise AdCPValidationError(
             error_msg, details={"error_code": "INVALID_CREATIVES", "creative_errors": validation_errors}
         )
+
+
+def _is_springserve_tag_mode(adapter: Any) -> bool:
+    return str(getattr(adapter, "adapter_name", "") or "").lower() == "springserve" and (
+        getattr(adapter, "demand_class", None) == "tag"
+    )
+
+
+def _tenant_uses_springserve(tenant_context: Any) -> bool:
+    return _tenant_adapter_name(tenant_context) == "springserve"
+
+
+def _tenant_uses_google_ad_manager(tenant_context: Any) -> bool:
+    return _tenant_adapter_name(tenant_context) in {"google_ad_manager", "gam"}
+
+
+def _tenant_adapter_name(tenant_context: Any) -> str:
+    if isinstance(tenant_context, dict):
+        adapter_name = tenant_context.get("ad_server")
+    else:
+        adapter_name = getattr(tenant_context, "ad_server", None)
+    return str(adapter_name or "").lower()
+
+
+def _existing_springserve_vast_endpoint_url(package: MediaPackage) -> str | None:
+    impl = getattr(package, "implementation_config", None) or {}
+    springserve_config = impl.get("springserve", impl) if isinstance(impl, dict) else {}
+    if not isinstance(springserve_config, dict):
+        return None
+    extras = springserve_config.get("extra_demand_tag_fields") or {}
+    if not isinstance(extras, dict):
+        return None
+    value = extras.get("vast_endpoint_url")
+    return str(value) if value else None
+
+
+def _package_with_springserve_vast_endpoint_url(package: MediaPackage, url: str) -> MediaPackage:
+    impl = dict(getattr(package, "implementation_config", None) or {})
+    raw_springserve_config = impl.get("springserve")
+    if isinstance(raw_springserve_config, dict):
+        springserve_config = dict(raw_springserve_config)
+    else:
+        springserve_config = dict(impl)
+
+    extras = dict(springserve_config.get("extra_demand_tag_fields") or {})
+    extras["vast_endpoint_url"] = url
+    springserve_config["extra_demand_tag_fields"] = extras
+    impl["springserve"] = springserve_config
+    return package.model_copy(update={"implementation_config": impl})
+
+
+def _prepare_springserve_tag_mode_packages(
+    adapter: Any,
+    packages: list[MediaPackage],
+    tenant_id: str,
+    session: "Session",
+) -> list[MediaPackage]:
+    """Inject assigned VAST creative URLs into SpringServe tag-mode packages.
+
+    SpringServe ``demand_class=tag`` requires ``vast_endpoint_url`` on the
+    Demand Tag create call. The later creative upload/bind phase is too late,
+    so resolve package creative assignments before ``adapter.create_media_buy``.
+    """
+    if not _is_springserve_tag_mode(adapter):
+        return packages
+
+    all_creative_ids = _creative_ids_for_packages(packages)
+    creatives_by_id = _load_creatives_by_id(session, tenant_id, all_creative_ids)
+    prepared: list[MediaPackage] = []
+    validation_errors: list[str] = []
+
+    for package in packages:
+        creative_ids = _get_requested_creative_ids(package)
+        if not creative_ids:
+            if _existing_springserve_vast_endpoint_url(package):
+                prepared.append(package)
+                continue
+            validation_errors.append(
+                f"Package {package.package_id} uses SpringServe demand_class=tag but has no assigned audio_vast creative"
+            )
+            prepared.append(package)
+            continue
+
+        if len(creative_ids) != 1:
+            validation_errors.append(
+                f"Package {package.package_id} uses SpringServe demand_class=tag and requires exactly one VAST creative "
+                f"(got {len(creative_ids)})"
+            )
+            prepared.append(package)
+            continue
+
+        creative_id = creative_ids[0]
+        creative = creatives_by_id.get(creative_id)
+        if creative is None:
+            validation_errors.append(f"Creative {creative_id} not found for SpringServe tag-mode package")
+            prepared.append(package)
+            continue
+
+        format_id = str(getattr(creative, "format", "") or "")
+        if "vast" not in format_id.lower():
+            validation_errors.append(
+                f"Creative {creative_id} has format '{format_id}', but SpringServe demand_class=tag requires a VAST format"
+            )
+            prepared.append(package)
+            continue
+
+        format_spec = _get_format_spec_sync(creative.agent_url, format_id) if format_id else None
+        asset = build_adapter_asset_from_stored_creative(
+            creative,
+            package_id=package.package_id,
+            format_spec=format_spec,
+        )
+        vast_url = asset.get("url")
+        if not vast_url:
+            validation_errors.append(f"Creative {creative_id} is missing the VAST URL required by SpringServe tag mode")
+            prepared.append(package)
+            continue
+
+        validate_url = getattr(adapter, "_validate_creative_remote_url", None)
+        url_error = validate_url(str(vast_url)) if callable(validate_url) else None
+        if url_error:
+            validation_errors.append(f"Creative {creative_id} VAST URL is invalid for SpringServe: {url_error}")
+            prepared.append(package)
+            continue
+
+        prepared.append(_package_with_springserve_vast_endpoint_url(package, str(vast_url)))
+
+    if validation_errors:
+        error_msg = "Cannot create SpringServe tag-mode media buy with invalid creatives:\n" + "\n".join(
+            f"  • {err}" for err in validation_errors
+        )
+        raise AdCPValidationError(error_msg, details={"error_code": "INVALID_CREATIVES"})
+
+    return prepared
 
 
 def _execute_adapter_media_buy_creation(
@@ -1048,6 +1252,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         f"[APPROVAL] Package {package_id}: Successfully converted all {len(format_ids_list)} formats"
                     )
 
+                    product_implementation_config = _dict_implementation_config(
+                        getattr(product, "implementation_config", None)
+                    )
+
                     media_package = MediaPackage(
                         package_id=package_id,
                         name=package_config.get("name") or product.name,
@@ -1057,6 +1265,8 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         targeting_overlay=targeting_overlay,
                         product_id=product_id,
                         budget=budget,
+                        creative_ids=package_config.get("creative_ids"),
+                        implementation_config=product_implementation_config,
                     )
                     packages.append(media_package)
 
@@ -1104,6 +1314,16 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
             # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
             _validate_creatives_before_adapter_call(packages, tenant_id, session=session)
+            if _tenant_uses_springserve(tenant_context):
+                adapter_for_preparation = get_adapter(
+                    principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_context
+                )
+                packages = _prepare_springserve_tag_mode_packages(
+                    adapter_for_preparation,
+                    packages,
+                    tenant_id,
+                    session=session,
+                )
 
         # Execute adapter creation (outside session to avoid conflicts)
         response = _execute_adapter_media_buy_creation(
@@ -1164,9 +1384,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             session = uow2.session
             from src.core.database.models import Creative as CreativeModel
             from src.core.database.models import CreativeAssignment
-
-            # Import adapter helper here (used for both creative upload and order approval)
-            from src.core.helpers.adapter_helpers import get_adapter
 
             # Get all creative assignments for this media buy
             stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
@@ -1333,33 +1550,35 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             else:
                 logger.info(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
 
-        # After creatives are uploaded (or skipped), retry order approval
-        # This is necessary because:
-        # 1. GAM may still be processing inventory forecasts (NO_FORECAST_YET error)
-        # 2. Creatives may have been uploaded after the initial approval attempt
-        logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
-        try:
-            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_context)
-            if hasattr(adapter, "orders_manager") and adapter.orders_manager:
-                approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
-                if approval_success:
-                    logger.info(f"[APPROVAL] Successfully approved GAM order {response.media_buy_id}")
+        if _tenant_uses_google_ad_manager(tenant_context):
+            # After creatives are uploaded (or skipped), retry order approval.
+            # GAM may still be processing inventory forecasts (NO_FORECAST_YET),
+            # and creatives may have been uploaded after the initial approval attempt.
+            logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
+            try:
+                adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_context)
+                if hasattr(adapter, "orders_manager") and adapter.orders_manager:
+                    approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
+                    if approval_success:
+                        logger.info(f"[APPROVAL] Successfully approved GAM order {response.media_buy_id}")
+                    else:
+                        # GAM approval failed - return failure so status can be updated
+                        error_msg = (
+                            f"Failed to approve order {response.media_buy_id}, "
+                            f"it will remain in DRAFT status. This may be due to missing creatives or "
+                            f"GAM still processing inventory forecasts."
+                        )
+                        logger.warning(f"[APPROVAL] {error_msg}")
+                        return False, error_msg
                 else:
-                    # GAM approval failed - return failure so status can be updated
-                    error_msg = (
-                        f"Failed to approve order {response.media_buy_id}, "
-                        f"it will remain in DRAFT status. This may be due to missing creatives or "
-                        f"GAM still processing inventory forecasts."
-                    )
-                    logger.warning(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
-            else:
-                logger.info("[APPROVAL] Adapter does not support order approval, skipping")
-        except Exception as approval_error:
-            # Approval exception - return failure
-            error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
-            logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-            return False, error_msg
+                    logger.info("[APPROVAL] Adapter does not support order approval, skipping")
+            except Exception as approval_error:
+                # Approval exception - return failure
+                error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
+                logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
+                return False, error_msg
+        else:
+            logger.info("[APPROVAL] Non-GAM adapter does not require order approval, skipping")
 
         # Update media buy status to 'active' after successful adapter execution
         # (UC-002:437 — "updates the media buy status to active")
@@ -3035,7 +3254,10 @@ async def _create_media_buy_impl(
         # Validate and auto-generate GAM implementation_config for each product if needed.
         # ``effective_configs`` lets us thread the auto-generated value through the
         # rest of the function without mutating the wire-shape Product schema.
-        effective_configs: dict[str, dict] = {p.product_id: p.implementation_config or {} for p in products_in_buy}
+        effective_configs: dict[str, dict] = {
+            p.product_id: _dict_implementation_config(getattr(p, "implementation_config", None))
+            for p in products_in_buy
+        }
         if adapter.__class__.__name__ == "GoogleAdManager":
             from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -3272,62 +3494,15 @@ async def _create_media_buy_impl(
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
-                # Validate that requested formats are supported by product
-                # Format is composite key: (agent_url, id) per AdCP spec
-                product_format_keys: set[tuple[str | None, str]] = set()
-                if pkg_product.format_ids:
-                    for fmt in pkg_product.format_ids:
-                        agent_url = fmt.agent_url
-                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
-                        product_format_keys.add((normalized_url, fmt.id))
-
-                # Build set of requested format keys for comparison
-                requested_format_keys: set[tuple[str | None, str]] = set()
-                for fmt in matching_package.format_ids:
-                    normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
-                    requested_format_keys.add((normalized_url, fmt.id))
-
-                def format_display(url: str | None, fid: str) -> str:
-                    """Format a (url, id) pair for display, handling trailing slashes."""
-                    if not url:
-                        return fid
-                    # Remove trailing slash from URL to avoid double slashes
-                    # Convert to string in case it's an AnyUrl object
-                    clean_url = str(url).rstrip("/")
-                    return f"{clean_url}/{fid}"
-
-                def _has_supported_key(url: str | None, fid: str, keys: set = product_format_keys) -> bool:
-                    """Check if (url, fid) is supported, allowing an '/mcp' URL variant.
-
-                    This does not mutate any of the underlying key sets; it only checks
-                    for the presence of either the exact key or an alternative where
-                    '/mcp' is appended to the end of the URL path.
-
-                    Args:
-                        url: The format URL to check
-                        fid: The format ID to check
-                        keys: The set of supported (url, fid) tuples (bound at function definition)
-                    """
-                    # Exact match first
-                    if (url, fid) in keys:
-                        return True
-
-                    # If URL provided, also try with '/mcp' appended (idempotent if already present)
-                    if url:
-                        # Convert to string in case it's an AnyUrl object
-                        base = str(url).rstrip("/")
-                        mcp_url = base if base.endswith("/mcp") else f"{base}/mcp"
-                        if (mcp_url, fid) in keys:
-                            return True
-
-                    return False
-
+                product_formats = list(pkg_product.format_ids or [])
                 unsupported_formats = [
-                    format_display(url, fid) for url, fid in requested_format_keys if not _has_supported_key(url, fid)
+                    _format_ref_display(fmt)
+                    for fmt in matching_package.format_ids
+                    if _matching_supported_format(fmt, product_formats) is None
                 ]
 
                 if unsupported_formats:
-                    if not product_format_keys:
+                    if not product_formats:
                         # Product has no format_ids configured - this is a configuration error
                         error_msg = (
                             f"Product '{pkg_product.name}' ({pkg_product.product_id}) has no format_ids configured. "
@@ -3335,9 +3510,7 @@ async def _create_media_buy_impl(
                             f"Please configure format_ids on the product or contact the publisher."
                         )
                     else:
-                        supported_formats_str = ", ".join(
-                            [format_display(url, fid) for url, fid in product_format_keys]
-                        )
+                        supported_formats_str = ", ".join(_format_ref_display(fmt) for fmt in product_formats)
                         error_msg = (
                             f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
                             f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
@@ -3346,25 +3519,8 @@ async def _create_media_buy_impl(
 
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
-                # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
-                if pkg_product.format_ids:
-                    for fmt in pkg_product.format_ids:
-                        agent_url = fmt.agent_url
-                        fmt_id = fmt.id
-                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
-                        if fmt_id:
-                            product_format_dimensions[(normalized_url, fmt_id)] = (
-                                fmt.width,
-                                fmt.height,
-                                fmt.duration_ms,
-                            )
-
                 # Process request format_ids, merging dimensions from product if missing
                 for req_fmt in matching_package.format_ids:
-                    normalized_url = str(req_fmt.agent_url).rstrip("/") if req_fmt.agent_url else None
                     # Check if request format has dimensions
                     if req_fmt.width is not None and req_fmt.height is not None:
                         # Request has dimensions, convert to our FormatId type
@@ -3379,7 +3535,8 @@ async def _create_media_buy_impl(
                         )
                     else:
                         # Try to get dimensions from product's format_ids
-                        product_dims = product_format_dimensions.get((normalized_url, req_fmt.id))
+                        matching_product_format = _matching_supported_format(req_fmt, product_formats)
+                        product_dims = _format_params(matching_product_format) if matching_product_format else None
                         if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
                             # Merge dimensions from product
                             format_ids_to_use.append(
@@ -3485,6 +3642,7 @@ async def _create_media_buy_impl(
                     creative_ids=(
                         _get_requested_creative_ids(matching_package) if matching_package else None
                     ),  # Include creative_ids from uploaded creatives
+                    implementation_config=effective_configs.get(pkg_product.product_id),
                 )
             )
 
@@ -3524,6 +3682,12 @@ async def _create_media_buy_impl(
                 # FIXME(salesagent-9f2): creative validation should use a repository
                 assert pre_validate_uow.session is not None
                 _validate_creatives_before_adapter_call(packages, tenant["tenant_id"], session=pre_validate_uow.session)
+                packages = _prepare_springserve_tag_mode_packages(
+                    adapter,
+                    packages,
+                    tenant["tenant_id"],
+                    session=pre_validate_uow.session,
+                )
         except AdCPError:
             # Validation failed - creative validation errors already logged
             # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
@@ -3957,14 +4121,11 @@ async def _create_media_buy_impl(
                                 # Add to association list for immediate GAM association
                                 platform_creative_ids.append(platform_creative_id)
                             else:
-                                # Creative not uploaded to GAM yet - upload it now
-                                # Use the same simple asset dict approach as manual approval (execute_approved_media_buy)
+                                # Creative not uploaded to the adapter yet - upload it now.
                                 logger.info(
-                                    f"Creative {creative_id} has no platform_creative_id - uploading to GAM now"
+                                    f"Creative {creative_id} has no platform_creative_id - uploading to adapter now"
                                 )
                                 try:
-                                    creative_data = creative.data or {}
-
                                     # Get format spec for proper extraction
                                     # Uses shared helper with in-memory cache (30min TTL)
                                     format_spec = None
@@ -3976,36 +4137,18 @@ async def _create_media_buy_impl(
                                                 f"from {creative.agent_url}"
                                             )
 
-                                    # Extract URL and dimensions using shared helper
-                                    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
-
-                                    # Extract click-through URL separately from media URL (with macro substitution)
-                                    click_url = extract_click_url(creative_data, format_spec)
-
-                                    # Extract impression tracker URL
-                                    impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
-
-                                    # Build simple asset dict (same as manual approval flow)
-                                    asset = {
-                                        "creative_id": creative.creative_id,
-                                        "package_assignments": [package_id],  # This specific package
-                                        "width": width,
-                                        "height": height,
-                                        "url": url,
-                                        "click_url": click_url,  # Separate click-through URL for GAM destinationUrl
-                                        "asset_type": creative_data.get("asset_type", "image"),
-                                        "name": creative.name or f"Creative {creative.creative_id}",
-                                    }
-
-                                    # Add impression tracker URL in the format expected by GAM adapter
-                                    if impression_tracker_url:
-                                        asset["delivery_settings"] = {
-                                            "tracking_urls": {"impression": [impression_tracker_url]}
-                                        }
+                                    asset = build_adapter_asset_from_stored_creative(
+                                        creative,
+                                        package_id=response_package_id,
+                                        format_spec=format_spec,
+                                    )
 
                                     # Validate required fields - FAIL FAST, do not skip
                                     validation_errors = []
-                                    if not asset["width"] or not asset["height"]:
+                                    adapter_name = str(getattr(adapter, "adapter_name", "") or "").lower()
+                                    if adapter_asset_requires_dimensions(adapter_name, asset) and (
+                                        not asset["width"] or not asset["height"]
+                                    ):
                                         validation_errors.append(
                                             f"Creative {creative_id} missing dimensions (width={asset['width']}, height={asset['height']})"
                                         )
@@ -4017,7 +4160,7 @@ async def _create_media_buy_impl(
                                             "Cannot create media buy with invalid creatives. "
                                             "The following creatives are missing required fields:\n"
                                             + "\n".join(f"  • {err}" for err in validation_errors)
-                                            + "\n\nAll creatives must have dimensions (width/height) and a content URL. "
+                                            + "\n\nDisplay creatives must have dimensions (width/height); all creatives need a content URL. "
                                             "Please ensure creatives are properly synced before creating media buys."
                                         )
                                         logger.error(f"[AUTO-APPROVAL] {error_msg}")
@@ -4030,41 +4173,42 @@ async def _create_media_buy_impl(
                                             },
                                         )
 
-                                    # Upload to GAM using adapter's add_creative_assets method
+                                    # Upload through the selected adapter. The helper above preserves
+                                    # canonical format metadata so SpringServe audio and FreeWheel VAST
+                                    # creatives can use their adapter-specific wire shapes.
                                     upload_result = adapter.add_creative_assets(
                                         response.media_buy_id if response.media_buy_id else "",
                                         [asset],
                                         datetime.now(UTC),
                                     )
-                                    logger.info(f"Successfully uploaded creative {creative_id} to GAM: {upload_result}")
+                                    logger.info(
+                                        f"Successfully uploaded creative {creative_id} to adapter: {upload_result}"
+                                    )
 
-                                    # Update creative in database with platform_creative_id
-                                    if upload_result and len(upload_result) > 0:
-                                        uploaded_status = upload_result[0]
-                                        # Only set platform_creative_id if not already set
-                                        if uploaded_status.creative_id and not creative.data.get(
-                                            "platform_creative_id"
-                                        ):
-                                            creative.data["platform_creative_id"] = uploaded_status.creative_id
-                                            session.add(creative)
-                                            platform_creative_ids.append(uploaded_status.creative_id)
-                                            logger.info(
-                                                f"Updated creative {creative_id} with platform_creative_id={uploaded_status.creative_id}"
-                                            )
-                                        elif creative.data.get("platform_creative_id"):
-                                            logger.info(
-                                                f"Preserving existing platform_creative_id={creative.data.get('platform_creative_id')} "
-                                                f"for creative {creative_id}, not overwriting with upload result"
-                                            )
-                                            platform_creative_ids.append(creative.data["platform_creative_id"])
+                                    uploaded_platform_creative_id = _uploaded_platform_creative_id(
+                                        upload_result, creative_id
+                                    )
+                                    if not creative.data.get("platform_creative_id"):
+                                        creative.data["platform_creative_id"] = uploaded_platform_creative_id
+                                        session.add(creative)
+                                        platform_creative_ids.append(uploaded_platform_creative_id)
+                                        logger.info(
+                                            f"Updated creative {creative_id} with platform_creative_id={uploaded_platform_creative_id}"
+                                        )
+                                    else:
+                                        logger.info(
+                                            f"Preserving existing platform_creative_id={creative.data.get('platform_creative_id')} "
+                                            f"for creative {creative_id}, not overwriting with upload result"
+                                        )
+                                        platform_creative_ids.append(creative.data["platform_creative_id"])
                                 except AdCPError:
                                     # Re-raise AdCPError - validation failures should fail the entire operation
                                     raise
                                 except Exception as upload_error:
                                     # Other exceptions (network errors, etc.) - log and fail
-                                    logger.error(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
+                                    logger.error(f"Failed to upload creative {creative_id} to adapter: {upload_error}")
                                     raise AdCPAdapterError(
-                                        f"Failed to upload creative {creative_id} to GAM: {str(upload_error)}",
+                                        f"Failed to upload creative {creative_id} to adapter: {str(upload_error)}",
                                         details={"error_code": "CREATIVE_UPLOAD_FAILED"},
                                     ) from upload_error
 

@@ -3,6 +3,8 @@
 Issue #782: Support creative format templates with dynamic width/height/duration.
 """
 
+from pathlib import Path
+
 import pytest
 from adcp.types import Dimensions, FormatId, Renders
 
@@ -575,6 +577,15 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
 class TestFormatTemplatesAPI:
     """Tests for format templates API endpoint (/api/formats/templates)."""
 
+    def test_static_picker_exposes_audio_vast_template(self):
+        """The product/inventory picker must expose the canonical audio VAST format."""
+        picker_js = Path("static/js/format-template-picker.js").read_text()
+
+        assert "audio_vast: {" in picker_js
+        assert 'id: "audio_vast"' in picker_js
+        assert 'name: "Audio VAST"' in picker_js
+        assert 'supportedAdapters: ["mock", "springserve"]' in picker_js
+
     def test_templates_endpoint_structure(self):
         """Test the format templates endpoint returns expected structure."""
         # Simulates what the endpoint returns
@@ -607,6 +618,64 @@ class TestFormatTemplatesAPI:
         assert "display_static" in gam_templates
         assert "video_hosted" in gam_templates
         assert "audio" not in gam_templates
+
+    def test_templates_endpoint_exposes_audio_vast_for_non_gam_adapters(self):
+        from src.admin.app import create_app
+
+        app = create_app()
+        app.config["TESTING"] = True
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = {"email": "test@example.com"}
+                sess["tenant_id"] = "test_tenant"
+
+            response = client.get("/api/formats/templates?adapter_type=springserve")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        templates = payload["templates"]
+        assert templates["audio_vast"]["name"] == "Audio VAST"
+        assert templates["audio_vast"]["type"] == "audio"
+        assert templates["audio_vast"]["gam_supported"] is False
+        assert "audio_30s" not in templates
+
+    def test_templates_endpoint_hides_audio_vast_for_gam(self):
+        from src.admin.app import create_app
+
+        app = create_app()
+        app.config["TESTING"] = True
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = {"email": "test@example.com"}
+                sess["tenant_id"] = "test_tenant"
+
+            response = client.get("/api/formats/templates?adapter_type=gam")
+
+        assert response.status_code == 200
+        templates = response.get_json()["templates"]
+        assert "audio_vast" not in templates
+
+    def test_templates_endpoint_hides_audio_for_freewheel(self):
+        from src.admin.app import create_app
+
+        app = create_app()
+        app.config["TESTING"] = True
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = {"email": "test@example.com"}
+                sess["tenant_id"] = "test_tenant"
+
+            response = client.get("/api/formats/templates?adapter_type=freewheel")
+
+        assert response.status_code == 200
+        templates = response.get_json()["templates"]
+        assert "video" in templates
+        assert templates["video"]["adapter_expands_to"]["freewheel"] == ["video_vast"]
+        assert "audio_vast" not in templates
+        assert "audio_30s" not in templates
 
     def test_common_sizes_from_gam_constants(self):
         """Test that common sizes come from GAM_STANDARD_SIZES."""
