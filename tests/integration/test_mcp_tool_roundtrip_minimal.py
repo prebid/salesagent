@@ -15,11 +15,11 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.factories.spec_required_kwargs import required_request_kwargs
-from tests.helpers.adcp_versions import explicit_adcp_version
 
 # adcp 4.4 wire-required envelope on mutation tools — buyers must supply
 # both. Match the pattern used by tests/e2e/adcp_request_builder.py so test
 # inputs reflect real-buyer wire shape rather than the schema we'd prefer.
+# ``adcp_version`` stays omitted to exercise the legacy 3.0 default path.
 _WIRE_BRAND = {"domain": "testbrand.com"}
 _WIRE_ACCOUNT = {"brand": _WIRE_BRAND, "operator": "testbrand.com"}
 
@@ -29,7 +29,6 @@ def _wire_envelope(prefix: str) -> dict:
     return {
         "account": _WIRE_ACCOUNT,
         "idempotency_key": f"{prefix}-{uuid.uuid4()}",
-        "adcp_version": explicit_adcp_version(),
     }
 
 

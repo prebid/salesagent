@@ -68,6 +68,22 @@ VALID_CATALOG_MATCH = {"submitted_count": 10, "matched_count": 5}
 VALID_CATALOG_TYPES = ["product"]
 VALID_CONVERSION_TRACKING = {"platform_managed": True}
 VALID_DATA_PROVIDER_SIGNALS = [{"selection_type": "all", "data_provider_domain": "polk.com"}]
+VALID_INCLUDED_SIGNALS = [
+    {
+        "signal_ref": {"scope": "product", "signal_id": "sports_fans"},
+        "name": "Sports Fans",
+        "value_type": "binary",
+    }
+]
+VALID_SIGNAL_TARGETING_RULES = {"selection_mode": "optional", "max_selected_signals": 2}
+VALID_SIGNAL_TARGETING_OPTIONS = [
+    {
+        "signal_ref": {"scope": "product", "signal_id": "auto_intenders"},
+        "name": "Auto Intenders",
+        "value_type": "binary",
+        "allowed_targeting_modes": ["include", "exclude"],
+    }
+]
 VALID_FORECAST = {
     "currency": "USD",
     "method": "estimate",
@@ -258,6 +274,24 @@ class TestProductConversion36Fields:
         assert schema.data_provider_signals is not None
         assert schema.forecast is not None
         assert schema.signal_targeting_allowed is True
+
+    def test_beta4_signal_fields_present_when_populated(self):
+        """Beta 4 signal fields appear in converted product when set.
+
+        Covers: UC-001-MAIN-18
+        """
+        product = _make_db_product(
+            included_signals=VALID_INCLUDED_SIGNALS,
+            signal_targeting_rules=VALID_SIGNAL_TARGETING_RULES,
+            signal_targeting_options=VALID_SIGNAL_TARGETING_OPTIONS,
+            signal_targeting_allowed=True,
+        )
+
+        dumped = convert_product_model_to_schema(product).model_dump(mode="json", exclude_none=True)
+
+        assert dumped["included_signals"][0]["signal_ref"]["signal_id"] == "sports_fans"
+        assert dumped["signal_targeting_rules"]["max_selected_signals"] == 2
+        assert dumped["signal_targeting_options"][0]["signal_ref"]["signal_id"] == "auto_intenders"
 
     def test_36_fields_optional_when_null(self):
         """Conversion succeeds when all 6 new fields are null.

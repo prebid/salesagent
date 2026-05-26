@@ -433,6 +433,12 @@ class Product(Base, JSONValidatorMixin):
     conversion_tracking: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # Type hint: list of DataProviderSignalSelector objects
     data_provider_signals: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of SignalListing objects bundled into this product
+    included_signals: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: SignalTargetingRules object for product-level signal composition
+    signal_targeting_rules: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of ProductSignalTargetingOption objects selectable on this product
+    signal_targeting_options: Mapped[list | None] = mapped_column(JSONType, nullable=True)
     # Type hint: DeliveryForecast object (delivery predictions)
     forecast: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # Type hint: list of ProductAction enum values allowed for this product

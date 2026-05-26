@@ -394,6 +394,19 @@ async def build_platform_for_tenant(tenant_id: str) -> DecisioningPlatform:
     return MockSellerPlatform()
 
 
+class SalesagentPlatformRouter(LazyPlatformRouter):
+    """Lazy tenant router with SDK-native request-scoped capabilities."""
+
+    def get_adcp_capabilities_for_request(
+        self,
+        params: Any = None,
+        context: ToolContext | None = None,
+    ) -> DecisioningCapabilities | None:
+        from core.platforms._capabilities_envelope import capabilities_for_request
+
+        return capabilities_for_request(self.capabilities, params=params, context=context)
+
+
 def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
     """Bind a :class:`SalesAgentProposalManager` to every active
     tenant. Same instance shared across tenants — v1 of the manager
@@ -412,6 +425,11 @@ def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
 def build_router() -> LazyPlatformRouter:
     from adcp.types.generated_poc.bundled.protocol.get_adcp_capabilities_response import Features
 
+    # Side-effect import: installs the remaining tenant-specific
+    # webhook_signing response shim. Publisher domains now flow through
+    # SalesagentPlatformRouter.get_adcp_capabilities_for_request so the SDK
+    # owns canonical response projection.
+    from core.platforms import _capabilities_envelope  # noqa: F401
     from core.platforms._delegate import SUPPORTED_ADCP_VERSIONS, SUPPORTED_MAJOR_VERSIONS
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
 
@@ -484,7 +502,7 @@ def build_router() -> LazyPlatformRouter:
     # without setting ``DATABASE_URL``. The factory only fires when the
     # framework dispatches a proposal-aware tool, by which point the
     # production server has a live DSN.
-    router = LazyPlatformRouter(
+    router = SalesagentPlatformRouter(
         accounts=SalesagentAccountStore(),
         factory=build_platform_for_tenant,
         capabilities=capabilities,

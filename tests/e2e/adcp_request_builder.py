@@ -10,8 +10,6 @@ import warnings
 from datetime import UTC, datetime
 from typing import Any
 
-from tests.helpers.adcp_versions import explicit_adcp_version
-
 _DEFAULT_BRAND: dict[str, Any] = {"domain": "testbrand.com"}
 
 
@@ -56,6 +54,8 @@ def _inject_wire_required_fields(
     Real buyers must supply them; the test builders synthesise valid
     values from the caller-supplied brand so e2e flows behave like real
     callers without bypassing SDK validation.
+    ``adcp_version`` is intentionally omitted so MCP requests exercise the
+    protocol's legacy 3.0 default path.
 
     * ``account`` is a natural-key reference (``{brand, operator}``)
       where the operator defaults to the brand's domain — buyers using
@@ -70,7 +70,6 @@ def _inject_wire_required_fields(
     operator = actual_brand.get("domain", "testbrand.com") if isinstance(actual_brand, dict) else "testbrand.com"
     request["idempotency_key"] = f"{idempotency_prefix}-{uuid.uuid4()}"
     request["account"] = {"brand": actual_brand, "operator": operator}
-    request["adcp_version"] = explicit_adcp_version()
 
 
 def parse_tool_result(result: Any) -> dict[str, Any]:

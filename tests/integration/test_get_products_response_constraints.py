@@ -171,6 +171,11 @@ class TestRelevanceThresholdIntegration:
 # ---------------------------------------------------------------------------
 # Publisher Domains Portfolio Source (CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01)
 # ---------------------------------------------------------------------------
+#
+# AdCP v3 retired ``list_authorized_properties`` and moved the portfolio onto
+# ``get_adcp_capabilities``. ``core.platforms._capabilities_envelope`` resolves
+# ``portfolio.publisher_domains`` from the per-tenant ``PublisherPartner`` table
+# for the SDK's request-scoped capabilities hook.
 
 
 class TestPublisherDomainsPortfolioIntegration:
@@ -196,8 +201,11 @@ class TestPublisherDomainsPortfolioIntegration:
 
         assert domains == ["alpha.com", "mike.com", "zeta.com"]
 
-    def test_publisher_domains_empty_when_no_partners(self, integration_db):
-        """Tenant with zero ``PublisherPartner`` rows yields an empty list.
+    @pytest.mark.asyncio
+    async def test_publisher_domains_empty_when_no_partners(self, integration_db):
+        """Tenant with zero ``PublisherPartner`` rows yields an empty list so
+        the capabilities hook omits the portfolio block (schema requires
+        ``min_length=1`` on ``publisher_domains``).
 
         Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
         """
