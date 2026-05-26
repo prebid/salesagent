@@ -249,6 +249,17 @@ class AccountRepository:
         self._session.flush()
         return access
 
+    def ensure_access(self, principal_id: str, account_id: str) -> bool:
+        """Grant access if missing.
+
+        Returns True when a new grant was created, False when the principal
+        already had access.
+        """
+        if self.has_access(principal_id, account_id):
+            return False
+        self.grant_access(principal_id, account_id)
+        return True
+
     def revoke_access(self, principal_id: str, account_id: str) -> bool:
         """Revoke an agent's access to an account. Returns True if deleted."""
         access = self._session.scalars(

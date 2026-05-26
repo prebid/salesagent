@@ -9,8 +9,11 @@ BR-RULE-061 (delete_missing), BR-RULE-062 (dry_run)
 """
 
 import pytest
+from adcp.types import PaginationRequest
 
-from src.core.schemas.account import SyncAccountsRequest
+from src.core.schemas.account import ListAccountsRequest, SyncAccountsRequest
+from src.core.tools.accounts import _list_accounts_impl, _sync_accounts_impl
+from tests.factories import PrincipalFactory
 from tests.harness import Transport
 from tests.harness.account_sync import AccountSyncEnv
 
@@ -34,6 +37,29 @@ def _action_value(action):
 def _status_value(status):
     """Extract string value from Status enum or return as-is."""
     return status.value if hasattr(status, "value") else str(status)
+
+
+def _pagination_integrity_accounts() -> list[dict]:
+    return [
+        {
+            "brand": {"domain": "acme-corp.com"},
+            "operator": "pinnacle-media.com",
+            "billing": "operator",
+            "sandbox": True,
+        },
+        {
+            "brand": {"domain": "nova-brands.com"},
+            "operator": "pinnacle-media.com",
+            "billing": "operator",
+            "sandbox": True,
+        },
+        {
+            "brand": {"domain": "pinnacle-media.com"},
+            "operator": "pinnacle-media.com",
+            "billing": "operator",
+            "sandbox": True,
+        },
+    ]
 
 
 class TestSyncAccountsCreate:
@@ -757,6 +783,34 @@ class TestSyncAccountsAccountId:
         ids = [a.account_id for a in response.accounts]
         assert all(i is not None for i in ids)
         assert len(set(ids)) == 2, "Different (brand, operator) tuples must mint different account_ids"
+
+    @pytest.mark.asyncio
+    async def test_existing_operator_accounts_grant_access_to_resyncing_principal(self, integration_db):
+        with AccountSyncEnv(tenant_id="story_accounts_t1", principal_id="agent_story_a") as env:
+            tenant, _principal = env.setup_default_data()
+            second_principal = PrincipalFactory(tenant=tenant, principal_id="agent_story_b")
+            second_identity = PrincipalFactory.make_identity(
+                principal_id=second_principal.principal_id,
+                tenant_id=tenant.tenant_id,
+                tenant=env.identity.tenant,
+            )
+
+            req = SyncAccountsRequest(accounts=_pagination_integrity_accounts())
+            first_response = await env.call_impl_async(req=req)
+            second_response = await _sync_accounts_impl(req=req, identity=second_identity)
+
+            list_response = _list_accounts_impl(
+                req=ListAccountsRequest(pagination=PaginationRequest(max_results=2)),
+                identity=second_identity,
+            )
+
+        assert [_action_value(acct.action) for acct in first_response.accounts] == ["created", "created", "created"]
+        assert [_action_value(acct.action) for acct in second_response.accounts] == ["updated", "updated", "updated"]
+        assert len(list_response.accounts) == 2
+        assert list_response.pagination is not None
+        assert list_response.pagination.has_more is True
+        assert list_response.pagination.cursor is not None
+        assert list_response.pagination.total_count == 3
 
 
 class TestSyncAccountsWireStatusEnum:

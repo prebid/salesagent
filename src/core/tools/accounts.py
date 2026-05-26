@@ -321,6 +321,11 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
     return changes
 
 
+def _sync_existing_action(changes: dict[str, Any], access_changed: bool) -> str:
+    """Return the sync action for an existing account upsert."""
+    return "updated" if changes or access_changed else "unchanged"
+
+
 def _build_sync_result(
     *,
     brand: Any,
@@ -596,7 +601,8 @@ async def _sync_accounts_impl(
                 if dry_run:
                     # Check if fields would change
                     changes = _account_fields_changed(existing, entry)
-                    action = "updated" if changes else "unchanged"
+                    access_would_change = not repo.has_access(principal_id, existing.account_id)
+                    action = _sync_existing_action(changes, access_would_change)
                     results.append(
                         _build_sync_result(
                             account_id=existing.account_id,
@@ -613,11 +619,10 @@ async def _sync_accounts_impl(
 
                 # Check for field changes and update if needed
                 changes = _account_fields_changed(existing, entry)
+                access_granted = repo.ensure_access(principal_id, existing.account_id)
                 if changes:
                     repo.update_fields(existing.account_id, **changes)
-                    action = "updated"
-                else:
-                    action = "unchanged"
+                action = _sync_existing_action(changes, access_granted)
 
                 if account_notification_configs is not None:
                     register_account_notification_configs_in_repo(
