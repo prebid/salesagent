@@ -674,6 +674,35 @@ class TestCreateMediaBuyValidation:
                 campaign_currency="USD",
             )
 
+    def test_default_pricing_option_uses_first_product_option(self):
+        """Storyboard compatibility: pricing_option_id='default' selects first option.
+
+        Type: unit
+        Source: AdCP storyboard webhook_emission
+        """
+        from src.core.tools.media_buy_create import _validate_pricing_model_selection
+
+        product = _mock_product("test-product")
+        package = MagicMock()
+        package.pricing_option_id = "default"
+        package.bid_price = None
+        package.pricing_model = None
+        package.budget = None
+
+        result = _validate_pricing_model_selection(
+            package=package,
+            product=product,
+            campaign_currency="USD",
+        )
+
+        assert result == {
+            "pricing_model": "cpm",
+            "rate": 5.0,
+            "currency": "USD",
+            "is_fixed": True,
+            "bid_price": None,
+        }
+
     def test_bid_price_below_floor_rejected(self):
         """UC-002-V14: auction bid_price below floor_price rejected.
 

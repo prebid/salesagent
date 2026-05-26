@@ -109,6 +109,28 @@ Equivalent Make target:
 make storyboard-non-guaranteed
 ```
 
+Webhook storyboards require an SDK-hosted receiver. The wrapper exposes the
+SDK flags but leaves them off by default because Docker/remote agents need a
+callback URL they can actually reach:
+
+```bash
+# Host-run agent.
+WEBHOOK_RECEIVER=loopback make storyboard-non-guaranteed
+
+# Docker compose on a local machine. Use the host-gateway name from
+# docker-compose.yml so the container can call back to the SDK receiver.
+WEBHOOK_RECEIVER=proxy \
+WEBHOOK_RECEIVER_PORT=58123 \
+WEBHOOK_RECEIVER_PUBLIC_URL=http://host.docker.internal:58123 \
+make storyboard-non-guaranteed
+
+# Remote agent.
+WEBHOOK_RECEIVER_AUTO_TUNNEL=1 make storyboard-non-guaranteed
+WEBHOOK_RECEIVER=proxy \
+WEBHOOK_RECEIVER_PUBLIC_URL=https://receiver.example.test \
+make storyboard-non-guaranteed
+```
+
 Latest-SDK full assessment without blocking on known failures:
 
 ```bash

@@ -1488,6 +1488,18 @@ def push_creative_to_existing_buy(
         return False, str(e)
 
 
+def _unwrap_pricing_option(option: Any) -> Any:
+    """Unwrap adcp RootModel pricing options while preserving ORM objects."""
+    return getattr(option, "root", option)
+
+
+def _pricing_option_wire_id(option: Any) -> str:
+    """Return the pricing_option_id shape exposed by get_products."""
+    option = _unwrap_pricing_option(option)
+    fixed_str = "fixed" if option.is_fixed else "auction"
+    return f"{option.pricing_model.lower()}_{option.currency.lower()}_{fixed_str}"
+
+
 def _validate_pricing_model_selection(
     package: Package | PackageRequest | AdcpPackageRequest,
     product: Any,  # ProductModel from database
@@ -1535,14 +1547,12 @@ def _validate_pricing_model_selection(
     # Priority: pricing_option_id (AdCP spec) > pricing_model (legacy)
     pricing_option_id = package.pricing_option_id
     pricing_model_fallback = getattr(package, "pricing_model", None)  # Legacy field
-
-    # Helper to unwrap RootModel - adcp 2.14.0+ uses RootModel wrapper
-    def unwrap_option(opt: Any) -> Any:
-        return getattr(opt, "root", opt)
+    if pricing_option_id and pricing_option_id.lower() == "default":
+        pricing_option_id = None
 
     # If neither specified, use first pricing option from product
     if not pricing_option_id and not pricing_model_fallback:
-        first_option = unwrap_option(product.pricing_options[0])
+        first_option = _unwrap_pricing_option(product.pricing_options[0])
         return {
             "pricing_model": first_option.pricing_model,
             "rate": float(first_option.rate) if first_option.rate else None,
@@ -1554,11 +1564,8 @@ def _validate_pricing_model_selection(
     # Find matching pricing option
     selected_option = None
     for option in product.pricing_options:
-        opt_inner = unwrap_option(option)
-        # Construct pricing_option_id in same format as get_products returns
-        # Format: {pricing_model}_{currency}_{fixed|auction}
-        fixed_str = "fixed" if opt_inner.is_fixed else "auction"
-        option_id = f"{opt_inner.pricing_model}_{opt_inner.currency.lower()}_{fixed_str}"
+        opt_inner = _unwrap_pricing_option(option)
+        option_id = _pricing_option_wire_id(opt_inner)
 
         # Try matching by pricing_option_id first (AdCP spec)
         if pricing_option_id and pricing_option_id.lower() == option_id.lower():
@@ -1576,7 +1583,7 @@ def _validate_pricing_model_selection(
     if not selected_option:
         # Show available options in same format as matching logic expects
         available_options = [
-            f"{unwrap_option(opt).pricing_model}_{unwrap_option(opt).currency.lower()}_{'fixed' if unwrap_option(opt).is_fixed else 'auction'} ({unwrap_option(opt).pricing_model} - {unwrap_option(opt).currency})"
+            f"{_pricing_option_wire_id(opt)} ({_unwrap_pricing_option(opt).pricing_model} - {_unwrap_pricing_option(opt).currency})"
             for opt in product.pricing_options
         ]
         error_msg = f"Product {product.product_id} does not offer "
@@ -2136,14 +2143,7 @@ async def _create_media_buy_impl(
                         product = product_map[package.product_id]
                         # Use the first pricing option from the product
                         if product.pricing_options and len(product.pricing_options) > 0:
-                            # Use the generated pricing_option_id format from the product's first option
-                            # Unwrap RootModel wrapper if present (adcp 2.14.0+ uses RootModel)
-                            first_option = product.pricing_options[0]
-                            first_option = getattr(first_option, "root", first_option)
-                            pricing_model = first_option.pricing_model.lower()
-                            currency = first_option.currency.lower()
-                            is_fixed = "fixed" if first_option.is_fixed else "auction"
-                            package.pricing_option_id = f"{pricing_model}_{currency}_{is_fixed}"
+                            package.pricing_option_id = _pricing_option_wire_id(product.pricing_options[0])
                             logger.info(
                                 f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
                             )

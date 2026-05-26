@@ -32,6 +32,12 @@
 #   # Or production-path mode (no sandbox routing):
 #   NO_SANDBOX=1 ./scripts/storyboard-check.sh
 #
+#   # Or grade webhook storyboards by starting the SDK receiver:
+#   WEBHOOK_RECEIVER=loopback ./scripts/storyboard-check.sh
+#   WEBHOOK_RECEIVER=proxy WEBHOOK_RECEIVER_PORT=58123 \
+#   WEBHOOK_RECEIVER_PUBLIC_URL=http://host.docker.internal:58123 ./scripts/storyboard-check.sh
+#   WEBHOOK_RECEIVER_AUTO_TUNNEL=1 ./scripts/storyboard-check.sh
+#
 #   # Local dev (non-HTTPS agent — production must terminate TLS):
 #   AGENT_URL=http://localhost:8000 AGENT_TOKEN=ci-test-token \
 #   ALLOW_HTTP=1 ./scripts/storyboard-check.sh
@@ -67,6 +73,10 @@ NO_SANDBOX="${NO_SANDBOX:-0}"
 ASSERTS_SEEDED_STATE="${ASSERTS_SEEDED_STATE:-0}"
 STORYBOARD_SOFT_FAIL="${STORYBOARD_SOFT_FAIL:-0}"
 REPORT_DIR="${REPORT_DIR:-/tmp}"
+WEBHOOK_RECEIVER="${WEBHOOK_RECEIVER:-}"
+WEBHOOK_RECEIVER_PORT="${WEBHOOK_RECEIVER_PORT:-}"
+WEBHOOK_RECEIVER_PUBLIC_URL="${WEBHOOK_RECEIVER_PUBLIC_URL:-}"
+WEBHOOK_RECEIVER_AUTO_TUNNEL="${WEBHOOK_RECEIVER_AUTO_TUNNEL:-0}"
 # ALLOW_HTTP="1" lets you run against a non-HTTPS local agent (e.g.
 # http://localhost:8000). The SDK refuses HTTP by default — production
 # agents must terminate TLS. Only use this for local dev validation.
@@ -107,6 +117,22 @@ if [[ "$ASSERTS_SEEDED_STATE" == "1" ]]; then
 fi
 if [[ "$STORYBOARD_SOFT_FAIL" == "1" ]]; then
     EXTRA_FLAGS+=(--soft-fail)
+fi
+if [[ -n "$WEBHOOK_RECEIVER" ]]; then
+    if [[ "$WEBHOOK_RECEIVER" == "1" ]]; then
+        EXTRA_FLAGS+=(--webhook-receiver)
+    else
+        EXTRA_FLAGS+=(--webhook-receiver "$WEBHOOK_RECEIVER")
+    fi
+fi
+if [[ -n "$WEBHOOK_RECEIVER_PORT" ]]; then
+    EXTRA_FLAGS+=(--webhook-receiver-port "$WEBHOOK_RECEIVER_PORT")
+fi
+if [[ -n "$WEBHOOK_RECEIVER_PUBLIC_URL" ]]; then
+    EXTRA_FLAGS+=(--webhook-receiver-public-url "$WEBHOOK_RECEIVER_PUBLIC_URL")
+fi
+if [[ "$WEBHOOK_RECEIVER_AUTO_TUNNEL" == "1" ]]; then
+    EXTRA_FLAGS+=(--webhook-receiver-auto-tunnel)
 fi
 
 mkdir -p "$REPORT_DIR"
@@ -310,6 +336,9 @@ if [[ -n "$TRACKS" ]]; then
 fi
 echo "Protocols:  $PROTOCOLS"
 echo "Sandbox:    $([[ $NO_SANDBOX == 1 ]] && echo off || echo on)"
+if [[ -n "$WEBHOOK_RECEIVER" || -n "$WEBHOOK_RECEIVER_PUBLIC_URL" || "$WEBHOOK_RECEIVER_AUTO_TUNNEL" == "1" ]]; then
+    echo "Webhooks:   receiver=${WEBHOOK_RECEIVER:-sdk-default} auto_tunnel=$WEBHOOK_RECEIVER_AUTO_TUNNEL public_url=${WEBHOOK_RECEIVER_PUBLIC_URL:-none}"
+fi
 echo "Reports:    $REPORT_DIR"
 echo
 
