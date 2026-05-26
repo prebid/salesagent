@@ -94,6 +94,31 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     return entries
 
 
+def _validate_formats_against_registry(
+    formats_parsed: list[dict],
+    valid_format_ids: set[str],
+) -> tuple[list[dict], list[str]]:
+    """Split parsed format entries into valid and invalid against registry IDs.
+
+    Parameterized entries (explicit width+height) are always accepted even when
+    the base format ID is absent from the registry — the GAM adapter synthesises
+    a format spec from dimensions in that case, matching the behaviour of
+    _validation.py for creative uploads.
+
+    Returns:
+        (valid_entries, invalid_format_ids)
+    """
+    valid_entries: list[dict] = []
+    invalid_ids: list[str] = []
+    for entry in _parse_format_entries(formats_parsed):
+        has_dimensions = bool(entry.get("width") and entry.get("height"))
+        if entry["id"] in valid_format_ids or has_dimensions:
+            valid_entries.append(entry)
+        else:
+            invalid_ids.append(entry["id"])
+    return valid_entries, invalid_ids
+
+
 def _format_id_to_display_name(format_id: str) -> str:
     """Convert a format_id to a friendly display name when format lookup fails.
 
@@ -759,9 +784,10 @@ def add_product(tenant_id):
                                 # Agent reachable — validate format IDs
                                 valid_format_ids = {fmt.format_id.id for fmt in result.formats}
 
-                                all_entries = _parse_format_entries(formats_parsed)
-                                invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
-                                formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
+                                valid_entries, invalid_formats = _validate_formats_against_registry(
+                                    formats_parsed, valid_format_ids
+                                )
+                                formats.extend(valid_entries)
 
                                 if invalid_formats:
                                     flash(
@@ -1382,9 +1408,10 @@ def edit_product(tenant_id, product_id):
                         # Agent reachable — validate format IDs
                         valid_format_ids = {fmt.format_id.id for fmt in result.formats}
 
-                        all_entries = _parse_format_entries(formats_parsed)
-                        invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
-                        validated_formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
+                        valid_entries, invalid_formats = _validate_formats_against_registry(
+                            formats_parsed, valid_format_ids
+                        )
+                        validated_formats.extend(valid_entries)
 
                         if invalid_formats:
                             flash(

@@ -1,0 +1,35 @@
+# Use AWS RDS via SSH tunnel instead of local Postgres.
+#
+# The SSH tunnel must be bound to 0.0.0.0 (not 127.0.0.1) so Docker containers
+# can reach it via host.docker.internal. DATABASE_URL is set in .env.
+
+services:
+  # Replace the local postgres with a no-op stub so the depends_on health-check
+  # chain still works without starting a real Postgres container.
+  # ports: !reset [] clears the base "5432:5432" binding so it doesn't conflict
+  # with the SSH tunnel already on that port.
+  postgres:
+    image: alpine:3
+    command: ["sh", "-c", "while true; do sleep 86400; done"]
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      timeout: 5s
+      retries: 1
+      start_period: 1s
+    environment: {}
+    volumes: !reset []
+    ports: !reset []
+
+  # db-init needs extra_hosts (not in base) to resolve host.docker.internal,
+  # and DATABASE_URL overrides the hardcoded postgres:// connection string.
+  db-init:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: "${DATABASE_URL}"
+
+  # adcp-server already has extra_hosts in base; just override DATABASE_URL.
+  adcp-server:
+    environment:
+      DATABASE_URL: "${DATABASE_URL}"
