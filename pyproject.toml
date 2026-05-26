@@ -1,13 +1,13 @@
 [project]
 name = "adcp-sales-agent"
 version = "1.7.0"
-description = "Add your description here"
+description = "Prebid Sales Agent — AdCP-compliant MCP/A2A/REST server for ad inventory orchestration."
 readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp>=4.3.0",
+    "adcp==4.3.0",  # exact pin — 4.3.0 targets AdCP spec 3.0.1; see docs/adcp-spec-version.md
     "fastmcp>=3.2.0", # v3.2 fixes GHSA-m8x7-r2rg-vh5g, GHSA-rww4-4w9c-7733
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
@@ -84,6 +84,13 @@ ui-tests = [
     "pytest-asyncio>=1.1.0",
     "allure-pytest==2.13.5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/prebid/salesagent"
+Repository = "https://github.com/prebid/salesagent"
+Issues = "https://github.com/prebid/salesagent/issues"
+Documentation = "https://github.com/prebid/salesagent/tree/main/docs"
+Changelog = "https://github.com/prebid/salesagent/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

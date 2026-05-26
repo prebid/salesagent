@@ -1,0 +1,14 @@
+name: salesagent CodeQL config
+
+# security-extended adds OWASP Top-10 + CWE coverage on top of the default suite.
+# Queries run in advisory mode during the 2-week ramp (see codeql.yml).
+queries:
+  - uses: security-extended
+
+# Exclude generated / vendored / migration content from analysis to reduce noise.
+paths-ignore:
+  - alembic/versions/
+  - src/adapters/google_ad_manager_original.py
+  - tests/
+  - htmlcov/
+  - .venv/

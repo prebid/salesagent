@@ -22,7 +22,18 @@ from tests.helpers.execute_approved_mocks import (
 
 
 def _uow_chain(repo_for_status_update):
-    """Build the 3-UoW chain that execute_approved_media_buy opens."""
+    """Build the 4-UoW chain that execute_approved_media_buy opens on the success path.
+
+    Order matches production (success-path reads):
+      uow1     — tenant + media_buy + packages + product reads (lines 612)
+      uow_plids — platform_order_id / platform_line_item_id persistence (lines 919-928,
+                   added by #1337). _persist_adapter_package_ids calls
+                   ``media_buys.get_packages(media_buy_id)`` — returning ``[]`` short-circuits
+                   the body.
+      uow2     — creatives upload (line 934)
+      uow3     — terminal MediaBuy.status='active' update (line 1076). Only opened on the
+                   sync-success branch; the handoff branch defers to background polling.
+    """
     tenant = make_mock_tenant(ad_server="google_ad_manager")
     mb = make_mock_media_buy(media_buy_id="mb_b2_001")
     pkg = make_mock_package(media_buy_id="mb_b2_001")
@@ -46,6 +57,17 @@ def _uow_chain(repo_for_status_update):
     uow1.__exit__ = MagicMock(return_value=None)
     uow1.session = s1
     uow1.media_buys = MagicMock()
+
+    # uow_plids (added by #1337): returns an empty package list so _persist_adapter_package_ids
+    # iterates zero rows and exits cleanly. The persistence path is exercised in its own tests.
+    plids_repo = MagicMock()
+    plids_repo.get_packages = MagicMock(return_value=[])
+    uow_plids = MagicMock()
+    uow_plids.__enter__ = MagicMock(return_value=uow_plids)
+    uow_plids.__exit__ = MagicMock(return_value=None)
+    uow_plids.session = MagicMock()
+    uow_plids.media_buys = plids_repo
+
     uow2 = MagicMock()
     uow2.__enter__ = MagicMock(return_value=uow2)
     uow2.__exit__ = MagicMock(return_value=None)
@@ -57,7 +79,7 @@ def _uow_chain(repo_for_status_update):
     uow3.session = MagicMock()
     uow3.media_buys = repo_for_status_update
 
-    return iter([uow1, uow2, uow3])
+    return iter([uow1, uow_plids, uow2, uow3])
 
 
 class TestExecuteApprovedHandsOffToBackgroundOnApprovalFailure:
