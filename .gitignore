@@ -59,6 +59,7 @@ fix_*.py
 sync_*.py
 !scripts/sync_*.py
 !src/**/sync_*.py
+!tests/**/sync_*.py
 test_sync.py
 
 # One-off test scripts in root (proper tests belong in tests/)

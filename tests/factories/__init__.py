@@ -29,6 +29,7 @@ from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.sync_job import SyncJobFactory
 from tests.factories.targeting import (
     CollectionListReferenceFactory,
     PropertyListReferenceFactory,
@@ -53,6 +54,7 @@ ALL_FACTORIES = [
     MediaBuyFactory,
     MediaPackageFactory,
     PushNotificationConfigFactory,
+    SyncJobFactory,
     CreativeFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
@@ -84,6 +86,7 @@ __all__ = [
     "PropertyTagFactory",
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
+    "SyncJobFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",

@@ -127,7 +127,7 @@ from src.core.tools.financial_validation import validate_max_daily_package_spend
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
 from src.services.activity_feed import activity_feed
-from src.services.order_approval_service import start_order_approval_background
+from src.services.order_approval_service import lookup_webhook_url, start_order_approval_background
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -1000,12 +1000,14 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     # owns the terminal MediaBuy.status transition (active/failed) and
                     # the audit/Slack notification (see order_approval_service.py).
                     try:
+                        resolved_webhook_url = lookup_webhook_url(tenant_id, principal.principal_id)
                         approval_id = start_order_approval_background(
                             order_id=response.media_buy_id,
                             media_buy_id=media_buy_id,
                             tenant_id=tenant_id,
                             principal_id=principal.principal_id,
-                            webhook_url=None,
+                            principal_name=principal.name,
+                            webhook_url=resolved_webhook_url,
                         )
                         background_owns_status = True
                         logger.info(
@@ -1026,17 +1028,23 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
             return False, error_msg
 
+        # Sanitize the user-controlled media_buy_id for log output — CodeQL
+        # py/log-injection flags this value reaching logger.info because it
+        # originates from admin route params / API request bodies. Stripping
+        # CR/LF prevents a forged value from injecting fake log lines.
+        safe_media_buy_id = str(media_buy_id).replace("\r", "").replace("\n", "")
+
         if background_owns_status:
             # Don't write 'active' here; the polling service will transition the
             # MediaBuy to active or failed based on what GAM actually does.
-            logger.info(f"[APPROVAL] Status update deferred to background polling for {media_buy_id}")
+            logger.info(f"[APPROVAL] Status update deferred to background polling for {safe_media_buy_id}")
         else:
             # Update media buy status to 'active' after successful adapter execution
             # (UC-002:437 — "updates the media buy status to active")
             with MediaBuyUoW(tenant_id) as uow3:
                 assert uow3.media_buys is not None
                 uow3.media_buys.update_status(media_buy_id, "active")
-                logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
+                logger.info(f"[APPROVAL] Updated media buy {safe_media_buy_id} status to 'active'")
 
         return True, None
 
@@ -2784,9 +2792,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url

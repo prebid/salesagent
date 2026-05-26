@@ -734,8 +734,9 @@ class GoogleAdManager(AdServerAdapter):
                             else getattr(push_config, "url", None)
                         )
 
-                    # Get principal_id from adapter's principal object
+                    # Get principal_id and principal_name from adapter's principal object
                     principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
+                    principal_name = getattr(self.principal, "name", None) or principal_id
 
                     # Start background approval polling task
                     from src.services.order_approval_service import start_order_approval_background
@@ -746,6 +747,7 @@ class GoogleAdManager(AdServerAdapter):
                             media_buy_id=order_id,  # In automatic mode, media_buy_id = order_id
                             tenant_id=self.tenant_id,
                             principal_id=principal_id,
+                            principal_name=principal_name,
                             webhook_url=webhook_url,
                             max_attempts=12,  # 2 minutes with 10 second intervals
                             poll_interval_seconds=10,

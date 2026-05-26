@@ -113,9 +113,9 @@ class TestExecuteApprovedHandsOffToBackgroundOnApprovalFailure:
         _, mock_orders, _, _ = self._run(approval_return_value=True)
         # The kwargs must include max_retries=1
         _, kwargs = mock_orders.approve_order.call_args
-        assert kwargs.get("max_retries") == 1, (
-            f"Expected max_retries=1, got kwargs={kwargs}. The 40-default would block the admin request for 10 minutes."
-        )
+        assert (
+            kwargs.get("max_retries") == 1
+        ), f"Expected max_retries=1, got kwargs={kwargs}. The 40-default would block the admin request for 10 minutes."
 
     def test_kicks_off_background_polling_when_approve_returns_false(self):
         """On approve_order failure, start_order_approval_background must be invoked."""
@@ -183,6 +183,7 @@ class TestMarkApprovalCompleteUpdatesMediaBuyAndAuditLogs:
                 webhook_url=None,
                 tenant_id="tenant_1",
                 principal_id="principal_1",
+                principal_name="Acme Corp",
                 media_buy_id="mb_b2_001",
             )
 
@@ -213,6 +214,7 @@ class TestMarkApprovalCompleteUpdatesMediaBuyAndAuditLogs:
                 webhook_url=None,
                 tenant_id="tenant_1",
                 principal_id="principal_1",
+                principal_name="Acme Corp",
                 media_buy_id="mb_b2_001",
             )
 
@@ -232,60 +234,73 @@ class TestMarkApprovalFailedUpdatesMediaBuyAndAuditLogs:
     def test_writes_media_buy_status_failed(self):
         from src.services.order_approval_service import _mark_approval_failed
 
-        mock_repo = MagicMock()
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=None)
-        mock_uow.media_buys = mock_repo
+        mock_media_buy_repo = MagicMock()
+        mock_media_buy_uow = MagicMock()
+        mock_media_buy_uow.__enter__ = MagicMock(return_value=mock_media_buy_uow)
+        mock_media_buy_uow.__exit__ = MagicMock(return_value=None)
+        mock_media_buy_uow.media_buys = mock_media_buy_repo
 
         sync_job = MagicMock()
         sync_job.progress = {"order_id": "12345", "attempts": 12}
-        mock_db_session = MagicMock()
-        mock_db_session.scalars.return_value.first.return_value = sync_job
+
+        mock_sync_job_repo = MagicMock()
+        mock_sync_job_repo.get.return_value = sync_job
+        mock_sync_job_uow = MagicMock()
+        mock_sync_job_uow.__enter__ = MagicMock(return_value=mock_sync_job_uow)
+        mock_sync_job_uow.__exit__ = MagicMock(return_value=None)
+        mock_sync_job_uow.sync_jobs = mock_sync_job_repo
 
         with (
-            patch("src.services.order_approval_service.get_db_session") as mock_get_db,
-            patch("src.services.order_approval_service.MediaBuyUoW", return_value=mock_uow),
+            patch("src.services.order_approval_service.SyncJobUoW", return_value=mock_sync_job_uow),
+            patch("src.services.order_approval_service.MediaBuyUoW", return_value=mock_media_buy_uow),
             patch("src.services.order_approval_service.AuditLogger"),
         ):
-            mock_get_db.return_value.__enter__.return_value = mock_db_session
-
             _mark_approval_failed(
                 approval_id="approval_12345_test",
                 error_message="forecast timeout after 12 attempts",
                 webhook_url=None,
                 tenant_id="tenant_1",
                 principal_id="principal_1",
+                principal_name="Acme Corp",
                 media_buy_id="mb_b2_001",
             )
 
-        mock_repo.update_status.assert_called_once_with("mb_b2_001", "failed")
+        mock_media_buy_repo.update_status.assert_called_once_with("mb_b2_001", "failed")
+        # The SyncJob.progress lookup must have happened and its order_id/attempts
+        # must have been carried into the audit_details. The mock returns
+        # progress={"order_id": "12345", "attempts": 12}, so the lookup is required
+        # for those fields to be present.
+        mock_sync_job_repo.get.assert_called_with("approval_12345_test")
 
     def test_fires_audit_log_with_success_false_and_error(self):
         from src.services.order_approval_service import _mark_approval_failed
 
         sync_job = MagicMock()
         sync_job.progress = {"order_id": "12345", "attempts": 12}
-        mock_db_session = MagicMock()
-        mock_db_session.scalars.return_value.first.return_value = sync_job
+
+        mock_sync_job_repo = MagicMock()
+        mock_sync_job_repo.get.return_value = sync_job
+        mock_sync_job_uow = MagicMock()
+        mock_sync_job_uow.__enter__ = MagicMock(return_value=mock_sync_job_uow)
+        mock_sync_job_uow.__exit__ = MagicMock(return_value=None)
+        mock_sync_job_uow.sync_jobs = mock_sync_job_repo
 
         mock_audit_instance = MagicMock()
 
         with (
-            patch("src.services.order_approval_service.get_db_session") as mock_get_db,
+            patch("src.services.order_approval_service.SyncJobUoW", return_value=mock_sync_job_uow),
             patch("src.services.order_approval_service.MediaBuyUoW"),
             patch(
                 "src.services.order_approval_service.AuditLogger", return_value=mock_audit_instance
             ) as mock_audit_cls,
         ):
-            mock_get_db.return_value.__enter__.return_value = mock_db_session
-
             _mark_approval_failed(
                 approval_id="approval_12345_test",
                 error_message="forecast timeout after 12 attempts",
                 webhook_url=None,
                 tenant_id="tenant_1",
                 principal_id="principal_1",
+                principal_name="Acme Corp",
                 media_buy_id="mb_b2_001",
             )
 
@@ -295,3 +310,8 @@ class TestMarkApprovalFailedUpdatesMediaBuyAndAuditLogs:
         assert kwargs.get("operation") == "approve_order"
         assert kwargs.get("principal_id") == "principal_1"
         assert kwargs.get("error") == "forecast timeout after 12 attempts"
+        # The SyncJob.progress lookup must propagate order_id and attempts into audit_details —
+        # without it, the audit log would lose the GAM order_id and the polling attempt count.
+        audit_details = kwargs.get("details") or {}
+        assert audit_details.get("order_id") == "12345"
+        assert audit_details.get("attempts") == 12

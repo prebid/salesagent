@@ -30,13 +30,39 @@ def cleanup_approval_registry():
 
 @pytest.fixture
 def mock_db_session():
-    """Mock database session."""
+    """Mock database session for code paths that still use get_db_session directly.
+
+    Used for ``_send_approval_webhook`` and ``get_approval_status``. The
+    SyncJob read/write paths run through ``SyncJobUoW`` — see
+    ``mock_sync_job_uow``.
+    """
     with patch("src.services.order_approval_service.get_db_session") as mock_session:
         mock_db = MagicMock()
         mock_session.return_value.__enter__.return_value = mock_db
         mock_db.scalars.return_value.first.return_value = None  # No existing approval
         mock_db.scalars.return_value.all.return_value = []
         yield mock_db
+
+
+@pytest.fixture
+def mock_sync_job_uow():
+    """Mock ``SyncJobUoW`` so service tests don't need a real database.
+
+    Defaults: no stale rows to reap, no running approval for the order,
+    create_for_order succeeds.
+    """
+    with patch("src.services.order_approval_service.SyncJobUoW") as mock_uow_cls:
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_repo = MagicMock()
+        mock_repo.reap_stale.return_value = []
+        mock_repo.find_running_for_order.return_value = None
+        mock_repo.create_for_order.return_value = MagicMock(sync_id="approval_mock")
+        mock_repo.get.return_value = None
+        mock_uow.sync_jobs = mock_repo
+        mock_uow_cls.return_value = mock_uow
+        yield {"uow_cls": mock_uow_cls, "uow": mock_uow, "repo": mock_repo}
 
 
 @pytest.fixture
@@ -64,10 +90,8 @@ def mock_gam_client():
         }
 
 
-def test_start_approval_creates_sync_job(mock_db_session):
-    """Test that starting approval creates a SyncJob record."""
-    from src.core.database.models import SyncJob
-
+def test_start_approval_creates_sync_job(mock_sync_job_uow):
+    """``start_order_approval_background`` delegates row creation to the repository."""
     approval_id = start_order_approval_background(
         order_id="12345",
         media_buy_id="mb_123",
@@ -76,38 +100,31 @@ def test_start_approval_creates_sync_job(mock_db_session):
         webhook_url="https://example.com/webhook",
     )
 
-    # Verify sync job was created
+    # Verify the generated approval_id shape and that the UoW was scoped to the tenant.
     assert approval_id.startswith("approval_12345_")
-    mock_db_session.add.assert_called_once()
+    mock_sync_job_uow["uow_cls"].assert_called_with("tenant_1")
 
-    # Check the sync job was created with correct fields
-    sync_job_call = mock_db_session.add.call_args[0][0]
-    assert isinstance(sync_job_call, SyncJob)
-    assert sync_job_call.sync_type == "order_approval"
-    assert sync_job_call.status == "running"
-    assert sync_job_call.tenant_id == "tenant_1"
-    assert sync_job_call.progress["order_id"] == "12345"
-    assert sync_job_call.progress["media_buy_id"] == "mb_123"
-    assert sync_job_call.progress["webhook_url"] == "https://example.com/webhook"
+    # Verify create_for_order was called once with the expected fields.
+    mock_sync_job_uow["repo"].create_for_order.assert_called_once()
+    create_kwargs = mock_sync_job_uow["repo"].create_for_order.call_args.kwargs
+    assert create_kwargs["sync_id"] == approval_id
+    assert create_kwargs["adapter_type"] == "google_ad_manager"
+    assert create_kwargs["order_id"] == "12345"
+    assert create_kwargs["media_buy_id"] == "mb_123"
+    assert create_kwargs["principal_id"] == "principal_1"
+    assert create_kwargs["webhook_url"] == "https://example.com/webhook"
+    assert create_kwargs["max_attempts"] == 12
+    # started_at must be set — the reaper threshold compares against it.
+    assert "started_at" in create_kwargs
+    assert isinstance(create_kwargs["started_at"], datetime)
+    assert create_kwargs["started_at"].tzinfo is not None, "started_at must be timezone-aware"
 
 
-def test_start_approval_rejects_duplicate(mock_db_session):
-    """Test that starting approval for same order fails."""
-    from src.core.database.models import SyncJob
-
-    # Mock existing approval for this order
-    existing_approval = SyncJob(
-        sync_id="approval_12345_existing",
-        tenant_id="tenant_1",
-        adapter_type="google_ad_manager",
-        sync_type="order_approval",
-        status="running",
-        started_at=datetime.now(UTC),
-        triggered_by="order_creation",
-        triggered_by_id="mb_123",
-        progress={"order_id": "12345"},
-    )
-    mock_db_session.scalars.return_value.all.return_value = [existing_approval]
+def test_start_approval_rejects_duplicate(mock_sync_job_uow):
+    """``start_order_approval_background`` raises when a live row already exists."""
+    existing = MagicMock()
+    existing.sync_id = "approval_12345_existing"
+    mock_sync_job_uow["repo"].find_running_for_order.return_value = existing
 
     with pytest.raises(ValueError, match="Approval already running for order 12345"):
         start_order_approval_background(
@@ -117,8 +134,11 @@ def test_start_approval_rejects_duplicate(mock_db_session):
             principal_id="principal_1",
         )
 
+    # The duplicate guard must run before any INSERT.
+    mock_sync_job_uow["repo"].create_for_order.assert_not_called()
 
-def test_approval_thread_tracks_in_registry(mock_db_session):
+
+def test_approval_thread_tracks_in_registry(mock_sync_job_uow):
     """Test that approval thread is tracked in global registry.
 
     Uses a blocking mock so the worker stays alive while the test
@@ -165,7 +185,7 @@ def test_get_approval_status(mock_db_session):
     )
     mock_db_session.scalars.return_value.first.return_value = approval
 
-    status = get_approval_status("approval_12345_test")
+    status = get_approval_status("approval_12345_test", tenant_id="tenant_1")
 
     assert status is not None
     assert status["approval_id"] == "approval_12345_test"
@@ -178,7 +198,7 @@ def test_get_approval_status_not_found(mock_db_session):
     """Test getting approval status for non-existent approval."""
     mock_db_session.scalars.return_value.first.return_value = None
 
-    status = get_approval_status("nonexistent")
+    status = get_approval_status("nonexistent", tenant_id="tenant_1")
     assert status is None
 
 
@@ -289,9 +309,9 @@ def test_webhook_retries_on_failure(mock_sleep):
         # Verify retry logic works - should be at least 3 attempts
         # Note: Due to test pollution in full suite, may see 4 calls, but minimum is 3
         assert call_counter["count"] >= 3, f"Expected at least 3 retry attempts, got {call_counter['count']}"
-        assert call_counter["count"] <= 4, (
-            f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
-        )
+        assert (
+            call_counter["count"] <= 4
+        ), f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
 
 
 class TestSyncJobTerminalOrdering:
@@ -300,65 +320,75 @@ class TestSyncJobTerminalOrdering:
     Otherwise a buyer polling the SyncJob can see status='completed' while the
     MediaBuy is still pinned at pending_approval, or status='failed' while the
     MediaBuy is still active. Consumer-visible state must commit last.
+
+    These tests prove the ordering by patching ``_finalize_approval`` to raise
+    and asserting that ``SyncJobRepository.mark_terminal`` was NEVER called.
+    Any reordering that flipped SyncJob terminal status BEFORE the MediaBuy
+    update would cause ``mark_terminal`` to fire in the rewritten path —
+    these tests would catch that immediately.
     """
 
-    def test_mark_complete_keeps_syncjob_running_when_finalize_raises(self):
+    def test_mark_complete_skips_terminal_write_when_finalize_raises(self):
         from src.services import order_approval_service as service_module
 
-        approval_job = MagicMock()
-        approval_job.status = "running"
+        mock_sync_job_repo = MagicMock()
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_uow.sync_jobs = mock_sync_job_repo
 
         with (
-            patch.object(service_module, "_finalize_approval") as mock_finalize,
-            patch.object(service_module, "get_db_session") as mock_session,
+            patch.object(service_module, "SyncJobUoW", return_value=mock_uow),
+            patch.object(service_module, "_finalize_approval", side_effect=RuntimeError("media buy update failed")),
         ):
-            mock_db = MagicMock()
-            mock_session.return_value.__enter__.return_value = mock_db
-            mock_db.scalars.return_value.first.return_value = approval_job
-            mock_finalize.side_effect = RuntimeError("media buy update failed")
-
             service_module._mark_approval_complete(
                 approval_id="approval_test_1",
                 summary={"order_id": "12345", "attempts": 1, "duration_seconds": 5},
                 webhook_url=None,
                 tenant_id="t1",
                 principal_id="p1",
+                principal_name="Test Principal",
                 media_buy_id="mb_1",
             )
 
-            assert approval_job.status == "running", (
-                f"SyncJob.status flipped to {approval_job.status!r} despite finalize failure — "
-                "buyer would observe premature completion"
-            )
-            mock_db.commit.assert_not_called()
+        # The SyncJob terminal write MUST NOT execute when _finalize_approval raised.
+        # If the production ordering ever flipped (mark_terminal before _finalize_approval),
+        # this assertion would fail — the buyer would observe a premature 'completed'.
+        mock_sync_job_repo.mark_terminal.assert_not_called()
 
-    def test_mark_failed_keeps_syncjob_running_when_finalize_raises(self):
+    def test_mark_failed_skips_terminal_write_when_finalize_raises(self):
         from src.services import order_approval_service as service_module
 
-        approval_job = MagicMock()
-        approval_job.status = "running"
-        approval_job.progress = {"order_id": "12345", "attempts": 3}
+        # _mark_approval_failed opens SyncJobUoW twice: once to read order_id/attempts
+        # BEFORE _finalize_approval (line ~447), and again AFTER for the terminal
+        # write (line ~470). Both calls return the same mock UoW.
+        existing_sync_job = MagicMock()
+        existing_sync_job.progress = {"order_id": "12345", "attempts": 3}
+
+        mock_sync_job_repo = MagicMock()
+        mock_sync_job_repo.get.return_value = existing_sync_job
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_uow.sync_jobs = mock_sync_job_repo
 
         with (
-            patch.object(service_module, "_finalize_approval") as mock_finalize,
-            patch.object(service_module, "get_db_session") as mock_session,
+            patch.object(service_module, "SyncJobUoW", return_value=mock_uow),
+            patch.object(service_module, "_finalize_approval", side_effect=RuntimeError("media buy update failed")),
         ):
-            mock_db = MagicMock()
-            mock_session.return_value.__enter__.return_value = mock_db
-            mock_db.scalars.return_value.first.return_value = approval_job
-            mock_finalize.side_effect = RuntimeError("media buy update failed")
-
             service_module._mark_approval_failed(
                 approval_id="approval_test_2",
                 error_message="approval timed out",
                 webhook_url=None,
                 tenant_id="t1",
                 principal_id="p1",
+                principal_name="Test Principal",
                 media_buy_id="mb_1",
             )
 
-            assert approval_job.status == "running", (
-                f"SyncJob.status flipped to {approval_job.status!r} despite finalize failure — "
-                "buyer would observe premature termination"
-            )
-            mock_db.commit.assert_not_called()
+        # The pre-finalize read happened (lookup for order_id/attempts).
+        mock_sync_job_repo.get.assert_called_with("approval_test_2")
+        # The post-finalize terminal write MUST NOT execute when _finalize_approval raised.
+        # Without this guard the SyncJob would flip to 'failed' while the MediaBuy
+        # is unchanged — the buyer would observe a premature termination.
+        mock_sync_job_repo.mark_terminal.assert_not_called()
