@@ -238,6 +238,60 @@ class TestBuildIdempotencyHitResult:
         assert package.canceled is False
         assert package.budget == 1000.0
 
+    def test_pending_approval_without_creatives_replays_pending_creatives(self, integration_db):
+        """Replay preserves the original no-creatives guidance for manual approval buys."""
+        from src.core.schemas import CreateMediaBuyResult, CreateMediaBuySuccess, MediaBuyStatus
+        from src.core.tools.media_buy_create import _build_idempotency_hit_result
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+
+        idem_key = f"pending-approval-{uuid.uuid4().hex[:8]}"
+        tenant_id = f"pa_t_{uuid.uuid4().hex[:6]}"
+
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id=tenant_id)
+            principal = PrincipalFactory(tenant=tenant)
+            principal_id = principal.principal_id
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                idempotency_key=idem_key,
+                status="pending_approval",
+                raw_request={
+                    "idempotency_key": idem_key,
+                    "packages": [
+                        {
+                            "package_id": "pkg_pending_approval_1",
+                            "product_id": "prod_291a023d",
+                            "budget": 1000.0,
+                        }
+                    ],
+                },
+            )
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id="pkg_pending_approval_1",
+                package_config={
+                    "package_id": "pkg_pending_approval_1",
+                    "product_id": "prod_291a023d",
+                    "budget": 1000.0,
+                },
+            )
+            env.get_session()
+
+        result = _build_idempotency_hit_result(
+            tenant_id=tenant_id,
+            idempotency_key=idem_key,
+            principal_id=principal_id,
+            context=None,
+        )
+
+        assert isinstance(result, CreateMediaBuyResult)
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.status == "completed"
+        assert result.response.status == "completed"
+        assert result.response.media_buy_status == MediaBuyStatus.pending_creatives
+        assert result.response.replayed is True
+
 
 class TestIdempotencyRaceRecovery:
     """Integration test: IntegrityError catch + _build_idempotency_hit_result recovery.

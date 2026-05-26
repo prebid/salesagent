@@ -57,6 +57,10 @@ def _make_identity(
     )
 
 
+def _enum_value(value):
+    return getattr(value, "value", value)
+
+
 def _make_mock_db_session():
     """Create a mock DB session with context manager support."""
     mock_session = MagicMock()
@@ -611,13 +615,13 @@ def test_pause_completes_workflow_step(standard_mocks):
     )
 
 
-def test_pause_response_includes_status_paused(standard_mocks):
-    """Pause response must include ``status="paused"`` (#353).
+def test_pause_response_includes_media_buy_status_paused(standard_mocks):
+    """Pause response must include ``media_buy_status="paused"`` (#353).
 
-    Buyer agents walking the wire response need ``status`` to confirm
+    Buyer agents walking the wire response need ``media_buy_status`` to confirm
     the lifecycle transition without a separate ``get_media_buys``
     round-trip. The ``media_buy_state_machine / pause_buy`` storyboard
-    asserts ``field_present @ /status``.
+    asserts ``field_present @ /media_buy_status``.
     """
     mock_result = UpdateMediaBuySuccess(media_buy_id="mb_pause", affected_packages=[])
     standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
@@ -627,14 +631,13 @@ def test_pause_response_includes_status_paused(standard_mocks):
     result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
-    # Pydantic stores the value as the ``MediaBuyStatus`` enum; compare
-    # via ``.value`` to assert on the wire string.
-    assert result.status is not None
-    assert getattr(result.status, "value", result.status) == "paused"
+    assert result.status == "completed"
+    assert result.media_buy_status is not None
+    assert _enum_value(result.media_buy_status) == "paused"
 
 
-def test_resume_response_includes_status_active(standard_mocks):
-    """Resume response must include ``status="active"`` (#353)."""
+def test_resume_response_includes_media_buy_status_active(standard_mocks):
+    """Resume response must include ``media_buy_status="active"`` (#353)."""
     mock_result = UpdateMediaBuySuccess(media_buy_id="mb_resume", affected_packages=[])
     standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
 
@@ -643,14 +646,15 @@ def test_resume_response_includes_status_active(standard_mocks):
     result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
-    assert result.status is not None
-    assert getattr(result.status, "value", result.status) == "active"
+    assert result.status == "completed"
+    assert result.media_buy_status is not None
+    assert _enum_value(result.media_buy_status) == "active"
 
 
-def test_cancel_response_includes_status_canceled(standard_mocks):
-    """Cancel response must include ``status="canceled"`` (#353).
+def test_cancel_response_includes_media_buy_status_canceled(standard_mocks):
+    """Cancel response must include ``media_buy_status="canceled"`` (#353).
 
-    Without ``status``, buyers can't programmatically confirm the
+    Without ``media_buy_status``, buyers can't programmatically confirm the
     cancellation took effect — they'd have to poll ``get_media_buys``.
     """
     mock_buy = MagicMock()
@@ -662,8 +666,9 @@ def test_cancel_response_includes_status_canceled(standard_mocks):
     result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
-    assert result.status is not None
-    assert getattr(result.status, "value", result.status) == "canceled"
+    assert result.status == "completed"
+    assert result.media_buy_status is not None
+    assert _enum_value(result.media_buy_status) == "canceled"
 
 
 def test_cancel_bypasses_manual_approval_gate_and_persists_status(standard_mocks):
@@ -680,8 +685,9 @@ def test_cancel_bypasses_manual_approval_gate_and_persists_status(standard_mocks
     result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
-    assert result.status is not None
-    assert getattr(result.status, "value", result.status) == "canceled"
+    assert result.status == "completed"
+    assert result.media_buy_status is not None
+    assert _enum_value(result.media_buy_status) == "canceled"
     standard_mocks["uow_instance"].media_buys.update_fields.assert_called_once_with(
         "mb_cancel_manual", status="canceled"
     )
@@ -718,7 +724,8 @@ def test_cancel_dominates_mixed_payload_and_skips_other_mutations(standard_mocks
     result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
-    assert getattr(result.status, "value", result.status) == "canceled"
+    assert result.status == "completed"
+    assert _enum_value(result.media_buy_status) == "canceled"
     standard_mocks["uow_instance"].media_buys.update_fields.assert_called_once_with(
         "mb_cancel_mixed", status="canceled"
     )
@@ -748,7 +755,8 @@ def test_manual_approval_response_coerces_non_wire_db_status_to_none(standard_mo
 
     assert isinstance(result, UpdateMediaBuySuccess)
     # Coerced to None — better than emitting an enum-invalid string.
-    assert result.status is None
+    assert result.status == "completed"
+    assert result.media_buy_status is None
 
 
 def test_manual_approval_response_preserves_wire_valid_db_status(standard_mocks):
@@ -765,8 +773,9 @@ def test_manual_approval_response_preserves_wire_valid_db_status(standard_mocks)
     result = _update_media_buy_impl(req=req, identity=identity)
 
     assert isinstance(result, UpdateMediaBuySuccess)
-    assert result.status is not None
-    assert getattr(result.status, "value", result.status) == "pending_creatives"
+    assert result.status == "completed"
+    assert result.media_buy_status is not None
+    assert _enum_value(result.media_buy_status) == "pending_creatives"
 
 
 # ---------------------------------------------------------------------------

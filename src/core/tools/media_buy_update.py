@@ -638,12 +638,12 @@ def _update_media_buy_impl(
             # execution path can re-execute the update after human approval.
             # This mirrors create_media_buy's raw_request pattern.
             #
-            # Include the media buy's CURRENT persisted status — the update
+            # Include the media buy's CURRENT persisted lifecycle status — the update
             # hasn't transitioned the buy yet (it's pending approval).
             # Without this, buyer agents walking the response can't
             # distinguish a deferred update from a noop, and the
             # ``media_buy_state_machine / pause_buy`` storyboard would fail
-            # on ``field_present @ /status`` (#353) for tenants that route
+            # on ``field_present @ /media_buy_status`` (#353) for tenants that route
             # update_media_buy through manual approval.
             #
             # Coerce the persisted status through ``_to_wire_status`` before
@@ -655,12 +655,12 @@ def _update_media_buy_impl(
             from src.core.tools.media_buy_list import _to_wire_status
 
             current_buy = uow.media_buys.get_by_id(req.media_buy_id) if req.media_buy_id else None
-            current_status: str | None = _to_wire_status(
+            current_media_buy_status: str | None = _to_wire_status(
                 getattr(current_buy, "status", None) if current_buy is not None else None
             )
             approval_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
-                status=current_status,
+                media_buy_status=current_media_buy_status,
                 affected_packages=[],  # Not yet applied — pending approval
                 context=req.context,
                 # Surface the workflow step id so buyers can disambiguate
@@ -820,14 +820,15 @@ def _update_media_buy_impl(
             # it would need a schema migration; tracked separately.
             uow.media_buys.update_fields(req.media_buy_id, status="canceled")
 
-            # Include the resulting status — buyers need ``status="canceled"``
+            # Include the resulting lifecycle status — buyers need
+            # ``media_buy_status="canceled"``
             # to confirm the lifecycle transition without an extra
             # ``get_media_buys`` round-trip. The
             # ``media_buy_state_machine / cancel_buy`` storyboard asserts on
-            # ``field_present @ /status`` (#353).
+            # ``field_present @ /media_buy_status`` (#353).
             cancel_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
-                status="canceled",
+                media_buy_status="canceled",
                 affected_packages=[],
                 context=req.context,
             )
@@ -902,15 +903,15 @@ def _update_media_buy_impl(
                 media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
                 affected_pkgs = getattr(result, "affected_packages", [])
 
-                # Echo the resulting media-buy status — ``paused`` after a
+                # Echo the resulting media-buy lifecycle status — ``paused`` after a
                 # pause, ``active`` after a resume. Buyers need this to
                 # confirm the transition; the
                 # ``media_buy_state_machine / {pause,resume}_buy`` storyboards
-                # assert on ``field_present @ /status`` (#353).
-                resulting_status = "paused" if req.paused else "active"
+                # assert on ``field_present @ /media_buy_status`` (#353).
+                resulting_media_buy_status = "paused" if req.paused else "active"
                 success_response = UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
-                    status=resulting_status,
+                    media_buy_status=resulting_media_buy_status,
                     affected_packages=affected_pkgs,
                     context=req.context,
                 )
@@ -1730,17 +1731,17 @@ def _update_media_buy_impl(
         # - AdCP-required fields (package_id) for spec compliance
         # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
-        # Compute current status on the way out: read what we just persisted and
+        # Compute current lifecycle status on the way out: read what we just persisted and
         # apply the same blocker / date logic the get_media_buys read path uses.
-        # Without this, the response's ``status`` is None and the storyboard
+        # Without this, the response's ``media_buy_status`` is None and the storyboard
         # ``pending_creatives_to_start/assign_creative_to_package`` step can't
         # observe the transition we just performed.
         from sqlalchemy.exc import SQLAlchemyError
 
         from src.core.tools.media_buy_list import _compute_status
 
-        response_status: str | None = None
-        # ``status`` on UpdateMediaBuySuccess is best-effort — we want it
+        response_media_buy_status: str | None = None
+        # ``media_buy_status`` on UpdateMediaBuySuccess is best-effort — we want it
         # populated when we can read the buy back, but a fetch/parse failure
         # MUST NOT regress the rest of the response. Catch the narrow set of
         # exceptions the read-back can plausibly throw:
@@ -1757,13 +1758,13 @@ def _update_media_buy_impl(
             post_update_buy = uow.media_buys.get_by_id(req.media_buy_id) if req.media_buy_id else None
             if post_update_buy is not None:
                 today = datetime.now(UTC).date()
-                response_status = _compute_status(post_update_buy, today).value
+                response_media_buy_status = _compute_status(post_update_buy, today).value
         except (SQLAlchemyError, ValueError, TypeError, StopIteration) as exc:
             logger.warning(f"[update_media_buy] could not compute status for {req.media_buy_id}: {exc}")
 
         final_response = UpdateMediaBuySuccess(
             media_buy_id=req.media_buy_id or "",
-            status=response_status,
+            media_buy_status=response_media_buy_status,
             affected_packages=affected_packages_list,
             context=req.context,
         )

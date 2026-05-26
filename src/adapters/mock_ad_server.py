@@ -24,7 +24,7 @@ from src.core.schemas import (
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
-    CreateMediaBuySuccess,
+    CreateMediaBuySubmitted,
     DeliveryTotals,
     MediaPackage,
     PackagePerformance,
@@ -475,13 +475,22 @@ class MockAdServer(AdServerAdapter):
 
             # Handle question asking (return pending with question)
             if scenario.should_ask_question:
-                # For question-asking scenario, return success with pending media_buy_id
-                # The media buy hasn't been created yet - we need input first
-                # The workflow_step_id will track this pending operation
-                return CreateMediaBuySuccess(
-                    media_buy_id="pending",  # Placeholder for pending manual approval
-                    creative_deadline=None,
-                    packages=[],  # No packages yet - operation not complete
+                step = self._create_workflow_step(
+                    step_type="mock_create_media_buy_question",
+                    status="input_required",
+                    request_data={
+                        "request": request,
+                        "packages": packages,
+                        "start_time": start_time.isoformat(),
+                        "end_time": end_time.isoformat(),
+                        "operation": "create_media_buy",
+                        "question": scenario.question_text,
+                    },
+                )
+                return CreateMediaBuySubmitted(
+                    task_id=step["step_id"],
+                    workflow_step_id=step["step_id"],
+                    message=scenario.question_text or "Additional input is required before creating this media buy.",
                 )
 
             # Handle async mode
@@ -595,14 +604,14 @@ class MockAdServer(AdServerAdapter):
         else:
             self.log("   Manual completion required - use complete_task tool")
 
-        # For async mode, return response without media_buy_id or packages
+        # For async mode, return the submitted task shape without media_buy_id or packages
         # The media buy hasn't been created yet - it's being processed asynchronously
         # The workflow_step_id (from step['step_id']) will track this pending operation
         # Client can poll the step or wait for webhook notification when complete
-        return CreateMediaBuySuccess(
-            media_buy_id="pending",  # Placeholder for async processing in progress
-            creative_deadline=None,
-            packages=[],  # No packages yet - operation not complete
+        return CreateMediaBuySubmitted(
+            task_id=step["step_id"],
+            workflow_step_id=step["step_id"],
+            message="Media buy creation submitted for asynchronous processing.",
         )
 
     def _create_media_buy_sync_with_delay(

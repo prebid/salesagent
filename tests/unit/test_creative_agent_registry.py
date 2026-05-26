@@ -35,7 +35,7 @@ class TestCacheKeyAcceptsAnyUrl:
 
     @pytest.mark.asyncio
     async def test_get_format_accepts_anyurl_agent_url(self, monkeypatch):
-        """get_format must not crash when agent_url is AnyUrl (GAM line item path)."""
+        """get_format must accept AnyUrl and use the local SDK reference catalog."""
         monkeypatch.delenv("ADCP_TESTING", raising=False)
         registry = CreativeAgentRegistry()
 
@@ -46,7 +46,8 @@ class TestCacheKeyAcceptsAnyUrl:
         monkeypatch.setattr(registry, "_fetch_formats_from_agent", mock_fetch)
 
         result = await registry.get_format(AnyUrl("https://creative.adcontextprotocol.org/"), "display_300x250_image")
-        assert result is None  # Not found, but no TypeError
+        assert result is not None
+        assert result.format_id.id == "display_300x250_image"
 
 
 class TestCreativeAgentRegistry:

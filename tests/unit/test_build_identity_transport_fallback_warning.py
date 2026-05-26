@@ -138,6 +138,35 @@ class TestBuildIdentityTransportFallback:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings == [], "No misconfig — must not warn"
 
+    def test_request_context_transport_takes_precedence(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A2A decisioning RequestContext carries transport directly; use it
+        even if the older server ContextVar is absent."""
+        from adcp.server import current_transport
+        from adcp.server.auth import current_principal
+
+        from core.platforms._delegate import _build_identity
+
+        _patch_supporting_calls(monkeypatch)
+
+        ctx = _make_ctx()
+        ctx.transport = "a2a"
+        principal_token = current_principal.set("principal-1")
+        transport_token = current_transport.set(None)
+        try:
+            with caplog.at_level(logging.WARNING, logger="core.platforms._delegate"):
+                identity = _build_identity(ctx)
+        finally:
+            current_principal.reset(principal_token)
+            current_transport.reset(transport_token)
+
+        assert identity.protocol == "a2a"
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == []
+
     def test_no_warning_when_no_principal(
         self,
         monkeypatch: pytest.MonkeyPatch,

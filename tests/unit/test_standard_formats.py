@@ -1,7 +1,8 @@
-"""Unit tests for the hardcoded standard-formats catalog.
+"""Unit tests for the local standard-formats catalog.
 
 Verifies:
-- All 12 IAB standard formats parse as valid :class:`Format` objects.
+- SDK beta 2 canonical reference formats and legacy aliases parse as valid
+  :class:`Format` objects.
 - ``get_standard_format`` returns the cached object for known IDs and
   ``None`` for unknown IDs.
 - ``is_standard_agent`` matches the reference creative agent URL with
@@ -27,9 +28,9 @@ from src.core.standard_formats import (
 
 
 class TestStandardFormatCatalog:
-    def test_catalog_has_iab_standards(self):
-        """The 12 IAB standard formats from format_cache.py are present."""
-        expected = {
+    def test_catalog_has_sdk_reference_formats_and_legacy_aliases(self):
+        """The SDK reference catalog is available alongside legacy IDs."""
+        legacy_expected = {
             "display_300x250",
             "display_728x90",
             "display_160x600",
@@ -43,11 +44,22 @@ class TestStandardFormatCatalog:
             "audio_60s",
             "native_1x1",
         }
-        assert STANDARD_FORMAT_IDS == expected
+        sdk_expected = {
+            "display_300x250_image",
+            "display_300x250_html",
+            "display_300x250_generative",
+            "display_js",
+            "native_standard",
+            "audio_standard_30s",
+            "video_vast",
+            "sponsored_recommendation",
+        }
+        assert legacy_expected <= STANDARD_FORMAT_IDS
+        assert sdk_expected <= STANDARD_FORMAT_IDS
 
     def test_every_entry_is_a_real_format_object(self):
         """All catalog entries deserialize as Format objects (proves the
-        nested asset definitions match the v4.4.0 Format schema)."""
+        nested asset definitions match the SDK Format schema)."""
         for fmt_id, fmt in STANDARD_FORMATS.items():
             assert isinstance(fmt, Format), f"{fmt_id} is not a Format"
             assert fmt.format_id.id == fmt_id
@@ -59,6 +71,12 @@ class TestStandardFormatCatalog:
         fmt = get_standard_format("display_300x250")
         assert fmt is not None
         assert fmt.format_id.id == "display_300x250"
+        assert fmt.type == "display"
+
+    def test_get_sdk_reference_format_returns_object(self):
+        fmt = get_standard_format("display_300x250_image")
+        assert fmt is not None
+        assert fmt.format_id.id == "display_300x250_image"
         assert fmt.type == "display"
 
     def test_get_unknown_format_returns_none(self):

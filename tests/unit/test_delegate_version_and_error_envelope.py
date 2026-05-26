@@ -23,8 +23,12 @@ from pydantic import BaseModel, field_validator
 from core.platforms._delegate import (
     _check_major_version,
     _maybe_raise_legacy_errors,
+    _resolve_requested_version,
+    _to_wire,
     _translate_validation_error,
 )
+from src.core.schemas import CreateMediaBuySuccess, MediaBuyStatus, UpdateMediaBuySuccess
+from src.core.schemas._base import CreateMediaBuyResult
 
 
 class TestCheckMajorVersion:
@@ -86,6 +90,68 @@ class TestCheckMajorVersion:
             adcp_major_version = True
 
         _check_major_version(BoolShaped())  # no raise
+
+
+class TestRequestedVersionResolution:
+    """The delegate follows the SDK's release-precision negotiation contract."""
+
+    def test_omitted_version_defaults_to_legacy_3_0(self) -> None:
+        assert _resolve_requested_version({}) == "3.0"
+
+    def test_explicit_3_1_beta_is_preserved(self) -> None:
+        assert _resolve_requested_version({"adcp_version": "3.1.0-beta.3"}) == "3.1-beta.3"
+
+    def test_unsupported_version_raises_wire_error(self) -> None:
+        with pytest.raises(AdcpError) as exc:
+            _resolve_requested_version({"adcp_version": "4.0"})
+        assert exc.value.code == "VERSION_UNSUPPORTED"
+        assert exc.value.field == "adcp_version"
+
+
+class TestRequestedVersionWireAdaptation:
+    """Media-buy success responses adapt status fields to the requested release."""
+
+    def test_create_media_buy_3_0_uses_legacy_status_field(self) -> None:
+        response = CreateMediaBuyResult(
+            response=CreateMediaBuySuccess(
+                media_buy_id="mb_1",
+                packages=[],
+                media_buy_status=MediaBuyStatus.pending_creatives,
+            ),
+            status="completed",
+        )
+
+        wire = _to_wire(response, requested_adcp_version="3.0", tool_name="create_media_buy")
+
+        assert wire["status"] == "pending_creatives"
+        assert "media_buy_status" not in wire
+
+    def test_create_media_buy_3_1_keeps_envelope_and_lifecycle_fields(self) -> None:
+        response = CreateMediaBuyResult(
+            response=CreateMediaBuySuccess(
+                media_buy_id="mb_1",
+                packages=[],
+                media_buy_status=MediaBuyStatus.pending_creatives,
+            ),
+            status="completed",
+        )
+
+        wire = _to_wire(response, requested_adcp_version="3.1-beta.3", tool_name="create_media_buy")
+
+        assert wire["status"] == "completed"
+        assert wire["media_buy_status"] == "pending_creatives"
+
+    def test_update_media_buy_3_0_uses_legacy_status_field(self) -> None:
+        response = UpdateMediaBuySuccess(
+            media_buy_id="mb_1",
+            affected_packages=[],
+            media_buy_status=MediaBuyStatus.canceled,
+        )
+
+        wire = _to_wire(response, requested_adcp_version="3.0", tool_name="update_media_buy")
+
+        assert wire["status"] == "canceled"
+        assert "media_buy_status" not in wire
 
 
 class TestMaybeRaiseLegacyErrors:

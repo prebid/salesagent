@@ -30,7 +30,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from adcp.decisioning import AdcpError, RequestContext
-from adcp.server import current_transport
+from adcp.server import UnsupportedVersionError, current_transport, resolve_requested_adcp_version
 from adcp.server.auth import current_principal
 from pydantic import BaseModel, ValidationError
 
@@ -58,6 +58,9 @@ from src.core.tools.products import _get_products_impl
 from src.core.tools.signals import _get_signals_impl
 
 logger = logging.getLogger(__name__)
+
+# Release-precision AdCP versions this agent serves on the native v3 surface.
+SUPPORTED_ADCP_VERSIONS: tuple[str, ...] = ("3.0", "3.1-beta.3")
 
 # Process-singleton guard so the misconfig WARNING (see _build_identity)
 # fires once per process rather than once per request — repeated logs
@@ -109,7 +112,8 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
     # (#627): the dispatcher itself populates this ContextVar based on which
     # transport invoked the handler. Falls back to "mcp" when unset (lifespan
     # events, unit-test harness paths, admin requests that somehow reach here).
-    detected_transport = current_transport.get()
+    ctx_transport = getattr(ctx, "transport", None)
+    detected_transport = ctx_transport if ctx_transport in ("mcp", "a2a") else current_transport.get()
     if detected_transport in ("mcp", "a2a"):
         protocol: str = detected_transport
     else:
@@ -165,7 +169,42 @@ def _coerce_to_request_model(req: Any, model_cls: type[BaseModel]) -> Any:
     return model_cls.model_validate(req)
 
 
-def _to_wire(response: Any) -> dict[str, Any]:
+def _request_payload(req: Any) -> dict[str, Any]:
+    """Return a dict-shaped request payload for version negotiation."""
+    if isinstance(req, dict):
+        return dict(req)
+    if hasattr(req, "model_dump"):
+        return req.model_dump(mode="json", exclude_none=True)
+    return {}
+
+
+def _resolve_requested_version(req: Any) -> str:
+    """Resolve the AdCP release requested by the buyer.
+
+    The SDK helper preserves the important compatibility contract:
+    no ``adcp_version`` signal means legacy 3.0, while explicit 3.1 beta
+    opts into the newer response envelope shape.
+    """
+    payload = _request_payload(req)
+    try:
+        return resolve_requested_adcp_version(payload, supported=SUPPORTED_ADCP_VERSIONS)
+    except UnsupportedVersionError as exc:
+        field = "adcp_version" if isinstance(exc.wire_value, str) else "adcp_major_version"
+        raise AdcpError(
+            "VERSION_UNSUPPORTED",
+            message=str(exc),
+            recovery="correctable",
+            field=field,
+            details={"supported_versions": list(exc.supported)},
+        ) from exc
+
+
+def _to_wire(
+    response: Any,
+    *,
+    requested_adcp_version: str | None = None,
+    tool_name: str | None = None,
+) -> dict[str, Any]:
     """Project a Pydantic response model onto a wire dict the framework
     can serialize.
 
@@ -185,8 +224,28 @@ def _to_wire(response: Any) -> dict[str, Any]:
         wire = response.model_dump(mode="json", exclude_none=True)
     else:
         wire = dict(response)  # last-ditch coerce
+    if requested_adcp_version is not None and tool_name is not None:
+        wire = _adapt_response_for_requested_version(wire, requested_adcp_version, tool_name=tool_name)
     _maybe_raise_legacy_errors(wire)
     return wire
+
+
+def _adapt_response_for_requested_version(
+    wire: dict[str, Any],
+    requested_adcp_version: str,
+    *,
+    tool_name: str,
+) -> dict[str, Any]:
+    """Project newer media-buy response fields back to the requested release."""
+    if requested_adcp_version != "3.0" or tool_name not in {"create_media_buy", "update_media_buy"}:
+        return wire
+    if wire.get("status") != "completed" or "media_buy_status" not in wire:
+        return wire
+
+    adapted = dict(wire)
+    media_buy_status = adapted.pop("media_buy_status")
+    adapted["status"] = media_buy_status
+    return adapted
 
 
 # AdCP 3.0.11 standard error codes are uppercase snake_case. Some internal
@@ -476,6 +535,7 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     """
     identity = _build_identity(ctx)
     req_model = _coerce_to_request_model(req, CreateMediaBuyRequest)
+    requested_adcp_version = _resolve_requested_version(req_model)
     pnc = req_model.push_notification_config
     pnc_dict: dict[str, Any] | None
     if pnc is None:
@@ -486,7 +546,7 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
         pnc_dict = dict(pnc)
     response = await _create_media_buy_impl(req_model, push_notification_config=pnc_dict, identity=identity)
     _emit_media_buy_created_if_success(identity.tenant_id, response)
-    return _to_wire(response)
+    return _to_wire(response, requested_adcp_version=requested_adcp_version, tool_name="create_media_buy")
 
 
 def _emit_media_buy_created_if_success(tenant_id: str, result: Any) -> None:
@@ -521,7 +581,7 @@ def _emit_media_buy_created_if_success(tenant_id: str, result: Any) -> None:
         {
             "media_buy_id": media_buy_id,
             "buyer_ref": getattr(inner, "buyer_ref", None),
-            "status": getattr(inner, "status", None),
+            "status": getattr(inner, "media_buy_status", None) or getattr(inner, "status", None),
         },
     )
 
@@ -558,9 +618,10 @@ async def _delegate_update_media_buy(
     else:
         patch_dict = dict(patch)
     patch_dict["media_buy_id"] = media_buy_id
+    requested_adcp_version = _resolve_requested_version(patch_dict)
     req_model = _coerce_to_request_model(patch_dict, UpdateMediaBuyRequest)
     response = await asyncio.to_thread(_update_media_buy_impl, req_model, identity)
-    return _to_wire(response)
+    return _to_wire(response, requested_adcp_version=requested_adcp_version, tool_name="update_media_buy")
 
 
 @translate_adcp_errors

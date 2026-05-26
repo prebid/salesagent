@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 
 from src.core.protocol_envelope import ProtocolEnvelope
-from src.core.schemas import CreateMediaBuySuccess, GetProductsResponse
+from src.core.schemas import CreateMediaBuySubmitted, CreateMediaBuySuccess, GetProductsResponse
 
 
 class TestProtocolEnvelope:
@@ -173,11 +173,7 @@ class TestProtocolEnvelope:
 
     def test_async_operation_with_task_id(self):
         """Test envelope for async operation (submitted status with task_id)."""
-        response = CreateMediaBuySuccess(
-            buyer_ref="ref123",
-            media_buy_id="mb_456",
-            packages=[{"buyer_ref": "ref123", "package_id": "pkg_1", "paused": False}],
-        )
+        response = CreateMediaBuySubmitted(task_id="task_async_123", message="Processing media buy creation")
 
         envelope = ProtocolEnvelope.wrap(
             payload=response, status="submitted", task_id="task_async_123", message="Processing media buy creation"
@@ -285,11 +281,7 @@ class TestProtocolEnvelopeStatusLogic:
 
     def test_successful_async_operation_uses_submitted_status(self):
         """Test that successful async operations use status='submitted' with task_id."""
-        response = CreateMediaBuySuccess(
-            buyer_ref="test_buyer",
-            media_buy_id="pending",  # Placeholder for async operations
-            packages=[],
-        )
+        response = CreateMediaBuySubmitted(task_id="task_async_456", message="Media buy creation submitted")
 
         envelope = ProtocolEnvelope.wrap(
             payload=response, status="submitted", task_id="task_async_456", message="Media buy creation submitted"
@@ -297,15 +289,11 @@ class TestProtocolEnvelopeStatusLogic:
 
         assert envelope.status == "submitted"
         assert envelope.task_id == "task_async_456"
-        assert envelope.payload.get("media_buy_id") == "pending"  # Placeholder for async operations
+        assert envelope.payload.get("media_buy_id") is None
 
     def test_in_progress_async_operation_uses_working_status(self):
         """Test that in-progress async operations use status='working'."""
-        response = CreateMediaBuySuccess(
-            buyer_ref="test_buyer",
-            media_buy_id="buy_partial_789",  # May have ID but not complete
-            packages=[],
-        )
+        response = {"media_buy_id": "buy_partial_789"}
 
         envelope = ProtocolEnvelope.wrap(
             payload=response, status="working", task_id="task_work_789", message="Creating line items..."

@@ -237,11 +237,16 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
 
     Extends the official adcp CreateMediaBuySuccess type with internal workflow tracking.
     Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+    The beta-2 sync-success shape carries envelope ``status="completed"`` plus
+    lifecycle ``media_buy_status``.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # adcp 6.1+ requires synchronous media-buy successes to carry the
+    # protocol envelope status. Default it here so adapter constructors stay
+    # focused on domain fields.
+    status: Literal["completed"] = "completed"
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -311,10 +316,10 @@ class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
     """Async-pending create_media_buy envelope extending the adcp library type.
 
     Per the AdCP ``create_media_buy_response`` discriminated union, the
-    pending-approval shape carries a ``status='submitted'`` literal and a
+    async-pending shape carries a ``status='submitted'`` literal and a
     ``task_id`` handle — it does NOT carry ``media_buy_id`` or ``packages``
-    (those belong to the sync-success variant whose ``status`` is a
-    ``MediaBuyStatus`` enum). Mixing the two shapes produces a wire payload
+    (those belong to the sync-success variant whose lifecycle state is
+    ``media_buy_status``). Mixing the two shapes produces a wire payload
     that the SDK validator at the buyer's edge rejects.
 
     ``workflow_step_id`` is an internal handle excluded from wire output;
@@ -332,12 +337,10 @@ class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
         return f"Media buy task {self.task_id} submitted; awaiting approval."
 
 
-# Adapter-level union for create_media_buy. Adapters always produce a sync
-# outcome (success or error); the async-pending envelope ``CreateMediaBuySubmitted``
-# is a protocol-level concept emitted by the orchestrator before any adapter
-# call, so it does not appear here. ``CreateMediaBuyResult.response`` widens
-# this with the submitted variant for the wrapper's serialization path.
-CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
+# Adapter-level union for create_media_buy. Most adapters produce a sync outcome
+# (success or error), but the mock adapter can simulate true async/question flows
+# and return the submitted task shape before any media buy is minted.
+CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
 
 
 class CreateMediaBuyResult(SalesAgentBaseModel):
@@ -349,14 +352,11 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     Supports tuple unpacking ``(response, status)`` for backward compatibility
     with existing callers and tests.
 
-    The wrapper's top-level ``status`` is a ``TaskStatus``-style envelope
-    field. For the sync-success variant, the inner ``CreateMediaBuySuccess``
-    already carries a ``MediaBuyStatus`` in its ``status`` field; we MUST NOT
-    overwrite that with the wrapper's TaskStatus value, because a
-    ``MediaBuyStatus`` slot can only hold values like ``pending_start`` /
-    ``active`` (never ``submitted``). For the submitted/error variants there
-    is no inner status to preserve, so the wrapper's TaskStatus lands at the
-    top level — which matches the spec's async envelope shape.
+    The wrapper's top-level ``status`` is a ``TaskStatus``-style envelope field.
+    Beta 2 sync-success responses already carry their own envelope
+    ``status="completed"`` and lifecycle ``media_buy_status``, so the wrapper
+    leaves them untouched. For error variants, the wrapper's TaskStatus lands at
+    the top level; the submitted variant already carries ``status="submitted"``.
     """
 
     status: str
@@ -365,10 +365,9 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
         result = self.response.model_dump(mode=info.mode)
-        # Sync-success carries an inner ``MediaBuyStatus`` in ``status`` — leave
-        # it intact rather than clobbering with the wrapper's TaskStatus, which
-        # would emit an out-of-enum value at the wire boundary.
-        if isinstance(self.response, CreateMediaBuySuccess):
+        # Sync-success and submitted variants already carry the beta-2 envelope
+        # status; do not clobber them with the wrapper's status.
+        if isinstance(self.response, (CreateMediaBuySuccess, CreateMediaBuySubmitted)):
             return result
         result["status"] = self.status
         return result
@@ -414,6 +413,11 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
     """
+
+    # adcp 6.1+ requires synchronous media-buy successes to carry the
+    # protocol envelope status. Default it here so adapter constructors stay
+    # focused on domain fields.
+    status: Literal["completed"] = "completed"
 
     # Override affected_packages to use our extended AffectedPackage type
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)

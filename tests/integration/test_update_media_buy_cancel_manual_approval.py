@@ -44,7 +44,8 @@ def test_cancel_persists_when_update_media_buy_requires_manual_approval(factory_
     cancel_response = _update_media_buy_impl(req=cancel_req, identity=identity)
 
     assert isinstance(cancel_response, UpdateMediaBuySuccess)
-    assert cancel_response.status == MediaBuyStatus.canceled
+    assert cancel_response.status == "completed"
+    assert cancel_response.media_buy_status == MediaBuyStatus.canceled
 
     factory_session.expire_all()
     mappings = list(

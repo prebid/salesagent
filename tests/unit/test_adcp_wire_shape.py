@@ -298,7 +298,7 @@ def _build_create_media_buy_success() -> tuple[Any, type]:
     from src.core.schemas import CreateMediaBuySuccess
     from src.core.schemas._base import CreateMediaBuyResult
 
-    inner = CreateMediaBuySuccess(media_buy_id="mb_test", packages=[], status=MediaBuyStatus.pending_start)
+    inner = CreateMediaBuySuccess(media_buy_id="mb_test", packages=[], media_buy_status=MediaBuyStatus.pending_start)
     return CreateMediaBuyResult(response=inner, status="completed"), LibResponse
 
 
@@ -323,7 +323,7 @@ def _build_create_media_buy_success_pending_creatives() -> tuple[Any, type]:
     inner = CreateMediaBuySuccess(
         media_buy_id="mb_pending_creatives",
         packages=[Package(package_id="pkg_test")],
-        status=MediaBuyStatus.pending_creatives,
+        media_buy_status=MediaBuyStatus.pending_creatives,
         workflow_step_id="step_internal_only",
     )
     return CreateMediaBuyResult(response=inner, status="completed"), LibResponse
@@ -555,7 +555,8 @@ class TestWireShapeValidatesAgainstLibrary:
         Regression guard: a previous bug emitted ``{media_buy_id, packages,
         status: 'submitted'}`` from the manual-approval path. The spec's
         ``create_media_buy_response`` is a discriminated union — sync-success
-        carries a ``MediaBuyStatus`` (no 'submitted'), while the async
+        carries ``status='completed'`` plus ``media_buy_status`` (no
+        'submitted'), while the async
         envelope carries a TaskStatus literal ``'submitted'`` and identifies
         the work via ``task_id`` (no ``media_buy_id``/``packages``).
 

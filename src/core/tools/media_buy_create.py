@@ -162,6 +162,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     Error,
@@ -348,16 +349,36 @@ def _request_has_creatives(req: CreateMediaBuyRequest) -> bool:
     """
     if not req.packages:
         return False
-    for pkg in req.packages:
+    return _packages_have_creatives(req.packages)
+
+
+def _packages_have_creatives(packages: Any) -> bool:
+    """True if package objects or serialized package dicts carry creatives."""
+    if not packages:
+        return False
+    for pkg in packages:
+        if isinstance(pkg, dict):
+            if pkg.get("creative_ids") or pkg.get("creative_assignments") or pkg.get("creatives"):
+                return True
+            continue
         # Local ``creative_ids`` and AdCP ``creative_assignments`` both attach
-        # pre-uploaded creatives to the package.
-        if _get_requested_creative_ids(pkg):
-            return True
-        # adcp PackageRequest: inline ``creatives`` list (full creative objects)
-        inline = getattr(pkg, "creatives", None)
-        if inline:
+        # pre-uploaded creatives to the package. Inline ``creatives`` carries
+        # full creative objects.
+        if _get_requested_creative_ids(pkg) or getattr(pkg, "creatives", None):
             return True
     return False
+
+
+def _media_buy_status_for_create_replay(existing: Any) -> MediaBuyStatus:
+    """Derive the beta-2 lifecycle status for a create-media-buy replay."""
+    try:
+        return MediaBuyStatus(existing.status)
+    except ValueError:
+        if existing.status == "pending_approval":
+            raw_request = existing.raw_request or {}
+            if not _packages_have_creatives(raw_request.get("packages")):
+                return MediaBuyStatus.pending_creatives
+        return MediaBuyStatus.pending_start
 
 
 def _link_step_to_media_buy(*, tenant_id: str, step_id: str, media_buy_id: str, branch: str) -> None:
@@ -746,7 +767,7 @@ def _execute_adapter_media_buy_creation(
             if response.errors:
                 for err in response.errors:
                     logger.error(f"[ADAPTER]   Error: {err.code} - {err.message}")
-        else:
+        elif isinstance(response, CreateMediaBuySuccess):
             logger.info(
                 f"[ADAPTER] create_media_buy succeeded: {response.media_buy_id} "
                 f"with {len(response.packages) if response.packages else 0} packages"
@@ -755,6 +776,8 @@ def _execute_adapter_media_buy_creation(
                 for i, pkg in enumerate(response.packages):
                     # response.packages are now always Package objects
                     logger.info(f"[ADAPTER] Response package {i}: {pkg.package_id}")
+        else:
+            logger.info(f"[ADAPTER] create_media_buy submitted async task: {response.task_id}")
         return response
     except Exception as adapter_error:
         import traceback
@@ -1079,6 +1102,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             error_messages = [str(err) for err in response.errors] if response.errors else ["Unknown error"]
             error_msg = "; ".join(error_messages)
             logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
+            return False, error_msg
+        if isinstance(response, CreateMediaBuySubmitted):
+            error_msg = f"Adapter submitted async task {response.task_id} during approval execution"
+            logger.error(f"[APPROVAL] {error_msg}")
             return False, error_msg
 
         logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}")
@@ -1784,16 +1811,12 @@ def _build_idempotency_hit_result(
         # ``budget``, etc. and fails the conformance suite.
         response_packages = [_package_from_config(pkg) for pkg in db_packages]
 
-        try:
-            adcp_status = MediaBuyStatus(existing.status)
-        except ValueError:
-            adcp_status = MediaBuyStatus.pending_start
-
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
                 media_buy_id=existing.media_buy_id,
                 packages=response_packages,
-                status=adcp_status,
+                status="completed",
+                media_buy_status=_media_buy_status_for_create_replay(existing),
                 replayed=True,
             ),
             status=AdcpTaskStatus.completed.value,
@@ -2959,7 +2982,8 @@ async def _create_media_buy_impl(
                 response=CreateMediaBuySuccess(
                     media_buy_id=media_buy_id,
                     packages=pending_packages,
-                    status=buy_status,
+                    status="completed",
+                    media_buy_status=buy_status,
                     workflow_step_id=step.step_id,
                 ),
                 status=AdcpTaskStatus.completed.value,
@@ -3154,7 +3178,8 @@ async def _create_media_buy_impl(
                 response=CreateMediaBuySuccess(
                     media_buy_id=media_buy_id,
                     packages=response_packages,
-                    status=buy_status,
+                    status="completed",
+                    media_buy_status=buy_status,
                     workflow_step_id=step.step_id,
                 ),
                 status=AdcpTaskStatus.completed.value,
@@ -3494,6 +3519,10 @@ async def _create_media_buy_impl(
             simulated_response = CreateMediaBuySuccess(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
                 packages=simulated_packages,
+                status="completed",
+                media_buy_status=MediaBuyStatus.pending_start
+                if _request_has_creatives(req)
+                else MediaBuyStatus.pending_creatives,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3514,6 +3543,9 @@ async def _create_media_buy_impl(
             error_code = response.errors[0].code if response.errors else "UNKNOWN"
             logger.error(f"[ADAPTER] Adapter returned error response: {error_code} - {error_msg}")
             return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.failed.value)
+
+        if isinstance(response, CreateMediaBuySubmitted):
+            return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.submitted.value)
 
         # At this point, response is CreateMediaBuySuccess - safe to access success-specific fields
         # Type narrowing: media_buy_id must be present in successful response
@@ -4149,7 +4181,8 @@ async def _create_media_buy_impl(
         adcp_response = CreateMediaBuySuccess(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
-            status=MediaBuyStatus(media_buy_status),
+            status="completed",
+            media_buy_status=MediaBuyStatus(media_buy_status),
             creative_deadline=response.creative_deadline,
         )
 

@@ -291,7 +291,8 @@ class TestMediaBuyApprovalAsync:
         )
         media_buy_id = result.response.media_buy_id
         assert media_buy_id
-        assert result.response.status == MediaBuyStatus.pending_creatives
+        assert result.response.status == "completed"
+        assert result.response.media_buy_status == MediaBuyStatus.pending_creatives
 
         with get_db_session() as session:
             steps = session.scalars(select(WorkflowStep).where(WorkflowStep.step_type == "media_buy_creation")).all()

@@ -21,6 +21,10 @@
 #   AGENT_URL=http://localhost:8000 AGENT_TOKEN=ci-test-token \
 #   ALLOW_HTTP=1 ./scripts/storyboard-check.sh
 #
+#   # Pin the JS storyboard runner/spec line:
+#   ADCP_SDK_PACKAGE=@adcp/sdk@7.11.0 ./scripts/storyboard-check.sh          # AdCP 3.0.x
+#   ADCP_SDK_PACKAGE=@adcp/sdk@8.1.0-beta.11 ./scripts/storyboard-check.sh   # AdCP 3.1 beta
+#
 # Outputs:
 #   - One-line summary per transport: passed/failed/skipped + duration
 #   - List of failing step IDs with truncated error messages
@@ -42,6 +46,7 @@ AGENT_TOKEN="${AGENT_TOKEN:-}"
 STORYBOARD="${STORYBOARD:-media_buy_seller}"
 TIMEOUT="${TIMEOUT:-180}"
 NO_SANDBOX="${NO_SANDBOX:-0}"
+ADCP_SDK_PACKAGE="${ADCP_SDK_PACKAGE:-@adcp/sdk}"
 # ALLOW_HTTP="1" lets you run against a non-HTTPS local agent (e.g.
 # http://localhost:8000). The SDK refuses HTTP by default — production
 # agents must terminate TLS. Only use this for local dev validation.
@@ -96,7 +101,7 @@ run_one() {
     # stderr; --json puts the full ComplianceResult on stdout so we can
     # post-process skip causes (which the always-on summary doesn't surface
     # — see adcontextprotocol/adcp-client#1623).
-    npx -y @adcp/sdk storyboard run "$url" "$STORYBOARD" \
+    npx -y "$ADCP_SDK_PACKAGE" storyboard run "$url" "$STORYBOARD" \
         --auth "$AGENT_TOKEN" \
         --protocol "$protocol" \
         --json \
@@ -206,6 +211,7 @@ PYEOF
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 echo "Storyboard: $STORYBOARD"
+echo "SDK:        $ADCP_SDK_PACKAGE"
 echo "Sandbox:    $([[ $NO_SANDBOX == 1 ]] && echo off || echo on)"
 echo
 

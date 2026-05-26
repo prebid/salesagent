@@ -56,6 +56,20 @@ def test_idempotency_replay_ttl_constant_matches_pgbackend_window() -> None:
     )
 
 
+def test_router_capabilities_advertise_release_precision_versions() -> None:
+    """Capabilities advertise both legacy 3.0 and explicit 3.1 beta support."""
+    from core.main import build_router
+    from core.platforms._delegate import SUPPORTED_ADCP_VERSIONS
+
+    with patch("core.main._build_proposal_managers", return_value={}):
+        router = build_router()
+    adcp_block = router.capabilities.adcp
+
+    assert adcp_block is not None, "DecisioningCapabilities.adcp must be set"
+    advertised = [v.root if hasattr(v, "root") else v for v in adcp_block.supported_versions or []]
+    assert advertised == list(SUPPORTED_ADCP_VERSIONS)
+
+
 def test_router_capabilities_advertise_agent_billing() -> None:
     """Capabilities must list ``agent`` in ``account.supported_billing`` so
     buyers can discover the agent-billing path before calling sync_accounts.

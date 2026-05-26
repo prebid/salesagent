@@ -2,6 +2,8 @@ import pytest
 
 from src.core.exceptions import AdCPValidationError
 from src.services.push_notification_registration import (
+    PushNotificationRegistration,
+    _verify_webhook_control,
     normalize_push_notification_config,
     register_account_notification_configs_in_repo,
     register_push_notification_config_in_repo,
@@ -21,6 +23,16 @@ class RecordingPushNotificationRepo:
     def deactivate_active_for_principal_purpose(self, **kwargs):
         self.deactivations.append(kwargs)
         return 0
+
+
+def _account_registration() -> PushNotificationRegistration:
+    return PushNotificationRegistration(
+        config_id="pnc_1",
+        url="https://example.com/catalog-webhooks",
+        account_id="acc_1",
+        subscriber_id="sub_1",
+        event_types=["product.updated"],
+    )
 
 
 def test_normalizes_legacy_authenticated_push_notification_config() -> None:
@@ -194,6 +206,65 @@ def test_account_notification_configs_are_account_scoped_and_replace_active_set(
             "except_config_id": None,
         }
     ]
+
+
+def test_verify_webhook_control_posts_sdk_challenge_and_accepts_echo(monkeypatch) -> None:
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"challenge": captured["payload"]["challenge"]}
+
+    def post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["payload"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("src.services.push_notification_registration.requests.post", post)
+
+    _verify_webhook_control(_account_registration())
+
+    assert captured["url"] == "https://example.com/catalog-webhooks"
+    assert captured["payload"]["type"] == "webhook.challenge"
+    assert captured["payload"]["account_id"] == "acc_1"
+    assert captured["payload"]["subscriber_id"] == "sub_1"
+    assert captured["payload"]["challenge"].startswith("wch_")
+    assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["timeout"] == 5
+
+
+def test_verify_webhook_control_rejects_missing_echo(monkeypatch) -> None:
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr("src.services.push_notification_registration.requests.post", lambda *args, **kwargs: Response())
+
+    with pytest.raises(AdCPValidationError, match="was not echoed") as exc:
+        _verify_webhook_control(_account_registration())
+
+    assert exc.value.details["reason"] == "missing_echo"
+
+
+def test_verify_webhook_control_rejects_invalid_challenge_inputs() -> None:
+    registration = PushNotificationRegistration(
+        config_id="pnc_1",
+        url="https://example.com/catalog-webhooks",
+        account_id=None,
+        subscriber_id="sub_1",
+        event_types=["product.updated"],
+    )
+
+    with pytest.raises(AdCPValidationError, match="challenge is invalid"):
+        _verify_webhook_control(registration)
 
 
 def test_account_notification_configs_reject_missing_event_types() -> None:

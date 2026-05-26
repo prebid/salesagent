@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import os
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import requests
 from adcp.webhooks import (
+    WebhookChallengeError,
     WebhookDestinationPolicy,
     WebhookDestinationValidationError,
+    create_webhook_challenge_payload,
+    validate_webhook_challenge_response,
     validate_webhook_destination_url,
 )
 
@@ -286,13 +288,17 @@ def _validate_account_notification_event_types(
 
 
 def _verify_webhook_control(registration: PushNotificationRegistration) -> None:
-    challenge = f"whc_{uuid.uuid4().hex}"
-    payload = {
-        "type": "webhook.challenge",
-        "challenge": challenge,
-        "account_id": registration.account_id,
-        "subscriber_id": registration.subscriber_id,
-    }
+    try:
+        payload = create_webhook_challenge_payload(
+            account_id=registration.account_id or "",
+            subscriber_id=registration.subscriber_id or "",
+        )
+    except ValueError as exc:
+        raise AdCPValidationError(
+            "accounts[].notification_configs[] webhook proof-of-control challenge is invalid",
+            details={"account_id": registration.account_id, "subscriber_id": registration.subscriber_id},
+        ) from exc
+
     try:
         response = requests.post(
             _normalize_localhost_for_docker(registration.url),
@@ -307,11 +313,22 @@ def _verify_webhook_control(registration: PushNotificationRegistration) -> None:
             "accounts[].notification_configs[] webhook proof-of-control challenge failed",
             details={"account_id": registration.account_id, "subscriber_id": registration.subscriber_id},
         ) from exc
-    if response_payload.get("challenge") != challenge and response_payload.get("token") != challenge:
+    try:
+        validate_webhook_challenge_response(
+            response_payload,
+            challenge=payload["challenge"],
+            field="accounts[].notification_configs[].url",
+            url=registration.url,
+        )
+    except WebhookChallengeError as exc:
         raise AdCPValidationError(
             "accounts[].notification_configs[] webhook proof-of-control challenge was not echoed",
-            details={"account_id": registration.account_id, "subscriber_id": registration.subscriber_id},
-        )
+            details={
+                "account_id": registration.account_id,
+                "subscriber_id": registration.subscriber_id,
+                "reason": exc.reason,
+            },
+        ) from exc
 
 
 def _allow_private_webhook_destinations() -> bool:

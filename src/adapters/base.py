@@ -718,6 +718,7 @@ class AdServerAdapter(ABC):
             media_buy_id=media_buy_id,
             creative_deadline=creative_deadline,
             packages=package_responses,
+            status="completed",
             workflow_step_id=workflow_step_id,
         )
 
