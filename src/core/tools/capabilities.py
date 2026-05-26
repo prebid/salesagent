@@ -35,7 +35,7 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
-from src.services.targeting_capabilities import supports_property_list_filtering
+from src.services.targeting_capabilities import supports_property_list_targeting
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +168,10 @@ def _get_adcp_capabilities_impl(
         # emit per-package UNSUPPORTED_FEATURE advisories on the success envelope
         # so buyers can see the silent-drop window. Kevel's siteId resolver flips
         # this True and the other 4 adapters hard-reject — same source of truth
-        # via `supports_property_list_filtering()`.
-        property_list_filtering=supports_property_list_filtering(adapter),
+        # via `supports_property_list_targeting()`. The wire flag name
+        # ``property_list_filtering`` stays as-is per #1313 review note: the
+        # spec rename is tracked as a separate follow-up.
+        property_list_filtering=supports_property_list_targeting(adapter),
         # catalog_management: declared False until a sync_catalogs tool ships.
         # AdCP spec binds this flag to the buyer-driven sync_catalogs task
         # (SyncCatalogsRequest with account + catalogs[] + delete_missing) —

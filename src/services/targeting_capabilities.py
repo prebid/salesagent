@@ -14,8 +14,8 @@ for upstream inclusion in AdCP.
 
 from typing import TYPE_CHECKING, Any
 
-from src.core.exceptions import AdCPValidationError
-from src.core.schemas import Error, Targeting, TargetingCapability
+from src.core.exceptions import AdCPUnsupportedFeatureError, AdCPValidationError
+from src.core.schemas import Targeting, TargetingCapability
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
@@ -194,21 +194,30 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
     return [f"{key} is not a recognized targeting field" for key in model_extra]
 
 
-def supports_property_list_filtering(adapter: object | None) -> bool:
+def supports_property_list_targeting(adapter: object | None) -> bool:
     """Return True iff the bound adapter compiles ``targeting_overlay.property_list``.
 
-    Today no adapter sets ``supports_property_list_filtering=True``; the
+    Renamed from ``supports_property_list_filtering`` per Konstantine's
+    2026-05-25 #1313 review: the ``property_list_filtering`` wire flag in
+    ``media-buy-features.json:12`` names the *get_products result-filter*
+    capability, which is a different feature that happens to share a word.
+    The capability THIS helper gates is ``targeting_overlay.property_list``
+    — i.e. *targeting*, not *filtering*. The wire flag rename in
+    ``get_adcp_capabilities`` is tracked separately so this PR stays focused.
+
+    Today no adapter sets ``supports_property_list_targeting=True``; the
     declaration in ``get_adcp_capabilities`` is the canonical "False until an
     adapter actually compiles it" anchor. When Kevel's siteId resolver lands,
     Kevel's adapter class will set this ClassVar to True and the helper will
-    start returning True for tenants on Kevel. Other adapters hard-reject, at
-    which point this advisory path is unreachable for them. Centralizing the
-    check here keeps the wire declaration (capabilities) and the per-call
-    advisory (this module) in lockstep with one source of truth.
+    start returning True for tenants on Kevel. Other adapters hard-reject at
+    the ``_impl`` boundary (see ``_create_media_buy_impl`` /
+    ``_update_media_buy_impl``); centralizing the check there keeps the wire
+    declaration (capabilities) and the runtime guard in lockstep with one
+    source of truth.
     """
     if adapter is None:
         return False
-    return bool(getattr(adapter.__class__, "supports_property_list_filtering", False))
+    return bool(getattr(adapter.__class__, "supports_property_list_targeting", False))
 
 
 # ─── property_list targeting helpers ────────────────────────────────────
@@ -225,63 +234,58 @@ def supports_property_list_filtering(adapter: object | None) -> bool:
 # capability infrastructure lands separately.
 
 
-def build_property_list_unsupported_advisories(
-    packages: list[Any] | None,
-    capability_supported: bool,
-) -> list[Error]:
-    """Build per-package ``UNSUPPORTED_FEATURE`` advisories for property_list use.
+def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: object | None) -> None:
+    """Honest-declaration boundary check: reject ``targeting_overlay.property_list``
+    against adapters that do not compile it.
 
-    AdCP spec 3.0.0 ``error-handling.mdx`` describes non-fatal errors as
-    "populate only the payload... MUST NOT populate ``adcp_error``" — i.e.
-    advisories ride on the success envelope. Buyers see the silent-drop
-    window during the rollout of property_list round-trip and adapter
-    compilation, without the request being rejected.
+    Raises ``AdCPUnsupportedFeatureError`` (wire code ``UNSUPPORTED_FEATURE``,
+    recovery ``correctable``) on the first offending package, carrying
+    ``field=f"packages[{i}].targeting_overlay.property_list"`` and a
+    machine-actionable ``suggestion`` so the buyer agent can drop the field
+    and retry, or pick a capable seller. AdCP spec basis:
+    ``targeting.json:179`` and ``update-media-buy-request.json:64`` — sellers
+    MUST reject rather than silently drop.
 
-    Returns Error objects for each package whose ``targeting_overlay.property_list``
-    is set when the bound adapter does not compile the field. Caller appends
-    to ``CreateMediaBuySuccess.errors`` / ``UpdateMediaBuySuccess.errors``.
+    Centralized here so ``_create_media_buy_impl`` and
+    ``_update_media_buy_impl`` share one path (Konstantine #1313:
+    "collapses all three into this single path"). The legacy per-adapter
+    rejects (``base.AdServerAdapter._check_property_list_supported``) and the
+    legacy soft-advisory (``property_list_unsupported_advisories``) are both
+    removed in favor of this single boundary raise.
+
+    Args:
+        packages: Request packages, possibly None. Each is inspected for a
+            non-None ``targeting_overlay.property_list``.
+        adapter: The resolved adapter instance. Capability is read from
+            ``adapter.__class__.supports_property_list_targeting`` via
+            ``supports_property_list_targeting()``.
+
+    Raises:
+        AdCPUnsupportedFeatureError: when the adapter has not declared
+            property_list-targeting support and any package requests it.
     """
-    if capability_supported or not packages:
-        return []
-
-    advisories: list[Error] = []
+    if supports_property_list_targeting(adapter) or not packages:
+        return
     for index, package in enumerate(packages):
         overlay = getattr(package, "targeting_overlay", None)
         if overlay is None or getattr(overlay, "property_list", None) is None:
             continue
-        advisories.append(
-            Error(
-                code="UNSUPPORTED_FEATURE",
-                message=(
-                    "property_list_filtering is declared off for this seller. "
-                    "The list_id is persisted on the package but will not affect "
-                    "targeting until adapter compilation lands."
-                ),
-                field=f"packages[{index}].targeting_overlay.property_list",
-                suggestion=(
-                    "Continue to send property_list; the seller will activate it "
-                    "once the adapter compiles list_ids into native targeting."
-                ),
-            )
+        adapter_label = getattr(adapter.__class__, "adapter_name", adapter.__class__.__name__) if adapter else "adapter"
+        raise AdCPUnsupportedFeatureError(
+            message=(
+                f"{adapter_label} does not support property_list targeting. "
+                "This seller's adapter cannot compile targeting_overlay.property_list "
+                "into native ad-server targeting. The buyer can drop the field and "
+                "retry, or use a seller whose get_adcp_capabilities advertises "
+                "property_list_filtering=true."
+            ),
+            field=f"packages[{index}].targeting_overlay.property_list",
+            suggestion=(
+                "Remove targeting_overlay.property_list from this package and retry, "
+                "or choose a seller whose get_adcp_capabilities declares "
+                "property_list_filtering=true."
+            ),
         )
-    return advisories
-
-
-def property_list_unsupported_advisories(
-    packages: list[Any] | None,
-    adapter: object | None,
-) -> list[Error] | None:
-    """High-level wrapper: build advisories or return ``None`` when none apply.
-
-    Single entry point for both create and update paths; mirrors
-    ``MediaBuyFeatures.property_list_filtering`` source-of-truth via
-    ``supports_property_list_filtering()`` so the per-call advisory and the
-    capability declaration cannot drift. ``None`` (not ``[]``) so the
-    optional ``errors`` field round-trips cleanly through
-    ``model_dump(exclude_none=True)``.
-    """
-    advisories = build_property_list_unsupported_advisories(packages, supports_property_list_filtering(adapter))
-    return advisories or None
 
 
 def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:

@@ -86,9 +86,9 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 )
 
 # Sanity check: every mapping target must be a standard code.
-assert all(v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()), (
-    "ERROR_CODE_MAPPING contains non-standard target codes"
-)
+assert all(
+    v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()
+), "ERROR_CODE_MAPPING contains non-standard target codes"
 
 
 def translate_error_code(code: str) -> str:
@@ -307,3 +307,23 @@ class AdCPServiceUnavailableError(AdCPError):
     status_code = 503
     error_code = "SERVICE_UNAVAILABLE"
     recovery: RecoveryHint = "transient"
+
+
+class AdCPUnsupportedFeatureError(AdCPError):
+    """Adapter cannot compile a buyer-requested feature (422, UNSUPPORTED_FEATURE).
+
+    Raised when the seller's adapter has declared it cannot honor a specific
+    request field (e.g. ``targeting_overlay.property_list``). Per AdCP spec
+    (``error-code.json:189``, ``error-handling.mdx:467``) the canonical recovery
+    is "check ``get_adcp_capabilities``, drop the field, retry, or use a capable
+    seller" — so this is ``correctable``, not ``terminal``. Callers should pass
+    ``field`` and ``suggestion`` so the buyer agent can act without humans.
+
+    Distinct from ``AdCPValidationError``: validation rejects what the buyer
+    asked for as ill-formed; this rejects a well-formed request that the
+    *seller* can't compile.
+    """
+
+    status_code = 422
+    error_code = "UNSUPPORTED_FEATURE"
+    recovery: RecoveryHint = "correctable"

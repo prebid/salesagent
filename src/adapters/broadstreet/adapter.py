@@ -295,11 +295,10 @@ class BroadstreetAdapter(AdServerAdapter):
         Returns:
             CreateMediaBuyResponse with media buy details
         """
-        # Honest capability declaration (AdCP honest-declaration contract): Broadstreet is
-        # single-network and has no native property_list compilation path; reject
-        # property_list targeting up-front rather than silently dropping it.
-        if err := self._reject_property_list_if_unsupported(packages):
-            return err
+        # Note: honest-declaration property_list reject moved to
+        # ``_create_media_buy_impl`` (Konstantine #1313). Broadstreet is
+        # single-network and keeps ``supports_property_list_targeting = False``;
+        # the boundary raise rejects up-front before this adapter runs.
 
         # Log operation
         self.audit_logger.log_operation(

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, ClassVar
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot, Targeting
 
-from adcp.types import Error
 from adcp.types.aliases import Package as ResponsePackage
 from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
@@ -18,7 +17,6 @@ from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
     CheckMediaBuyStatusResponse,
-    CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
     CreateMediaBuySuccess,
@@ -194,7 +192,7 @@ class AdServerAdapter(ABC):
     # ("Each enabled adapter MUST translate OR raise UNSUPPORTED_FEATURE").
     # Override to True only when the adapter has a working property_list
     # compilation path (e.g. resolving the list to native publisher identifiers).
-    supports_property_list_filtering: ClassVar[bool] = False
+    supports_property_list_targeting: ClassVar[bool] = False
 
     # Connection config schema - override in subclasses
     connection_config_class: type[BaseConnectionConfig] | None = BaseConnectionConfig
@@ -382,56 +380,14 @@ class AdServerAdapter(ABC):
 
         return errors
 
-    def _check_property_list_supported(self, packages: list[MediaPackage]) -> CreateMediaBuyError | None:
-        """Honest-declaration check: refuse property_list targeting unless the adapter compiles it.
-
-        Returns a ``CreateMediaBuyError`` with wire code ``UNSUPPORTED_FEATURE`` when:
-        - ``supports_property_list_filtering`` is ``False`` on this adapter class, AND
-        - any package's ``targeting_overlay.property_list`` is non-None.
-
-        Returns ``None`` when the buyer didn't request property_list targeting OR the
-        adapter has compilation support. Callers should prefer
-        ``_reject_property_list_if_unsupported`` which adds the standard log + return
-        pattern; this method exists for the rare caller that needs granular access to
-        the raw error without the audit log line.
-
-        Per the AdCP "honest-declaration" contract: each enabled adapter MUST translate
-        OR raise UNSUPPORTED_FEATURE — silent dropping is a contract violation.
-        """
-        if self.supports_property_list_filtering:
-            return None
-        for package in packages:
-            targeting = getattr(package, "targeting_overlay", None)
-            if targeting is None:
-                continue
-            if getattr(targeting, "property_list", None) is not None:
-                adapter_label = getattr(self.__class__, "adapter_name", self.__class__.__name__)
-                message = (
-                    f"{adapter_label} does not support property_list targeting. "
-                    "This adapter cannot compile targeting_overlay.property_list to native "
-                    "ad-server targeting. Remove property_list from the request, or use an "
-                    "adapter that advertises property_list_filtering=true in get_adcp_capabilities."
-                )
-                return CreateMediaBuyError(
-                    errors=[Error(code="UNSUPPORTED_FEATURE", message=message, details=None)],
-                )
-        return None
-
-    def _reject_property_list_if_unsupported(self, packages: list[MediaPackage]) -> CreateMediaBuyError | None:
-        """Adapter entry-point helper: check property_list support + log + return error.
-
-        Used by all 4 honest-declaration adapters (Broadstreet, Mock, Triton, Xandr)
-        as the standard ``create_media_buy`` early-return: the inline check + audit
-        log + early-return pattern was identical 4-line copy-paste at every site.
-        Callers use::
-
-            if err := self._reject_property_list_if_unsupported(packages):
-                return err
-        """
-        error = self._check_property_list_supported(packages)
-        if error is not None:
-            self.log(f"[red]Error: {error.errors[0].message}[/red]")
-        return error
+    # Note: property_list honest-declaration check lives in
+    # ``_create_media_buy_impl`` / ``_update_media_buy_impl`` via
+    # ``raise_if_property_list_unsupported`` (Konstantine #1313). Adapters
+    # declare their capability via the ``supports_property_list_targeting``
+    # ClassVar above; the runtime guard fires at the _impl boundary, before
+    # any dry_run / approval / execution branch, so every transport (REST,
+    # A2A, MCP) and every adapter (including GAM/Kevel) honors the contract
+    # uniformly.
 
     @abstractmethod
     def create_media_buy(

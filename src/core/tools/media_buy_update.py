@@ -85,7 +85,7 @@ from src.core.tools.financial_validation import (
 )
 from src.core.validation_helpers import format_validation_error
 from src.services.targeting_capabilities import (
-    property_list_unsupported_advisories,
+    raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
     validate_geo_overlap,
     validate_overlay_targeting,
@@ -310,6 +310,7 @@ def _update_media_buy_impl(
                 return response_data
 
             adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
+
             today = req.today or date.today()
 
             # AdCP 3.0.0 spec (core/product.json `property_targeting_allowed`): reject property_list targeting
@@ -354,6 +355,18 @@ def _update_media_buy_impl(
                         property_targeting_violations.append(violation)
                 raise_if_property_targeting_violations(property_targeting_violations)
 
+            # Konstantine #1313: honest-declaration check for property_list targeting.
+            # Runs AFTER the #1276 product-flag gate (raise_if_property_targeting_violations
+            # above) so a buyer asking for property_list on a product whose
+            # ``property_targeting_allowed=False`` sees the product-specific
+            # VALIDATION_ERROR first (smaller-scope correction: switch product
+            # within same seller). If the request is well-formed against the product
+            # but the seller's adapter cannot compile property_list, this check fires
+            # with UNSUPPORTED_FEATURE (recovery=correctable; suggestion: drop the
+            # field or pick a capable seller). Both gates fire BEFORE the dry_run
+            # branch so all transports + dry_run honor the contract uniformly.
+            raise_if_property_list_unsupported(req.packages, adapter)
+
             # Dry-run mode: Return simulated response without any database writes
             # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
             if testing_ctx.dry_run:
@@ -382,7 +395,7 @@ def _update_media_buy_impl(
                     affected_packages=simulated_affected,
                     valid_actions=valid_actions_for_status(_dry_run_status),
                     context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
+                    errors=None,
                 )
 
                 return dry_run_response
@@ -406,7 +419,7 @@ def _update_media_buy_impl(
                     affected_packages=[],  # Not yet applied — pending approval
                     valid_actions=valid_actions_for_status(_approval_status),
                     context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
+                    errors=None,
                 )
                 approval_data = approval_response.model_dump(mode="json")
                 approval_data["request_data"] = req.model_dump(mode="json")
@@ -570,7 +583,7 @@ def _update_media_buy_impl(
                         media_buy_id=media_buy_id,
                         affected_packages=affected_pkgs,
                         valid_actions=valid_actions_for_status(_post_action_status),
-                        errors=property_list_unsupported_advisories(req.packages, adapter),
+                        errors=None,
                     )
                     # Log successful update_media_buy (pause/resume)
                     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -1408,7 +1421,7 @@ def _update_media_buy_impl(
                 affected_packages=affected_packages_list,
                 valid_actions=valid_actions_for_status(_final_status),
                 context=req.context,
-                errors=property_list_unsupported_advisories(req.packages, adapter),
+                errors=None,
             )
 
             # Log successful update_media_buy call

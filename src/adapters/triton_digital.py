@@ -140,14 +140,13 @@ class TritonDigital(AdServerAdapter):
             dry_run_prefix=False,
         )
 
-        # Honest capability declaration (AdCP honest-declaration contract): Triton can in principle
-        # compile audio-property identifier types (station_id, podcast_guid, etc.) to its
-        # native targeting, but that requires the property_list resolver work tracked in
-        # B3. Until then, reject property_list targeting up-front rather than silently
-        # dropping it. Future: override _check_property_list_supported to inspect the
-        # resolved identifier types and accept the audio-capable ones.
-        if err := self._reject_property_list_if_unsupported(packages):
-            return err
+        # Note: honest-declaration property_list reject moved to
+        # ``_create_media_buy_impl`` (Konstantine #1313). Triton can in
+        # principle compile audio-property identifier types (station_id,
+        # podcast_guid, etc.) to its native targeting, but that requires the
+        # property_list resolver work tracked in B3 — until then this adapter
+        # keeps ``supports_property_list_targeting = False`` and the boundary
+        # raise rejects the request up-front.
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
