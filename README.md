@@ -10,6 +10,12 @@ The Prebid Sales Agent is a server that:
 - **Provides an admin interface** for managing inventory and campaigns
 - **Handles the full campaign lifecycle** from discovery to reporting
 
+## AdCP Compatibility
+
+This implementation targets **AdCP spec version 3.0.1** via the `adcp==4.3.0`
+Python SDK. See [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the
+SDK-to-spec mapping and bump procedure.
+
 ## Choose Your Path
 
 | I want to... | Start here |
