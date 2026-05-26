@@ -1489,31 +1489,21 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
         )
 
     if outcome == "assignment created":
-        if err is not None:
-            if isinstance(err, AdCPError):
-                pytest.xfail(
-                    f"SPEC-PRODUCTION GAP: Expected 'assignment created' but production "
-                    f"raised {type(err).__name__}(code={err.error_code}): {err}"
-                )
-            raise AssertionError(f"Expected 'assignment created' but got {type(err).__name__}: {err}")
+        assert err is None, f"Expected 'assignment created' but got {type(err).__name__}: {err}"
         assigned = _get_creative_assigned_to(ctx)
         expected_pkg_id = ctx["package"].package_id
         assert expected_pkg_id in assigned, f"Expected package {expected_pkg_id!r} in assigned_to but got {assigned}"
     elif outcome == "FORMAT_MISMATCH":
-        if err is None:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: Expected FORMAT_MISMATCH error but production "
-                f"succeeded. Response: {ctx.get('response')}"
-            )
-        if not isinstance(err, AdCPError):
-            raise AssertionError(f"Expected AdCPError for FORMAT_MISMATCH, got {type(err).__name__}: {err}")
+        assert err is not None, (
+            f"Expected FORMAT_MISMATCH error but production succeeded. Response: {ctx.get('response')}"
+        )
+        assert isinstance(err, AdCPError), f"Expected AdCPError for FORMAT_MISMATCH, got {type(err).__name__}: {err}"
         msg = str(err).lower()
         assert "format" in msg and ("not supported" in msg or "mismatch" in msg), (
             f"Expected format-mismatch indication in error, got: {err}"
         )
     elif outcome in ("success", "success (no agent validation)"):
-        if err is not None:
-            pytest.xfail(f"SPEC-PRODUCTION GAP: expected '{outcome}' but production raised {type(err).__name__}: {err}")
+        assert err is None, f"Expected '{outcome}' but production raised {type(err).__name__}: {err}"
         assert ctx.get("response") is not None, f"Expected a response for '{outcome}'"
     elif outcome in (
         "CREATIVE_FORMAT_REQUIRED",
@@ -1524,11 +1514,9 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
     ):
         _assert_per_creative_failure(ctx, outcome)
     elif outcome == "assignment updated":
-        if err is not None:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Expected 'assignment updated' (idempotent upsert) "
-                f"but production raised {type(err).__name__}: {err}"
-            )
+        assert err is None, (
+            f"Expected 'assignment updated' (idempotent upsert) but production raised {type(err).__name__}: {err}"
+        )
         assigned = _get_creative_assigned_to(ctx)
         expected_pkg_id = ctx["package"].package_id
         assert expected_pkg_id in assigned, (
@@ -1761,15 +1749,38 @@ def then_assignment_created_as_paused(ctx: dict) -> None:
     """Spec: weight=0 assignment is paused (weight persisted as 0).
 
     Production hard-codes weight=100 on all new assignments and has no API
-    surface for per-entry weight. SPEC-PRODUCTION GAP.
+    surface for per-entry weight. SPEC-PRODUCTION GAP on weight only.
     """
-    import pytest
+    from sqlalchemy import select
 
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused) is not supported. "
-        "Production's assignments shape (dict[creative_id -> list[package_id]]) has no weight field; "
-        "_assignments.py hard-codes weight=100 on create."
-    )
+    from src.core.database.models import CreativeAssignment
+
+    # Assert what production DOES provide: assignment was created
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    expected_pkg = ctx["package"].package_id
+    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
+
+    # Verify the DB row exists
+    _xfail_if_e2e(ctx)
+    tenant_id = ctx["tenant"].tenant_id
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    with db_session(ctx) as session:
+        assignment = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id,
+                creative_id=creative_id,
+                package_id=expected_pkg,
+            )
+        ).first()
+        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
+        # Xfail ONLY the specific unimplemented claim
+        if assignment.weight != 0:
+            pytest.xfail(
+                "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused) is not supported. "
+                f"Expected weight=0, got weight={assignment.weight}. "
+                "Production hard-codes weight=100 on create."
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1963,10 +1974,32 @@ def then_assignment_includes_placement(ctx: dict) -> None:
 
     Production's assignments shape has no placement_ids field and the
     CreativeAssignment ORM model does not persist per-assignment placement ids.
-    SPEC-PRODUCTION GAP.
+    SPEC-PRODUCTION GAP on placement_ids only.
     """
-    import pytest
+    from sqlalchemy import select
 
+    from src.core.database.models import CreativeAssignment
+
+    # Assert what production DOES provide: assignment was created
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    expected_pkg = ctx["package"].package_id
+    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
+
+    # Verify the DB row exists
+    _xfail_if_e2e(ctx)
+    tenant_id = ctx["tenant"].tenant_id
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    with db_session(ctx) as session:
+        assignment = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id,
+                creative_id=creative_id,
+                package_id=expected_pkg,
+            )
+        ).first()
+        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
+    # Xfail ONLY the specific unimplemented claim
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Per-assignment placement_ids targeting is not supported. "
         "Production's assignments shape (dict[creative_id -> list[package_id]]) has no "
@@ -2439,12 +2472,16 @@ def then_behavior_matches_strict_mode(ctx: dict) -> None:
     means the same abort-on-error behavior as explicit strict mode. We verify
     an error was raised (same assertion as the abort step).
     """
+    from src.core.exceptions import AdCPError
+
     error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: default validation_mode should be 'strict' (abort on error), "
-            "but production succeeded without raising. Default may be 'lenient' in production."
-        )
+    assert error is not None, (
+        "Default validation_mode should be 'strict' (abort on error), "
+        f"but production succeeded without raising. Response: {ctx.get('response')}"
+    )
+    assert isinstance(error, (AdCPError, Exception)), (
+        f"Expected an error (strict abort), got {type(error).__name__}: {error}"
+    )
 
 
 @then("no assignments should be created")
@@ -3122,18 +3159,15 @@ def _get_media_buy_status_from_db(ctx: dict) -> str:
 @then(parsers.parse('the media buy status should transition to "{target_status}"'))
 def then_media_buy_status_should_transition_to(ctx: dict, target_status: str) -> None:
     """Assert the media buy transitioned to the target status after sync."""
-    error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected media buy transition to '{target_status}' "
-            f"but sync raised {type(error).__name__}: {error}"
-        )
+    assert "error" not in ctx, (
+        f"Expected media buy transition to '{target_status}' but sync raised "
+        f"{type(ctx['error']).__name__}: {ctx['error']}"
+    )
     actual = _get_media_buy_status_from_db(ctx)
-    if actual != target_status:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected media buy status '{target_status}', got '{actual}'. "
-            f"BR-RULE-038/040: draft + approved_at should transition to pending_creatives."
-        )
+    assert actual == target_status, (
+        f"Expected media buy status '{target_status}', got '{actual}'. "
+        f"BR-RULE-038/040: draft + approved_at should transition to pending_creatives."
+    )
 
 
 @then(parsers.parse('the media buy status should remain "{expected_status}"'))
@@ -3164,9 +3198,9 @@ def then_media_buy_should_remain_in_draft(ctx: dict) -> None:
 @then("the media buy status should not change")
 def then_media_buy_status_should_not_change(ctx: dict) -> None:
     """Assert a non-draft media buy's status was unchanged (boundary)."""
-    error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected no status change but sync raised {type(error).__name__}: {error}")
+    assert "error" not in ctx, (
+        f"Expected no status change but sync raised {type(ctx['error']).__name__}: {ctx['error']}"
+    )
     original_status = ctx["media_buy"].status
     actual = _get_media_buy_status_from_db(ctx)
     assert actual == original_status, (
@@ -3182,19 +3216,15 @@ def then_media_buy_status_uc006(ctx: dict, status: str) -> None:
     SyncCreativesResponse. This override queries the DB directly when a media
     buy was created by a UC-006 Given step.
     """
-    error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected media buy status '{status}' but sync raised {type(error).__name__}: {error}"
-        )
-    if "media_buy" not in ctx:
-        pytest.xfail("No media buy in ctx — cannot check status from DB")
+    assert "error" not in ctx, (
+        f"Expected media buy status '{status}' but sync raised {type(ctx['error']).__name__}: {ctx['error']}"
+    )
+    assert "media_buy" in ctx, "No media buy in ctx — cannot check status from DB"
     actual = _get_media_buy_status_from_db(ctx)
-    if actual != status:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected media buy status '{status}', got '{actual}'. "
-            f"Production may not implement media buy status transition during creative sync."
-        )
+    assert actual == status, (
+        f"Expected media buy status '{status}', got '{actual}'. "
+        f"Production may not implement media buy status transition during creative sync."
+    )
 
 
 # --- mah2: ai-powered workflow steps (BR-RULE-037 INV-4) ---
@@ -3855,16 +3885,14 @@ def then_no_slack_notification(ctx: dict) -> None:
     _assert_success_response(ctx)
     mock_notify = ctx["env"].mock.get("send_notifications")
     if mock_notify is not None:
-        if mock_notify.call_count > 0:
-            # Production calls _send_creative_notifications unconditionally;
-            # the function internally checks for webhook and no-ops.
-            # Spec says no notification should be sent when webhook is absent.
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: production calls _send_creative_notifications even "
-                "when no slack_webhook_url is configured. The function no-ops internally "
-                "(logs 'Slack notifications disabled'), but the mock still records the call. "
-                "See BR-RULE-037 INV-6."
-            )
+        assert mock_notify.call_count == 0, (
+            f"Expected no Slack notification but send_notifications was called "
+            f"{mock_notify.call_count} time(s). "
+            f"SPEC-PRODUCTION GAP: production calls _send_creative_notifications even "
+            f"when no slack_webhook_url is configured. The function no-ops internally "
+            f"(logs 'Slack notifications disabled'), but the mock still records the call. "
+            f"See BR-RULE-037 INV-6."
+        )
     # If no mock is available, pass — no notification mock means no notification was possible
 
 
@@ -6066,13 +6094,38 @@ def then_assignment_created_as_paused_no_delivery(ctx: dict) -> None:
     """Spec: weight=0 assignment is paused (no delivery).
 
     Production hard-codes weight=100 on all new assignments and has no API
-    surface for per-entry weight. SPEC-PRODUCTION GAP.
+    surface for per-entry weight. SPEC-PRODUCTION GAP on weight/delivery only.
     """
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused, no delivery) is not supported. "
-        "Production's assignments shape (dict[creative_id -> list[package_id]]) has no weight field; "
-        "_assignments.py hard-codes weight=100 on create."
-    )
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment
+
+    # Assert what production DOES provide: assignment was created
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    expected_pkg = ctx["package"].package_id
+    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
+
+    # Verify the DB row exists
+    _xfail_if_e2e(ctx)
+    tenant_id = ctx["tenant"].tenant_id
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    with db_session(ctx) as session:
+        assignment = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id,
+                creative_id=creative_id,
+                package_id=expected_pkg,
+            )
+        ).first()
+        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
+        # Xfail ONLY the specific unimplemented claim
+        if assignment.weight != 0:
+            pytest.xfail(
+                "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused, no delivery) "
+                f"is not supported. Expected weight=0, got weight={assignment.weight}. "
+                "Production hard-codes weight=100 on create."
+            )
 
 
 @then("the response should include the creative with assignment results")
