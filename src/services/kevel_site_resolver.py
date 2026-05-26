@@ -25,9 +25,11 @@ publisher onboarding within the same operator's session.
 from __future__ import annotations
 
 import logging
+import threading
 import urllib.parse
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 import httpx
 from adcp.types import PropertyListReference
@@ -40,7 +42,12 @@ logger = logging.getLogger(__name__)
 # Kevel identifier types we can compile to native siteIds.
 # Domain/subdomain map cleanly to Site.Url; other types (ios_bundle, podcast,
 # etc.) would need separate Kevel inventory primitives that aren't wired here.
-_SUPPORTED_IDENTIFIER_TYPES = frozenset({"domain", "subdomain"})
+# Exposed publicly so the Kevel adapter's dry-run path can type-check
+# identifiers without instantiating a resolver (no HTTP needed).
+SUPPORTED_IDENTIFIER_TYPES: frozenset[str] = frozenset({"domain", "subdomain"})
+
+# Internal alias preserved for back-compat with the resolver's own loops.
+_SUPPORTED_IDENTIFIER_TYPES = SUPPORTED_IDENTIFIER_TYPES
 
 _KEVEL_SITE_PAGE_SIZE = 200
 _DEFAULT_HTTP_TIMEOUT = 10.0
@@ -77,7 +84,17 @@ class KevelSiteResolver:
 
     # Module-level cache across resolver instances: (base_url, network_id) ->
     # ({normalized_domain: site_id}, expires_at).
-    _site_cache: dict[tuple[str, str], tuple[dict[str, int], datetime]] = {}
+    _site_cache: ClassVar[dict[tuple[str, str], tuple[dict[str, int], datetime]]] = {}
+
+    # Guards reads/writes on ``_site_cache`` so concurrent ``create_media_buy``
+    # calls on the same network can't race: previously two threads could both
+    # see ``cached is None``, both call ``_fetch_all_sites()`` (double HTTP),
+    # and both write to the cache (last-write-wins clobber). The expiry-drop
+    # branch could also ``del`` a key another thread had already refreshed,
+    # raising ``KeyError``. The HTTP fetch stays OUTSIDE the lock (slow) —
+    # two concurrent fetches on a cold cache are still possible and acceptable
+    # (both produce the same data), but the cache pop/write is atomic.
+    _cache_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(
         self,
@@ -130,16 +147,30 @@ class KevelSiteResolver:
         )
 
     def _get_site_lookup(self) -> dict[str, int]:
-        """Return the cached ``{normalized_domain: site_id}`` index, fetching if needed."""
-        cache_key = (self.base_url, self.network_id)
-        cached = self._site_cache.get(cache_key)
-        if cached is not None:
-            cached_lookup, cached_expires_at = cached
-            if datetime.now(UTC) < cached_expires_at:
-                return cached_lookup
-            # Expired — drop and re-fetch below.
-            del self._site_cache[cache_key]
+        """Return the cached ``{normalized_domain: site_id}`` index, fetching if needed.
 
+        Threading: the cache read + expiry-drop runs under ``_cache_lock`` so
+        concurrent callers see a consistent view and the expiry ``pop`` cannot
+        race a fresh write. The HTTP fetch happens OUTSIDE the lock — two
+        concurrent cold-cache callers may both fetch (acceptable: both
+        produce the same lookup), but the cache write back into ``_site_cache``
+        is atomic and last-write-wins.
+        """
+        cache_key = (self.base_url, self.network_id)
+
+        with self._cache_lock:
+            cached = self._site_cache.get(cache_key)
+            if cached is not None:
+                cached_lookup, cached_expires_at = cached
+                if datetime.now(UTC) < cached_expires_at:
+                    return cached_lookup
+                # Expired — drop and re-fetch below. ``pop`` (not ``del``) so
+                # we don't raise ``KeyError`` if another thread already
+                # repopulated the entry between the read above and now.
+                self._site_cache.pop(cache_key, None)
+
+        # HTTP fetch outside the lock — Kevel pagination can take seconds and
+        # holding the lock that long would serialize unrelated networks too.
         sites = self._fetch_all_sites()
         lookup: dict[str, int] = {}
         for site in sites:
@@ -152,7 +183,13 @@ class KevelSiteResolver:
                 lookup[normalized] = int(site_id)
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self.cache_ttl_seconds)
-        self._site_cache[cache_key] = (lookup, expires_at)
+        with self._cache_lock:
+            # Last-write-wins: a concurrent fetch may have populated this key
+            # in the brief window we were doing HTTP. Both fetches produce
+            # the same data (within Kevel's API consistency), so overwriting
+            # is safe and avoids the complexity of a fetch-in-progress
+            # sentinel.
+            self._site_cache[cache_key] = (lookup, expires_at)
         logger.debug(
             "Cached Kevel site index for network %s: %d sites (expires %s)",
             self.network_id,
@@ -188,7 +225,8 @@ class KevelSiteResolver:
     @classmethod
     def clear_cache(cls) -> None:
         """Reset the module-level site index cache. Test-only utility."""
-        cls._site_cache.clear()
+        with cls._cache_lock:
+            cls._site_cache.clear()
 
 
 def _normalize_domain(value: str) -> str:

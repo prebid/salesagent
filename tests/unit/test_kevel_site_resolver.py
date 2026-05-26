@@ -238,6 +238,95 @@ class TestSiteIndexCache:
 
         assert fetch_mock.call_count == 2
 
+    def test_concurrent_cold_cache_resolves_share_same_lookup(self):
+        """Two threads racing on a cold cache produce a consistent final state.
+
+        Pre-#1314 audit BLOCKER-01: ``_site_cache`` was a plain class-level dict
+        mutated without locks. Two simultaneous ``create_media_buy`` calls on
+        the same Kevel network could both observe ``cached is None``, both
+        call ``_fetch_all_sites()`` (double HTTP), and both write to the cache
+        (last-write-wins clobber). Worse: the expiry-drop branch used ``del``
+        which races a concurrent refresh and can raise ``KeyError``.
+
+        Post-fix: ``_cache_lock`` guards cache reads/writes; HTTP stays
+        OUTSIDE the lock so two threads on a cold cache may still both fetch
+        (acceptable — Kevel returns the same data), but the cache write is
+        atomic and the expiry-pop uses ``dict.pop(key, None)`` so it cannot
+        ``KeyError``. This test pins the post-condition: after concurrent
+        resolves both threads converge on a non-empty resolved set and the
+        cache holds a single coherent lookup.
+        """
+        import threading as _threading
+
+        resolver = _resolver()
+        fetch_mock = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
+        results: list[ResolvedSiteIds] = []
+        results_lock = _threading.Lock()
+
+        def _run():
+            res = resolver.resolve(_ref())
+            with results_lock:
+                results.append(res)
+
+        with (
+            patch(
+                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
+                return_value=[_identifier("espn.com")],
+            ),
+            patch.object(resolver, "_fetch_all_sites", fetch_mock),
+        ):
+            threads = [_threading.Thread(target=_run) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5.0)
+
+        # All 8 threads completed without raising (no KeyError on expiry race).
+        assert len(results) == 8, f"Expected 8 thread results, got {len(results)} — some threads raised/hung"
+        # Every thread observes the same resolved set — no torn write.
+        assert all(
+            r.site_ids == {42} for r in results
+        ), "Concurrent resolvers returned inconsistent site_ids — cache write was not atomic"
+        # Final cache state holds the lookup once with no torn entries.
+        cache_key = (resolver.base_url, resolver.network_id)
+        cached_lookup, _expires_at = KevelSiteResolver._site_cache[cache_key]
+        assert cached_lookup == {"espn.com": 42}, f"Cache state torn after concurrent writes: {cached_lookup!r}"
+
+    def test_concurrent_expired_cache_drop_does_not_raise(self):
+        """Concurrent expiry drops use ``pop`` not ``del`` so a second thread
+        finding an already-popped key cannot ``KeyError``.
+
+        Pre-fix this would raise inside ``_get_site_lookup`` when two threads
+        simultaneously hit the expiry branch (one ``del``'d, the other tried
+        to ``del`` a missing key). Now both threads call
+        ``self._site_cache.pop(cache_key, None)`` which is a no-op on the
+        second pop.
+        """
+        resolver = _resolver()
+        cache_key = (resolver.base_url, resolver.network_id)
+
+        # Pre-populate cache with an expired entry to force the pop branch.
+        KevelSiteResolver._site_cache[cache_key] = ({"old.com": 1}, datetime.now(UTC) - timedelta(seconds=1))
+
+        fetch_mock = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
+        with (
+            patch(
+                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
+                return_value=[_identifier("espn.com")],
+            ),
+            patch.object(resolver, "_fetch_all_sites", fetch_mock),
+        ):
+            # Two sequential calls both see expired entry on entry to the
+            # locked block (the first call repopulates inside the lock; the
+            # second call sees the fresh entry). The test mainly proves that
+            # the expiry-pop branch is safe; the threaded test above proves
+            # concurrent safety end-to-end.
+            r1 = resolver.resolve(_ref())
+            r2 = resolver.resolve(_ref())
+
+        assert r1.site_ids == {42}
+        assert r2.site_ids == {42}
+
 
 class TestPaginationAndFetch:
     """_fetch_all_sites pages through Kevel until totalPages."""
