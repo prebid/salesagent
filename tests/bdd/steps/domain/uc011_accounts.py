@@ -556,18 +556,31 @@ def then_not_an_error(ctx: dict) -> None:
 
 @then(parsers.parse("the response contains {count:d} accounts"))
 def then_n_accounts(ctx: dict, count: int) -> None:
-    """Assert the response has exactly N accounts."""
+    """Assert the response has exactly N accounts.
+
+    Also tracks account IDs for later disjointness checks in pagination.
+    """
     resp = ctx["response"]
     actual = len(resp.accounts)
     assert actual == count, f"Expected {count} accounts, got {actual}"
+    # Track IDs for disjointness assertion in subsequent pages
+    ctx["previous_page_ids"] = {a.account_id for a in resp.accounts}
 
 
 @then(parsers.parse("the response contains {count:d} more accounts"))
 def then_n_more_accounts(ctx: dict, count: int) -> None:
-    """Assert the response has exactly N accounts (phrased as 'more')."""
+    """Assert the response has exactly N accounts and they are disjoint from previous page."""
     resp = ctx["response"]
     actual = len(resp.accounts)
     assert actual == count, f"Expected {count} more accounts, got {actual}"
+    # Verify disjointness with previous page
+    prev_ids = ctx.get("previous_page_ids")
+    if prev_ids:
+        current_ids = {a.account_id for a in resp.accounts}
+        overlap = prev_ids & current_ids
+        assert not overlap, f"Page 2 shares {len(overlap)} account(s) with page 1: {overlap}"
+        # Track cumulative IDs for further pages
+        ctx["previous_page_ids"] = prev_ids | current_ids
 
 
 @then(parsers.parse("the response includes pagination metadata with has_more {has_more} and a cursor"))
@@ -639,12 +652,13 @@ def then_error_invalid_status(ctx: dict) -> None:
 
 @then("the response contains accounts with all statuses")
 def then_all_statuses_present(ctx: dict) -> None:
-    """Assert the response includes accounts with all the statuses set up."""
+    """Assert the response includes accounts covering all seeded statuses."""
     resp = ctx["response"]
-    assert resp is not None, "Expected a response"
     statuses = {_status_str(a.status) for a in resp.accounts}
-    # The Given step created accounts with 4 statuses
-    assert len(statuses) >= 2, f"Expected multiple statuses, got {statuses}"
+    expected = ctx.get("created_statuses")
+    assert expected, "Test setup error: created_statuses not tracked by Given step"
+    missing = expected - statuses
+    assert not missing, f"Response missing statuses {missing}. Got {statuses}, expected superset of {expected}"
 
 
 @then("the result set is identical to requesting without any filter")
@@ -693,6 +707,17 @@ def then_response_outcome(ctx: dict, outcome: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _extract_brand_pairs(accounts: list[dict[str, Any]]) -> set[tuple[str, str | None]]:
+    """Extract (domain, brand_id) pairs from parsed sync account entries."""
+    pairs: set[tuple[str, str | None]] = set()
+    for a in accounts:
+        brand = a.get("brand", {})
+        domain = brand.get("domain")
+        if domain:
+            pairs.add((domain, brand.get("brand_id")))
+    return pairs
+
+
 def _parse_sync_table(datatable: Any) -> list[dict[str, Any]]:
     """Parse a Gherkin data table into sync_accounts account entries.
 
@@ -730,6 +755,8 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
+
+    ctx["sync_request_brand_pairs"] = _extract_brand_pairs(accounts)
 
     kwargs: dict[str, Any] = {}
 
@@ -875,14 +902,16 @@ def then_n_account_results(ctx: dict, count: int) -> None:
 
 @then("each account echoes brand domain and brand_id from the request")
 def then_all_accounts_echo_brand(ctx: dict) -> None:
-    """Assert each account in the response has non-empty brand domain and brand_id."""
+    """Assert each response account's brand domain+brand_id matches a submitted pair."""
     resp = ctx["response"]
+    submitted = ctx.get("sync_request_brand_pairs")
+    assert submitted, "Test setup error: sync_request_brand_pairs not tracked by When step"
     for acct in resp.accounts:
         brand = acct.brand
         domain = brand.domain
         bid = _brand_id_str(getattr(brand, "brand_id", None))
-        assert isinstance(domain, str) and domain, f"Account missing non-empty brand domain: {brand}"
-        assert isinstance(bid, str) and bid, f"Account for {domain!r} missing non-empty brand_id: {brand}"
+        pair = (domain, bid)
+        assert pair in submitted, f"Response brand pair {pair} not in submitted pairs {submitted}"
 
 
 @then(parsers.parse('the account operator is "{operator}"'))
@@ -986,29 +1015,52 @@ def then_error_has_suggestion(ctx: dict) -> None:
 
 @then(parsers.parse("the response contains an errors array with at least {count:d} error"))
 def then_errors_array(ctx: dict, count: int) -> None:
-    """Assert the error response contains errors (mapped from exception)."""
+    """Assert the error response contains at least count structured errors.
+
+    Production maps exceptions to error responses. If the exception carries
+    a structured ``errors`` list, verify its length. Otherwise a single
+    exception maps to exactly 1 error.
+    """
     error = _get_error(ctx)
-    # The error itself represents at least 1 error
-    assert count >= 1, f"Expected at least 1 error, got count={count}"
-    assert error is not None, "Expected errors array with at least 1 error"
+    # Check for structured errors list on the exception
+    errors_list = getattr(error, "errors", None)
+    if isinstance(errors_list, (list, tuple)):
+        actual = len(errors_list)
+    else:
+        actual = 1  # single exception = 1 error
+    assert actual >= count, f"Expected at least {count} error(s), got {actual}: {error}"
+    # Verify no success response leaked through
+    assert ctx.get("response") is None, "Expected error variant (no success response) when errors array is present"
 
 
 @then("the response does not contain an accounts array")
 def then_no_accounts_in_response(ctx: dict) -> None:
-    """Assert the error response has no accounts array."""
+    """Assert the error response has no accounts array.
+
+    In the error variant, ctx['response'] is None (error raised).
+    Verify no success response leaked through.
+    """
+    _get_error(ctx)  # Confirm we're in the error path
     resp = ctx.get("response")
-    if resp is not None:
-        accounts = getattr(resp, "accounts", None)
-        assert accounts is None or len(accounts) == 0, f"Expected no accounts in error response, got {len(accounts)}"
+    assert resp is None, f"Expected no success response in error variant, got: {resp}"
 
 
 @then("the response does not contain a dry_run field")
 def then_no_dry_run_field(ctx: dict) -> None:
-    """Assert the response doesn't include dry_run."""
+    """Assert the error variant response doesn't include dry_run.
+
+    This step runs in the error variant scenario where ctx["response"]
+    is None (error was raised). Verify the error itself doesn't leak
+    a dry_run field.
+    """
+    error = ctx.get("error")
+    assert error is not None, "Expected error variant — no error found"
+    # Error variant: no success response should exist
     resp = ctx.get("response")
-    if resp is not None:
-        dry_run = getattr(resp, "dry_run", None)
-        assert dry_run is None, f"Expected no dry_run, got {dry_run}"
+    assert resp is None, f"Expected no success response in error variant, got: {resp}"
+    # Verify the error doesn't carry a dry_run attribute
+    dry_run = getattr(error, "dry_run", None)
+    assert dry_run is None, f"Expected no dry_run on error, got {dry_run}"
 
 
 @then("the response is the error variant of oneOf")
@@ -1020,11 +1072,11 @@ def then_response_is_error_variant(ctx: dict) -> None:
 
 @then("the response contains an accounts array")
 def then_has_accounts_array(ctx: dict) -> None:
-    """Assert the response has an accounts array (non-None list)."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    """Assert the response has a non-empty accounts array."""
+    resp = ctx["response"]
     accounts = resp.accounts  # AttributeError if field missing
     assert isinstance(accounts, list), f"accounts is not a list: {type(accounts)}"
+    assert accounts, "Expected non-empty accounts array in success variant"
 
 
 @then("the response does not contain an operation-level errors array")
@@ -1256,28 +1308,59 @@ def when_push_config(ctx: dict, url: str) -> None:
 
 @then("the system registers the webhook for async account status notifications")
 def then_webhook_registered(ctx: dict) -> None:
-    """Assert webhook URL was recorded (registration, not delivery)."""
-    url = ctx.get("push_notification_url")
-    assert url is not None, "No push_notification_config URL recorded"
+    """Assert webhook URL was registered for async status notifications.
+
+    Verifies that the sync response or error acknowledges the
+    push_notification_config. Production does not yet implement webhook
+    registration, so assert what we can and xfail the gap.
+    """
+    import pytest
+
+    # Assert the sync request completed (response or error exists)
+    assert ctx.get("response") is not None or ctx.get("error") is not None, (
+        "Expected sync to complete before checking webhook registration"
+    )
+    pytest.xfail("SPEC-PRODUCTION GAP: push_notification_config webhook registration not yet implemented in production")
 
 
 @then(parsers.parse('when the account transitions from "{from_status}" to "{to_status}"'))
 def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> None:
-    """Record expected status transition for push notification verification."""
-    ctx["expected_transition"] = (from_status, to_status)
+    """Assert account status transition triggers push notification flow.
+
+    Verifies that the sync created an account and that the from_status
+    is a valid initial state. Production does not yet implement status
+    transition notifications, so assert what we can and xfail the gap.
+    """
+    import pytest
+
+    # Assert the sync created at least one account
+    resp = ctx.get("response")
+    assert resp is not None, "Expected sync response before checking transitions"
+    assert resp.accounts, "Expected at least one account in sync response"
+    # Verify from_status is a plausible initial state
+    assert from_status in {"pending_approval", "active", "suspended", "closed"}, (
+        f"Unexpected from_status: {from_status}"
+    )
+    pytest.xfail("SPEC-PRODUCTION GAP: async account status transition notifications not yet implemented in production")
 
 
 @then(parsers.parse('a push notification is sent to "{url}"'))
 def then_push_sent(ctx: dict, url: str) -> None:
-    """Assert push notification would be sent to the URL.
+    """Assert push notification is delivered to the specified URL.
 
-    Push delivery is asynchronous — this step verifies the registration
-    and expected transition were recorded. Actual delivery is handled
-    by the webhook delivery service.
+    Verifies that the sync completed successfully (prerequisite for push
+    delivery). Production does not yet implement webhook push delivery,
+    so assert the prerequisite and xfail the delivery check.
     """
-    assert ctx.get("push_notification_url") == url, (
-        f"Expected push to {url}, registered: {ctx.get('push_notification_url')}"
-    )
+    import pytest
+
+    # Assert the sync completed before push can fire
+    resp = ctx.get("response")
+    assert resp is not None, "Expected sync response before push notification"
+    assert resp.accounts, "Expected accounts in sync response before push"
+    # Verify the URL is well-formed
+    assert url.startswith("https://"), f"Push URL should be HTTPS, got: {url}"
+    pytest.xfail("SPEC-PRODUCTION GAP: push notification delivery to webhook URL not yet implemented in production")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1911,11 +1994,16 @@ def then_empty_accounts_error(ctx: dict) -> None:
 
 @then("the per-account error indicates brand domain is required")
 def then_brand_required_error(ctx: dict) -> None:
-    """Assert the error mentions missing brand domain."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error about missing brand domain"
+    """Assert the error indicates brand domain is required.
+
+    The error must mention both 'brand'/'domain' AND 'required'/'missing'
+    to confirm it's specifically about the missing brand domain field.
+    """
+    error = _get_error(ctx)
     msg = str(error).lower()
-    assert "brand" in msg or "domain" in msg or "required" in msg, f"Expected error about brand domain, got: {error}"
+    has_brand_ref = "brand" in msg or "domain" in msg
+    has_required_ref = "required" in msg or "missing" in msg
+    assert has_brand_ref and has_required_ref, f"Expected error about brand domain being required, got: {error}"
 
 
 @then("the per-account error indicates operator is required")
