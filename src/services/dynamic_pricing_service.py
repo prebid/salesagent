@@ -90,7 +90,7 @@ class DynamicPricingService:
         # Extract creative sizes from product format IDs
         # Format IDs like "display_300x250" -> "300x250"
         creative_sizes = []
-        for format_id in product.format_ids:
+        for format_id in product.format_ids or []:
             # Handle FormatId objects (dict or object with .id attribute)
             # Pydantic validation may return dict, object, or string depending on context
             if isinstance(format_id, dict):

@@ -29,6 +29,7 @@ from core.platforms._delegate import (
 )
 from src.core.schemas import CreateMediaBuySuccess, MediaBuyStatus, UpdateMediaBuySuccess
 from src.core.schemas._base import CreateMediaBuyResult
+from tests.helpers.adcp_versions import explicit_adcp_version
 
 
 class TestCheckMajorVersion:
@@ -99,7 +100,8 @@ class TestRequestedVersionResolution:
         assert _resolve_requested_version({}) == "3.0"
 
     def test_explicit_3_1_beta_is_preserved(self) -> None:
-        assert _resolve_requested_version({"adcp_version": "3.1.0-beta.3"}) == "3.1-beta.3"
+        version = explicit_adcp_version()
+        assert _resolve_requested_version({"adcp_version": version}) == version
 
     def test_unsupported_version_raises_wire_error(self) -> None:
         with pytest.raises(AdcpError) as exc:
@@ -136,7 +138,7 @@ class TestRequestedVersionWireAdaptation:
             status="completed",
         )
 
-        wire = _to_wire(response, requested_adcp_version="3.1-beta.3", tool_name="create_media_buy")
+        wire = _to_wire(response, requested_adcp_version=explicit_adcp_version(), tool_name="create_media_buy")
 
         assert wire["status"] == "completed"
         assert wire["media_buy_status"] == "pending_creatives"

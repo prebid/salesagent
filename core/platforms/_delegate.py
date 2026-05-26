@@ -32,6 +32,7 @@ from typing import Any
 from adcp.decisioning import AdcpError, RequestContext
 from adcp.server import UnsupportedVersionError, current_transport, resolve_requested_adcp_version
 from adcp.server.auth import current_principal
+from adcp.validation.envelope import get_supported_adcp_versions
 from pydantic import BaseModel, ValidationError
 
 from src.core.config_loader import get_tenant_by_id
@@ -60,7 +61,9 @@ from src.core.tools.signals import _get_signals_impl
 logger = logging.getLogger(__name__)
 
 # Release-precision AdCP versions this agent serves on the native v3 surface.
-SUPPORTED_ADCP_VERSIONS: tuple[str, ...] = ("3.0", "3.1-beta.3")
+# Keep this sourced from the SDK so beta bumps automatically advertise the
+# packaged spec version instead of leaving stale local constants behind.
+SUPPORTED_ADCP_VERSIONS: tuple[str, ...] = get_supported_adcp_versions()
 
 # Process-singleton guard so the misconfig WARNING (see _build_identity)
 # fires once per process rather than once per request — repeated logs

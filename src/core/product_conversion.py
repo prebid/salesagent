@@ -12,6 +12,7 @@ V3 Migration Notes:
 """
 
 import logging
+from typing import Any
 from unittest.mock import Mock
 
 from adcp import (
@@ -29,6 +30,27 @@ from src.core.resolved_product import ResolvedProduct
 from src.core.schemas import Product
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_product_placements(placements: Any) -> Any:
+    """Project legacy stored placement dicts onto the current SDK shape."""
+    if not isinstance(placements, list):
+        return placements
+
+    normalized = []
+    for placement in placements:
+        if hasattr(placement, "model_dump"):
+            placement_data = placement.model_dump(mode="json", exclude_none=True)
+        elif isinstance(placement, dict):
+            placement_data = dict(placement)
+        else:
+            normalized.append(placement)
+            continue
+
+        placement_data.setdefault("kind", "seller_inline")
+        placement_data.setdefault("mode", "targetable")
+        normalized.append(placement_data)
+    return normalized
 
 
 def convert_pricing_option_to_adcp(
@@ -330,7 +352,6 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         "creative_policy",
         "product_card",
         "product_card_detailed",
-        "placements",
         "property_targeting_allowed",
         "signal_targeting_allowed",
         "catalog_match",
@@ -346,6 +367,10 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         value = getattr(product_model, field_name, None)
         if value is not None and not isinstance(value, Mock):
             product_data[field_name] = value
+
+    placements = getattr(product_model, "placements", None)
+    if placements is not None and not isinstance(placements, Mock):
+        product_data["placements"] = _normalize_product_placements(placements)
 
     # channels: DB stores strings, schema uses MediaChannel enum.
     if product_model.channels:

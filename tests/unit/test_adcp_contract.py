@@ -3065,9 +3065,17 @@ class TestProductV36FieldContract:
     def test_placements_present_when_set(self):
         """placements appears in model_dump with correct Placement structure."""
         placements = [
-            {"placement_id": "top_banner", "name": "Top Banner", "description": "Above the fold"},
             {
+                "kind": "seller_inline",
+                "placement_id": "top_banner",
+                "mode": "targetable",
+                "name": "Top Banner",
+                "description": "Above the fold",
+            },
+            {
+                "kind": "seller_inline",
                 "placement_id": "sidebar",
+                "mode": "targetable",
                 "name": "Sidebar",
                 "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             },
@@ -3305,6 +3313,8 @@ class TestProductV36FieldContract:
         assert dump["product_card"]["manifest"]["headline"] == "Test"
         assert dump["product_card_detailed"]["manifest"]["body"] == "Details"
         assert dump["placements"][0]["placement_id"] == "top"
+        assert json_dump["placements"][0]["kind"] == "seller_inline"
+        assert json_dump["placements"][0]["mode"] == "targetable"
         assert dump["reporting_capabilities"]["expected_delay_minutes"] == 30
         assert dump["catalog_match"]["submitted_count"] == 100
         assert len(dump["catalog_types"]) == 2

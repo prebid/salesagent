@@ -40,6 +40,7 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.harness._asgi_app import run_on_app_loop
+from tests.helpers.adcp_versions import explicit_adcp_version
 
 
 def _call_mcp_raw(tool_name: str, arguments: dict[str, Any], authenticated_principal: dict[str, str]) -> Any:
@@ -235,7 +236,7 @@ def _create_media_buy_payload(
     product_id = authenticated_principal["product_id"]
 
     return {
-        "adcp_version": "3.1-beta.3",
+        "adcp_version": explicit_adcp_version(),
         "account": {"account_id": account_id},
         "idempotency_key": idempotency_key,
         "brand": {"domain": "testbrand.example"},

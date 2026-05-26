@@ -187,7 +187,7 @@ def _signal_matches_spec(signal: Signal, signal_spec: str | None) -> bool:
             signal.name,
             signal.description,
             signal.signal_type.value,
-            signal.data_provider,
+            signal.data_provider or "",
         ]
     ).lower()
     if spec_lower in searchable_text:
