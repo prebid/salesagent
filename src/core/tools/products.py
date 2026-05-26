@@ -24,6 +24,7 @@ from src.core.schemas import (
     GetProductsResponse,  # Extends library Product
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tracing import traced
 from src.core.validation_helpers import safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -174,6 +175,7 @@ def _is_buyer_visible_product_model(product_model: Any) -> bool:
     return implementation_config.get("status") not in {"draft", "archived"}
 
 
+@traced
 async def _get_products_impl(
     req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:

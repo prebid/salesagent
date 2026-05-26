@@ -39,6 +39,7 @@ from src.core.schemas.account import (
     SyncAccountsResponse,
     SyncResponseAccount,
 )
+from src.core.tracing import traced
 from src.services.protocol_change_webhooks import notify_account_status_changed_async
 from src.services.push_notification_registration import (
     normalize_push_notification_config,
@@ -166,6 +167,7 @@ def _apply_pagination(
     )
 
 
+@traced
 def _list_accounts_impl(
     req: ListAccountsRequest | None = None,
     identity: ResolvedIdentity | None = None,
@@ -486,6 +488,7 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
     return brand_domain, brand_id, operator, sandbox
 
 
+@traced
 async def _sync_accounts_impl(
     req: SyncAccountsRequest | None = None,
     identity: ResolvedIdentity | None = None,

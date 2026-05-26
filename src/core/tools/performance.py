@@ -21,9 +21,11 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
 from src.core.tools.media_buy_update import _verify_principal
+from src.core.tracing import traced
 from src.core.validation_helpers import format_validation_error
 
 
+@traced
 def _update_performance_index_impl(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],

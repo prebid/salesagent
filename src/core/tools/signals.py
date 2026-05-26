@@ -13,6 +13,7 @@ import uuid
 from typing import Any
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.tracing import traced
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +377,7 @@ def _validate_signal_discovery_request(req: GetSignalsRequest) -> None:
         )
 
 
+@traced
 async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
     """Shared implementation for get_signals (used by both MCP and A2A).
 
@@ -499,6 +501,7 @@ def current_signal_feed_version(tenant_id: str, *, ad_server: str | None = None,
     return _signal_feed_version(_build_signal_feed(tenant_id, ad_server=ad_server, agent_url=agent_url))
 
 
+@traced
 async def _activate_signal_impl(
     signal_agent_segment_id: str,
     campaign_id: str = None,

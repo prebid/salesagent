@@ -15,6 +15,7 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPNotImplementedInEmb
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeAsset, SyncCreativeResult, SyncCreativesResponse
+from src.core.tracing import traced
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 
 from ._assignments import _process_assignments
@@ -45,6 +46,7 @@ def _effective_approval_mode(approval_mode: str) -> str:
     )
 
 
+@traced
 def _sync_creatives_impl(
     creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]],
     assignments: dict | None = None,

@@ -35,8 +35,10 @@ from src.core.audit_logger import get_audit_logger
 from src.core.format_cache import canonical_format_matches
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
+from src.core.tracing import traced
 
 
+@traced
 def _list_creative_formats_impl(
     req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity | None
 ) -> ListCreativeFormatsResponse:

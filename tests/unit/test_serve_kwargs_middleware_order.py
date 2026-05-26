@@ -21,6 +21,7 @@ import pytest
 
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.origin_guard import BuyerProtocolOriginGuardMiddleware
+from src.core.middleware.tracing import TracingMiddleware
 from src.core.signing import SigningVerifyMiddleware
 
 
@@ -44,11 +45,21 @@ def middleware_classes() -> list[type]:
     return [entry[0] for entry in kwargs["asgi_middleware"]]
 
 
-def test_admin_wsgi_mount_runs_first(middleware_classes):
-    """Admin paths must short-circuit to Flask before any buyer-protocol
-    middleware sees them."""
-    assert middleware_classes[0] is AdminWSGIMount, (
-        f"AdminWSGIMount must be first in asgi_middleware; got order: {[c.__name__ for c in middleware_classes]}"
+def test_tracing_middleware_runs_outermost(middleware_classes):
+    """TracingMiddleware must be the outermost wrapper so every request,
+    including admin paths, gets a trace span."""
+    assert middleware_classes[0] is TracingMiddleware, (
+        f"TracingMiddleware must be first in asgi_middleware; got order: {[c.__name__ for c in middleware_classes]}"
+    )
+
+
+def test_admin_wsgi_mount_runs_before_buyer_protocol(middleware_classes):
+    """Admin paths must short-circuit to Flask before buyer-protocol
+    middlewares see them."""
+    tracing_index = middleware_classes.index(TracingMiddleware)
+    admin_index = middleware_classes.index(AdminWSGIMount)
+    assert admin_index == tracing_index + 1, (
+        f"AdminWSGIMount must immediately follow TracingMiddleware; got order: {[c.__name__ for c in middleware_classes]}"
     )
 
 

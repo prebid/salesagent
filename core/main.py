@@ -89,7 +89,9 @@ from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
+from src.core.middleware.tracing import TracingMiddleware
 from src.core.signing import SigningVerifyMiddleware
+from src.core.telemetry import shutdown_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -721,6 +723,7 @@ def _serve_kwargs(
     allowed_origins = _allowed_origins()
 
     asgi_middleware: list = [
+        (TracingMiddleware, {}),
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
         # DualCredentialAuditMiddleware logs WARNING when an inbound
         # request carries two different bearer tokens (one in
@@ -761,7 +764,11 @@ def _serve_kwargs(
     # the store against per-test databases. ``close_proposal_store``
     # on shutdown drains in-flight connections before serve() exits.
     on_startup = [_start_schedulers] if include_scheduler else None
-    on_shutdown = [_stop_schedulers, close_proposal_store] if include_scheduler else [close_proposal_store]
+    on_shutdown = (
+        [_stop_schedulers, close_proposal_store, shutdown_telemetry]
+        if include_scheduler
+        else [close_proposal_store, shutdown_telemetry]
+    )
 
     return {
         "router": router,

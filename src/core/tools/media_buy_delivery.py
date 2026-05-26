@@ -17,6 +17,7 @@ from pydantic import RootModel
 from rich.console import Console
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.tracing import traced
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -147,6 +148,7 @@ def _is_circuit_breaker_open(tenant_id: str) -> bool:
     return webhook_delivery_service.has_open_circuit_breaker(tenant_id)
 
 
+@traced
 def _get_media_buy_delivery_impl(
     req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity | None
 ) -> GetMediaBuyDeliveryResponse:

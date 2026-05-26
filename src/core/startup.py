@@ -4,8 +4,24 @@ import logging
 
 from src.core.config import validate_configuration
 from src.core.logging_config import setup_oauth_logging, setup_structured_logging
+from src.core.telemetry import init_telemetry
 
 logger = logging.getLogger(__name__)
+
+
+def instrument_sqlalchemy() -> None:
+    """Instrument SQLAlchemy engines for OTEL tracing.
+
+    No-op when tracing is disabled.
+    """
+    from src.core.telemetry import is_tracing_enabled
+
+    if not is_tracing_enabled():
+        return
+
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+    SQLAlchemyInstrumentor().instrument()
 
 
 def initialize_application() -> None:
@@ -20,6 +36,9 @@ def initialize_application() -> None:
         # Setup structured logging FIRST (before any logging calls)
         # This ensures production environments get JSON logs
         setup_structured_logging()
+
+        init_telemetry()
+        instrument_sqlalchemy()
 
         logger.info("Initializing Prebid Sales Agent...")
 

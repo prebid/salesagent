@@ -35,6 +35,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
+from src.core.tracing import traced
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +336,7 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
         raise AdCPAuthorizationError(f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.")
 
 
+@traced
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,

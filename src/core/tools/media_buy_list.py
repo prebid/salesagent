@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.tracing import traced
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ from src.core.tools._gam_projection import (
 )
 
 
+@traced
 def _get_media_buys_impl(
     req: GetMediaBuysRequest,
     identity: ResolvedIdentity | None = None,

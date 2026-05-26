@@ -38,6 +38,7 @@ from src.core.exceptions import (
     AdCPTermsRejectedError,
     AdCPValidationError,
 )
+from src.core.tracing import traced
 
 # Conservative seller policy for measurement_terms negotiation.
 # Buyers propose; sellers accept, reject, or adjust. The minimum variance the
@@ -2110,6 +2111,7 @@ def _package_from_config(db_package: Any) -> Package:
     return Package(**kwargs)
 
 
+@traced
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | None = None,

@@ -12,6 +12,11 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+try:
+    from opentelemetry import trace
+except ImportError:
+    trace = None  # type: ignore[assignment]
+
 
 class ClientDisconnectFilter(logging.Filter):
     """Filter out noisy ClientDisconnect errors from MCP library.
@@ -116,6 +121,12 @@ class JSONFormatter(logging.Formatter):
         extra_fields = {k: v for k, v in record.__dict__.items() if k not in standard_attrs}
         if extra_fields:
             log_entry["extra"] = extra_fields
+
+        if trace is not None:
+            span = trace.get_current_span()
+            ctx = span.get_span_context() if span else None
+            if ctx and ctx.is_valid:
+                log_entry["trace_id"] = format(ctx.trace_id, "032x")
 
         return json.dumps(log_entry)
 

@@ -44,6 +44,9 @@ dependencies = [
     "markdown>=3.4.0",
     "babel>=2.17.0",
     "logfire>=4.16.0",
+    "opentelemetry-sdk>=1.39.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.39.0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.60b0",
     # >=1.99.0 clears GHSA-cqp8-fcvh-x7r3 (CVE-2026-46678): IPv6 transition-form
     # bypass of the cloud-metadata blocklist when ``allow-local`` is enabled.
     # We don't enable allow-local but Security Audit gates on the advisory.
