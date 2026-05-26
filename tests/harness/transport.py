@@ -46,12 +46,17 @@ class TransportResult:
         envelope: Transport-specific metadata (HTTP status, ToolResult, etc.).
         error: Exception raised during dispatch, if any.
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
+        wire_error_envelope: Raw two-layer error envelope dict from the wire,
+            before reconstruction.  ``None`` on success.  This is the canonical
+            field for error verification — see ``tests/CLAUDE.md`` § Error
+            Verification Policy.
     """
 
     payload: BaseModel | None = None
     envelope: dict[str, Any] = field(default_factory=dict)
     error: Exception | None = None
     raw_response: Any = None
+    wire_error_envelope: dict[str, Any] | None = None
 
     @property
     def is_success(self) -> bool:

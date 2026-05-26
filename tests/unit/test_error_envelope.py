@@ -2,8 +2,8 @@
 
 This serializer is the single source of truth for AdCP spec-compliant
 two-layer error responses. Boundary translators (MCP, A2A, REST) and
-ContextManager.fail_step both call this so wire responses and persisted
-workflow_step.response_data are byte-identical by construction.
+ContextManager.fail_workflow_step_for_exception all call this so wire
+responses and persisted workflow_step.response_data share the same shape.
 
 The two-layer model is normative since AdCP spec 3.0.6 (CHANGELOG 91b6e2c).
 Storyboard runners (e.g., @adcp/sdk@6.11.0) read errors[0].code AND

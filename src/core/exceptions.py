@@ -507,10 +507,11 @@ class AdCPProductUnavailableError(AdCPError):
 # ---------------------------------------------------------------------------
 # Two-layer envelope serializer — single source of truth for wire shape.
 # ---------------------------------------------------------------------------
-# Boundary translators (MCP, A2A, REST) AND ContextManager.fail_step both
-# call this so wire responses and persisted workflow_step.response_data are
-# byte-identical by construction. _impl functions never build wire shape;
-# they raise AdCPError subclasses and the boundary translator runs this.
+# All three boundary translators (MCP, A2A, REST) and
+# ContextManager.fail_workflow_step_for_exception call this so wire
+# responses and persisted workflow_step.response_data share the same
+# two-layer shape. _impl functions never build wire shape; they raise
+# AdCPError subclasses and the boundary translator runs this.
 #
 # Spec: two-layer model is normative since AdCP 3.0.6 (CHANGELOG 91b6e2c).
 # Storyboard runners (@adcp/sdk 6.11.0+) check errors[0].code (when
@@ -557,3 +558,21 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     if serialized_context is not None:
         envelope["context"] = serialized_context
     return envelope
+
+
+def normalize_to_adcp_error(exc: Exception) -> AdCPError:
+    """Normalize untyped exceptions to typed AdCPError subclasses.
+
+    Single source of truth for the wrapping applied at all three transport
+    boundaries (MCP, A2A, REST).  Already-typed ``AdCPError`` passes through
+    unchanged.  ``ValueError`` maps to ``AdCPValidationError``,
+    ``PermissionError`` to ``AdCPAuthorizationError``, and anything else
+    wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    """
+    if isinstance(exc, AdCPError):
+        return exc
+    if isinstance(exc, ValueError):
+        return AdCPValidationError(str(exc))
+    if isinstance(exc, PermissionError):
+        return AdCPAuthorizationError(str(exc))
+    return AdCPError(str(exc) or type(exc).__name__)

@@ -92,9 +92,9 @@ class TestMcpWireErrorEnvelope:
         envelope = json.loads(envelope_text)
 
         # CRITICAL: spec two-layer envelope shape on the wire.
-        assert (
-            "adcp_error" in envelope
-        ), f"Wire envelope must include top-level adcp_error. Got keys: {sorted(envelope.keys())}"
+        assert "adcp_error" in envelope, (
+            f"Wire envelope must include top-level adcp_error. Got keys: {sorted(envelope.keys())}"
+        )
         assert "errors" in envelope, f"Wire envelope must include errors array. Got keys: {sorted(envelope.keys())}"
 
         # NOT_FOUND → INVALID_REQUEST via STANDARD_ERROR_CODES wire translation.
@@ -102,20 +102,20 @@ class TestMcpWireErrorEnvelope:
             f"Envelope-level code: NOT_FOUND must translate to INVALID_REQUEST on the wire, "
             f"got {envelope['adcp_error'].get('code')}"
         )
-        assert (
-            envelope["adcp_error"]["recovery"] == "terminal"
-        ), f"AdCPNotFoundError default recovery is terminal, got {envelope['adcp_error'].get('recovery')}"
-        assert (
-            "mb_does_not_exist_pr1306_wire_test" in envelope["adcp_error"]["message"]
-        ), f"Envelope message must echo the missing media_buy_id, got: {envelope['adcp_error']['message']}"
+        assert envelope["adcp_error"]["recovery"] == "terminal", (
+            f"AdCPNotFoundError default recovery is terminal, got {envelope['adcp_error'].get('recovery')}"
+        )
+        assert "mb_does_not_exist_pr1306_wire_test" in envelope["adcp_error"]["message"], (
+            f"Envelope message must echo the missing media_buy_id, got: {envelope['adcp_error']['message']}"
+        )
 
         # errors[0] mirrors envelope-level adcp_error (single-error case).
         assert len(envelope["errors"]) > 0, "errors array must be non-empty"
         err = envelope["errors"][0]
         assert err["code"] == "INVALID_REQUEST", f"errors[0].code must match envelope code, got: {err.get('code')}"
-        assert (
-            err["recovery"] == "terminal"
-        ), f"errors[0].recovery must match envelope recovery, got: {err.get('recovery')}"
-        assert (
-            err["message"] == envelope["adcp_error"]["message"]
-        ), "errors[0].message must be byte-identical to adcp_error.message in single-error case"
+        assert err["recovery"] == "terminal", (
+            f"errors[0].recovery must match envelope recovery, got: {err.get('recovery')}"
+        )
+        assert err["message"] == envelope["adcp_error"]["message"], (
+            "errors[0].message must be byte-identical to adcp_error.message in single-error case"
+        )
