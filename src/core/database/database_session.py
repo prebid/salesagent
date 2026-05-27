@@ -88,7 +88,7 @@ def get_engine():
                 "Individual DB_HOST/DB_PORT/DB_USER/DB_PASSWORD variables are not supported."
             )
 
-        if "postgresql" not in connection_string:
+        if not connection_string.startswith(("postgresql://", "postgresql+", "postgres://")):
             raise ValueError("Only PostgreSQL is supported. Use DATABASE_URL=postgresql://...")
 
         # Get timeout configuration from environment
