@@ -253,7 +253,7 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
     return asgn.assignment_id
 
 
-_PUSH_PATCH = "src.core.tools.media_buy_create.push_creative_to_existing_buy"
+_PUSH_PATCH = "src.admin.blueprints.creatives.push_creative_to_existing_buy"
 
 
 class TestCreativeApprovalRetroactivePush:
