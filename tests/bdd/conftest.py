@@ -1157,11 +1157,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "production does not validate start_date>=end_date (same gap as "
                 "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
+            # Transport-scoped: impl genuinely PASSES start>=end on the _impl
+            # path now. a2a/mcp/rest still don't enforce the gap.
             (
                 "T-UC-004-boundary-date-range",
-                {"start_date after end_date", "start_date equals end_date"},
-                "production does not validate start_date>=end_date (same gap as "
-                "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
+                {
+                    "a2a-start_date after end_date",
+                    "mcp-start_date after end_date",
+                    "rest-start_date after end_date",
+                    "a2a-start_date equals end_date",
+                    "mcp-start_date equals end_date",
+                    "rest-start_date equals end_date",
+                },
+                "production does not validate start_date>=end_date on a2a/mcp/rest "
+                "(impl passes). Same gap as T-UC-004-daterange-invalid/-equal. "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # end-only date_range default (salesagent-losz / debt C7, Gap G40):
             # when only end_date is provided, the spec says start_date defaults
@@ -1328,25 +1338,46 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "cross-principal access returns 200+empty instead of "
                 "AdCPError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
             ),
+            # Transport-scoped: impl genuinely PASSES "principal differs from owner"
+            # (production raises AdCPError on cross-principal access at the _impl
+            # boundary). a2a/mcp/rest still return 200+empty — C3 gap remains there.
             (
                 "T-UC-004-boundary-ownership",
-                {"principal differs from owner"},
+                {
+                    "a2a-principal differs from owner",
+                    "mcp-principal differs from owner",
+                    "rest-principal differs from owner",
+                },
                 "cross-principal access returns 200+empty instead of "
-                "AdCPError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
+                "AdCPError(MEDIA_BUY_NOT_FOUND). impl genuinely passes. "
+                "See docs/test-debt-bdd-strict-markers.md item C3.",
             ),
             # status-filter (salesagent-6vu): all valid single statuses +
             # arrays + (field absent) pass. pending_activation rows fail
             # (Gherkin uses a non-spec MediaBuyStatus — item B1); empty-array /
             # unknown-value "failed" rows raise ValidationError not
             # AdCPError(INVALID_REQUEST) — item C4.
-            # partition: single_pending / unknown_value(failed) / empty_array
-            # fail on all 4 transports, so plain substrings are exact.
+            # partition: impl now genuinely PASSES single_pending (production
+            # normalizes the legacy 'pending_activation' label). a2a/mcp/rest
+            # still fail on the unknown-value/empty-array C4 normalization.
             (
                 "T-UC-004-partition-status-filter",
-                {"single_pending", "empty_array", "unknown_value"},
+                {
+                    "a2a-single_pending",
+                    "mcp-single_pending",
+                    "rest-single_pending",
+                    "a2a-empty_array",
+                    "mcp-empty_array",
+                    "rest-empty_array",
+                    "a2a-unknown_value",
+                    "mcp-unknown_value",
+                    "rest-unknown_value",
+                },
                 "single_pending: Gherkin 'pending_activation' is not a valid AdCP "
-                "MediaBuyStatus (item B1). empty_array/unknown_value: ValidationError "
-                "not AdCPError(INVALID_REQUEST) (item C4). See docs/test-debt-bdd-strict-markers.md.",
+                "MediaBuyStatus (item B1) — impl normalizes the legacy label, "
+                "a2a/mcp/rest do not. empty_array/unknown_value: ValidationError "
+                "not AdCPError(INVALID_REQUEST) (item C4). "
+                "See docs/test-debt-bdd-strict-markers.md.",
             ),
             # boundary: pending_activation fails everywhere; the 'failed' /
             # '[] (empty array...)' rows pass on impl/rest (ValidationError
