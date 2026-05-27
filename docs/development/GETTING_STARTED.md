@@ -10,6 +10,11 @@ Set up the Prebid Sales Agent for local development.
 | Docker + Compose | Latest | [docker.com](https://docs.docker.com/get-docker/) |
 | Git | Any | [git-scm.com](https://git-scm.com/downloads) |
 | uv | Latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| ast-grep | Latest | `brew install ast-grep` (macOS) or [ast-grep.github.io](https://ast-grep.github.io/guide/quick-start.html) |
+
+> **Note:** `ast-grep` is a Rust CLI tool used by the `ast-grep-bdd-guards` pre-commit hook for BDD
+> step structural pattern detection. It cannot be installed via `uv` — it requires a separate system
+> install. Without it, commits that touch `tests/bdd/steps/` will be blocked locally.
 
 ## One-Command Setup
 

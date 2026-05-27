@@ -118,11 +118,14 @@ def get_engine():
             )
         else:
             logger.info("Direct PostgreSQL connection - using standard connection pool settings")
-            # Direct PostgreSQL settings (no PgBouncer)
+            # Direct PostgreSQL settings (no PgBouncer).
+            # DB_POOL_SIZE / DB_MAX_OVERFLOW env vars allow CI to tune the pool
+            # down (e.g. DB_POOL_SIZE=4 DB_MAX_OVERFLOW=8) without code changes,
+            # preventing postgres max_connections exhaustion in GHA runners (D40).
             _engine = create_engine(
                 connection_string,
-                pool_size=10,  # Base connections in pool
-                max_overflow=20,  # Additional connections beyond pool_size
+                pool_size=int(os.environ.get("DB_POOL_SIZE", "10")),
+                max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "20")),
                 pool_timeout=pool_timeout,  # Seconds to wait for connection from pool
                 pool_recycle=3600,  # Recycle connections after 1 hour
                 pool_pre_ping=True,  # Test connections before use

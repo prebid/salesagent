@@ -13,10 +13,7 @@ Regression prevention: https://github.com/prebid/salesagent/pull/1066
 Beads: salesagent-6931
 """
 
-from unittest.mock import patch
-
 from src.core.auth_context import AuthContext
-from src.core.resolved_identity import ResolvedIdentity
 
 
 class TestResolveAuthTokenPassthrough:
@@ -24,32 +21,9 @@ class TestResolveAuthTokenPassthrough:
 
     def test_resolve_auth_passes_extracted_token(self):
         """_resolve_auth_dep should pass auth_ctx.auth_token to resolve_identity()."""
-        from src.core.auth_context import _resolve_auth_dep
+        from tests.helpers import assert_resolve_auth_dep_passes_token
 
-        auth_ctx = AuthContext(
-            auth_token="pre-extracted-token",
-            headers={"authorization": "Bearer pre-extracted-token"},
-        )
-
-        mock_identity = ResolvedIdentity(
-            principal_id="test_principal",
-            tenant_id="default",
-            tenant={"tenant_id": "default"},
-            protocol="rest",
-        )
-
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
-            _resolve_auth_dep(auth_ctx)
-
-        # resolve_identity should receive the pre-extracted token
-        mock_resolve.assert_called_once()
-        call_kwargs = mock_resolve.call_args
-        assert call_kwargs.kwargs.get("auth_token") == "pre-extracted-token" or (
-            len(call_kwargs.args) > 1 and call_kwargs.args[1] == "pre-extracted-token"
-        ), (
-            "_resolve_auth_dep should pass auth_ctx.auth_token to resolve_identity() "
-            "to avoid redundant token extraction from headers."
-        )
+        assert_resolve_auth_dep_passes_token()
 
 
 class TestAuthContextNoDeadFields:
@@ -131,6 +105,6 @@ class TestAuthContextDocstringsMatchReality:
             "AuthContext docstring claims 'zero auth logic in handlers' "
             "but handlers call resolve_identity(). Fix docstring."
         )
-        assert "resolves auth" not in docstring_lower, (
-            "AuthContext docstring claims auth resolution but middleware only extracts tokens."
-        )
+        assert (
+            "resolves auth" not in docstring_lower
+        ), "AuthContext docstring claims auth resolution but middleware only extracts tokens."

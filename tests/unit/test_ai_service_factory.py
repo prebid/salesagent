@@ -75,9 +75,9 @@ class TestBuildModelString:
     """Tests for build_model_string function."""
 
     def test_gemini_provider(self):
-        """Gemini uses google-gla prefix."""
+        """Gemini maps to google prefix (google-gla deprecated in pydantic-ai 1.99.0)."""
         result = build_model_string("gemini", "gemini-2.0-flash")
-        assert result == "google-gla:gemini-2.0-flash"
+        assert result == "google:gemini-2.0-flash"
 
     def test_openai_provider(self):
         """OpenAI uses openai prefix."""

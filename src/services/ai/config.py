@@ -76,7 +76,7 @@ def _get_provider_api_key(provider: str) -> str | None:
 def build_model_string(provider: str, model: str) -> str:
     """Build the Pydantic AI model string.
 
-    Pydantic AI uses format: "provider:model" (e.g., "google-gla:gemini-2.0-flash")
+    Pydantic AI uses format: "provider:model" (e.g., "google:gemini-2.0-flash")
 
     Args:
         provider: Provider name (e.g., "google-gla", "anthropic", "gateway/openai")
@@ -85,9 +85,10 @@ def build_model_string(provider: str, model: str) -> str:
     Returns:
         Pydantic AI model string
     """
-    # Handle legacy "gemini" provider name
-    if provider == "gemini":
-        provider = "google-gla"
+    # Normalize legacy and alias provider names to pydantic-ai canonical form.
+    # "gemini" and "google-gla" are both stored in DB configs; "google-gla:" was
+    # deprecated in pydantic-ai 1.99.0 — map both to the new "google:" prefix.
+    if provider in ("gemini", "google-gla"):
+        provider = "google"
 
-    # Provider string is already in Pydantic AI format (e.g., "google-gla", "gateway/anthropic")
     return f"{provider}:{model}"

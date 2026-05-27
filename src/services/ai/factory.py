@@ -147,9 +147,11 @@ class AIServiceFactory:
             from pydantic_ai.models.google import GoogleModel
             from pydantic_ai.providers.google import GoogleProvider
 
+            # pydantic-ai >= 1.99.0 renamed 'google-gla' -> 'google'; use GoogleProvider()
+            # for both paths so the string literal never leaks past the type boundary.
             if api_key:
                 return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-            return GoogleModel(model_name, provider="google-gla")
+            return GoogleModel(model_name, provider=GoogleProvider())
 
         elif provider == "anthropic":
             from pydantic_ai.models.anthropic import AnthropicModel

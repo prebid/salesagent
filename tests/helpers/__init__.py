@@ -3,6 +3,38 @@
 from __future__ import annotations
 
 
+def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token") -> None:
+    """Assert _resolve_auth_dep passes auth_ctx.auth_token to resolve_identity().
+
+    Shared assertion used by multiple test files to verify the token passthrough
+    contract: the pre-extracted token must be forwarded without redundant
+    re-extraction from headers.
+    """
+    from unittest.mock import patch
+
+    from src.core.auth_context import AuthContext, _resolve_auth_dep
+    from src.core.resolved_identity import ResolvedIdentity
+
+    auth_ctx = AuthContext(
+        auth_token=auth_token,
+        headers={"authorization": f"Bearer {auth_token}"},
+    )
+    mock_identity = ResolvedIdentity(
+        principal_id="test_principal",
+        tenant_id="default",
+        tenant={"tenant_id": "default"},
+        protocol="rest",
+    )
+    with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
+        _resolve_auth_dep(auth_ctx)
+
+    mock_resolve.assert_called_once()
+    call_kwargs = mock_resolve.call_args
+    assert call_kwargs.kwargs.get("auth_token") == auth_token or (
+        len(call_kwargs.args) > 1 and call_kwargs.args[1] == auth_token
+    )
+
+
 def assert_effective_properties_normalized(
     effective: list[dict],
     raw: list[dict],
@@ -20,9 +52,9 @@ def assert_effective_properties_normalized(
         for key, value in orig.items():
             assert key in eff, f"[{i}] Missing key {key!r} from original"
             assert eff[key] == value, f"[{i}] {key!r}: {eff[key]!r} != {value!r}"
-        assert eff.get("selection_type") == expected_selection_type, (
-            f"[{i}] selection_type: {eff.get('selection_type')!r} != {expected_selection_type!r}"
-        )
+        assert (
+            eff.get("selection_type") == expected_selection_type
+        ), f"[{i}] selection_type: {eff.get('selection_type')!r} != {expected_selection_type!r}"
 
 
 from tests.helpers.adcp_factories import (
@@ -45,6 +77,8 @@ from tests.helpers.adcp_factories import (
 from tests.helpers.envelope_assertions import assert_envelope_shape
 
 __all__ = [
+    # Auth helpers
+    "assert_resolve_auth_dep_passes_token",
     # Envelope assertions
     "assert_envelope_shape",
     # Product factories

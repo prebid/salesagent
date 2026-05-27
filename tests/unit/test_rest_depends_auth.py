@@ -49,17 +49,17 @@ class TestApiV1NoManualAuthCalls:
         """_resolve_auth should not exist in api_v1 (moved to auth_context Depends)."""
         import src.routes.api_v1 as api_v1_mod
 
-        assert not hasattr(api_v1_mod, "_resolve_auth"), (
-            "_resolve_auth still exists in api_v1.py — should be replaced by Depends"
-        )
+        assert not hasattr(
+            api_v1_mod, "_resolve_auth"
+        ), "_resolve_auth still exists in api_v1.py — should be replaced by Depends"
 
     def test_no_require_auth_in_api_v1(self):
         """_require_auth should not exist in api_v1 (moved to auth_context Depends)."""
         import src.routes.api_v1 as api_v1_mod
 
-        assert not hasattr(api_v1_mod, "_require_auth"), (
-            "_require_auth still exists in api_v1.py — should be replaced by Depends"
-        )
+        assert not hasattr(
+            api_v1_mod, "_require_auth"
+        ), "_require_auth still exists in api_v1.py — should be replaced by Depends"
 
 
 class TestRouteSignaturesUseDependsForIdentity:
@@ -142,9 +142,9 @@ class TestRouteSignaturesUseDependsForIdentity:
         for name in route_names:
             func = getattr(api_v1_mod, name)
             sig = inspect.signature(func)
-            assert "request" not in sig.parameters, (
-                f"{name} still takes 'request' parameter — should use Depends for auth"
-            )
+            assert (
+                "request" not in sig.parameters
+            ), f"{name} still takes 'request' parameter — should use Depends for auth"
 
 
 class TestResolveAuthDepBehavior:
@@ -185,31 +185,9 @@ class TestResolveAuthDepBehavior:
 
     def test_passes_auth_token_to_resolve_identity(self):
         """resolve_auth dep should pass pre-extracted token to avoid redundant extraction."""
-        from unittest.mock import patch
+        from tests.helpers import assert_resolve_auth_dep_passes_token
 
-        from src.core.auth_context import AuthContext, _resolve_auth_dep
-        from src.core.resolved_identity import ResolvedIdentity
-
-        auth_ctx = AuthContext(
-            auth_token="pre-extracted-token",
-            headers={"authorization": "Bearer pre-extracted-token"},
-        )
-
-        mock_identity = ResolvedIdentity(
-            principal_id="test_principal",
-            tenant_id="default",
-            tenant={"tenant_id": "default"},
-            protocol="rest",
-        )
-
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
-            _resolve_auth_dep(auth_ctx)
-
-        mock_resolve.assert_called_once()
-        call_kwargs = mock_resolve.call_args
-        assert call_kwargs.kwargs.get("auth_token") == "pre-extracted-token" or (
-            len(call_kwargs.args) > 1 and call_kwargs.args[1] == "pre-extracted-token"
-        )
+        assert_resolve_auth_dep_passes_token()
 
 
 class TestRequireAuthDepBehavior:

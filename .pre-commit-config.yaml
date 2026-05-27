@@ -291,11 +291,17 @@ repos:
       - id: check-ast
       - id: debug-statements
 
-  - repo: https://github.com/psf/black
-    rev: 87928e6d6761a4a6d22250e1fee5601b3998086e  # frozen: 26.5.1
+  # Per ADR-001: black runs via `uv run` so it resolves from uv.lock,
+  # not from an isolated pre-commit venv. This eliminates black/ruff format
+  # disagreements caused by version drift (issue #1234, fixed in PR 2).
+  - repo: local
     hooks:
       - id: black
-        language_version: python3
+        name: black
+        entry: uv run black
+        language: system
+        types: [python]
+        require_serial: true
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: 0c7b6c989466a93942def1f84baf36ddfcd60c83  # frozen: v0.15.14
@@ -303,31 +309,22 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
 
-  # Type checking with mypy - ENFORCED (0 errors in src/)
-  # After achieving 100% compliance, mypy is now mandatory for all commits
-  #
-  # FIXME(#1234-pr2): This hook still uses mirrors-mypy + additional_dependencies,
-  # which violates ADR-001 (uv.lock as single source of truth). Migration to
-  # language: system / entry: uv run mypy is PR 2 scope — it requires deleting
-  # [project.optional-dependencies].dev and wiring the pydantic.mypy plugin.
-  # Until then, adcp pin here must be kept in sync with uv.lock manually.
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: d2823d321df3af8f878f7ee3414dc94d037145b9  # frozen: v2.1.0
+  # Per ADR-001: mypy runs via `uv run` so it resolves from uv.lock.
+  # This replaced mirrors-mypy + additional_dependencies in PR 2 of issue #1234,
+  # eliminating the adcp/sqlalchemy/fastmcp version drift that was the root cause
+  # of the original bug (adcp 3.2→3.10 drift in mypy's isolated venv).
+  # pydantic.mypy plugin is active because pydantic is in [dependency-groups].dev.
+  - repo: local
     hooks:
       - id: mypy
-        args: [--config-file=mypy.ini]
-        additional_dependencies:
-          - sqlalchemy[mypy]==2.0.36
-          - types-requests
-          - types-python-dateutil
-          - types-pytz
-          - types-Markdown
-          - types-waitress
-          - adcp==4.3.0
-          - fastmcp
-          - alembic
+        name: mypy
+        entry: uv run mypy
+        language: system
+        args: [--config-file=mypy.ini, src/]
         files: '^src/'
         exclude: '^src/adapters/google_ad_manager_original\.py$'
+        pass_filenames: false
+        require_serial: true
 
   # Per D35 — secret detection. Top-OSS norm (24,400+ stars; CNCF, sigstore, Apache).
   - repo: https://github.com/gitleaks/gitleaks

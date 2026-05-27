@@ -2904,12 +2904,12 @@ class TestCreativeWrongBaseClass:
             Creative as ListingCreative,
         )
 
-        assert issubclass(Creative, ListingCreative), (
-            f"Creative must extend the listing Creative (list_creatives_response.Creative), not {Creative.__bases__}"
-        )
-        assert not issubclass(Creative, DeliveryCreative), (
-            "Creative must NOT extend the delivery Creative (get_creative_delivery_response.Creative)"
-        )
+        assert issubclass(
+            Creative, ListingCreative
+        ), f"Creative must extend the listing Creative (list_creatives_response.Creative), not {Creative.__bases__}"
+        assert not issubclass(
+            Creative, DeliveryCreative
+        ), "Creative must NOT extend the delivery Creative (get_creative_delivery_response.Creative)"
 
     def test_list_creatives_response_includes_name(self):
         """name must appear in model_dump() because the listing Creative schema
@@ -3195,9 +3195,9 @@ class TestValidationModeSemantics:
         req = SyncCreativesRequest(creatives=[creative])
         assert req.validation_mode is not None
         # validation_mode is an enum; compare by value
-        assert req.validation_mode.value == "strict", (
-            f"Default validation_mode should be 'strict', got '{req.validation_mode.value}'"
-        )
+        assert (
+            req.validation_mode.value == "strict"
+        ), f"Default validation_mode should be 'strict', got '{req.validation_mode.value}'"
 
 
 # ============================================================================
