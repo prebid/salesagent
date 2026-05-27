@@ -4105,6 +4105,10 @@ async def create_media_buy_raw(
 
     identity = enrich_identity_with_account(identity, req.account)
 
+    # Read context_id when available (FastMCP Context only — A2A callers typically
+    # pass identity directly without ctx, so this is best-effort)
+    _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
+
     # Serialize SDK model to dict for _impl (which uses dict-based config access)
     pnc_dict = (
         push_notification_config.model_dump()
@@ -4112,11 +4116,11 @@ async def create_media_buy_raw(
         else push_notification_config
     )
 
-    # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(
         req=req,
         push_notification_config=pnc_dict,
         identity=identity,
+        context_id=_ctx_id,
     )
 
 

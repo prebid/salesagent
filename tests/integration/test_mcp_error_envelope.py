@@ -13,21 +13,71 @@ Konstantine review (PR #1306, 2026-05-24): mock-only tests do not prove
 wiring; this exercises the full FastMCP pipeline end-to-end with
 Client(mcp) → middleware → TypeAdapter → tool → _impl → typed raise →
 boundary translator → wire envelope.
+
+Production-validator tests (BUDGET_TOO_LOW, INVALID_REQUEST past start_time)
+drive REAL invalid input through the full pipeline — no ``_impl`` patching.
+This exercises the actual production validators
+(src/core/tools/media_buy_create.py:1756 budget, :1791 start_time) and the
+_StructuredValidationError → AdCPValidationError translation at line 2221.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 from fastmcp import Client
 
+from src.core.database.database_session import get_db_session
 from src.core.main import mcp
+from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.adcp_factories import create_test_package_request_dict, setup_error_test_tenant_chain
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+_TENANT_ID = "mcp_envelope_test"
+_PRINCIPAL_ID = "mcp_envelope_principal"
+_ACCESS_TOKEN = "mcp_envelope_token_456"
+_PRODUCT_ID = "mcp_envelope_product"
+
+
+@pytest.fixture
+def mcp_real_tenant_setup(integration_db):
+    """Create tenant + principal + product so production validators see a real DB context.
+
+    Uses the shared ``setup_error_test_tenant_chain`` helper. Returns a
+    fully-bound ResolvedIdentity ready for end-to-end MCP wire tests against
+    real validators (BUDGET_TOO_LOW, INVALID_REQUEST past start_time, etc.).
+    """
+    from src.core.config_loader import set_current_tenant
+
+    with get_db_session() as session:
+        result = setup_error_test_tenant_chain(
+            session,
+            tenant_id=_TENANT_ID,
+            principal_id=_PRINCIPAL_ID,
+            access_token=_ACCESS_TOKEN,
+            product_id=_PRODUCT_ID,
+            subdomain="mcpenv",
+            tenant_name="MCP Envelope Test Tenant",
+            advertiser_id="mock_adv_456",
+        )
+
+        set_current_tenant(result["tenant_dict"])
+
+        identity = ResolvedIdentity(
+            principal_id=_PRINCIPAL_ID,
+            tenant_id=_TENANT_ID,
+            tenant=result["tenant_dict"],
+            auth_token=_ACCESS_TOKEN,
+            protocol="mcp",
+        )
+        yield identity
 
 
 @pytest.mark.integration
@@ -150,54 +200,43 @@ class TestMcpWireErrorEnvelope:
             return is_error, None
         return is_error, json.loads(envelope_text)
 
-    def test_create_media_buy_budget_too_low_emits_envelope_on_wire(self, integration_db):
-        """Typed AdCPValidationError(BUDGET_TOO_LOW) surfaces as a wire envelope.
+    def test_create_media_buy_budget_too_low_emits_envelope_on_wire(self, mcp_real_tenant_setup):
+        """Production BUDGET_TOO_LOW validator surfaces as a spec two-layer envelope on the wire.
 
-        Patches ``_create_media_buy_impl`` to raise the typed AdCPError directly,
-        bypassing the validation prelude (tenant lookup, currency limits, product
-        catalog) that comes before the budget check in production. Verifies the
-        full MCP boundary translator → wire envelope path:
-            typed raise → with_error_logging → _translate_to_tool_error →
-            AdCPToolError → CallToolResult.content[0].text
+        Drives REAL invalid input (per-package ``budget=0``) through the full pipeline:
+            Client(mcp).call_tool("create_media_buy", real_invalid_payload)
+              → middleware resolves identity (patched to use real tenant/principal)
+              → create_media_buy MCP wrapper builds CreateMediaBuyRequest
+              → _create_media_buy_impl validation: get_total_budget() == 0
+              → raise _StructuredValidationError(code="BUDGET_TOO_LOW") (line 1758)
+              → except block translates to AdCPValidationError (line 2221)
+              → with_error_logging → _translate_to_tool_error → wire envelope
 
-        BUDGET_TOO_LOW is a spec STANDARD code (passthrough — not in ERROR_CODE_MAPPING).
+        No ``_impl`` patching — exercises the actual production validator
+        and the structured-error→AdCPError translation path.
+
+        BUDGET_TOO_LOW is a spec STANDARD code (passthrough — not remapped).
         """
-        from src.core.exceptions import AdCPValidationError
+        identity = mcp_real_tenant_setup
+        start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+        end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
 
-        identity = PrincipalFactory.make_identity(protocol="mcp")
-
-        # Patch _impl to raise the typed error the validator would emit at the
-        # production budget site (media_buy_create.py:1760, BUDGET_TOO_LOW).
-        # The pre-raise validation chain (tenant/principal/product/currency lookups)
-        # is not under test here — the wire envelope shape is.
-        async def _raise_budget_too_low(**kwargs):
-            raise AdCPValidationError(
-                "Invalid budget: 0. Budget must be positive.",
-                error_code="BUDGET_TOO_LOW",
-                suggestion="Set each package budget to a positive amount.",
-                field="packages[].budget",
-            )
-
-        with patch(
-            "src.core.tools.media_buy_create._create_media_buy_impl",
-            side_effect=_raise_budget_too_low,
-        ):
-            is_error, envelope = self._call_mcp_tool_capturing_envelope(
-                "create_media_buy",
-                {
-                    "brand": {"domain": "wiretest.example"},
-                    "packages": [
-                        {
-                            "product_id": "p1",
-                            "pricing_option_id": "cpm_usd_fixed",
-                            "budget": 0,
-                        }
-                    ],
-                    "start_time": "2027-01-01T00:00:00Z",
-                    "end_time": "2027-02-01T00:00:00Z",
-                },
-                identity,
-            )
+        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+            "create_media_buy",
+            {
+                "brand": {"domain": "wiretest.example"},
+                "packages": [
+                    create_test_package_request_dict(
+                        product_id=_PRODUCT_ID,
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=0,
+                    )
+                ],
+                "start_time": start_time,
+                "end_time": end_time,
+            },
+            identity,
+        )
 
         assert is_error, "BUDGET_TOO_LOW must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
@@ -213,41 +252,38 @@ class TestMcpWireErrorEnvelope:
         err = envelope["errors"][0]
         assert err["code"] == "BUDGET_TOO_LOW", f"errors[0].code must match envelope code, got {err.get('code')}"
 
-    def test_create_media_buy_validation_error_emits_envelope_on_wire(self, integration_db):
-        """Typed AdCPValidationError(INVALID_REQUEST) surfaces as a wire envelope.
+    def test_create_media_buy_validation_error_emits_envelope_on_wire(self, mcp_real_tenant_setup):
+        """Production past-start-time validator surfaces INVALID_REQUEST on the wire.
 
-        Patches ``_create_media_buy_impl`` to raise the typed error a past-
-        start-time validator would emit (production: media_buy_create.py:1799).
-        Verifies the full MCP boundary translator path.
+        Drives REAL invalid input (``start_time`` in the past) through the
+        full pipeline. Production validator at
+        src/core/tools/media_buy_create.py:1791 raises
+        ``_StructuredValidationError(code="INVALID_REQUEST")``; the except
+        block at line 2221 translates to ``AdCPValidationError``; the MCP
+        boundary translator builds the wire envelope.
 
-        INVALID_REQUEST is a spec STANDARD code (passthrough — not in ERROR_CODE_MAPPING).
+        No ``_impl`` patching — exercises the actual production validator.
+
+        INVALID_REQUEST is a spec STANDARD code (passthrough — not remapped).
         """
-        from src.core.exceptions import AdCPValidationError
+        identity = mcp_real_tenant_setup
 
-        identity = PrincipalFactory.make_identity(protocol="mcp")
-
-        async def _raise_past_start(**kwargs):
-            raise AdCPValidationError(
-                "Invalid start time: 2020-01-01T00:00:00Z. Start time cannot be in the past.",
-                error_code="INVALID_REQUEST",
-                suggestion="Use a future datetime or 'asap' for immediate start.",
-                field="start_time",
-            )
-
-        with patch(
-            "src.core.tools.media_buy_create._create_media_buy_impl",
-            side_effect=_raise_past_start,
-        ):
-            is_error, envelope = self._call_mcp_tool_capturing_envelope(
-                "create_media_buy",
-                {
-                    "brand": {"domain": "wiretest.example"},
-                    "packages": [{"product_id": "p1", "pricing_option_id": "cpm_usd_fixed", "budget": 5000.0}],
-                    "start_time": "2020-01-01T00:00:00Z",
-                    "end_time": "2020-02-01T00:00:00Z",
-                },
-                identity,
-            )
+        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+            "create_media_buy",
+            {
+                "brand": {"domain": "wiretest.example"},
+                "packages": [
+                    create_test_package_request_dict(
+                        product_id=_PRODUCT_ID,
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                "start_time": "2020-01-01T00:00:00Z",  # in the past
+                "end_time": "2020-02-01T00:00:00Z",
+            },
+            identity,
+        )
 
         assert is_error, "INVALID_REQUEST must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"

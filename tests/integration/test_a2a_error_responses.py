@@ -16,24 +16,11 @@ from unittest.mock import MagicMock
 import pytest
 from a2a.server.routes.common import ServerCallContext
 from a2a.types import Message, SendMessageRequest, Task
-from sqlalchemy import delete
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.database.database_session import get_db_session
-
-# fmt: off
-from src.core.database.models import CurrencyLimit, PricingOption
-from src.core.database.models import Principal as ModelPrincipal
-from src.core.database.models import Product as ModelProduct
-from src.core.database.models import Tenant as ModelTenant
 from src.core.resolved_identity import ResolvedIdentity
-
-# fmt: on
-from tests.helpers.adcp_factories import create_test_package_request_dict
-from tests.integration.conftest import (
-    add_required_setup_data,
-    create_test_product_with_pricing,
-)
+from tests.helpers.adcp_factories import create_test_package_request_dict, setup_error_test_tenant_chain
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -51,96 +38,35 @@ class TestA2AErrorPropagation:
 
     @pytest.fixture
     def test_tenant(self, integration_db):
-        """Create test tenant with minimal setup."""
+        """Create test tenant + principal + product via the shared error-test chain helper.
+
+        Note: human_review_required=False ensures media buy runs immediately
+        rather than going to approval workflow (needed for response field tests).
+        """
         from src.core.config_loader import set_current_tenant
 
         with get_db_session() as session:
-            now = datetime.now(UTC)
-
-            # Clean up existing test data
-            session.execute(delete(PricingOption).where(PricingOption.tenant_id == "a2a_error_test"))
-            session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "a2a_error_test"))
-            session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == "a2a_error_test"))
-            session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "a2a_error_test"))
-            session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "a2a_error_test"))
-            session.commit()
-
-            # Create tenant
-            # Note: human_review_required=False ensures media buy runs immediately
-            # rather than going to approval workflow (needed for response field tests)
-            tenant = ModelTenant(
+            result = setup_error_test_tenant_chain(
+                session,
                 tenant_id="a2a_error_test",
-                name="A2A Error Test Tenant",
-                subdomain="a2aerror",
-                ad_server="mock",
-                is_active=True,
-                human_review_required=False,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(tenant)
-            session.flush()  # Ensure tenant exists in database before add_required_setup_data queries it
-
-            # Add required setup data before creating product
-            add_required_setup_data(session, "a2a_error_test")
-
-            # Create product using new pricing model
-            # NOTE: format_ids must be structured FormatId objects with agent_url, not strings
-            product = create_test_product_with_pricing(
-                session=session,
-                tenant_id="a2a_error_test",
+                principal_id="a2a_error_principal",
+                access_token="a2a_error_token_123",
                 product_id="a2a_error_product",
-                name="A2A Error Test Product",
-                description="Product for error testing",
-                pricing_model="CPM",
-                rate="10.0",
-                is_fixed=True,
-                min_spend_per_package="1000.0",
-                format_ids=[{"id": "display_300x250", "agent_url": "https://test.example.com"}],
-                delivery_type="guaranteed",
-                targeting_template={},
+                subdomain="a2aerror",
+                tenant_name="A2A Error Test Tenant",
+                advertiser_id="mock_adv_123",
             )
-
-            session.commit()
-
-            # Set tenant context
-            set_current_tenant(
-                {
-                    "tenant_id": "a2a_error_test",
-                    "name": "A2A Error Test Tenant",
-                    "subdomain": "a2aerror",
-                    "ad_server": "mock",
-                    "human_review_required": False,
-                }
-            )
-
-            yield {
-                "tenant_id": "a2a_error_test",
-                "name": "A2A Error Test Tenant",
-                "subdomain": "a2aerror",
-                "ad_server": "mock",
-                "human_review_required": False,
-            }
+            set_current_tenant(result["tenant_dict"])
+            yield result["tenant_dict"]
 
     @pytest.fixture
     def test_principal(self, integration_db, test_tenant):
-        """Create test principal."""
-        with get_db_session() as session:
-            principal = ModelPrincipal(
-                tenant_id=test_tenant["tenant_id"],
-                principal_id="a2a_error_principal",
-                name="A2A Error Test Principal",
-                access_token="a2a_error_token_123",
-                platform_mappings={"mock": {"advertiser_id": "mock_adv_123"}},
-            )
-            session.add(principal)
-            session.commit()
-
-            yield {
-                "principal_id": "a2a_error_principal",
-                "access_token": "a2a_error_token_123",
-                "name": "A2A Error Test Principal",
-            }
+        """Test principal info (created by the shared chain helper in test_tenant)."""
+        yield {
+            "principal_id": "a2a_error_principal",
+            "access_token": "a2a_error_token_123",
+            "name": "A2A Error Test Principal",
+        }
 
     @pytest.fixture
     def handler(self):
@@ -203,9 +129,9 @@ class TestA2AErrorPropagation:
         # DataPart. The wire shape is the spec envelope (adcp_error + errors),
         # not the previous {success: False, errors: [...]} ad-hoc dict.
         assert "adcp_error" in artifact_data, "Response must carry the envelope-level adcp_error key"
-        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR", (
-            f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
-        )
+        assert (
+            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
         assert "errors" in artifact_data, "Response must include 'errors' field"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
 
@@ -316,9 +242,9 @@ class TestA2AErrorPropagation:
 
         # CRITICAL ASSERTIONS: Success response
         assert artifact_data["success"] is True, "success must be True for successful operation"
-        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
-            "errors field must be None or empty array for success"
-        )
+        assert (
+            artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0
+        ), "errors field must be None or empty array for success"
         assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
@@ -363,9 +289,9 @@ class TestA2AErrorPropagation:
 
         # CRITICAL: full two-layer envelope on the wire.
         assert "adcp_error" in artifact_data, "Wire envelope must carry top-level adcp_error key"
-        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR", (
-            f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
-        )
+        assert (
+            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
         assert "errors" in artifact_data, "Wire envelope must include errors array"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
 
@@ -481,9 +407,9 @@ class TestA2AErrorPropagation:
 
         # Full two-layer envelope on the wire.
         assert "adcp_error" in artifact_data, "Wire envelope must carry top-level adcp_error key"
-        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR", (
-            f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
-        )
+        assert (
+            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
         assert "errors" in artifact_data, "Wire envelope must include errors array"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
 
@@ -491,9 +417,9 @@ class TestA2AErrorPropagation:
         assert error["code"] == "VALIDATION_ERROR", f"Per-error code must match envelope code, got {error.get('code')}"
         # Per-error message enumerates the missing required fields.
         msg = error["message"]
-        assert "format_id" in msg and "content_uri" in msg and "name" in msg, (
-            f"Per-error message must name all missing required fields, got: {msg}"
-        )
+        assert (
+            "format_id" in msg and "content_uri" in msg and "name" in msg
+        ), f"Per-error message must name all missing required fields, got: {msg}"
 
     async def test_assign_creative_missing_required_params_wire_envelope(self, handler, test_tenant, test_principal):
         """assign_creative missing required params → two-layer envelope on the A2A wire.
@@ -679,9 +605,9 @@ class TestA2AErrorResponseStructure:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.recovery == "transient", (
-                "Custom recovery='transient' override must be preserved, not default 'terminal'"
-            )
+            assert (
+                error.recovery == "transient"
+            ), "Custom recovery='transient' override must be preserved, not default 'terminal'"
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
 
@@ -835,10 +761,10 @@ class TestA2AContextEcho:
             f"Got keys: {sorted(artifact_data.keys())}"
         )
         echoed = artifact_data["context"]
-        assert echoed.get("session_id") == "sess_pr1306_context_echo", (
-            f"session_id must round-trip unchanged, got: {echoed}"
-        )
-        assert echoed.get("workflow_step") == "echo_validation", (
-            f"workflow_step must round-trip unchanged, got: {echoed}"
-        )
+        assert (
+            echoed.get("session_id") == "sess_pr1306_context_echo"
+        ), f"session_id must round-trip unchanged, got: {echoed}"
+        assert (
+            echoed.get("workflow_step") == "echo_validation"
+        ), f"workflow_step must round-trip unchanged, got: {echoed}"
         assert echoed.get("request_id") == "req_abc_42", f"request_id must round-trip unchanged, got: {echoed}"
