@@ -24,13 +24,10 @@ if TYPE_CHECKING:
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
+from adcp.types import BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import MediaBuyStatus
+from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
-from adcp.types.generated_poc.core.brand_ref import BrandReference
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
-from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
@@ -40,6 +37,7 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
     AdCPError,
     AdCPNotFoundError,
     AdCPValidationError,
@@ -51,6 +49,30 @@ class PackageAssignmentDict(TypedDict):
 
     package_id: str
     weight: int
+
+
+class _StructuredValidationError(ValueError):
+    """ValueError subclass carrying AdCP-standard error metadata.
+
+    Used within _create_media_buy_impl to propagate specific error codes
+    (BUDGET_TOO_LOW, PRODUCT_NOT_FOUND, INVALID_REQUEST) through the
+    catch-all at the end of the validation block.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        recovery: str = "correctable",
+        suggestion: str | None = None,
+        field: str | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.recovery = recovery
+        self.suggestion = suggestion
+        self.field = field
 
 
 logger = logging.getLogger(__name__)
@@ -870,7 +892,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # Get the Principal object (needed for adapter)
             from src.core.auth import get_principal_object
 
-            principal = get_principal_object(media_buy.principal_id)
+            principal = get_principal_object(media_buy.principal_id, tenant_id=tenant_id)
             if not principal:
                 error_msg = f"Principal {media_buy.principal_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
@@ -1547,7 +1569,9 @@ async def _create_media_buy_impl(
 
     # Extract testing context first
     if identity is None:
-        raise AdCPValidationError("Identity is required")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
@@ -1709,7 +1733,11 @@ async def _create_media_buy_impl(
         total_budget = req.get_total_budget()
         if total_budget <= 0:
             error_msg = f"Invalid budget: {total_budget}. Budget must be positive."
-            raise ValueError(error_msg)
+            raise _StructuredValidationError(
+                error_msg,
+                code="BUDGET_TOO_LOW",
+                suggestion="Set each package budget to a positive amount.",
+            )
 
         # 2. DateTime validation
         now = datetime.now(UTC)
@@ -1740,7 +1768,11 @@ async def _create_media_buy_impl(
 
             if computed_start_time < now:
                 error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
-                raise ValueError(error_msg)
+                raise _StructuredValidationError(
+                    error_msg,
+                    code="INVALID_REQUEST",
+                    suggestion="Use a future datetime or 'asap' for immediate start.",
+                )
 
         # Validate end_time
         if req.end_time is None:
@@ -1754,7 +1786,11 @@ async def _create_media_buy_impl(
 
         if computed_end_time <= computed_start_time:
             error_msg = f"Invalid time range: end time ({req.end_time}) must be after start time ({req.start_time})."
-            raise ValueError(error_msg)
+            raise _StructuredValidationError(
+                error_msg,
+                code="INVALID_REQUEST",
+                suggestion="Set end_time to a datetime after start_time.",
+            )
 
         # Assign computed times to local variables for use throughout the function
         start_time_val = computed_start_time
@@ -1824,7 +1860,12 @@ async def _create_media_buy_impl(
             missing_product_ids = set(product_ids) - set(product_map.keys())
             if missing_product_ids:
                 error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
-                raise ValueError(error_msg)
+                raise _StructuredValidationError(
+                    error_msg,
+                    code="PRODUCT_NOT_FOUND",
+                    suggestion="Check available products with get_products.",
+                    field="packages[].product_id",
+                )
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
             # error if the product has property_targeting_allowed: false."
@@ -2131,7 +2172,12 @@ async def _create_media_buy_impl(
                     violations = unknown_violations + access_violations + geo_overlap_violations
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
-                        raise ValueError(error_msg)
+                        raise _StructuredValidationError(
+                            error_msg,
+                            code="INVALID_REQUEST",
+                            suggestion="Check targeting constraints.",
+                            field="targeting_overlay",
+                        )
 
     except (ValueError, PermissionError) as e:
         # Update workflow step as failed (only if step exists - not created in dry_run mode)
@@ -2139,9 +2185,14 @@ async def _create_media_buy_impl(
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
 
         # Return error response with failed status
+        # Use structured error info from _StructuredValidationError when available
+        if isinstance(e, _StructuredValidationError):
+            error = Error(code=e.code, message=str(e), details={"suggestion": e.suggestion} if e.suggestion else None)
+        else:
+            error = Error(code="VALIDATION_ERROR", message=str(e), details=None)
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
+                errors=[error],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,

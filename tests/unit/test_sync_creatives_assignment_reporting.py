@@ -7,7 +7,7 @@ reports which packages each creative was assigned to via the assigned_to field.
 """
 
 import pytest
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import CreativeAction
 
 from src.core.schemas import SyncCreativeResult
 

@@ -31,7 +31,7 @@ class TestMCPErrorShapes:
         from src.core.tools.media_buy_create import create_media_buy
 
         # Call with missing context triggers AdCPValidationError (transport-agnostic)
-        with pytest.raises((AdCPValidationError, ToolError)) as exc_info:
+        with pytest.raises((AdCPValidationError, AdCPAuthenticationError, ToolError)) as exc_info:
             await create_media_buy(
                 brand={"domain": "test.com"},
                 packages=[],  # Empty but present; validation will catch the issue
@@ -73,8 +73,8 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # _create_media_buy_impl requires identity; passing None triggers AdCPValidationError
-        with pytest.raises(AdCPValidationError) as exc_info:
+        # _create_media_buy_impl requires identity; passing None triggers AdCPAuthenticationError
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
         assert "Identity is required" in str(exc_info.value)
@@ -252,7 +252,7 @@ class TestUpdateMediaBuyErrorShapes:
             media_buy_id="buy_001",
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _update_media_buy_impl(req=req, identity=None)
 
         assert "Identity is required" in str(exc_info.value)
@@ -557,7 +557,7 @@ class TestMCPRecoveryInErrorResponses:
         [
             ("AdCPError", "internal error", "INTERNAL_ERROR", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPAuthenticationError", "bad token", "AUTH_REQUIRED", "terminal"),
+            ("AdCPAuthenticationError", "bad token", "AUTH_TOKEN_INVALID", "terminal"),
             ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
             ("AdCPNotFoundError", "gone", "NOT_FOUND", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
@@ -727,7 +727,8 @@ class TestErrorCodeVocabularyConsistency:
         # SDK standard codes used by our exception classes
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
-        "AUTH_REQUIRED",  # SDK standard: authentication + authorisation
+        "AUTH_TOKEN_INVALID",  # AdCP spec: invalid/missing auth token (AdCPAuthenticationError)
+        "AUTH_REQUIRED",  # SDK standard: authorisation (AdCPAuthorizationError)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
         "ACCOUNT_AMBIGUOUS",  # adcp-req: Natural key matches multiple accounts (BR-RULE-080)

@@ -16,13 +16,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from adcp.types.generated_poc.core.format import (
-    Assets,
-    Assets81,
-    Dimensions,
-    Renders,
-)
-from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
+from adcp.types import AssetContentType, ImageFormatAsset, VideoFormatAsset
+from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
@@ -76,28 +71,28 @@ class TestCombinedFilters:
             "d_small",
             "Small Display Banner",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets(item_type="individual", asset_id="hero_image", required=True)],
+            assets=[ImageFormatAsset(item_type="individual", asset_id="hero_image", required=True)],
         )
         # Image asset, width 970 -- should NOT match (too wide)
         display_wide_image = _make_format(
             "d_wide",
             "Wide Display Billboard",
             renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
-            assets=[Assets(item_type="individual", asset_id="billboard_image", required=True)],
+            assets=[ImageFormatAsset(item_type="individual", asset_id="billboard_image", required=True)],
         )
         # Video asset, width 300 -- should NOT match (wrong asset type)
         display_video = _make_format(
             "d_video",
             "Display Video Unit",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets81(item_type="individual", asset_id="hero_video", required=True)],
+            assets=[VideoFormatAsset(item_type="individual", asset_id="hero_video", required=True)],
         )
         # Image asset, width 300 -- SHOULD MATCH (type filter no longer applies)
         video_image = _make_format(
             "v_image",
             "Video Companion",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets(item_type="individual", asset_id="companion_image", required=True)],
+            assets=[ImageFormatAsset(item_type="individual", asset_id="companion_image", required=True)],
         )
 
         all_formats = [display_small_image, display_wide_image, display_video, video_image]
@@ -122,13 +117,13 @@ class TestCombinedFilters:
             "d_match",
             "Matching Display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
-            assets=[Assets(item_type="individual", asset_id="banner_image", required=True)],
+            assets=[ImageFormatAsset(item_type="individual", asset_id="banner_image", required=True)],
         )
         display_no_match = _make_format(
             "d_nomatch",
             "Non-Matching Display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
-            assets=[Assets(item_type="individual", asset_id="wide_image", required=True)],
+            assets=[ImageFormatAsset(item_type="individual", asset_id="wide_image", required=True)],
         )
 
         with CreativeFormatsEnv() as env:
@@ -149,7 +144,7 @@ class TestCombinedFilters:
             "d_a2a_match",
             "A2A Display Match",
             renders=[Renders(role="primary", dimensions=Dimensions(width=320, height=50))],
-            assets=[Assets(item_type="individual", asset_id="mobile_image", required=True)],
+            assets=[ImageFormatAsset(item_type="individual", asset_id="mobile_image", required=True)],
         )
         audio_format = _make_format(
             "a_nomatch",
@@ -176,7 +171,7 @@ class TestCombinedFilters:
             "v1",
             "Video Only",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets81(item_type="individual", asset_id="vid", required=True)],
+            assets=[VideoFormatAsset(item_type="individual", asset_id="vid", required=True)],
         )
 
         with CreativeFormatsEnv() as env:
@@ -327,7 +322,7 @@ class TestFullCatalogViaA2A:
         fmt = _make_format(
             "display_standard",
             "Standard Display",
-            assets=[Assets(item_type="individual", asset_id="hero", required=True)],
+            assets=[ImageFormatAsset(item_type="individual", asset_id="hero", required=True)],
         )
 
         with CreativeFormatsEnv() as env:

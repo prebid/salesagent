@@ -17,13 +17,13 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types import MediaBuyStatus
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.exceptions import AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
@@ -385,9 +385,11 @@ class TestCreateMediaBuyAdapterAtomicity:
             # The important assertion is that a record EXISTS (atomicity: success -> persisted).
             # AdCP MediaBuyStatus distinguishes pending_creatives (missing/unapproved creatives)
             # from pending_start (manual approval / scheduled future start).
-            assert mb.status in ("active", "pending_creatives", "pending_start"), (
-                f"Expected active/pending_creatives/pending_start, got {mb.status}"
-            )
+            assert mb.status in (
+                "active",
+                "pending_creatives",
+                "pending_start",
+            ), f"Expected active/pending_creatives/pending_start, got {mb.status}"
 
             packages = session.scalars(
                 select(DBMediaPackage).where(DBMediaPackage.media_buy_id == mb.media_buy_id)
@@ -574,9 +576,9 @@ class TestGetMediaBuysResponseFields:
         )
         response = _get_media_buys_impl(get_req, identity=mb_identity, include_snapshot=True)
 
-        assert len(response.media_buys) == 1, (
-            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
-        )
+        assert (
+            len(response.media_buys) == 1
+        ), f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
         assert len(mb_response.packages) >= 1
@@ -664,9 +666,9 @@ class TestGetMediaBuysResponseFields:
         )
         response = _get_media_buys_impl(get_req, identity=mb_identity)
 
-        assert len(response.media_buys) == 1, (
-            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
-        )
+        assert (
+            len(response.media_buys) == 1
+        ), f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
 
@@ -679,9 +681,9 @@ class TestGetMediaBuysResponseFields:
         assert target_pkg is not None, f"Package {package_id} not found in response"
 
         # Creative approvals should be populated
-        assert target_pkg.creative_approvals is not None, (
-            "creative_approvals should be populated after creative assignment"
-        )
+        assert (
+            target_pkg.creative_approvals is not None
+        ), "creative_approvals should be populated after creative assignment"
         assert len(target_pkg.creative_approvals) >= 1
         approval_ids = {a.creative_id for a in target_pkg.creative_approvals}
         assert "c_approval_test" in approval_ids
@@ -760,9 +762,9 @@ class TestGetMediaBuysResponseFields:
         )
         response = _get_media_buys_impl(get_req, identity=mb_identity)
 
-        assert len(response.media_buys) == 1, (
-            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
-        )
+        assert (
+            len(response.media_buys) == 1
+        ), f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
         assert mb_response.status == expected, (
@@ -951,5 +953,5 @@ class TestDeliveryIdentityValidation:
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_nonexistent"])
-        with pytest.raises(AdCPValidationError):
+        with pytest.raises(AdCPAuthenticationError):
             _get_media_buy_delivery_impl(req, identity=None)

@@ -5,8 +5,12 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from adcp.types.generated_poc.core.account import CreditLimit, GovernanceAgent, Setup
-from adcp.types.generated_poc.core.brand_ref import BrandReference
+from adcp.types import BrandReference
+from adcp.types.generated_poc.core.account import (  # TODO: no stable alias in adcp.types
+    CreditLimit,
+    GovernanceAgent,
+    Setup,
+)
 from sqlalchemy import (
     DECIMAL,
     BigInteger,

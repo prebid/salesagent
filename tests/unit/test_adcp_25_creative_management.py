@@ -165,7 +165,7 @@ class TestUpdateMediaBuyInlineCreatives:
     def test_update_media_buy_package_creatives_field_exists(self):
         """Verify update_media_buy accepts package.creatives field."""
         # adcp 3.9: PackageUpdate1/PackageUpdate2 union variants merged into single PackageUpdate
-        from adcp.types.generated_poc.media_buy.package_update import PackageUpdate
+        from adcp.types import PackageUpdate
 
         # Check PackageUpdate structure has creatives field
         fields = PackageUpdate.model_fields

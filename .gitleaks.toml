@@ -1,0 +1,12 @@
+title = "salesagent gitleaks config"
+
+# Inherit gitleaks default rules; override with [[allowlist]] for known test fixtures.
+[extend]
+useDefault = true
+
+# Skill harness test-only env file — TEST ENCRYPTION_KEY explicitly labelled
+# "TEST ONLY — never use in production" on the same line. Per-fixture allowlist
+# so future drift in skills/.agent-db.env (real credentials) still triggers.
+[[allowlists]]
+description = "agent-db skill test-only ENCRYPTION_KEY"
+paths = ['''\.claude/skills/\.agent-db\.env''']

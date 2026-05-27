@@ -1380,7 +1380,7 @@ class TestUC003UpdateCreativeIds:
 
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-09
         """
-        from adcp.types.generated_poc.creative.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as LibraryCreative,
         )
 
@@ -1500,7 +1500,7 @@ class TestUC003UploadInlineCreatives:
         _setup_db_session(standard_mocks)
 
         # Mock _sync_creatives_impl to return a failure
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
 
         mock_sync_response = MagicMock()
         failed_creative = MagicMock()
@@ -2472,7 +2472,7 @@ class TestUC003ExtK:
         """
         _setup_db_session(standard_mocks)
 
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
 
         mock_sync_response = MagicMock()
         failed = MagicMock()
@@ -2513,7 +2513,7 @@ class TestUC003ExtK:
         """
         _setup_db_session(standard_mocks)
 
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
 
         mock_sync_response = MagicMock()
         failed = MagicMock()

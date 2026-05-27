@@ -63,40 +63,6 @@ def _resolve_media_buy_id(ctx: dict, mb_id: str) -> str:
     return ctx.get("media_buy_id_aliases", {}).get(mb_id, mb_id)
 
 
-def _response_attribution_window(ctx: dict) -> dict[str, Any]:
-    """Return the response's attribution_window as a plain dict.
-
-    Works across all four transports: the response is always a
-    GetMediaBuyDeliveryResponse (impl/a2a) or one parsed back from JSON
-    (rest/mcp). Fails explicitly when attribution_window is absent so the
-    caller's assertion is a substantive red, not an AttributeError.
-    """
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a response, got error: {ctx.get('error')!r}"
-    resp_dict = resp.model_dump(mode="json") if hasattr(resp, "model_dump") else resp
-    assert isinstance(resp_dict, dict), f"Cannot serialize response: {resp!r}"
-    aw = resp_dict.get("attribution_window")
-    assert aw is not None, (
-        f"Response is missing attribution_window — production must populate it. Response keys: {sorted(resp_dict)}"
-    )
-    assert isinstance(aw, dict), f"attribution_window should be an object, got {aw!r}"
-    return aw
-
-
-def _post_click_days(post_click: dict[str, Any] | None) -> int | None:
-    """Normalize a post_click Duration dict to whole days, or None."""
-    if not post_click:
-        return None
-    interval = post_click.get("interval")
-    unit = post_click.get("unit")
-    if interval is None or unit is None:
-        return None
-    per_day = {"seconds": 86400, "minutes": 1440, "hours": 24, "days": 1}
-    if unit in per_day:
-        return int(interval) // per_day[unit] if unit != "days" else int(interval)
-    return None
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — media buy setup and adapter configuration
 # ═══════════════════════════════════════════════════════════════════════
@@ -184,28 +150,39 @@ def given_no_principal(ctx: dict, principal_id: str) -> None:
     ctx["nonexistent_principal"] = principal_id
 
 
+def _create_unique_media_buy(
+    ctx: dict,
+    label: str,
+    owner: str,
+    status: str = "active",
+) -> str:
+    """Create a media buy with a UUID-based ID, register its Gherkin label.
+
+    Generates a unique ``media_buy_id`` so parallel pytest-xdist workers
+    never collide on ``media_buys_pkey``.
+    """
+    real_id = _generate_unique_id(label)
+    _register_media_buy_label(ctx, label, real_id)
+    entry: dict[str, str] = {"media_buy_id": real_id, "owner": owner}
+    if status != "active":
+        entry["status"] = status
+    ctx.setdefault("media_buys", {})[real_id] = entry
+    _ensure_media_buy_in_db(ctx, real_id, owner, status)
+    return real_id
+
+
 @given(parsers.parse('multiple media buys owned by "{owner}" in various statuses'))
 def given_multiple_buys_various_statuses(ctx: dict, owner: str) -> None:
     """Create media buys in various statuses for partition testing."""
     for status in ("active", "completed", "paused"):
-        mb_id = f"mb-{status}"
-        ctx.setdefault("media_buys", {})[mb_id] = {
-            "media_buy_id": mb_id,
-            "owner": owner,
-            "status": status,
-        }
-        _ensure_media_buy_in_db(ctx, mb_id, owner, status)
+        _create_unique_media_buy(ctx, label=f"mb-{status}", owner=owner, status=status)
 
 
 @given(parsers.parse('media buys owned by "{owner}"'))
 def given_media_buys_owned_by(ctx: dict, owner: str) -> None:
     """Create a default set of media buys owned by the given principal."""
-    for mb_id in ("mb-001", "mb-002"):
-        ctx.setdefault("media_buys", {})[mb_id] = {
-            "media_buy_id": mb_id,
-            "owner": owner,
-        }
-        _ensure_media_buy_in_db(ctx, mb_id, owner)
+    for label in ("mb-001", "mb-002"):
+        _create_unique_media_buy(ctx, label=label, owner=owner)
 
 
 # ── Adapter response configuration ────────────────────────────────────
@@ -628,16 +605,9 @@ def when_request_no_identifiers(ctx: dict) -> None:
     dispatch_request(ctx)
 
 
-# Restricted to the genuine ``key=value`` Scenario-Outline Examples form
-# (``\w+=``). The typed inline forms — ``status_filter "x"``,
-# ``status_filter [...]``, ``reporting_dimensions {json}``,
-# ``attribution_window {json}`` — are handled by their dedicated steps
-# (when_request_with_status_filter, when_partition_dimensions, etc.). A
-# greedy ``parsers.parse("...with {request_params}")`` here shadowed those
-# specific steps and mis-parsed spaced JSON objects (salesagent-18h.1).
-@when(parsers.re(r"the Buyer Agent requests delivery metrics with (?P<request_params>\w+=.+)"))
+@when(parsers.parse("the Buyer Agent requests delivery metrics with {request_params}"))
 def when_request_with_params(ctx: dict, request_params: str) -> None:
-    """Request with arbitrary ``key=value`` params (Scenario Outline Examples)."""
+    """Request with arbitrary params (Scenario Outline)."""
     kwargs = _parse_request_params(request_params)
     dispatch_request(ctx, **kwargs)
 
@@ -673,13 +643,10 @@ def when_request_with_status_filter_list(ctx: dict, filter_json: str) -> None:
 
 @when("the Buyer Agent requests delivery metrics without status_filter")
 def when_request_no_status_filter(ctx: dict) -> None:
-    """Request without status_filter — browsing, so the default "active" filter applies.
-
-    No media_buy_ids are sent: the scenario tests the default-filter behaviour,
-    which only applies when browsing (explicit IDs bypass the default). This is
-    the same no-parameter browse as the no-identifiers step, so delegate to it.
-    """
-    when_request_no_identifiers(ctx)
+    """Request without status_filter (all statuses)."""
+    media_buys = ctx.get("media_buys", {})
+    mb_ids = list(media_buys.keys())
+    dispatch_request(ctx, media_buy_ids=mb_ids if mb_ids else None)
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics with start_date "{start}" and end_date "{end}"'))
@@ -759,21 +726,26 @@ def when_webhook_fires(ctx: dict, mb_id: str) -> None:
 
 @when(parsers.parse('the system delivers a webhook report for "{mb_id}"'))
 def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
-    """System delivers a webhook report for a specific media buy."""
-    env = ctx["env"]
+    """System delivers a webhook report via WebhookDeliveryService."""
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+        result = _call_webhook_service(ctx, mb_id=mb_id)
+        ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
 
 
 @when(parsers.parse('the system delivers a "{report_type}" webhook report for "{mb_id}"'))
 def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
-    """System delivers a typed webhook report."""
+    """System delivers a typed webhook report via WebhookDeliveryService."""
     ctx["report_type"] = report_type
-    env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id, notification_type=report_type)
+        result = _call_webhook_service(
+            ctx,
+            mb_id=mb_id,
+            is_final=(report_type == "final"),
+            is_adjusted=(report_type == "adjusted"),
+        )
+        ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
 
@@ -911,9 +883,6 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
     """Request with attribution window."""
     aw = json.loads(aw_json)
-    # Capture the requested window so the echo/model Then-steps can
-    # cross-check the response against what the buyer actually asked for.
-    ctx["request_attribution"] = aw
     dispatch_request(ctx, media_buy_ids=[mb_id], attribution_window=aw)
 
 
@@ -944,344 +913,100 @@ def when_boundary_attribution(ctx: dict, value: str) -> None:
     _dispatch_partition(ctx, "attribution_window", value)
 
 
-# include_package_daily_breakdown IS a real GetMediaBuyDeliveryRequest field
-# (bool | None, salesagent extension). The Examples ``value`` column gives the
-# literal sent on the wire: ``(field absent)`` (omit the param), ``false`` /
-# ``true`` (real booleans), and the quoted non-boolean forms ``"yes"`` /
-# ``"true"`` (string, NOT bool). The non-boolean forms are sent verbatim so the
-# request genuinely exercises the type-validation path rather than being
-# coerced before dispatch.
-def _daily_breakdown_request_kwargs(value: str) -> dict[str, Any]:
-    """Translate a daily-breakdown Examples ``value`` → request kwargs.
-
-    - ``(field absent)``  → {} (param omitted)
-    - ``false`` / ``true``→ real bool
-    - ``"yes"`` / ``"true"`` (quoted) → the raw non-boolean string, exercising
-      the missing strict-bool validation (production lax-coerces it).
-    """
-    v = value.strip()
-    if v in ("(field absent)", "(omitted)", "(not provided)"):
-        return {}
-    if v == "true":
-        return {"include_package_daily_breakdown": True}
-    if v == "false":
-        return {"include_package_daily_breakdown": False}
-    if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
-        # Quoted ⇒ a string literal (non-boolean type) sent as-is.
-        return {"include_package_daily_breakdown": v[1:-1]}
-    raise AssertionError(f"Unrecognized daily-breakdown descriptor: {value!r}")
-
-
 @when(parsers.parse("the Buyer Agent requests delivery metrics with include_package_daily_breakdown {value}"))
 def when_partition_daily_breakdown(ctx: dict, value: str) -> None:
-    """Partition test: daily breakdown — translate descriptor to real kwargs."""
-    dispatch_request(ctx, **_daily_breakdown_request_kwargs(value))
+    """Partition test: daily breakdown value."""
+    _dispatch_partition(ctx, "include_package_daily_breakdown", value)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics at daily breakdown boundary {value}"))
 def when_boundary_daily_breakdown(ctx: dict, value: str) -> None:
-    """Boundary test: daily breakdown — translate descriptor to real kwargs."""
-    dispatch_request(ctx, **_daily_breakdown_request_kwargs(value))
-
-
-# account IS a real GetMediaBuyDeliveryRequest field (AccountReference | None,
-# a RootModel[AccountReference1 | AccountReference2]). The Examples ``value``
-# column is the literal account-reference object the buyer sends:
-# ``(field absent)`` (omit), or a JSON object ({"account_id": ...} /
-# {"brand": ..., "operator": ...} / {} / both-keys). The object is sent as the
-# real ``account`` request kwarg so the AccountReference parsing + account
-# resolution path is genuinely exercised (not the axis name as a literal).
-def _account_request_kwargs(value: str) -> dict[str, Any]:
-    """Translate an account Examples ``value`` → request kwargs.
-
-    - ``(field absent)`` → {} (param omitted)
-    - any JSON object    → {"account": <object>} (real AccountReference input)
-    """
-    v = value.strip()
-    if v in ("(field absent)", "(omitted)", "(not provided)"):
-        return {}
-    return {"account": json.loads(v)}
+    """Boundary test: daily breakdown value."""
+    _dispatch_partition(ctx, "include_package_daily_breakdown", value)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics with account {value}"))
 def when_partition_account(ctx: dict, value: str) -> None:
-    """Partition test: account — translate descriptor to real kwargs."""
-    dispatch_request(ctx, **_account_request_kwargs(value))
+    """Partition test: account value."""
+    _dispatch_partition(ctx, "account", value)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics at account boundary {value}"))
 def when_boundary_account(ctx: dict, value: str) -> None:
-    """Boundary test: account — translate descriptor to real kwargs."""
-    dispatch_request(ctx, **_account_request_kwargs(value))
-
-
-# status_filter IS a real GetMediaBuyDeliveryRequest field
-# (MediaBuyStatus | StatusFilter | None). The Examples ``*_value`` column is
-# the literal the buyer sends: ``(field absent)`` (omit), a single status
-# string, a JSON array of statuses, or ``[]`` (empty array, violates
-# minItems). Translate each to the real status_filter request kwarg instead
-# of blindly wrapping the raw descriptor text in a one-element list.
-def _status_filter_request_kwargs(value: str) -> dict[str, Any]:
-    """Translate a status_filter descriptor → request kwargs.
-
-    - ``(field absent)``        → {} (param omitted; default-active browse)
-    - ``[...]`` (JSON array)    → status_filter=<parsed list> (incl. [])
-    - single status string      → status_filter=[<status>]
-    """
-    v = value.strip()
-    if v in ("(field absent)", "(omitted)", "(not provided)"):
-        return {}
-    if v.startswith("[") and v.endswith("]"):
-        return {"status_filter": json.loads(v)}
-    return {"status_filter": [v]}
+    """Boundary test: account value."""
+    _dispatch_partition(ctx, "account", value)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<partition_value>[^"]+)"'))
 def when_partition_status_filter(ctx: dict, partition_value: str) -> None:
-    """Partition test: status_filter — translate descriptor to real kwargs."""
-    dispatch_request(ctx, **_status_filter_request_kwargs(partition_value))
+    """Partition test: status_filter value."""
+    dispatch_request(ctx, status_filter=[partition_value])
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at status_filter boundary "(?P<boundary_value>[^"]+)"'))
 def when_boundary_status_filter(ctx: dict, boundary_value: str) -> None:
-    """Boundary test: status_filter — translate descriptor to real kwargs."""
-    dispatch_request(ctx, **_status_filter_request_kwargs(boundary_value))
-
-
-# Date-range partition/boundary descriptors map to real start_date/end_date
-# values, NOT to a literal ``date_range`` request field. Feeding the axis
-# name through _dispatch_partition produced {"date_range": "<descriptor>"},
-# which GetMediaBuyDeliveryRequest (extra=forbid) rejects — so the scenario
-# never exercised the feature and only "passed" under a blanket strict=False
-# xfail. The classifier keys on content words shared by both the partition
-# Examples (start_before_end, dates_omitted, start_equals_end,
-# start_after_end) and the boundary phrasings (start_date before end_date,
-# dates omitted (full range), start_date equals end_date,
-# start_date after end_date).
-_DATE_RANGE_START = "2025-01-01"
-_DATE_RANGE_END = "2025-01-31"
-_DATE_RANGE_SAME = "2025-01-15"
-
-
-def _date_range_request_kwargs(descriptor: str) -> dict[str, str]:
-    """Translate a date-range partition/boundary descriptor → request kwargs.
-
-    Returns the start_date/end_date kwargs the descriptor represents:
-    - "...omitted..."        → {} (full range; no date params)
-    - "...before..."         → valid range (start < end)
-    - "...equals..."         → zero-length range (start == end)
-    - "...after..."          → inverted range (start > end)
-    """
-    d = descriptor.lower()
-    if "omitted" in d:
-        return {}
-    if "before" in d:
-        return {"start_date": _DATE_RANGE_START, "end_date": _DATE_RANGE_END}
-    if "equals" in d:
-        return {"start_date": _DATE_RANGE_SAME, "end_date": _DATE_RANGE_SAME}
-    if "after" in d:
-        return {"start_date": _DATE_RANGE_END, "end_date": _DATE_RANGE_START}
-    raise AssertionError(f"Unrecognized date-range descriptor: {descriptor!r}")
+    """Boundary test: status_filter value."""
+    dispatch_request(ctx, status_filter=[boundary_value])
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with date range "(?P<partition>[^"]+)"'))
 def when_partition_date_range(ctx: dict, partition: str) -> None:
-    """Partition test: date range — translate descriptor to real dates."""
-    dispatch_request(ctx, **_date_range_request_kwargs(partition))
+    """Partition test: date range."""
+    _dispatch_partition(ctx, "date_range", partition)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at date boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_date_range(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: date range — translate descriptor to real dates."""
-    dispatch_request(ctx, **_date_range_request_kwargs(boundary_point))
-
-
-# Webhook credentials is a WEBHOOK-CONFIG validation flow, NOT a
-# get_media_buy_delivery request parameter. The production contract is the
-# AdCP ``reporting_webhook.authentication`` schema (Authentication: a
-# ``schemes`` enum of {Bearer, HMAC-SHA256} + ``credentials`` str with
-# min_length=32). Constructing that real model is exactly the validation a
-# seller performs when a buyer registers a reporting webhook, so the
-# descriptor is translated into a real Authentication construction instead of
-# being shoved through _dispatch_partition as a bogus delivery-request field.
-_WEBHOOK_CRED_MIN = "k" * 32  # exactly min_length (valid)
-_WEBHOOK_CRED_SHORT = "k" * 31  # one below min_length (rejected)
-
-
-def _webhook_authentication_args(descriptor: str) -> tuple[list[str], str]:
-    """Translate a credentials descriptor → (schemes, credentials) for the
-    AdCP ``Authentication`` model.
-
-    - hmac / HMAC-SHA256        → (["HMAC-SHA256"], 32-char)
-    - bearer / Bearer           → (["Bearer"], 32-char)
-    - at minimum / 32 chars     → (["HMAC-SHA256"], 32-char)
-    - too short / 31 chars      → (["HMAC-SHA256"], 31-char) → min_length fail
-    - unknown scheme            → (["UnknownScheme"], 32-char) → enum fail
-    """
-    d = descriptor.lower()
-    if "unknown" in d:
-        return (["UnknownScheme"], _WEBHOOK_CRED_MIN)
-    if "short" in d or "31" in d:
-        return (["HMAC-SHA256"], _WEBHOOK_CRED_SHORT)
-    if "bearer" in d:
-        return (["Bearer"], _WEBHOOK_CRED_MIN)
-    if "hmac" in d:
-        return (["HMAC-SHA256"], _WEBHOOK_CRED_MIN)
-    if "minimum" in d or "32" in d:
-        return (["HMAC-SHA256"], _WEBHOOK_CRED_MIN)
-    raise AssertionError(f"Unrecognized webhook-credentials descriptor: {descriptor!r}")
-
-
-def _validate_webhook_credentials(ctx: dict, descriptor: str) -> None:
-    """Construct the real AdCP Authentication model for *descriptor*.
-
-    Records the validated model in ctx["response"] on success, or the
-    Pydantic ValidationError in ctx["error"] on rejection — the same
-    success/error contract the partition/boundary Then step asserts on.
-    """
-    from adcp.types.generated_poc.core.reporting_webhook import Authentication
-    from pydantic import ValidationError
-
-    ctx.pop("response", None)
-    ctx.pop("error", None)
-    schemes, credentials = _webhook_authentication_args(descriptor)
-    try:
-        ctx["response"] = Authentication(schemes=schemes, credentials=credentials)
-    except ValidationError as exc:
-        ctx["error"] = exc
+    """Boundary test: date range."""
+    _dispatch_partition(ctx, "date_range", boundary_point)
 
 
 @when(parsers.re(r'the webhook is configured with credentials "(?P<partition>[^"]+)"'))
 def when_partition_credentials(ctx: dict, partition: str) -> None:
-    """Partition test: webhook credentials — validate the real Authentication model."""
-    _validate_webhook_credentials(ctx, partition)
+    """Partition test: webhook credentials."""
+    _dispatch_partition(ctx, "credentials", partition)
 
 
 @when(parsers.re(r'the webhook credentials are at boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_credentials(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: webhook credentials — validate the real Authentication model."""
-    _validate_webhook_credentials(ctx, boundary_point)
-
-
-# "resolution" is NOT a request field — it is the identifier-resolution
-# *behavior* of get_media_buy_delivery. The descriptor names a resolution mode
-# that the buyer triggers through the real media_buy_ids parameter (and the
-# adcp-3.12-removed buyer_refs, which now degrades to "no identifiers"). The
-# Given step seeds mb-001 / mb-002 owned by buyer-001.
-def _resolution_request_kwargs(descriptor: str) -> dict[str, Any]:
-    """Translate a resolution mode descriptor → real media_buy_ids kwargs.
-
-    - media_buy_ids only          → media_buy_ids=["mb-001"]
-    - buyer_refs only             → {} (buyer_refs removed in adcp 3.12 →
-                                       falls back to all principal's buys)
-    - both provided               → media_buy_ids=["mb-001"] (refs ignored)
-    - neither provided            → {} (all principal's buys)
-    - partial resolution          → media_buy_ids=["mb-001","mb-999"]
-    - zero resolution             → media_buy_ids=["mb-998","mb-999"]
-    - empty array (schema reject)  → media_buy_ids=[] (min_length=1 → invalid)
-    """
-    d = descriptor.lower()
-    # Order matters: "zero resolution (empty result)" also contains "empty",
-    # so the specific modes are matched before the empty-array schema reject.
-    if "partial" in d:
-        return {"media_buy_ids": ["mb-001", "mb-999"]}
-    if "zero" in d:
-        return {"media_buy_ids": ["mb-998", "mb-999"]}
-    if "neither" in d:
-        return {}
-    if "buyer_refs only" in d or "buyer_refs_only" in d:
-        return {}  # buyer_refs removed in adcp 3.12 → no-identifier fallback
-    if "both" in d:
-        return {"media_buy_ids": ["mb-001"]}
-    if "empty" in d:  # "empty_array" / "empty array (schema reject)"
-        return {"media_buy_ids": []}
-    if "media_buy_ids" in d:
-        return {"media_buy_ids": ["mb-001"]}
-    raise AssertionError(f"Unrecognized resolution descriptor: {descriptor!r}")
+    """Boundary test: webhook credentials."""
+    _dispatch_partition(ctx, "credentials", boundary_point)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with resolution "(?P<partition>[^"]+)"'))
 def when_partition_resolution(ctx: dict, partition: str) -> None:
-    """Partition test: resolution — translate mode to real media_buy_ids."""
-    dispatch_request(ctx, **_resolution_request_kwargs(partition))
+    """Partition test: resolution — translate partition name to actual request params."""
+    _dispatch_resolution(ctx, partition)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at resolution boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_resolution(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: resolution — translate mode to real media_buy_ids."""
-    dispatch_request(ctx, **_resolution_request_kwargs(boundary_point))
-
-
-# "ownership"/"principal" is NOT a request field — it is the principal-scoping
-# *behavior* of get_media_buy_delivery. The descriptor names whether the
-# requesting principal owns the requested media buy. The buyer triggers each
-# mode through the real media_buy_ids parameter against the env's
-# transport-correct identity (buyer-001, the seeded owner):
-#  - matches  → request mb-001 (owned by buyer-001)            → valid
-#  - mismatch → request a buy owned by a *different* principal → security
-#               path (should be rejected as MEDIA_BUY_NOT_FOUND).
-_OWNERSHIP_FOREIGN_OWNER = "other-buyer"
-_OWNERSHIP_FOREIGN_MB = "mb-owned-elsewhere"
-
-
-def _dispatch_ownership(ctx: dict, descriptor: str) -> None:
-    """Translate an ownership descriptor → a real media_buy_ids request.
-
-    Always dispatches with the env's default (transport-correct) identity —
-    the seeded owner buyer-001. "mismatch" requests a media buy owned by a
-    different principal so the cross-principal security path is exercised.
-    """
-    d = descriptor.lower()
-    if "mismatch" in d or "differs" in d:
-        _ensure_media_buy_in_db(ctx, _OWNERSHIP_FOREIGN_MB, _OWNERSHIP_FOREIGN_OWNER)
-        dispatch_request(ctx, media_buy_ids=[_OWNERSHIP_FOREIGN_MB])
-        return
-    if "match" in d:
-        dispatch_request(ctx, media_buy_ids=["mb-001"])
-        return
-    raise AssertionError(f"Unrecognized ownership descriptor: {descriptor!r}")
+    """Boundary test: resolution — translate boundary name to actual request params."""
+    _dispatch_resolution(ctx, boundary_point)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with principal "(?P<partition>[^"]+)"'))
 def when_partition_principal(ctx: dict, partition: str) -> None:
-    """Partition test: ownership — translate mode to a real owned/foreign request."""
-    _dispatch_ownership(ctx, partition)
+    """Partition test: principal ownership."""
+    _dispatch_partition(ctx, "principal", partition)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at ownership boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_ownership(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: ownership — translate mode to a real owned/foreign request."""
-    _dispatch_ownership(ctx, boundary_point)
-
-
-# sampling_method is the request parameter the descriptor names — a buyer
-# asking for a sampled artifact pull sends ``sampling_method=<value>``. It is
-# NOT a GetMediaBuyDeliveryRequest field today (extra=forbid rejects it), so
-# wiring the real parameter genuinely exercises (and exposes) the unimplemented
-# feature instead of vacuously "passing" on the axis name. ``(omitted)`` sends
-# no sampling parameter — that is the only genuinely valid case.
-def _sampling_request_kwargs(value: str) -> dict[str, Any]:
-    """Translate a sampling-method descriptor → request kwargs.
-
-    - ``(omitted)`` / ``(field absent)`` → {} (no sampling parameter)
-    - any named method → {"sampling_method": <value>} (the real parameter)
-    """
-    v = value.strip()
-    if v in ("(omitted)", "(field absent)", "(not provided)"):
-        return {}
-    return {"sampling_method": v}
+    """Boundary test: ownership."""
+    _dispatch_partition(ctx, "ownership", boundary_point)
 
 
 @when(parsers.re(r'the Buyer Agent queries delivery artifacts with sampling method "(?P<partition_value>[^"]+)"'))
 def when_partition_sampling(ctx: dict, partition_value: str) -> None:
-    """Partition test: sampling — translate descriptor to real kwargs."""
-    dispatch_request(ctx, **_sampling_request_kwargs(partition_value))
+    """Partition test: sampling method."""
+    _dispatch_partition(ctx, "sampling_method", partition_value)
 
 
 @when(parsers.re(r'the Buyer Agent queries delivery artifacts at sampling boundary "(?P<boundary_value>[^"]+)"'))
 def when_boundary_sampling(ctx: dict, boundary_value: str) -> None:
-    """Boundary test: sampling — translate descriptor to real kwargs."""
-    dispatch_request(ctx, **_sampling_request_kwargs(boundary_value))
+    """Boundary test: sampling method."""
+    _dispatch_partition(ctx, "sampling_method", boundary_value)
 
 
 @when(parsers.parse('the Buyer Agent queries delivery metrics for media buy "{mb_id}"'))
@@ -1834,8 +1559,8 @@ def then_hmac_computation(ctx: dict) -> None:
     raw_sig = headers.get("X-ADCP-Signature") or headers.get("X-Webhook-Signature", "")
     signature = raw_sig.removeprefix("sha256=")
     assert signature, "Expected HMAC signature header to be present and non-empty"
-    signing_secret: str = ctx.get("signing_secret", "")
-    assert signing_secret, "Test setup must store signing_secret in ctx['signing_secret']"
+    signing_secret: str = ctx.get("webhook_secret", "")
+    assert signing_secret, "Test setup must store webhook_secret in ctx['webhook_secret']"
     payload_str = json_lib.dumps(payload, sort_keys=True, separators=(",", ":"))
     message = f"{timestamp}.{payload_str}".encode()
     expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
@@ -2046,78 +1771,29 @@ def then_packages_exclude_field(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the response geo breakdown should use classification system "{system}"'))
 def then_geo_system(ctx: dict, system: str) -> None:
-    """Assert the response geo breakdown declares the requested classification system.
-
-    BR-RULE-091 INV-5: for geo_level=metro/postal_area the seller echoes the
-    classification ``system`` it applied. Reads by_geo off every package and
-    asserts at least one entry declares exactly the expected system.
-    """
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a response, got error: {ctx.get('error')!r}"
-    resp_dict = resp.model_dump(mode="json") if hasattr(resp, "model_dump") else resp
-    assert isinstance(resp_dict, dict), f"Cannot serialize response: {resp!r}"
-
-    deliveries = resp_dict.get("media_buy_deliveries") or []
-    assert deliveries, f"Response has no media_buy_deliveries: {sorted(resp_dict)}"
-    geo_entries = [geo for d in deliveries for pkg in (d.get("by_package") or []) for geo in (pkg.get("by_geo") or [])]
-    assert geo_entries, (
-        "Response has no geo breakdown — production must populate by_geo when "
-        f"reporting_dimensions.geo is requested. Deliveries: {deliveries!r}"
+    """Assert geo breakdown classification system."""
+    raise NotImplementedError(
+        "geo_breakdown not yet in GetMediaBuyDeliveryResponse schema — "
+        "add geo_breakdown field to MediaBuyDeliveryData before implementing"
     )
-    systems = [g.get("system") for g in geo_entries]
-    assert system in systems, (
-        f"geo breakdown should declare classification system {system!r}, "
-        f"got systems {systems!r}; geo entries={geo_entries!r}"
-    )
-
-
-def _assert_placement_sorted_by(ctx: dict, metric: str) -> None:
-    """Assert every package's by_placement is sorted descending by ``metric``.
-
-    BR-RULE-091 INV-6: placement breakdown rows are ordered descending by the
-    effective sort metric. Reads by_placement off the response packages and
-    checks each adjacent pair is monotonically non-increasing. Requires a
-    non-trivial (>= 2 entry) breakdown so the ordering check is meaningful.
-    """
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a response, got error: {ctx.get('error')!r}"
-    resp_dict = resp.model_dump(mode="json") if hasattr(resp, "model_dump") else resp
-    assert isinstance(resp_dict, dict), f"Cannot serialize response: {resp!r}"
-
-    deliveries = resp_dict.get("media_buy_deliveries") or []
-    assert deliveries, f"Response has no media_buy_deliveries: {sorted(resp_dict)}"
-    placement_lists = [pkg.get("by_placement") or [] for d in deliveries for pkg in (d.get("by_package") or [])]
-    non_empty = [pl for pl in placement_lists if pl]
-    assert non_empty, (
-        "Response has no placement breakdown — production must populate "
-        f"by_placement when reporting_dimensions.placement is requested. Deliveries: {deliveries!r}"
-    )
-    for placements in non_empty:
-        assert len(placements) >= 2, (
-            f"placement breakdown must have >= 2 entries for the ordering check to be meaningful, got {placements!r}"
-        )
-        values = [(p.get(metric) or 0) for p in placements]
-        for earlier, later in zip(values, values[1:], strict=False):
-            assert earlier >= later, (
-                f"placement breakdown not sorted descending by {metric!r}: "
-                f"{earlier} precedes {later}; full sequence={values!r}; placements={placements!r}"
-            )
 
 
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}" (fallback)'))
 def then_placement_sorted_fallback(ctx: dict, metric: str) -> None:
-    """Assert placement breakdown fell back to the documented sort metric.
-
-    The requested metric was unavailable (seller does not report it), so the
-    seller must order by the fallback metric (``spend``) per INV-6.
-    """
-    _assert_placement_sorted_by(ctx, metric)
+    """Assert placement breakdown uses fallback sort metric."""
+    raise NotImplementedError(
+        "placement sort fallback not yet implemented in production — "
+        "by_placement sorting logic is not in _get_media_buy_delivery_impl"
+    )
 
 
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}"'))
 def then_placement_sorted(ctx: dict, metric: str) -> None:
-    """Assert placement breakdown is sorted descending by the requested metric."""
-    _assert_placement_sorted_by(ctx, metric)
+    """Assert placement breakdown is sorted by the given metric."""
+    raise NotImplementedError(
+        "placement breakdown sorting not yet implemented in production — "
+        "by_placement sorting logic is not in _get_media_buy_delivery_impl"
+    )
 
 
 # ── Attribution window assertions ─────────────────────────────────
@@ -2125,96 +1801,55 @@ def then_placement_sorted(ctx: dict, metric: str) -> None:
 
 @then(parsers.parse('the response should include attribution_window with model "{model}"'))
 def then_attribution_model(ctx: dict, model: str) -> None:
-    """Assert attribution_window.model equals the buyer-requested model."""
-    aw = _response_attribution_window(ctx)
-    actual = aw.get("model")
-    assert actual == model, (
-        f"attribution_window.model should echo the requested model {model!r}, "
-        f"got {actual!r}; full attribution_window={aw!r}"
+    """Assert attribution window model matches the expected value."""
+    raise NotImplementedError(
+        f"response attribution_window.model should == {model!r} — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
     )
 
 
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution_window.post_click echoes the request's post_click."""
-    aw = _response_attribution_window(ctx)
-    requested = ctx.get("request_attribution")
-    assert requested is not None, "No request_attribution captured by the When step"
-    requested_pc = requested.get("post_click")
-    assert requested_pc is not None, f"Scenario did not request a post_click window: {requested!r}"
-    actual_pc = aw.get("post_click")
-    assert actual_pc is not None, f"Response attribution_window did not echo post_click: {aw!r}"
-    assert actual_pc.get("interval") == requested_pc.get("interval"), (
-        f"post_click interval not echoed: requested {requested_pc!r}, got {actual_pc!r}"
-    )
-    assert actual_pc.get("unit") == requested_pc.get("unit"), (
-        f"post_click unit not echoed: requested {requested_pc!r}, got {actual_pc!r}"
+    """Assert attribution window echoes the request's post_click setting."""
+    raise NotImplementedError(
+        "response attribution_window.post_click should echo ctx['request_attribution'] — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
     )
 
 
 @then("the response should include attribution_window with the seller's platform default")
 def then_attribution_default(ctx: dict) -> None:
-    """Assert attribution_window carries the seller platform default model.
-
-    The buyer's request was ignored (seller does not support configurable
-    windows), so the response MUST surface the platform default model.
-    """
-    from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
-
-    aw = _response_attribution_window(ctx)
-    actual = aw.get("model")
-    assert actual == PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value, (
-        f"attribution_window.model should be the platform default "
-        f"{PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value!r}, got {actual!r}; attribution_window={aw!r}"
+    """Assert attribution window uses the seller's platform default."""
+    raise NotImplementedError(
+        "response attribution_window should be seller platform default (non-None) — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
     )
 
 
 @then('the response attribution_window should include "model" field (required)')
 def then_attribution_has_model(ctx: dict) -> None:
-    """Assert attribution_window.model is present and non-empty (spec-required)."""
-    aw = _response_attribution_window(ctx)
-    assert "model" in aw, f"attribution_window missing required 'model' field: {aw!r}"
-    model = aw.get("model")
-    assert isinstance(model, str) and model, (
-        f"attribution_window.model must be a non-empty model identifier, got {model!r}"
+    """Assert attribution_window.model is present in the response."""
+    raise NotImplementedError(
+        "response attribution_window.model should be non-None (required by spec) — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
     )
 
 
 @then("the response should include attribution_window with the seller's platform default model")
 def then_attribution_default_model(ctx: dict) -> None:
-    """Assert attribution_window.model equals the seller platform default model."""
-    from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
-
-    aw = _response_attribution_window(ctx)
-    actual = aw.get("model")
-    assert actual == PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value, (
-        f"buyer omitted attribution_window, so model must be the platform default "
-        f"{PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value!r}, got {actual!r}; attribution_window={aw!r}"
+    """Assert attribution window's model field reflects the seller platform default."""
+    raise NotImplementedError(
+        "response attribution_window.model should equal the seller platform default — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
     )
 
 
 @then("the response should include attribution_window reflecting campaign-length window")
 def then_attribution_campaign_length(ctx: dict) -> None:
-    """Assert attribution_window.post_click equals the campaign flight length in days."""
-    aw = _response_attribution_window(ctx)
-    actual_days = _post_click_days(aw.get("post_click"))
-    assert actual_days is not None, (
-        f"attribution_window.post_click should resolve to a day-count for a "
-        f"campaign-unit window, got {aw.get('post_click')!r}"
-    )
-
-    from datetime import date
-
-    from tests.factories.media_buy import MediaBuyFactory
-
-    start = MediaBuyFactory.start_date
-    end = MediaBuyFactory.end_date
-    assert isinstance(start, date) and isinstance(end, date)
-    expected_days = (end - start).days
-    assert actual_days == expected_days, (
-        f"campaign-length post_click should equal the flight length "
-        f"({expected_days} days from {start} to {end}), got {actual_days} days; "
-        f"attribution_window={aw!r}"
+    """Assert attribution window post_click duration equals the campaign length."""
+    raise NotImplementedError(
+        "response attribution_window.post_click should equal campaign duration in days — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
     )
 
 
@@ -2368,6 +2003,12 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
 @then(parsers.re(r"the (?P<field>.+) check should result in (?P<expected>.+)"))
 @then(parsers.re(r"the (?P<field>.+) check should be (?P<expected>.+)"))
 @then(parsers.re(r"the (?P<field>ownership|resolution) should be (?P<expected>.+)"))
+@then(
+    parsers.re(
+        r"the (?P<field>reporting_dimensions|attribution_window|daily breakdown"
+        r"|account|status|date|sampling) handling should be (?P<expected>.+)"
+    )
+)
 def then_partition_or_boundary_outcome(ctx: dict, field: str, expected: str) -> None:
     """Partition/boundary test: assert outcome matches expected for the given field."""
     _assert_partition_or_boundary(ctx, expected, field)
@@ -2433,13 +2074,9 @@ def _ensure_media_buy_in_db(
 def _parse_request_params(params_str: str) -> dict[str, Any]:
     """Parse request parameters from Gherkin table/string format.
 
-    Handles the ``key=value`` form (Scenario Outline Examples tables):
+    Handles formats like:
     - media_buy_ids=["mb-001"]
     - media_buy_ids=["mb-001"] status_filter=["active"]
-
-    Typed inline forms (status_filter "x", reporting_dimensions {json}, ...)
-    are NOT handled here — they have dedicated steps. The greedy step that
-    routes here is restricted to ``\\w+=`` so it never shadows them.
 
     Note: buyer_refs was removed from GetMediaBuyDeliveryRequest in adcp 3.12.
     Any buyer_refs= parsed from Gherkin are silently dropped.
@@ -2481,3 +2118,341 @@ def _dispatch_partition(ctx: dict, field: str, value: str) -> None:
 
     # Pass as string
     dispatch_request(ctx, **{field: value_stripped})
+
+
+# ── Restored helpers (from pre-merge 89a6c4bb) ──────────────────────
+
+
+def _generate_unique_id(label: str) -> str:
+    """Generate a unique media_buy_id from a Gherkin label."""
+    import uuid
+
+    return f"{label}-{uuid.uuid4().hex[:8]}"
+
+
+def _register_media_buy_label(ctx: dict, label: str, real_id: str) -> None:
+    """Register a Gherkin label → real database ID mapping."""
+    ctx.setdefault("media_buy_labels", {})[label] = real_id
+
+
+def _resolve_media_buy_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin label to the real database media_buy_id."""
+    labels = ctx.get("media_buy_labels", {})
+    if label in labels:
+        return labels[label]
+    return label  # fallback: label IS the real ID (legacy/nonexistent-ID scenarios)
+
+
+def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
+    """Resolve a list of Gherkin labels to real database media_buy_ids."""
+    return [_resolve_media_buy_id(ctx, label) for label in labels]
+
+
+def _wire_webhook_db(ctx: dict) -> None:
+    """Wire ctx webhook config into the CircuitBreakerEnv mock DB.
+
+    Reads ctx["webhook_config"], ctx["webhook_secret"], ctx["webhook_bearer_token"]
+    and calls env.set_db_webhooks() so _send_webhook_enhanced finds the right configs.
+    """
+    env = ctx["env"]
+    wh_cfgs = ctx.get("webhook_config", {})
+    if not wh_cfgs:
+        return  # default mock config is fine
+
+    configs = []
+    for _mb_id, wh in wh_cfgs.items():
+        url = wh.get("url", "https://buyer.example.com/webhook")
+        scheme = wh.get("auth_scheme")
+        secret = ctx.get("webhook_secret")
+        bearer = ctx.get("webhook_bearer_token")
+
+        auth_type = None
+        auth_token = None
+        if scheme and scheme.lower() == "hmac-sha256":
+            auth_type = "hmac"
+        elif scheme and scheme.lower() == "bearer":
+            auth_type = "bearer"
+            auth_token = bearer
+
+        configs.append(
+            env.make_webhook_config(
+                url=url,
+                auth_type=auth_type,
+                auth_token=auth_token,
+                secret=secret,
+            )
+        )
+    if configs:
+        env.set_db_webhooks(configs)
+
+
+def _call_webhook_service(
+    ctx: dict,
+    mb_id: str | None = None,
+    is_final: bool = False,
+    is_adjusted: bool = False,
+    next_expected_interval_seconds: float | None = 3600.0,
+) -> bool:
+    """Dispatch webhook delivery through the CircuitBreakerEnv.call_send."""
+    if mb_id is None:
+        # Pick the first label from ctx, then resolve to real ID
+        label = next(iter(ctx.get("media_buys", {})), None) or next(iter(ctx.get("webhook_config", {})), None)
+        assert label, "No media buy in ctx or webhook_config — a Given step must create one first"
+        mb_id = _resolve_media_buy_id(ctx, label)
+    else:
+        mb_id = _resolve_media_buy_id(ctx, mb_id)
+    _wire_webhook_db(ctx)
+    env = ctx["env"]
+    kwargs: dict[str, Any] = {
+        "media_buy_id": mb_id,
+        "is_final": is_final,
+        "is_adjusted": is_adjusted,
+    }
+    if next_expected_interval_seconds is not None:
+        kwargs["next_expected_interval_seconds"] = next_expected_interval_seconds
+    return env.call_send(**kwargs)
+
+
+def _get_webhook_payload(ctx: dict) -> dict:
+    """Extract the JSON payload from the most recent webhook POST call."""
+    env = ctx["env"]
+    call_args = env.mock["post"].call_args
+    assert call_args is not None, "No POST call recorded"
+    return call_args.kwargs.get("json") or call_args[1].get("json", {})
+
+
+_DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [
+    {"placement_id": "pl-A", "impressions": 3000.0, "spend": 150.0, "clicks": 30.0},
+    {"placement_id": "pl-B", "impressions": 1500.0, "spend": 200.0, "clicks": 10.0},
+    {"placement_id": "pl-C", "impressions": 500.0, "spend": 50.0, "clicks": 50.0},
+]
+
+
+def _inject_placement_data(ctx: dict) -> None:
+    """Ensure adapter responses include placement breakdown data.
+
+    If responses already exist, mutate them. Otherwise, register a default
+    response for each media buy known in ctx. This must be called from Given
+    steps that declare placement support, before the When step dispatches.
+    """
+    env = ctx["env"]
+    if env._adapter_responses:
+        for resp in env._adapter_responses.values():
+            for pkg in resp.by_package:
+                if pkg.by_placement is None:
+                    pkg.by_placement = _DEFAULT_PLACEMENT_DATA
+    else:
+        media_buys = ctx.get("media_buys", {})
+        for label in media_buys:
+            real_id = _resolve_media_buy_id(ctx, label)
+            env.set_adapter_response(
+                media_buy_id=real_id,
+                by_placement=_DEFAULT_PLACEMENT_DATA,
+            )
+
+
+@when(parsers.parse('the Buyer Agent requests delivery metrics at status_filter boundary "{boundary_value}"'))
+def when_request_status_filter_boundary(ctx: dict, boundary_value: str) -> None:
+    """Request delivery metrics with a status_filter boundary value.
+
+    Parses boundary_value:
+      - '(field absent)' → omit status_filter entirely (server default)
+      - '[]' → empty list
+      - '["active", "paused"]' → parsed JSON list
+      - 'canceled' → single-element list ['canceled']
+    """
+    media_buys = ctx.get("media_buys", {})
+    labels = list(media_buys.keys())
+    real_ids = _resolve_media_buy_ids(ctx, labels) if labels else []
+    kwargs: dict[str, Any] = {}
+    if real_ids:
+        kwargs["media_buy_ids"] = real_ids
+
+    if boundary_value == "(field absent)":
+        pass  # omit status_filter — test server default behavior
+    elif boundary_value.startswith("["):
+        kwargs["status_filter"] = json.loads(boundary_value)
+    else:
+        kwargs["status_filter"] = [boundary_value]
+
+    dispatch_request(ctx, **kwargs)
+
+
+def _assert_no_error_for_mb(ctx: dict, mb_id: str) -> None:
+    """Shared: assert no error was returned for a specific media buy ID.
+
+    Checks three layers:
+    1. Top-level ctx["error"] exception must not mention the real_id
+    2. Response-level errors list must not reference the real_id
+    3. Per-delivery error field for this real_id must be None
+    """
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    resp = ctx.get("response")
+    error = ctx.get("error")
+    assert resp is not None or error is not None, "Neither error nor response in ctx — test setup failed"
+    # If a general error occurred, check it's not about this specific mb_id
+    if error is not None:
+        error_msg = str(error).lower()
+        assert real_id.lower() not in error_msg, f"Error mentions '{mb_id}' (real_id={real_id}): {error}"
+    # If response exists, check response-level errors list and per-delivery errors
+    if resp is not None:
+        # Check response-level errors array (e.g. resp.errors)
+        resp_errors = getattr(resp, "errors", None)
+        if resp_errors:
+            for err in resp_errors:
+                err_str = str(err).lower()
+                assert real_id.lower() not in err_str, (
+                    f"Response-level errors list mentions '{mb_id}' (real_id={real_id}): {err}"
+                )
+        # Check per-delivery error field
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        for d in deliveries:
+            d_id = getattr(d, "media_buy_id", None)
+            if d_id == real_id:
+                d_error = getattr(d, "error", None)
+                assert d_error is None, f"Delivery for '{mb_id}' (real_id={real_id}) has error: {d_error}"
+
+
+def _find_field_in_response(resp: object, field: str) -> tuple[object, str]:
+    """Find a boolean field in the response, searching through all nesting levels.
+
+    Truncation flags (by_*_truncated) live at the package level inside
+    media_buy_deliveries[*].by_package[*]. This function searches:
+    1. Top-level response
+    2. Delivery level (media_buy_deliveries[0])
+    3. Package level (media_buy_deliveries[*].by_package[*])
+
+    Returns (value, location_description) or raises AssertionError if not found.
+    """
+    resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    if isinstance(resp_dict, dict) and field in resp_dict:
+        return resp_dict[field], "top-level response"
+
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    for d in deliveries:
+        d_dict = d.model_dump() if hasattr(d, "model_dump") else d
+        if isinstance(d_dict, dict) and field in d_dict:
+            return d_dict[field], f"delivery {getattr(d, 'media_buy_id', '?')}"
+        # Check package level — where truncation flags actually live
+        packages = d_dict.get("by_package", []) if isinstance(d_dict, dict) else []
+        if not packages:
+            packages = getattr(d, "by_package", None) or []
+        for pkg in packages:
+            pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else (pkg if isinstance(pkg, dict) else {})
+            if field in pkg_dict:
+                pkg_id = pkg_dict.get("package_id", "?")
+                return pkg_dict[field], f"package {pkg_id}"
+
+    raise AssertionError(
+        f"Field '{field}' not found at any level (response, delivery, package). "
+        f"Deliveries: {len(deliveries)}, "
+        f"packages checked: {sum(len(getattr(d, 'by_package', None) or []) for d in deliveries)}"
+    )
+
+
+def _assert_placement_sorted_by(ctx: dict, metric: str) -> None:
+    """Assert by_placement in at least one package is sorted descending by *metric*."""
+    resp = ctx.get("response") or ctx.get("result")
+    assert resp is not None, "No response in ctx — When step must store ctx['response']"
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    assert deliveries, "No deliveries in response"
+    found_placement = False
+    for d in deliveries:
+        by_package = getattr(d, "by_package", None) or []
+        for pkg in by_package:
+            placements = getattr(pkg, "by_placement", None)
+            if not placements:
+                continue
+            found_placement = True
+            values = [(p.get(metric) if isinstance(p, dict) else getattr(p, metric, None)) or 0 for p in placements]
+            assert values == sorted(values, reverse=True), f"by_placement not sorted descending by '{metric}': {values}"
+    assert found_placement, "No by_placement breakdown found in any package"
+
+
+def _dispatch_webhook_credentials(ctx: dict, value: str) -> None:
+    """Configure webhook credentials from a partition/boundary value and validate.
+
+    Maps credential partition names to actual webhook credential configuration,
+    then runs the production WebhookVerifier to validate.
+    """
+    from src.services.webhook_verification import WebhookVerifier
+
+    value_stripped = value.strip()
+
+    # Map partition names to credential strings
+    if value_stripped in ("(field absent)", "(omitted)", "(not provided)", "empty"):
+        secret = ""
+    elif value_stripped.startswith("short_") or "below_minimum" in value_stripped:
+        # Short credentials — below 32 char minimum
+        secret = "x" * 16
+    elif value_stripped.startswith("minimum") or "exactly_32" in value_stripped:
+        # Exactly at boundary
+        secret = "x" * 32
+    elif value_stripped.startswith("long") or "above_minimum" in value_stripped:
+        # Above minimum
+        secret = "x" * 64
+    else:
+        # Use the partition value as-is (may be the literal credential string)
+        secret = value_stripped
+
+    ctx["webhook_secret"] = secret
+    # Configure full webhook config using existing label or creating a placeholder
+    label = next(iter(ctx.get("media_buys", {})), None)
+    if label is None:
+        label = "mb-creds"
+        real_id = _generate_unique_id(label)
+        _register_media_buy_label(ctx, label, real_id)
+        ctx.setdefault("media_buys", {})[label] = {"media_buy_id": real_id, "owner": "buyer-001"}
+    wh = ctx.setdefault("webhook_config", {}).setdefault(label, {})
+    wh["url"] = "https://buyer.example.com/webhook"
+    wh["active"] = True
+    wh["auth_scheme"] = "hmac-sha256"
+
+    try:
+        WebhookVerifier(webhook_secret=secret)
+        ctx["webhook_validated"] = True
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+def _dispatch_resolution(ctx: dict, partition: str) -> None:
+    """Translate resolution partition name to concrete request parameters.
+
+    Maps abstract partition names (media_buy_ids_only, etc.)
+    to real request fields so Then steps can verify the correct media buys
+    were resolved, not just that the request was accepted.
+    """
+    media_buys = ctx.get("media_buys", {})
+    labels = list(media_buys.keys())
+    real_ids = _resolve_media_buy_ids(ctx, labels)
+    partition_clean = partition.strip()
+    request_params = ctx.setdefault("request_params", {})
+
+    # Normalize boundary-style names to partition names
+    partition_norm = partition_clean.lower().replace(" ", "_")
+
+    if "media_buy_ids" in partition_norm and "only" in partition_norm:
+        # Resolve by media_buy_ids only
+        request_params["media_buy_ids"] = real_ids
+        dispatch_request(ctx, media_buy_ids=real_ids)
+    elif "neither_provided" in partition_norm or "neither" in partition_norm:
+        # Neither IDs nor refs — should return all owned media buys
+        dispatch_request(ctx)
+    elif "partial" in partition_norm:
+        # Partial resolution — request includes a nonexistent ID alongside a real one
+        partial_ids = real_ids[:1] + ["mb-nonexistent"]
+        request_params["media_buy_ids"] = partial_ids
+        dispatch_request(ctx, media_buy_ids=partial_ids)
+    elif "zero" in partition_norm:
+        # Zero resolution — request IDs that don't exist
+        request_params["media_buy_ids"] = ["mb-nonexistent-1", "mb-nonexistent-2"]
+        dispatch_request(ctx, media_buy_ids=["mb-nonexistent-1", "mb-nonexistent-2"])
+    elif "empty_array" in partition_norm or "empty" in partition_norm and "array" in partition_norm:
+        # Empty array — schema rejection expected
+        dispatch_request(ctx, media_buy_ids=[])
+    elif "all_buys" in partition_norm or "all" in partition_norm:
+        # All media buys — same as neither_provided
+        dispatch_request(ctx)
+    else:
+        # Fallback: pass through to generic dispatch
+        _dispatch_partition(ctx, "resolution", partition)

@@ -26,12 +26,8 @@ from pydantic import Field
 #: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
 MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
 
-from adcp.types import Error
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
-from adcp.types.generated_poc.core.targeting import TargetingOverlay
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
-from adcp.types.generated_poc.media_buy.package_update import PackageUpdate as UpdatePackage
+from adcp.types import ContextObject, CreativeAction, Error, ReportingWebhook, TargetingOverlay
+from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
@@ -40,6 +36,7 @@ from sqlalchemy import select
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
     AdCPError,
     AdCPGoneError,
     AdCPNotFoundError,
@@ -189,7 +186,9 @@ def _update_media_buy_impl(
     affected_packages_list: list[AffectedPackage] = []
 
     if identity is None:
-        raise ValueError("Identity is required for update_media_buy")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     # CRITICAL: Extract principal from identity
     principal_id = identity.principal_id
@@ -1487,6 +1486,7 @@ def _build_update_request(
     context: Any = None,
     reporting_webhook: Any = None,
     ext: Any = None,
+    idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1540,6 +1540,8 @@ def _build_update_request(
         request_params["reporting_webhook"] = reporting_webhook
     if ext is not None:
         request_params["ext"] = ext
+    if idempotency_key is not None:
+        request_params["idempotency_key"] = idempotency_key
 
     try:
         req = UpdateMediaBuyRequest(**request_params)
@@ -1575,6 +1577,7 @@ async def update_media_buy(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1600,6 +1603,7 @@ async def update_media_buy(
         context: Application-level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
         ext: Extension object for custom fields (optional, per AdCP spec)
+        idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1623,6 +1627,7 @@ async def update_media_buy(
         context=context,
         reporting_webhook=reporting_webhook,
         ext=ext,
+        idempotency_key=idempotency_key,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1649,6 +1654,7 @@ def update_media_buy_raw(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1674,6 +1680,7 @@ def update_media_buy_raw(
         context: Application level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery
         ext: Extension object for custom fields (optional, per AdCP spec)
+        idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -1696,6 +1703,7 @@ def update_media_buy_raw(
         context=context,
         reporting_webhook=reporting_webhook,
         ext=ext,
+        idempotency_key=idempotency_key,
     )
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context

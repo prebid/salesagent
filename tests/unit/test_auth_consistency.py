@@ -114,12 +114,12 @@ class TestMissingTokenConsistency:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        # create_media_buy raises AdCPValidationError with None identity
-        with pytest.raises((AdCPValidationError, ValueError)):
+        # create_media_buy raises AdCPAuthenticationError with None identity
+        with pytest.raises((AdCPAuthenticationError, AdCPValidationError, ValueError)):
             await _create_media_buy_impl(req=MagicMock(), identity=None)
 
-        # update_media_buy raises ValueError with None identity
-        with pytest.raises((ValueError, AdCPAuthenticationError)):
+        # update_media_buy raises AdCPAuthenticationError with None identity
+        with pytest.raises((AdCPAuthenticationError, ValueError)):
             _update_media_buy_impl(req=MagicMock(), identity=None)
 
 

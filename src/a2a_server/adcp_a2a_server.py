@@ -48,9 +48,7 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
-from adcp.types import GeneratedTaskStatus
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
 from sqlalchemy import select
 

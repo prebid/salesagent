@@ -38,6 +38,8 @@ def _adcp_error_from_code(
     message: str,
     recovery: str | None = None,
     details: dict | None = None,
+    suggestion: str | None = None,
+    field: str | None = None,
 ) -> Exception:
     """Reconstruct the exact AdCPError subclass from an error_code string.
 
@@ -91,6 +93,8 @@ def _adcp_error_from_code(
         message=message,
         details=details,
         recovery=recovery or "terminal",
+        suggestion=suggestion,
+        field=field,
     )
     if exc_cls is AdCPError:
         reconstructed.error_code = error_code
@@ -128,17 +132,25 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
             message = str(parsed[1])
             recovery = str(parsed[2]) if len(parsed) > 2 else None
 
-            # 4th element is JSON-serialized details dict (if present)
+            # 4th element is a JSON-serialized extra blob that may contain
+            # "details", "suggestion", and "field" as separate top-level keys
+            # (packed by tool_error_logging._translate_to_tool_error).
             details = None
+            suggestion = None
+            field = None
             if len(parsed) > 3 and parsed[3] is not None:
                 import json
 
                 try:
-                    details = json.loads(str(parsed[3]))
+                    extra = json.loads(str(parsed[3]))
+                    if isinstance(extra, dict):
+                        details = extra.get("details")
+                        suggestion = extra.get("suggestion")
+                        field = extra.get("field")
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-            return _adcp_error_from_code(error_code, message, recovery, details)
+            return _adcp_error_from_code(error_code, message, recovery, details, suggestion, field)
     except (ValueError, SyntaxError):
         pass
 

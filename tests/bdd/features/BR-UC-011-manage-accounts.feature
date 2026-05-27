@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
+# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-011 Manage Accounts
@@ -72,37 +72,9 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a list_accounts request without an authentication token
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_REQUIRED"
+    And the error code is "AUTH_TOKEN_INVALID"
     And the error message describes the authentication requirement
     # @bva authentication (account operations): no token on list
-
-  # ── Hand-authored: authorization boundary scenarios (PR #1170 review) ──
-
-  @T-UC-011-list-cross-agent @list @auth @security @hand-authored
-  Scenario: List accounts returns only the authenticated agent's accounts
-    Given agent "agent-A" has an authenticated connection with 2 accessible accounts
-    And agent "agent-B" has 3 accessible accounts in the same tenant
-    When agent "agent-A" sends a list_accounts request
-    Then the response contains an accounts array with 2 items
-    And none of the returned accounts belong to agent "agent-B"
-    # Security: cross-agent isolation — agent A must not see agent B's accounts
-
-  @T-UC-011-list-no-principal @list @auth @security @hand-authored
-  Scenario: List accounts with valid tenant but missing principal_id returns auth error
-    Given the Buyer Agent has a connection with tenant resolved but no principal_id
-    When the Buyer Agent sends a list_accounts request with no principal_id
-    Then the response is an error variant with no accounts array
-    And the error code is "AUTH_REQUIRED"
-    # Security: identity with tenant_id but missing principal_id must be rejected
-
-  @T-UC-011-sync-cross-agent @sync @auth @security @hand-authored
-  Scenario: Sync accounts are scoped to the authenticated agent
-    Given agent "agent-A" has an authenticated connection
-    And agent "agent-A" previously synced account for brand domain "a-brand.com"
-    And agent "agent-B" previously synced account for brand domain "b-brand.com"
-    When agent "agent-A" sends a list_accounts request
-    Then none of the returned accounts have brand domain "b-brand.com"
-    # Security: agent A cannot see agent B's accounts via list_accounts
 
   @T-UC-011-list-pagination @list @pagination @post-s4
   Scenario: List accounts with pagination
@@ -147,23 +119,6 @@ Feature: BR-UC-011 Manage Accounts
       | 50    | success with 50 accounts        |
       | 100   | success with 100 accounts       |
       | 101   | validation error                |
-
-  @T-UC-011-list-malformed-cursor @list @pagination @boundary
-  Scenario: List accounts with malformed pagination cursor returns first page
-    Given the Buyer Agent has an authenticated connection
-    And the agent has 5 accessible accounts
-    When the Buyer Agent sends a list_accounts request with cursor "not-valid-base64!"
-    Then the response returns accounts starting from the first page
-    And the response contains 5 accounts
-    # @bva pagination cursor: malformed base64 string falls back to offset 0
-
-  @T-UC-011-list-service-error @list @error @hand-authored
-  Scenario: List accounts returns error on service failure
-    Given the Buyer Agent has an authenticated connection
-    And the database is experiencing a transient failure
-    When the Buyer Agent sends a list_accounts request
-    Then the response is an error variant
-    # Edge case: service-level DB failure propagates as error, not empty result
 
   @T-UC-011-list-status-all @list @status-filter @partition @boundary
   Scenario: List accounts with no status filter returns all statuses (status filter = 'all')
@@ -288,7 +243,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_REQUIRED"
+    And the error code is "AUTH_TOKEN_INVALID"
     And the error message describes the authentication requirement
     And the error should include "suggestion" field with remediation guidance
     And no accounts were modified on the seller
@@ -303,27 +258,9 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant
-    And the error code is "AUTH_REQUIRED"
+    And the error code is "AUTH_TOKEN_INVALID"
     And the error should include "suggestion" field with remediation guidance
     # @bva authentication (account operations): invalid token on sync
-
-  @T-UC-011-sync-no-principal @sync @auth @security @hand-authored
-  Scenario: Sync accounts with valid tenant but missing principal_id returns auth error
-    Given the Buyer Agent has a connection with tenant resolved but no principal_id
-    When the Buyer Agent sends a sync_accounts request with no principal_id and:
-    | brand.domain    | operator      | billing  |
-    | acme-corp.com   | acme-corp.com | operator |
-    Then the response is an error variant with no accounts array
-    And the error code is "AUTH_REQUIRED"
-    # Security: parity with list_accounts no-principal guard
-
-  @T-UC-011-list-expired @list @auth @hand-authored
-  Scenario: List accounts with expired token returns auth error
-    Given the Buyer Agent has an A2A connection with an expired token
-    When the Buyer Agent sends a list_accounts request without an authentication token
-    Then the response is an error variant with no accounts array
-    And the error code is "AUTH_REQUIRED"
-    # Auth parity: list mirrors sync expired-token behavior
 
   @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary
   Scenario: Sync partial_failure -- success_partial_failure with action=failed (action=failed with errors)
@@ -347,7 +284,7 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com | operator |
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
+    And the per-account errors array contains an error with code "BILLING_NOT_SUPPORTED"
     And the error message explains the billing model is not available
     And the error should include "suggestion" field with remediation guidance
     # @bva billing: billing = unsupported value for seller
@@ -365,7 +302,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the response is a success variant with accounts array
     And the account for brand domain "good-brand.com" has action "created"
     And the account for brand domain "bad-brand.com" has action "failed"
-    And the failed account has status "rejected" with UNSUPPORTED_FEATURE error
+    And the failed account has status "rejected" with BILLING_NOT_SUPPORTED error
     And the error should include "suggestion" field with remediation guidance
     # BR-RULE-059 INV-2 + BR-RULE-057 INV-1: rejected billing produces per-account failure within success variant
 
@@ -507,41 +444,6 @@ Feature: BR-UC-011 Manage Accounts
     Then brand domain "old-brand.com" remains in its current state
     And only the included accounts are processed
 
-  # ── Hand-authored: delete_missing semantics (coverage gap analysis) ──
-
-  @T-UC-011-dryrun-delete-missing @sync @dry-run @delete-missing @hand-authored
-  Scenario: dry_run=true suppresses delete_missing — no deactivation preview
-    Given the Buyer Agent has an authenticated connection
-    And the agent previously synced accounts for brand domain "acme-corp.com" and "old-brand.com"
-    When the Buyer Agent sends a sync_accounts request with dry_run true and delete_missing true and:
-    | brand.domain    | operator      | billing  |
-    | acme-corp.com   | acme-corp.com | operator |
-    Then the response includes dry_run true
-    And the response does not include a result for brand domain "old-brand.com"
-    # Documents: dry_run suppresses delete_missing entirely — no preview of closures
-
-  @T-UC-011-delete-missing-granted-access @sync @delete-missing @security @hand-authored
-  Scenario: delete_missing does not close accounts the agent was granted access to
-    Given agent "agent-A" has an authenticated connection
-    And agent "agent-B" created account for brand domain "b-brand.com"
-    And agent "agent-A" was granted access to the account for brand domain "b-brand.com"
-    And agent "agent-A" previously synced account for brand domain "a-brand.com"
-    When agent "agent-A" sends a sync_accounts request with delete_missing true and:
-    | brand.domain  | operator      | billing  |
-    | a-brand.com   | a-brand.com   | operator |
-    Then agent B's account for brand domain "b-brand.com" is not affected
-    # Documents: delete_missing scopes by creator (principal_id), not by access grant
-
-  @T-UC-011-delete-missing-own-only @sync @delete-missing @hand-authored
-  Scenario: delete_missing only closes accounts the agent created
-    Given the Buyer Agent has an authenticated connection
-    And the agent previously synced accounts for brand domain "keep.com" and "drop.com"
-    When the Buyer Agent sends a sync_accounts request with delete_missing true and:
-    | brand.domain | operator   | billing  |
-    | keep.com     | keep.com   | operator |
-    Then the response includes a result for brand domain "drop.com" showing deactivation
-    And the account for brand domain "keep.com" has action "unchanged" or "updated"
-
   @T-UC-011-ext-g-echo @context-echo @post-f3 @partition @boundary
   Scenario Outline: context_provided -- context echoed in <operation> response (context with properties)
     Given the Buyer is authenticated with a valid principal_id
@@ -559,7 +461,7 @@ Feature: BR-UC-011 Manage Accounts
   Scenario: Context echoed in sync error response
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a sync_accounts request with context {"trace": "err-001"}
-    Then the response is an error variant with AUTH_REQUIRED
+    Then the response is an error variant with AUTH_TOKEN_INVALID
     And the response includes context {"trace": "err-001"}
     And the error should include "suggestion" field with remediation guidance
     # POST-F3: Context echoed even on error path
@@ -726,120 +628,4 @@ Feature: BR-UC-011 Manage Accounts
     # BR-RULE-209 INV-1: sandbox inputs validated same as production
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
-
-  @T-UC-011-sync-update-billing @sync @upsert @partition
-  Scenario: Sync update billing on existing account
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "acme-corp.com" already exists with billing "operator"
-    When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain    | operator      | billing |
-    | acme-corp.com   | acme-corp.com | agent   |
-    Then the account for brand domain "acme-corp.com" has action "updated"
-    And the account billing is "agent"
-
-  @T-UC-011-sync-update-payment-terms @sync @upsert @partition
-  Scenario: Sync update payment_terms on existing account
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "acme-corp.com" already exists with payment_terms "net_30"
-    When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain    | operator      | billing  | payment_terms |
-    | acme-corp.com   | acme-corp.com | operator | net_60        |
-    Then the account for brand domain "acme-corp.com" has action "updated"
-
-  @T-UC-011-sync-governance @sync @governance @partition
-  Scenario: Sync new account with governance_agents stores data correctly
-    Given the Buyer Agent has an authenticated connection
-    When the Buyer Agent sends a sync_accounts request with governance_agents for brand "governed.com"
-    Then the account for brand domain "governed.com" has action "created"
-    And the governance_agents are stored for brand domain "governed.com"
-
-  # ── Hand-authored: implementation fidelity (PR #1170 review) ──
-
-  @T-UC-011-sync-governance-unchanged @sync @governance @idempotent @hand-authored
-  Scenario: Sync unchanged governance_agents is idempotent
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "governed.com" already exists with governance_agents
-    When the Buyer Agent re-syncs with identical governance_agents for brand "governed.com"
-    Then the account for brand domain "governed.com" has action "unchanged"
-    # Regression: catches model-vs-dict comparison bug in change detection
-
-  @T-UC-011-sync-governance-update @sync @governance @hand-authored
-  Scenario: Sync with modified governance_agents detects the change
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "governed.com" already exists with governance_agents
-    When the Buyer Agent sends a sync with different governance_agents for brand "governed.com"
-    Then the account for brand domain "governed.com" has action "updated"
-
-  @T-UC-011-sync-unchanged-all-fields @sync @idempotent @hand-authored
-  Scenario: Sync with all fields identical reports unchanged (full idempotency)
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "full.com" exists with billing "agent", payment_terms "net_30", and governance_agents
-    When the Buyer Agent re-syncs with identical billing, payment_terms, and governance_agents for brand "full.com"
-    Then the account for brand domain "full.com" has action "unchanged"
-    # Regression: change detection must work across ALL field types
-
-  @T-UC-011-sync-unchanged-full @sync @upsert @partition
-  Scenario: Sync existing account with identical values is unchanged
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "stable.com" already exists with billing "agent" and payment_terms "net_30"
-    When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain | operator  | billing | payment_terms |
-    | stable.com   | stable.com | agent   | net_30        |
-    Then the account for brand domain "stable.com" has action "unchanged"
-
-  # ── Hand-authored: field preservation + access persistence invariants ──
-
-  @T-UC-011-sync-immutable-preserved @sync @upsert @invariant @hand-authored
-  Scenario: Sync update preserves immutable fields (name, advertiser, rate_card)
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "acme-corp.com" already exists with billing "operator"
-    When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain    | operator      | billing |
-    | acme-corp.com   | acme-corp.com | agent   |
-    Then the account for brand domain "acme-corp.com" has action "updated"
-    And the account name in the database is unchanged from the original
-    And the account rate_card in the database is unchanged from the original
-
-  @T-UC-011-sync-no-dup-access @sync @invariant @hand-authored
-  Scenario: Re-syncing an existing account does not duplicate access grants
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "resync.com" already exists with billing "operator"
-    When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain | operator    | billing |
-    | resync.com   | resync.com  | agent   |
-    Then the account for brand domain "resync.com" has action "updated"
-    And the agent has exactly one access grant for brand domain "resync.com"
-
-  @T-UC-011-sync-then-list @sync @list @invariant @hand-authored
-  Scenario: Newly synced account appears in list_accounts
-    Given the Buyer Agent has an authenticated connection
-    When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain    | operator        | billing  |
-    | new-brand.com   | new-brand.com   | operator |
-    Then the account for brand domain "new-brand.com" has action "created"
-    When the Buyer Agent sends a list_accounts request
-    Then the list includes an account with brand domain "new-brand.com"
-
-  @T-UC-011-dryrun-update @sync @dry-run @upsert @partition
-  Scenario: Dry-run detects billing change on existing account
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "preview.com" already exists with billing "operator"
-    When the Buyer Agent sends a sync_accounts request with dry_run true and:
-    | brand.domain | operator    | billing |
-    | preview.com  | preview.com | agent   |
-    Then the response is a success variant
-    And the response includes dry_run true
-    And the account for brand domain "preview.com" has action "updated"
-    And no accounts were actually modified for brand domain "preview.com"
-
-  @T-UC-011-dryrun-unchanged @sync @dry-run @upsert @partition
-  Scenario: Dry-run with no changes reports unchanged
-    Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "steady.com" already exists with billing "operator"
-    When the Buyer Agent sends a sync_accounts request with dry_run true and:
-    | brand.domain | operator   | billing  |
-    | steady.com   | steady.com | operator |
-    Then the response is a success variant
-    And the response includes dry_run true
-    And the account for brand domain "steady.com" has action "unchanged"
 

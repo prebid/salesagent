@@ -269,7 +269,7 @@ class TestProductNotFound:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "VALIDATION_ERROR"
+        assert errors[0].code == "PRODUCT_NOT_FOUND"
         assert "prod_missing" in errors[0].message
         assert "not found" in errors[0].message.lower()
 
@@ -1313,12 +1313,13 @@ class TestPreconditionObligations:
 
         Covers: UC-002-PRECOND-02
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
 
@@ -2044,16 +2045,16 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-I-03
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
         # Identity with no principal_id -> requires authentication
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity_no_principal = ResolvedIdentity(
             principal_id=None,

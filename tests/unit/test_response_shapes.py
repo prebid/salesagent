@@ -37,9 +37,9 @@ def assert_field_type(data: dict, field: str, expected_type: type, *, allow_none
     assert field in data, f"Missing field '{field}' in {sorted(data.keys())}"
     if allow_none and data[field] is None:
         return
-    assert isinstance(data[field], expected_type), (
-        f"Field '{field}' expected {expected_type.__name__}, got {type(data[field]).__name__}: {data[field]!r}"
-    )
+    assert isinstance(
+        data[field], expected_type
+    ), f"Field '{field}' expected {expected_type.__name__}, got {type(data[field]).__name__}: {data[field]!r}"
 
 
 def assert_fields_present(data: dict, required_fields: list[str]) -> None:
@@ -232,7 +232,7 @@ class TestSyncCreativesResponseShape:
 
     def test_sync_response_with_created_creative(self):
         """Sync response with a created creative has correct shape."""
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
@@ -255,7 +255,7 @@ class TestSyncCreativesResponseShape:
 
     def test_sync_response_internal_fields_excluded(self):
         """Internal fields (status, review_feedback) are excluded."""
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
@@ -274,8 +274,8 @@ class TestSyncCreativesResponseShape:
 
     def test_sync_response_failed_creative_has_errors(self):
         """Failed creative includes errors list."""
-        from adcp.types.generated_poc.core.error import Error as AdCPErrorDetail
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
+        from adcp.types import Error as AdCPErrorDetail
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
@@ -872,8 +872,8 @@ class TestSerializationConsistency:
         """SyncCreativesResponse is JSON-serializable."""
         import json
 
-        from adcp.types.generated_poc.core.error import Error as AdCPErrorDetail
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
+        from adcp.types import Error as AdCPErrorDetail
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
