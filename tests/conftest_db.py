@@ -559,14 +559,12 @@ def integration_db():
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cur = conn.cursor()
         # Terminate connections to the test database
-        cur.execute(
-            f"""
+        cur.execute(f"""
             SELECT pg_terminate_backend(pg_stat_activity.pid)
             FROM pg_stat_activity
             WHERE pg_stat_activity.datname = '{db_path}'
             AND pid <> pg_backend_pid()
-            """
-        )
+            """)
         cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
         cur.close()
         conn.close()
