@@ -43,7 +43,7 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
     And the response should contain media_buy_id "mb_existing"
-    And the response should contain buyer_ref
+    And the response should NOT contain "buyer_ref" field
     And the response should contain an implementation_date that is not null
     And the response should contain affected_packages including "pkg_001"
     And the affected package should show the updated budget of 5000
@@ -71,7 +71,7 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
     And the response should contain media_buy_id
-    And the response should contain buyer_ref "my_ref_01"
+    And the response should NOT contain "buyer_ref" field
     # POST-S1: Buyer knows media buy updated
     # POST-S4: Unambiguous success
     # POST-S5: Request completed

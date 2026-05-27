@@ -767,39 +767,6 @@ def then_response_has_media_buy_id(ctx: dict) -> None:
         )
 
 
-@then("the response should contain buyer_ref")
-def then_response_has_buyer_ref(ctx: dict) -> None:
-    """Assert buyer_ref is absent from response (removed in adcp 3.12).
-
-    The feature file predates the adcp 3.12 spec change that removed buyer_ref
-    from UpdateMediaBuySuccess. This step confirms the response was received
-    AND that buyer_ref is correctly absent from the serialized payload.
-    """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a success response in ctx"
-    data = resp.model_dump(exclude_none=True) if hasattr(resp, "model_dump") else resp
-    assert "buyer_ref" not in data, (
-        f"buyer_ref was removed in adcp 3.12 but still appears in response: {data.get('buyer_ref')!r}"
-    )
-
-
-@then(parsers.parse('the response should contain buyer_ref "{buyer_ref}"'))
-def then_response_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """Assert buyer_ref is absent from response (removed in adcp 3.12).
-
-    The feature file predates the adcp 3.12 spec change that removed buyer_ref
-    from UpdateMediaBuySuccess. This step confirms the response was received
-    AND that buyer_ref is correctly absent from the serialized payload.
-    The buyer_ref parameter is accepted for step-text compatibility but not checked.
-    """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a success response in ctx"
-    data = resp.model_dump(exclude_none=True) if hasattr(resp, "model_dump") else resp
-    assert "buyer_ref" not in data, (
-        f"buyer_ref was removed in adcp 3.12 but still appears in response: {data.get('buyer_ref')!r}"
-    )
-
-
 @then("the response should contain implementation_date that is null")
 def then_implementation_date_null(ctx: dict) -> None:
     """Assert response has a null implementation_date (pending approval)."""
