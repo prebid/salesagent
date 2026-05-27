@@ -30,10 +30,7 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # used to live here were collapsed into ``serialize_for_workflow_step``
 # (issue #240) — the helper is a module-level function, not an
 # ``_impl``, so the scanner naturally exempts its body.
-KNOWN_VIOLATIONS = {
-    # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 141),  # filters.model_dump(exclude_none=True)
-}
+KNOWN_VIOLATIONS: set[tuple[str, int]] = set()
 
 
 def _find_model_dump_in_impl() -> list[tuple[str, int, str, str]]:

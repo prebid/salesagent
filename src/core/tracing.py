@@ -6,6 +6,7 @@ Span name is the function name with the `_impl` suffix stripped.
 
 import asyncio
 import functools
+import inspect
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -37,6 +38,7 @@ def traced(func: Callable) -> Callable:
     Records exceptions and sets ERROR status on any unhandled exception, then re-raises.
     """
     name = _span_name(func)
+    identity_arg_index = _identity_positional_index(func)
 
     if asyncio.iscoroutinefunction(func):
 
@@ -47,7 +49,7 @@ def traced(func: Callable) -> Callable:
 
             tracer = get_tracer(_TRACER_NAME)
             with tracer.start_as_current_span(name) as span:
-                _set_identity_attribute(span, args, kwargs)
+                _set_identity_attribute(span, args, kwargs, identity_arg_index)
                 try:
                     return await func(*args, **kwargs)
                 except Exception as exc:
@@ -65,7 +67,7 @@ def traced(func: Callable) -> Callable:
 
             tracer = get_tracer(_TRACER_NAME)
             with tracer.start_as_current_span(name) as span:
-                _set_identity_attribute(span, args, kwargs)
+                _set_identity_attribute(span, args, kwargs, identity_arg_index)
                 try:
                     return func(*args, **kwargs)
                 except Exception as exc:
@@ -76,7 +78,29 @@ def traced(func: Callable) -> Callable:
         return sync_wrapper
 
 
-def _set_identity_attribute(span: Any, args: tuple, kwargs: dict) -> None:
+def _identity_positional_index(func: Callable) -> int | None:
+    try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return None
+
+    positional_index = 0
+    for param in params:
+        if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            if param.name == "identity":
+                return positional_index
+            positional_index += 1
+    return None
+
+
+def _set_identity_attribute(
+    span: Any,
+    args: tuple,
+    kwargs: dict,
+    identity_arg_index: int | None,
+) -> None:
     identity = kwargs.get("identity")
+    if identity is None and identity_arg_index is not None and len(args) > identity_arg_index:
+        identity = args[identity_arg_index]
     if identity is not None and hasattr(identity, "tenant_id"):
         span.set_attribute("salesagent.tenant_id", str(identity.tenant_id))

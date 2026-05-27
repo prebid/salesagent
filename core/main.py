@@ -586,6 +586,10 @@ async def _stop_schedulers() -> None:
     await stop_delivery_webhook_scheduler()
 
 
+async def _shutdown_telemetry_hook() -> None:
+    shutdown_telemetry()
+
+
 DEFAULT_DEV_TENANT_SUBDOMAINS: tuple[str, ...] = (
     "default",
     "acme",
@@ -765,9 +769,9 @@ def _serve_kwargs(
     # on shutdown drains in-flight connections before serve() exits.
     on_startup = [_start_schedulers] if include_scheduler else None
     on_shutdown = (
-        [_stop_schedulers, close_proposal_store, shutdown_telemetry]
+        [_stop_schedulers, close_proposal_store, _shutdown_telemetry_hook]
         if include_scheduler
-        else [close_proposal_store, shutdown_telemetry]
+        else [close_proposal_store, _shutdown_telemetry_hook]
     )
 
     return {

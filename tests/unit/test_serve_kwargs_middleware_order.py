@@ -14,6 +14,7 @@ middleware can catch.
 
 from __future__ import annotations
 
+import inspect
 import os
 from unittest.mock import MagicMock, patch
 
@@ -86,6 +87,13 @@ def test_public_url_resolver_is_callable():
         f"public_url must be a per-request callable (PublicUrlResolver), got {type(public_url).__name__!r}. "
         "Static strings can't carry X-Forwarded-Host for multi-tenant subdomain deploys."
     )
+
+
+def test_shutdown_hooks_are_awaitable():
+    """The SDK awaits every on_shutdown hook from _serve_kwargs."""
+    kwargs = _kwargs_with({})
+    non_awaitable = [hook.__name__ for hook in kwargs["on_shutdown"] if not inspect.iscoroutinefunction(hook)]
+    assert not non_awaitable, f"on_shutdown hooks must be async: {non_awaitable}"
 
 
 def test_buyer_protocol_origin_guard_wired_before_signing(middleware_classes):

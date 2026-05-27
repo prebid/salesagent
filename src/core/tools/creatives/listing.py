@@ -20,11 +20,13 @@ from src.core.schemas import (
     Creative,
     ListCreativesResponse,
 )
+from src.core.tracing import traced
 from src.core.validation_helpers import format_validation_error
 
 logger = logging.getLogger(__name__)
 
 
+@traced
 def _list_creatives_impl(
     media_buy_id: str | None = None,
     media_buy_ids: list[str] | None = None,
@@ -134,11 +136,13 @@ def _list_creatives_impl(
         filters_dict["media_buy_ids"] = effective_media_buy_ids
 
     # Merge structured filters with flat params (flat params take precedence).
-    # The MCP delegate forwards ``filters`` after ``req.model_dump(exclude_unset=True)``,
-    # so it can arrive either as a CreativeFilters model or as a plain dict.
+    # The delegate can pass either a CreativeFilters model or a plain dict.
     if filters:
-        if hasattr(filters, "model_dump"):
-            structured_dict = filters.model_dump(exclude_none=True)
+        model_fields = getattr(type(filters), "model_fields", None)
+        if model_fields:
+            structured_dict = {
+                name: getattr(filters, name) for name in model_fields if getattr(filters, name) is not None
+            }
         else:
             structured_dict = {k: v for k, v in dict(filters).items() if v is not None}
         filters_dict = {**structured_dict, **filters_dict}
