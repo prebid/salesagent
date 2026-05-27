@@ -123,36 +123,55 @@ def then_no_sandbox_field(ctx: dict) -> None:
 def then_no_real_api_calls(ctx: dict) -> None:
     """Assert no real ad platform API calls were made.
 
-    Verifies the mock registry was used instead of real HTTP calls.
-    The harness patches ``get_creative_agent_registry`` — if production
-    code called it, it got the mock and no real API calls occurred.
+    Operation-agnostic: works across all use cases (UC-001 products,
+    UC-004 delivery, UC-005 creative formats, UC-018 list creatives,
+    UC-019 query media buys) by inspecting the harness environment's
+    external patches rather than checking a single mock by name.
 
-    Two verification paths:
-    1. If a response exists (success path): verify production called the mock registry.
-    2. If an error exists (failure path): verify the mock was the source (the error
-       came from our mock, not from a real HTTP call that failed).
-    In either case, the mock being active proves no real calls escaped.
+    Three-part verification:
+    1. Production produced a response (the operation actually ran).
+    2. The harness has active external service patches — every external
+       integration point is replaced by a mock, so real HTTP/SOAP/gRPC
+       calls cannot escape the patch boundary.
+    3. The response carries ``sandbox=True``, corroborating that
+       production took the simulated/sandbox code path.
     """
     env = ctx["env"]
     assert env is not None, "Expected harness env in ctx — without the harness, real API calls could occur"
-    registry_mock = env.mock.get("registry")
-    assert registry_mock is not None, "Registry mock not configured in harness"
 
-    # The mock being called (at all) proves production code went through the patch
-    # point and never reached real HTTP. Whether it succeeded or failed is irrelevant
-    # to THIS step's claim: "no real API calls".
-    mock_registry = registry_mock.return_value
-    assert mock_registry is not None, "Registry mock has no return_value configured"
-
-    # Verify the registry mock was actually consulted by production code.
-    # Production must call one of these methods to get format data.
-    registry_was_consulted = (
-        registry_mock.called
-        or mock_registry.list_all_formats.called
-        or mock_registry.list_all_formats_with_errors.called
+    # 1. Production must have produced a response. A missing response means
+    #    the operation didn't run — that's a test failure, not a vacuous pass.
+    resp = ctx.get("response")
+    assert resp is not None, (
+        "Expected a response from production code but none found — "
+        "cannot verify 'no real API calls' without a completed operation"
     )
-    assert registry_was_consulted, (
-        "Neither the registry factory mock nor its methods were called — "
-        "production code may have bypassed the patched registry entirely. "
-        f"Response present: {'response' in ctx}, Error present: {'error' in ctx}"
+
+    # 2. The harness must have external service patches active. Each harness
+    #    env declares EXTERNAL_PATCHES that replace real ad-platform clients
+    #    (adapter, registry, etc.) with mocks. If external patches exist,
+    #    real calls are structurally impossible — the import target is replaced.
+    external_patches = getattr(env, "EXTERNAL_PATCHES", {})
+    assert len(external_patches) > 0 or len(env.mock) > 0, (
+        f"Harness {type(env).__name__} has no external patches and no active mocks — "
+        "cannot guarantee real ad-platform calls were suppressed"
+    )
+
+    # Verify at least one external mock was exercised by production code.
+    # This proves production actually ran through the patched seam (not that
+    # it silently skipped the external call entirely and returned a stub).
+    any_external_mock_called = any(mock.called for mock in env.mock.values())
+    assert any_external_mock_called, (
+        f"None of the harness mocks ({list(env.mock.keys())}) were called — "
+        "production code may have bypassed all patched external services. "
+        f"Harness: {type(env).__name__}"
+    )
+
+    # 3. Corroborate via the sandbox flag on the response. The sandbox=True
+    #    flag proves the sandbox/simulated code path served the result.
+    sandbox = getattr(resp, "sandbox", None)
+    assert sandbox is True, (
+        f"Expected sandbox=True on response confirming simulated mode, "
+        f"got sandbox={sandbox!r}. Without sandbox=True, the response may "
+        f"have been served by real ad-platform integration."
     )
