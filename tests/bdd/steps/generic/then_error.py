@@ -66,6 +66,41 @@ def _get_error_dict(error: Exception) -> dict:
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 
 
+# ── Shared validation ───────────────────────────────────────────────
+
+
+def _assert_meaningful_error(error: object) -> None:
+    """Assert the error object carries meaningful error information.
+
+    Validates that the error is either:
+    - An AdCPError with a non-empty error_code string, OR
+    - An adcp Error model with a non-empty string .code attribute, OR
+    - Another Exception with a non-empty string representation.
+
+    This rejects empty/placeholder errors that would make any
+    "operation should fail" assertion tautological.
+    """
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        assert isinstance(error.error_code, str) and error.error_code, (
+            f"AdCPError has empty or non-string error_code: {error.error_code!r}"
+        )
+        return
+
+    # adcp.types.Error model (from partial success response.errors)
+    code = getattr(error, "code", None)
+    if code is not None and not isinstance(error, Exception):
+        assert isinstance(code, str) and code, f"Error model has empty or non-string code: {code!r}"
+        return
+
+    if isinstance(error, (Exception, BaseException)):
+        assert str(error), f"Exception has no message: {type(error).__name__}"
+        return
+
+    raise AssertionError(f"ctx['error'] is not an Exception or Error model: {type(error).__name__} = {error!r}")
+
+
 # ── Operation failure ────────────────────────────────────────────────
 
 
@@ -77,18 +112,12 @@ def then_operation_fails(ctx: dict) -> None:
     1. Exception-based: ctx["error"] set by dispatch on exception
     2. Partial success: response.errors non-empty (UC-004 delivery pattern)
 
-    Both paths make a positive assertion that a real error object exists —
-    not just that a ctx key is set.
+    Both paths make a positive assertion that a real error object exists
+    with meaningful error information — not just that a ctx key is set.
     """
     error = ctx.get("error")
     if error is not None:
-        # Exception-based error — assert it is a proper error object (not just truthy).
-        # Valid error types: Exception subclasses OR adcp Error models (have .code attr).
-        is_exception = isinstance(error, (Exception, BaseException))
-        is_error_model = getattr(error, "code", None) is not None
-        assert is_exception or is_error_model, (
-            f"ctx['error'] is set but is not an Exception or Error model: {type(error).__name__} = {error!r}"
-        )
+        _assert_meaningful_error(error)
         return
     resp = ctx.get("response")
     if resp is not None and hasattr(resp, "errors") and resp.errors:
@@ -96,6 +125,7 @@ def then_operation_fails(ctx: dict) -> None:
         # Then steps (error_code, error_message) can find it.
         first_error = resp.errors[0]
         assert first_error is not None, "response.errors[0] is None — expected a concrete error object"
+        _assert_meaningful_error(first_error)
         ctx["error"] = first_error
         return
     raise AssertionError(
@@ -115,7 +145,7 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
     processed items alongside the error.
 
     Asserts:
-    1. An error was recorded (Exception or Error model).
+    1. An error was recorded with meaningful error information.
     2. If a response exists with a results/catalogs collection, NONE of the
        items were processed successfully (no partial success).
     """
@@ -135,12 +165,8 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
         f"ctx keys: {list(ctx.keys())}, response: {resp!r}"
     )
 
-    # ── Verify it is a proper error object ──────────────────────────
-    is_exception = isinstance(error, (Exception, BaseException))
-    is_error_model = getattr(error, "code", None) is not None
-    assert is_exception or is_error_model, (
-        f"ctx['error'] is not an Exception or Error model: {type(error).__name__} = {error!r}"
-    )
+    # ── Verify it carries meaningful error information ──────────────
+    _assert_meaningful_error(error)
 
     # ── Verify NO partial successes ─────────────────────────────────
     # "Entire sync fails" means the operation was rejected wholesale.
