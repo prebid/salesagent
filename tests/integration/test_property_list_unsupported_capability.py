@@ -3,25 +3,18 @@
 AdCP honest-declaration contract (``core/targeting.json:179``,
 ``update-media-buy-request.json:64``): a seller whose adapter cannot
 compile ``targeting_overlay.property_list`` MUST reject the request with
-``UNSUPPORTED_FEATURE`` rather than silently drop the field. The previous
-implementation lived in 4 adapter ``create_media_buy`` overrides plus a
-soft-advisory wrapper that rode on success envelopes — three divergent
-answers to one question per Konstantine's #1313 2026-05-25 review.
+``UNSUPPORTED_FEATURE`` rather than silently drop the field.
 
-The runtime guard now fires once per request in
-``_create_media_buy_impl`` / ``_update_media_buy_impl`` — right after
-adapter resolution, before any ``dry_run`` / approval / execution branch —
-so every transport (REST, A2A, MCP) and every adapter (mock, broadstreet,
-xandr, triton, kevel, GAM) honors the contract uniformly. These tests
-exercise the boundary directly with ``dry_run=False`` so the guard fires
-on the real path Konstantine flagged as previously uncovered (the legacy
-integration tests ran ``dry_run=True`` and short-circuited before the
-adapter ever ran).
+The runtime guard fires once per request in ``_create_media_buy_impl`` /
+``_update_media_buy_impl`` — right after adapter resolution, before any
+``dry_run`` / approval / execution branch — so every transport (REST, A2A,
+MCP) and every adapter (mock, broadstreet, xandr, triton, kevel, GAM)
+honors the contract uniformly.
 
-Pin-test (P14): flip ``MockAdServer.supports_property_list_targeting`` to
-``True`` and ``test_create_rejects_property_list_when_adapter_unsupported``
-must fail — that proves the boundary check is what's actually rejecting,
-not some upstream validation.
+Pin-test: flip ``MockAdServer.supports_property_list_targeting`` to ``True``
+and ``test_create_rejects_property_list_when_adapter_unsupported`` must
+fail — that proves the boundary check is what's actually rejecting, not
+some upstream validation.
 
 Covers: UC-002 honest-declaration property_list reject
 Covers: UC-003 honest-declaration property_list reject (update parity)
@@ -54,18 +47,15 @@ TENANT_ID = "test_property_list_capability"
 def _make_identity(dry_run: bool = True) -> ResolvedIdentity:
     """Identity for property_list capability tests.
 
-    The new boundary check fires at line 2217 of ``_create_media_buy_impl``
-    — right after ``get_adapter()`` resolution at line 2210, and BEFORE the
-    dry_run gate at line 2233 (Konstantine #1313: "Moving the check into
-    the ``_impl`` validation phase makes it fire on every response path").
-    So both ``dry_run=True`` and ``dry_run=False`` exercise the same check.
+    The boundary check fires in ``_create_media_buy_impl`` immediately
+    after ``get_adapter()`` resolution and BEFORE the dry_run / approval
+    gates, so both ``dry_run=True`` and ``dry_run=False`` exercise the
+    same check.
 
     Default ``dry_run=True`` skips the setup-checklist guard so the test
     tenant doesn't need full SSO + adagents.json configuration.
-    ``test_create_dry_run_false_path_also_rejects`` flips this to prove the
-    check is not short-circuited by dry_run — what Konstantine flagged on
-    the *legacy* adapter-layer reject (which lived after the dry_run gate
-    and only fired on the real-execution branch).
+    ``test_create_dry_run_false_path_also_rejects`` flips this to prove
+    the check is not short-circuited by dry_run.
     """
     return PrincipalFactory.make_identity(
         principal_id="test_adv",
@@ -133,10 +123,7 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
     Spec basis: ``error-code.json:189``, ``error-handling.mdx:467``. The wire
     envelope must carry ``code=UNSUPPORTED_FEATURE``, ``recovery=correctable``,
     machine-actionable ``field`` and ``suggestion`` so the buyer agent can drop
-    the field and retry without a human. Pre-#1313 the check lived inside
-    ``adapter.create_media_buy``, *after* ``_impl``'s dry_run gate; tests
-    exercised the helper return value via MagicMock — a wiring regression at
-    ``_impl`` would have stayed green.
+    the field and retry without a human.
     """
     request = _build_property_list_create_request()
 
@@ -144,7 +131,7 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
         await _create_media_buy_impl(req=request, identity=_make_identity())
 
     exc = excinfo.value
-    # Wire-shape contract: every field Konstantine called out must be present.
+    # Wire-shape contract: every field must be present.
     assert exc.error_code == "UNSUPPORTED_FEATURE"
     assert exc.recovery == "correctable", (
         "AdCP error-handling.mdx:467 requires the seller-incapacity case to "
@@ -160,10 +147,10 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
     )
 
     # Wire envelope round-trip: spec-compliant ``{"errors": [...]}`` shape
-    # carries all five fields through to the response body. Asserting on
-    # the envelope (not the reconstructed exception) is the wire-envelope
-    # policy from #1306+#1359; #1313's tree predates the helper so we
-    # check the shape directly here.
+    # carries all five fields through to the response body. The dedicated
+    # 3-transport wire tests below assert on the actual wire envelopes via
+    # ``assert_envelope_shape``; this _impl-level check asserts on the
+    # reconstructed envelope from the raised exception.
     envelope = exc.to_adcp_error()
     assert envelope["errors"][0]["code"] == "UNSUPPORTED_FEATURE"
     assert envelope["errors"][0]["recovery"] == "correctable"
@@ -172,15 +159,52 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
 
 
 @pytest.mark.requires_db
+async def test_create_dry_run_false_path_also_rejects(capability_tenant):
+    """Boundary check fires on the real-execution path, not just dry_run.
+
+    The pre-refactor adapter-layer check fired AFTER the dry_run gate, so a
+    dry_run=False request could reach adapter execution before being
+    rejected. The ``_impl``-level check must fire on both paths uniformly
+    so a buyer cannot bypass capability enforcement by toggling dry_run.
+
+    Uses ``test_session_id`` to bypass the production setup-checklist gate
+    (SSO + Authorized Properties) so the test can exercise the real-execution
+    branch on a minimal test tenant.
+    """
+    from src.core.testing_hooks import AdCPTestContext
+
+    request = _build_property_list_create_request()
+    identity = PrincipalFactory.make_identity(
+        principal_id="test_adv",
+        tenant_id=TENANT_ID,
+        protocol="mcp",
+        testing_context=AdCPTestContext(
+            dry_run=False,
+            mock_time=None,
+            jump_to_event=None,
+            test_session_id="prop-list-dryrun-false-session",
+        ),
+    )
+
+    with pytest.raises(AdCPUnsupportedFeatureError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=identity)
+
+    exc = excinfo.value
+    assert exc.error_code == "UNSUPPORTED_FEATURE"
+    assert exc.recovery == "correctable"
+    assert exc.field == "packages[0].targeting_overlay.property_list"
+
+
+@pytest.mark.requires_db
 async def test_create_accepts_property_list_when_adapter_supports(capability_tenant, monkeypatch):
     """Adapter that declares ``supports_property_list_targeting = True`` accepts the field.
 
-    Pin-test (P14): if the boundary check were removed, this test would
-    still pass — but its sibling
+    Pin-test: if the boundary check were removed, this test would still
+    pass — but its sibling
     ``test_create_rejects_property_list_when_adapter_unsupported`` would
     start passing for the wrong reason (no rejection ever happens). The
-    pair together prove the check is *gated* on the ClassVar, not always-on
-    or always-off.
+    pair together prove the check is *gated* on the ClassVar, not
+    always-on or always-off.
     """
     monkeypatch.setattr(MockAdServer, "supports_property_list_targeting", True)
     request = _build_property_list_create_request()
@@ -236,12 +260,12 @@ async def test_create_accepts_request_without_property_list_on_unsupported_adapt
         pytest.fail(f"Boundary check raised on a request without property_list — false positive. field={e.field!r}")
 
 
-# ─── update_media_buy boundary check (P1 create/update symmetry) ─────────
+# ─── update_media_buy boundary check (create/update symmetry) ───────────
 
 
 @pytest.mark.requires_db
 def test_update_rejects_property_list_when_adapter_unsupported(capability_tenant):
-    """``_update_media_buy_impl`` enforces the same boundary check as create (P1 symmetry).
+    """``_update_media_buy_impl`` enforces the same boundary check as create.
 
     A buyer that snuck property_list past the original create (e.g.
     because they used a different adapter then) cannot retroactively add

@@ -355,16 +355,16 @@ def _update_media_buy_impl(
                         property_targeting_violations.append(violation)
                 raise_if_property_targeting_violations(property_targeting_violations)
 
-            # Konstantine #1313: honest-declaration check for property_list targeting.
-            # Runs AFTER the #1276 product-flag gate (raise_if_property_targeting_violations
-            # above) so a buyer asking for property_list on a product whose
-            # ``property_targeting_allowed=False`` sees the product-specific
-            # VALIDATION_ERROR first (smaller-scope correction: switch product
-            # within same seller). If the request is well-formed against the product
-            # but the seller's adapter cannot compile property_list, this check fires
-            # with UNSUPPORTED_FEATURE (recovery=correctable; suggestion: drop the
-            # field or pick a capable seller). Both gates fire BEFORE the dry_run
-            # branch so all transports + dry_run honor the contract uniformly.
+            # Honest-declaration check for property_list targeting. Runs AFTER
+            # the product-flag gate above so a buyer asking for property_list
+            # on a product whose ``property_targeting_allowed=False`` sees the
+            # product-specific VALIDATION_ERROR first (smaller-scope correction:
+            # switch product within same seller). If the request is well-formed
+            # against the product but the seller's adapter cannot compile
+            # property_list, this check fires with UNSUPPORTED_FEATURE
+            # (recovery=correctable; suggestion: drop the field or pick a
+            # capable seller). Both gates fire BEFORE the dry_run branch so
+            # all transports + dry_run honor the contract uniformly.
             raise_if_property_list_unsupported(req.packages, adapter)
 
             # Dry-run mode: Return simulated response without any database writes

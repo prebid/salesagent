@@ -295,10 +295,10 @@ class BroadstreetAdapter(AdServerAdapter):
         Returns:
             CreateMediaBuyResponse with media buy details
         """
-        # Note: honest-declaration property_list reject moved to
-        # ``_create_media_buy_impl`` (Konstantine #1313). Broadstreet is
-        # single-network and keeps ``supports_property_list_targeting = False``;
-        # the boundary raise rejects up-front before this adapter runs.
+        # Honest-declaration property_list reject lives in
+        # ``_create_media_buy_impl``. Broadstreet is single-network and
+        # keeps ``supports_property_list_targeting = False``; the boundary
+        # raise rejects up-front before this adapter runs.
 
         # Log operation
         self.audit_logger.log_operation(

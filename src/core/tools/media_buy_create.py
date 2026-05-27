@@ -1474,19 +1474,14 @@ def _build_idempotency_hit_result(
     idempotency_key: str | None,
     principal_id: str,
     context: ContextObject | None,
-    req: "CreateMediaBuyRequest | None" = None,
-    adapter: "Any | None" = None,
 ) -> CreateMediaBuyResult:
     """Re-query the winner of an idempotency race and return its result.
 
     Used both for the happy-path idempotency lookup and for the TOCTOU
-    race-condition recovery (IntegrityError on commit).
-
-    ``req`` + ``adapter`` are optional so the property_list advisory can be
-    rebuilt on every replay (rebuild, don't persist — capability could have
-    flipped True between the original call and the replay). Callers that
-    have them in scope pass them; the function tolerates None for callers
-    that don't yet.
+    race-condition recovery (IntegrityError on commit). The property_list
+    capability check raises ``AdCPUnsupportedFeatureError`` at the boundary
+    on the first request, so a successful replay row is always against an
+    adapter that compiles the field — the replay result carries no advisory.
     """
     from src.core.database.repositories import MediaBuyUoW
 
@@ -1508,10 +1503,6 @@ def _build_idempotency_hit_result(
         except ValueError:
             adcp_status = MediaBuyStatus.pending_start
 
-        # Idempotency replay carries no advisory: post-#1313 the
-        # property_list capability check raises ``AdCPUnsupportedFeatureError``
-        # at the boundary on the first request, so a successful replay row is
-        # always against an adapter that compiles the field — nothing to warn.
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
                 media_buy_id=existing.media_buy_id,
@@ -1617,15 +1608,6 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key,
                     principal_id=principal_id,
                     context=req.context,
-                    req=req,
-                    # FIXME(idempotency-adapter): adapter isn't initialized yet
-                    # at this early happy-path check, so the advisory may
-                    # misfire once Kevel's capability flips to True
-                    # (Kevel tenants would see a stale UNSUPPORTED_FEATURE
-                    # on replay). Today no adapter compiles property_list,
-                    # so the advisory is always correct. Untangle when the
-                    # idempotency probe moves after adapter init.
-                    adapter=None,
                 )
 
     # Context management and workflow step creation - create workflow step FIRST
@@ -2206,14 +2188,14 @@ async def _create_media_buy_impl(
         # Use dry_run from testing context (which comes from config or testing flags)
         adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
 
-        # Konstantine #1313: honest-declaration check for property_list targeting.
-        # Runs once here — right after adapter resolution, before any dry_run /
+        # Honest-declaration check for property_list targeting. Runs once
+        # here — right after adapter resolution, before any dry_run /
         # approval / execution branch — so every response path (sync, async,
         # dry_run, manual approval) honors the contract uniformly. Adapters
-        # that declare ``supports_property_list_targeting = False`` reject the
-        # request with ``AdCPUnsupportedFeatureError`` (recovery=correctable)
-        # carrying ``field`` + ``suggestion`` so the buyer agent can drop the
-        # field and retry or pick a capable seller.
+        # that declare ``supports_property_list_targeting = False`` reject
+        # the request with ``AdCPUnsupportedFeatureError`` (recovery=
+        # correctable) carrying ``field`` + ``suggestion`` so the buyer
+        # agent can drop the field and retry or pick a capable seller.
         raise_if_property_list_unsupported(req.packages, adapter)
 
         # Check if manual approval is required
@@ -2392,8 +2374,6 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
                     context=req.context,
-                    req=req,
-                    adapter=adapter,
                 )
 
             # Log to activity feed for manual approval case
@@ -3267,8 +3247,6 @@ async def _create_media_buy_impl(
                 idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
                 context=req.context,
-                req=req,
-                adapter=adapter,
             )
 
         # Populate media_packages table for structured querying

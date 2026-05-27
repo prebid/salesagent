@@ -140,13 +140,13 @@ class TritonDigital(AdServerAdapter):
             dry_run_prefix=False,
         )
 
-        # Note: honest-declaration property_list reject moved to
-        # ``_create_media_buy_impl`` (Konstantine #1313). Triton can in
-        # principle compile audio-property identifier types (station_id,
-        # podcast_guid, etc.) to its native targeting, but that requires the
-        # property_list resolver work tracked in B3 — until then this adapter
-        # keeps ``supports_property_list_targeting = False`` and the boundary
-        # raise rejects the request up-front.
+        # Honest-declaration property_list reject lives in
+        # ``_create_media_buy_impl``. Triton can in principle compile audio-
+        # property identifier types (station_id, podcast_guid, etc.) to its
+        # native targeting, but that requires resolver work not yet
+        # implemented — until then this adapter keeps
+        # ``supports_property_list_targeting = False`` and the boundary raise
+        # rejects the request up-front.
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []

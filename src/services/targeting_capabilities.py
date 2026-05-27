@@ -197,23 +197,17 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
 def supports_property_list_targeting(adapter: object | None) -> bool:
     """Return True iff the bound adapter compiles ``targeting_overlay.property_list``.
 
-    Renamed from ``supports_property_list_filtering`` per Konstantine's
-    2026-05-25 #1313 review: the ``property_list_filtering`` wire flag in
-    ``media-buy-features.json:12`` names the *get_products result-filter*
-    capability, which is a different feature that happens to share a word.
-    The capability THIS helper gates is ``targeting_overlay.property_list``
-    — i.e. *targeting*, not *filtering*. The wire flag rename in
-    ``get_adcp_capabilities`` is tracked separately so this PR stays focused.
+    The ``property_list_filtering`` wire flag in ``media-buy-features.json:12``
+    names the *get_products result-filter* capability, which is a different
+    feature that happens to share a word. The capability THIS helper gates is
+    ``targeting_overlay.property_list`` — i.e. *targeting*, not *filtering*.
 
-    Today no adapter sets ``supports_property_list_targeting=True``; the
-    declaration in ``get_adcp_capabilities`` is the canonical "False until an
-    adapter actually compiles it" anchor. When Kevel's siteId resolver lands,
-    Kevel's adapter class will set this ClassVar to True and the helper will
-    start returning True for tenants on Kevel. Other adapters hard-reject at
-    the ``_impl`` boundary (see ``_create_media_buy_impl`` /
-    ``_update_media_buy_impl``); centralizing the check there keeps the wire
-    declaration (capabilities) and the runtime guard in lockstep with one
-    source of truth.
+    Adapter capability is read from the
+    ``supports_property_list_targeting: ClassVar[bool] = False`` declared in
+    ``AdServerAdapter``; adapters flip it to True once they implement the
+    compile path. Until then, ``_create_media_buy_impl`` /
+    ``_update_media_buy_impl`` reject ``property_list`` requests at the
+    boundary via ``raise_if_property_list_unsupported``.
     """
     if adapter is None:
         return False
@@ -247,11 +241,7 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
     MUST reject rather than silently drop.
 
     Centralized here so ``_create_media_buy_impl`` and
-    ``_update_media_buy_impl`` share one path (Konstantine #1313:
-    "collapses all three into this single path"). The legacy per-adapter
-    rejects (``base.AdServerAdapter._check_property_list_supported``) and the
-    legacy soft-advisory (``property_list_unsupported_advisories``) are both
-    removed in favor of this single boundary raise.
+    ``_update_media_buy_impl`` share a single rejection path.
 
     Args:
         packages: Request packages, possibly None. Each is inspected for a

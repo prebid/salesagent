@@ -380,14 +380,13 @@ class AdServerAdapter(ABC):
 
         return errors
 
-    # Note: property_list honest-declaration check lives in
+    # property_list honest-declaration check lives in
     # ``_create_media_buy_impl`` / ``_update_media_buy_impl`` via
-    # ``raise_if_property_list_unsupported`` (Konstantine #1313). Adapters
-    # declare their capability via the ``supports_property_list_targeting``
-    # ClassVar above; the runtime guard fires at the _impl boundary, before
-    # any dry_run / approval / execution branch, so every transport (REST,
-    # A2A, MCP) and every adapter (including GAM/Kevel) honors the contract
-    # uniformly.
+    # ``raise_if_property_list_unsupported``. Adapters declare their
+    # capability via the ``supports_property_list_targeting`` ClassVar
+    # above; the runtime guard fires at the _impl boundary, before any
+    # dry_run / approval / execution branch, so every transport (REST,
+    # A2A, MCP) and every adapter honors the contract uniformly.
 
     @abstractmethod
     def create_media_buy(

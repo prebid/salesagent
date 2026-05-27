@@ -206,6 +206,8 @@ logger = logging.getLogger(__name__)
 class XandrAdapter(AdServerAdapter):
     """Adapter for Microsoft Xandr (formerly AppNexus) platform."""
 
+    adapter_name = "xandr"
+
     def __init__(self, config: dict[str, Any], principal: Principal, tenant_id: str | None = None):
         """Initialize Xandr adapter with configuration and principal."""
         super().__init__(config, principal, tenant_id=tenant_id)
@@ -478,12 +480,12 @@ class XandrAdapter(AdServerAdapter):
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
-        """Create insertion order and line items in Xandr."""
-        # Note: honest-declaration property_list reject moved to
-        # ``_create_media_buy_impl`` (Konstantine #1313). Xandr keeps
-        # ``supports_property_list_targeting = False``; the boundary raise
-        # rejects up-front before this adapter runs.
+        """Create insertion order and line items in Xandr.
 
+        Xandr keeps ``supports_property_list_targeting = False``; the
+        ``_create_media_buy_impl`` boundary check rejects property_list
+        requests up-front before this adapter runs.
+        """
         if self._requires_manual_approval("create_media_buy"):
             task_id = self._create_human_task(
                 "create_media_buy",
