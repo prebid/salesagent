@@ -1549,38 +1549,28 @@ def then_no_retry(ctx: dict) -> None:
 def then_log_auth_rejection(ctx: dict) -> None:
     """Assert the system logged the authentication rejection.
 
-    The webhook delivery service logs a warning when receiving a 4xx client
-    error.  This step verifies that a log record containing the auth
-    rejection context was emitted during the delivery attempt.  Delivery
-    success/failure and retry count are covered by adjacent Then steps.
+    CircuitBreakerEnv captures WARNING+ log records from the webhook delivery
+    service. This step verifies a log record about the 401/client error was
+    emitted during the delivery attempt.
     """
     env = ctx["env"]
-    # 1. Confirm delivery failed (precondition — auth rejection must cause failure)
+    # 1. Confirm delivery failed (precondition)
     success = _extract_webhook_success(ctx)
     assert success is False, f"Expected webhook delivery to fail on auth rejection, got success={success!r}"
 
-    # 2. Check for log evidence of the auth rejection
-    log_records = ctx.get("captured_logs") or getattr(env, "captured_logs", None)
-    if log_records is not None:
-        found_auth_log = any(
-            "client error" in r.lower() or "401" in r or "unauthorized" in r.lower() for r in log_records
-        )
-        assert found_auth_log, (
-            f"Expected a log record about auth rejection (401/client error), "
-            f"found {len(log_records)} log records: {log_records[:5]}"
-        )
-    else:
-        # 3. No log capture — check mock call_args for 401 evidence
-        mock_post = env.mock.get("httpx_post") or env.mock.get("webhook_post")
-        if mock_post is not None and mock_post.call_count > 0:
-            # The webhook endpoint was called and returned 401 — delivery code
-            # processed the auth rejection (logging is an internal side effect)
-            pass  # Delivery failure + mock called = auth path exercised
-        else:
-            pytest.xfail(
-                "HARNESS GAP: no log capture and no webhook POST mock — "
-                "cannot verify auth rejection logging.  Delivery failure confirmed."
-            )
+    # 2. Verify auth rejection was logged
+    log_records = getattr(env, "captured_logs", None) or ctx.get("captured_logs")
+    assert log_records is not None, (
+        "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
+    )
+    found_auth_log = any(
+        "client error" in r.lower() or "401" in r or "unauthorized" in r.lower()
+        for r in log_records
+    )
+    assert found_auth_log, (
+        f"Expected a WARNING log record about auth rejection (401/client error/unauthorized), "
+        f"but captured {len(log_records)} records: {log_records[:5]}"
+    )
 
 
 @then("the webhook should be marked as failed")
