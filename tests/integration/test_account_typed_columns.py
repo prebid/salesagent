@@ -29,7 +29,7 @@ class TestAccountTypedBrand:
 
     def test_brand_is_pydantic_model(self, integration_db):
         """After DB roundtrip, brand is a BrandReference instance."""
-        from adcp.types.generated_poc.core.brand_ref import BrandReference
+        from adcp.types import BrandReference
 
         from src.core.database.models import Account
         from tests.factories import AccountFactory, TenantFactory
@@ -82,7 +82,7 @@ class TestAccountTypedCreditLimit:
 
     def test_credit_limit_is_pydantic_model(self, integration_db):
         """After DB roundtrip, credit_limit is a CreditLimit instance."""
-        from adcp.types.generated_poc.core.account import CreditLimit
+        from adcp.types.generated_poc.core.account import CreditLimit  # TODO: no stable alias in adcp.types
 
         from src.core.database.models import Account
         from tests.factories import AccountFactory, TenantFactory

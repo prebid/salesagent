@@ -10,16 +10,16 @@ from typing import Annotated, TypeVar
 
 from adcp import FormatId
 from adcp.types import Format as AdcpFormat
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.format import (
-    Assets,
-    Assets81,
-    Assets82,
-    Assets83,
-    Assets85,
-    Assets90,
+from adcp.types import (
+    AssetContentType,
+    AudioFormatAsset,
+    ContextObject,
+    HtmlFormatAsset,
+    ImageFormatAsset,
+    TextFormatAsset,
+    UrlFormatAsset,
+    VideoFormatAsset,
 )
-from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from adcp.utils.format_assets import get_format_assets
 from pydantic import Field
 
@@ -82,20 +82,20 @@ def _infer_asset_type(asset_id: str) -> str:
 # Each adcp Assets variant uses a Literal discriminator for asset_type.
 # Map asset type strings to the correct class.
 _ASSET_TYPE_TO_CLASS: dict[str, type] = {
-    "image": Assets,
-    "video": Assets81,
-    "audio": Assets82,
-    "text": Assets83,
-    "html": Assets85,
-    "url": Assets90,
+    "image": ImageFormatAsset,
+    "video": VideoFormatAsset,
+    "audio": AudioFormatAsset,
+    "text": TextFormatAsset,
+    "html": HtmlFormatAsset,
+    "url": UrlFormatAsset,
 }
 
 
 def _make_asset(
     asset_id: str, asset_type: str, required: bool
-) -> Assets | Assets81 | Assets82 | Assets83 | Assets85 | Assets90:
+) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:
     """Build the correct Assets variant for a given asset type string."""
-    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, Assets83)  # default to text
+    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
     return cls(
         item_type="individual",
         asset_id=asset_id,
@@ -136,7 +136,7 @@ def _list_creative_formats_impl(
     try:
         registry = get_creative_agent_registry()
     except Exception as e:
-        from adcp.types.generated_poc.core.error import Error as AdCPResponseError
+        from adcp.types import Error as AdCPResponseError
 
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
         return ListCreativeFormatsResponse(
@@ -196,7 +196,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[Assets | Assets81 | Assets82 | Assets83 | Assets85 | Assets90] = []
+                        assets_list: list[ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset] = []
                         for asset_id in template.get("required_assets", []):
                             asset_type = _infer_asset_type(asset_id)
                             assets_list.append(_make_asset(asset_id, asset_type, required=True))
@@ -316,7 +316,7 @@ def _list_creative_formats_impl(
     # Filter by wcag_level - hierarchical: A < AA < AAA
     # Formats must meet at least the requested level; formats without accessibility are excluded
     if req.wcag_level is not None:
-        from adcp.types.generated_poc.enums.wcag_level import WcagLevel
+        from adcp.types import WcagLevel
 
         _WCAG_ORDER = {WcagLevel.A: 1, WcagLevel.AA: 2, WcagLevel.AAA: 3}
         min_level = _WCAG_ORDER.get(req.wcag_level, 0)
@@ -364,7 +364,7 @@ def _list_creative_formats_impl(
     page_formats = formats[start_index:end_index]
 
     # Build pagination response
-    from adcp.types.generated_poc.core.pagination_response import PaginationResponse
+    from adcp.types import PaginationResponse
 
     next_cursor = None
     if has_more:
@@ -379,7 +379,7 @@ def _list_creative_formats_impl(
     )
 
     # Build creative_agents referrals from registry (POST-S4)
-    from adcp.types.generated_poc.enums.creative_agent_capability import CreativeAgentCapability
+    from adcp.types import CreativeAgentCapability
     from adcp.types.generated_poc.media_buy.list_creative_formats_response import (
         CreativeAgent as AdcpCreativeAgent,
     )
@@ -423,6 +423,11 @@ def _list_creative_formats_impl(
     )
 
     # Create response (no message/specification_version - not in adapter schema)
+    # Determine sandbox flag from identity (BR-RULE-209 INV-4)
+    sandbox_flag: bool | None = None
+    if identity and identity.testing_context and identity.testing_context.dry_run:
+        sandbox_flag = True
+
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
         formats=page_formats,
@@ -430,6 +435,7 @@ def _list_creative_formats_impl(
         errors=agent_errors if agent_errors else None,
         context=req.context,
         pagination=pagination_response,
+        sandbox=sandbox_flag,
     )
 
     # Always return Pydantic model - MCP wrapper will handle serialization

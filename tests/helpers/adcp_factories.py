@@ -13,7 +13,7 @@ from typing import Any
 # Import types from adcp library - use public API when available
 from adcp import Format, Property
 from adcp.types import CreativeAsset, FormatId
-from adcp.types.generated_poc.brand import Brand
+from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url

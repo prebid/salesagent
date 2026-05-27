@@ -6,11 +6,13 @@ All classes are re-exported from ``src.core.schemas`` for backward compatibility
 beads: salesagent-x79
 """
 
+from typing import Any
+
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
-from adcp.types.generated_poc.core.account import Account as LibraryAccountDomain
+from adcp.types import Account as LibraryAccountDomain
 from pydantic import ConfigDict
 
 from src.core.config import get_pydantic_extra_mode
@@ -30,6 +32,19 @@ class Account(LibraryAccountDomain):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # POST-S3: Buyer knows advertiser, rate_card, and payment_terms.
+    # Library model_dump defaults exclude_none=True which strips these when
+    # None.  Override to always include them so callers can distinguish
+    # "field absent" from "field=null".
+    _ALWAYS_INCLUDE = {"advertiser", "rate_card", "payment_terms"}
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        result = super().model_dump(**kwargs)
+        for field in self._ALWAYS_INCLUDE:
+            if field not in result:
+                result[field] = getattr(self, field, None)
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +85,12 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
 
     Library provides: accounts, errors, pagination, context, ext.
     NestedModelSerializerMixin ensures nested Account objects serialize correctly.
+    Accounts field redeclared for Pattern #4 (nested serialization with local subclass).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    accounts: list[Account] = []  # type: ignore[assignment]  # Pattern #4: use local Account subclass
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

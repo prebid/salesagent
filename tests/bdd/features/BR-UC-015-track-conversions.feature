@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
+# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-015 Track Conversions
@@ -974,7 +974,7 @@ Feature: BR-UC-015 Track Conversions
 
   @T-UC-015-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid event returns real validation error
-    And the request targets a sandbox account
+    Given the request targets a sandbox account
     When the Buyer Agent logs events with missing required event_type
     Then the response should indicate a validation error
     And the error should be a real validation error, not simulated

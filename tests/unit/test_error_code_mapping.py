@@ -47,12 +47,14 @@ class TestErrorCodeMapping:
         assert not overlap, f"Codes in both mapping and internal set: {overlap}"
 
     def test_class_error_codes_are_standard_or_internal(self):
-        """Every AdCPError subclass error_code must be standard or internal."""
-        std = set(STANDARD_ERROR_CODES)
+        """Every AdCPError subclass error_code must be standard, internal, or spec-required."""
+        # Spec-required codes not yet in SDK STANDARD_ERROR_CODES
+        spec_codes = {"AUTH_TOKEN_INVALID", "BILLING_NOT_SUPPORTED"}
+        allowed = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | spec_codes
         violations = []
         for cls in _all_adcp_error_subclasses():
             code = cls.error_code
-            if code not in std and code not in INTERNAL_CODES:
+            if code not in allowed:
                 violations.append(f"{cls.__name__}.error_code = {code!r}")
         assert not violations, "AdCPError subclasses with non-standard, non-internal codes:\n" + "\n".join(
             f"  {v}" for v in violations

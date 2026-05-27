@@ -232,6 +232,8 @@ class TestSchemaInheritance:
             ("SyncCreativesRequest", "idempotency_key"),  # optional override (generated at boundary)
             ("UpdateMediaBuyRequest", "account"),  # optional override (resolved from identity)
             ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (generated at boundary)
+            # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
+            ("ListAccountsResponse", "accounts"),
         }
 
         violations = []

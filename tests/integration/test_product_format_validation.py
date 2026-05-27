@@ -18,7 +18,7 @@ import json
 from unittest.mock import patch
 
 import pytest
-from adcp.types.generated_poc.core.error import Error as AdCPResponseError
+from adcp.types import Error as AdCPResponseError
 from sqlalchemy import select
 
 from src.admin.app import create_app

@@ -43,9 +43,8 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
-from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
+from adcp.types import ContextObject, MediaBuyStatus
+from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction  # TODO: no stable alias in adcp.types
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPNotFoundError
@@ -293,7 +292,7 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
-        result = self.response.model_dump(mode=info.mode)
+        result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
         return result
 
@@ -2165,7 +2164,7 @@ PROPERTY_ERROR_MESSAGES = {
 # --- Authorized Properties (AdCP Spec) ---
 # Use library types directly - all fields inherited from AdCP spec
 # V3: Property uses property-specific Identifier, not generic Identifier
-from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
+from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier  # TODO: no stable alias in adcp.types (different from adcp.types.Identifier)
 
 PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific identifier
 Property: TypeAlias = LibraryProperty

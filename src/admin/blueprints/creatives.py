@@ -12,7 +12,7 @@ from typing import Any
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import CreativeAction, McpWebhookPayload, SyncCreativeResult, SyncCreativesSuccessResponse
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import ContextObject
 from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.models import (

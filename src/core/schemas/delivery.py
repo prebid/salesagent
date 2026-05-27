@@ -20,7 +20,7 @@ from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryR
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import ReportingFrequency as LibraryReportingFrequency
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import ByGeoItem as LibraryByGeoItem
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import ByGeoItem as LibraryByGeoItem  # TODO: no stable alias in adcp.types
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
