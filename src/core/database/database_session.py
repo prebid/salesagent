@@ -17,8 +17,6 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
-from src.core.database.db_config import DatabaseConfig
-
 logger = logging.getLogger(__name__)
 
 # Module-level globals for lazy initialization
@@ -81,10 +79,16 @@ def get_engine():
                 "Use @pytest.mark.requires_db for integration tests."
             )
 
-        # Get connection string from config
-        connection_string = DatabaseConfig.get_connection_string()
+        # Get connection string from environment
+        connection_string = os.environ.get("DATABASE_URL")
+        if not connection_string:
+            raise OSError(
+                "DATABASE_URL is not set. Set it to a PostgreSQL connection URL, "
+                "e.g. DATABASE_URL=postgresql://user:password@host:5432/dbname. "
+                "Individual DB_HOST/DB_PORT/DB_USER/DB_PASSWORD variables are not supported."
+            )
 
-        if "postgresql" not in connection_string:
+        if not connection_string.startswith(("postgresql://", "postgresql+", "postgres://")):
             raise ValueError("Only PostgreSQL is supported. Use DATABASE_URL=postgresql://...")
 
         # Get timeout configuration from environment

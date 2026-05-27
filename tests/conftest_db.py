@@ -68,7 +68,7 @@ def test_database_url():
     if not url:
         pytest.skip("Tests require PostgreSQL. Run: ./run_all_tests.sh ci")
 
-    if "postgresql" not in url:
+    if not url.startswith(("postgresql://", "postgres://")):
         pytest.skip(f"Tests require PostgreSQL, got: {url.split('://')[0]}. Run: ./run_all_tests.sh ci")
 
     return url
@@ -384,7 +384,7 @@ def integration_db():
 
     # Require PostgreSQL - no SQLite fallback
     postgres_url = os.environ.get("DATABASE_URL")
-    if not postgres_url or not postgres_url.startswith("postgresql://"):
+    if not postgres_url or not postgres_url.startswith(("postgresql://", "postgres://")):
         pytest.skip(
             "Integration tests require PostgreSQL DATABASE_URL (e.g., postgresql://user:pass@localhost:5432/any_db)"
         )
@@ -398,7 +398,7 @@ def integration_db():
 
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
+    pattern = r"postgres(?:ql)?://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
     match = re.match(pattern, postgres_url)
     if match:
         user, password, host, port_str, _ = match.groups()
@@ -410,11 +410,13 @@ def integration_db():
         )
         user, password, host, postgres_port = "adcp_user", "test_password", "localhost", 5432
 
+    from urllib.parse import unquote
+
     conn_params = {
-        "host": host,
+        "host": unquote(host),
         "port": postgres_port,
-        "user": user,
-        "password": password,
+        "user": unquote(user),
+        "password": unquote(password),  # URL-encoded chars (e.g. %40→@) must be decoded for psycopg2
         "database": "postgres",  # Connect to default db first
     }
 
@@ -557,14 +559,12 @@ def integration_db():
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cur = conn.cursor()
         # Terminate connections to the test database
-        cur.execute(
-            f"""
+        cur.execute(f"""
             SELECT pg_terminate_backend(pg_stat_activity.pid)
             FROM pg_stat_activity
             WHERE pg_stat_activity.datname = '{db_path}'
             AND pid <> pg_backend_pid()
-            """
-        )
+            """)
         cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
         cur.close()
         conn.close()

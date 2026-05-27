@@ -9,6 +9,7 @@ This service:
 """
 
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -18,14 +19,33 @@ from sqlalchemy.orm import Session, scoped_session, sessionmaker
 from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
-from src.core.database.db_config import DatabaseConfig
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 
-# Create database session factory
-engine = create_engine(DatabaseConfig.get_connection_string())
-SessionLocal = sessionmaker(bind=engine)
-# Use scoped_session for thread-local sessions
-db_session = scoped_session(SessionLocal)
+
+class _LazyDBSession:
+    """Defers create_engine() to first use so importing this module doesn't require DATABASE_URL."""
+
+    _session: "scoped_session | None" = None
+
+    def _ensure(self) -> "scoped_session":
+        if type(self)._session is None:
+            url = os.environ.get("DATABASE_URL")
+            if not url:
+                raise OSError(
+                    "DATABASE_URL is not set. Set it to a PostgreSQL connection URL, "
+                    "e.g. DATABASE_URL=postgresql://user:password@host:5432/dbname."
+                )
+            type(self)._session = scoped_session(sessionmaker(bind=create_engine(url)))
+        return type(self)._session  # type: ignore[return-value]
+
+    def __getattr__(self, name: str):
+        return getattr(self._ensure(), name)
+
+    def __call__(self, *args, **kw):
+        return self._ensure()(*args, **kw)
+
+
+db_session = _LazyDBSession()
 
 logger = logging.getLogger(__name__)
 

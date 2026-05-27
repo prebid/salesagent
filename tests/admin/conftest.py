@@ -5,7 +5,6 @@ These fixtures are for testing the admin web interface.
 """
 
 import os
-from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import Session as SASession
@@ -85,27 +84,16 @@ def test_users():
 @pytest.fixture
 def ui_client(ui_test_mode):
     """Provide Flask client configured for UI testing."""
-    # Mock database before importing
-    with patch("db_config.get_db_connection") as mock_db_conn:
-        mock_db = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = []
-        mock_cursor.fetchone.return_value = None
-        mock_db.execute.return_value = mock_cursor
-        mock_db_conn.return_value = mock_db
+    from src.admin.app import create_app
 
-        # Mock GAM inventory service
-        with patch("gam_inventory_service.get_db_connection", return_value=mock_db):
-            from src.admin.app import create_app
+    app = create_app()
+    app.config["TESTING"] = True
+    app.config["SECRET_KEY"] = "test-secret-key"
+    app.config["WTF_CSRF_ENABLED"] = False
 
-            app = create_app()
-            app.config["TESTING"] = True
-            app.config["SECRET_KEY"] = "test-secret-key"
-            app.config["WTF_CSRF_ENABLED"] = False
+    client = app.test_client()
 
-            client = app.test_client()
-
-            yield client
+    yield client
 
 
 @pytest.fixture

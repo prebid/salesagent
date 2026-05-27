@@ -245,9 +245,7 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
     from src.core.database.models import MediaBuy as MediaBuyModel
     from tests.factories import CreativeAssignmentFactory
 
-    creative = session.scalars(
-        sa_select(CreativeModel).filter_by(tenant_id=tenant_id, creative_id=creative_id)
-    ).first()
+    creative = session.scalars(sa_select(CreativeModel).filter_by(tenant_id=tenant_id, creative_id=creative_id)).first()
     media_buy = session.scalars(
         sa_select(MediaBuyModel).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
     ).first()
@@ -255,7 +253,7 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
     return asgn.assignment_id
 
 
-_PUSH_PATCH = "src.core.tools.media_buy_create.push_creative_to_existing_buy"
+_PUSH_PATCH = "src.admin.blueprints.creatives.push_creative_to_existing_buy"
 
 
 class TestCreativeApprovalRetroactivePush:
