@@ -1375,14 +1375,25 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
     """Assert buyer_campaign_ref on each response media buy matches the seeded value.
 
     buyer_ref was removed in adcp 3.12; buyer_campaign_ref is the surviving
-    correlation identifier derived from raw_request in production code.
+    correlation identifier.  The step text still mentions buyer_ref because the
+    feature file is auto-generated from the spec.  We explicitly assert buyer_ref
+    is absent to document the removal.
     """
     buys = _get_media_buys(ctx)
     seeded = ctx.get("seeded_media_buys", {})
     checked = 0
     for buy in buys:
         buy_id = buy.media_buy_id
-        # Find the matching seeded ORM object by media_buy_id
+
+        # buyer_ref was removed in adcp 3.12 — assert it is absent on the
+        # response schema to document the removal.
+        assert not hasattr(buy, "buyer_ref") or getattr(buy, "buyer_ref", None) is None, (
+            f"Media buy '{buy_id}' unexpectedly has buyer_ref="
+            f"{getattr(buy, 'buyer_ref', None)!r}; buyer_ref was removed in adcp 3.12"
+        )
+
+        # buyer_campaign_ref is the surviving correlation identifier.
+        # Match it against the value seeded via factory raw_request.
         seeded_mb = None
         for mb in seeded.values():
             if mb.media_buy_id == buy_id:
@@ -1400,7 +1411,8 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
         )
         checked += 1
     assert checked == len(seeded), (
-        f"Expected {len(seeded)} media buys with buyer_campaign_ref verified, but only checked {checked}"
+        f"Expected {len(seeded)} media buys with buyer_campaign_ref verified, "
+        f"but only checked {checked}"
     )
 
 
