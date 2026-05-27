@@ -38,7 +38,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPAdapterError, AdCPBudgetTooLowError, AdCPNotFoundError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -2193,12 +2193,13 @@ class TestExtensionObligations:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Zero budget should fail validation; _StructuredValidationError(code=BUDGET_TOO_LOW)
-        # is converted to AdCPValidationError with that error_code by the _impl boundary catch.
+        # Zero budget triggers the typed AdCPBudgetTooLowError raise at
+        # media_buy_create.py:1758 directly — propagates through the boundary
+        # catch unchanged (no _StructuredValidationError translation).
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
         with _PatchContext() as pc:
-            with pytest.raises(AdCPValidationError) as excinfo:
+            with pytest.raises(AdCPBudgetTooLowError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         exc = excinfo.value

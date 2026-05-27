@@ -39,7 +39,7 @@ from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPError,
     AdCPGoneError,
-    AdCPNotFoundError,
+    AdCPMediaBuyNotFoundError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -143,7 +143,7 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     media_buy = repo.get_by_id(media_buy_id)
 
     if not media_buy:
-        raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
+        raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
     if media_buy.principal_id != principal_id:
         # CRITICAL: Verify principal_id is set (security check, not assertion)

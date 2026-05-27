@@ -4201,8 +4201,11 @@ class TestGetMediaBuysImplAuth:
         Priority: P1
         Type: unit
         Source: get_media_buys
+
+        Migrated to typed AdCPCapabilityNotSupportedError (wire code:
+        UNSUPPORTED_FEATURE) — was previously AdCPValidationError.
         """
-        from src.core.exceptions import AdCPValidationError
+        from src.core.exceptions import AdCPCapabilityNotSupportedError
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
@@ -4215,7 +4218,7 @@ class TestGetMediaBuysImplAuth:
             testing_context=None,
         )
 
-        with pytest.raises(AdCPValidationError, match="(?i)account.*not.*supported"):
+        with pytest.raises(AdCPCapabilityNotSupportedError, match="(?i)account.*not.*supported"):
             _get_media_buys_impl(req, identity=identity)
 
     def test_account_id_unsupported_recovery_is_correctable(self):
@@ -4223,7 +4226,7 @@ class TestGetMediaBuysImplAuth:
 
         Covers: salesagent-bmlk (PR #1083 review)
         """
-        from src.core.exceptions import AdCPValidationError
+        from src.core.exceptions import AdCPCapabilityNotSupportedError
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
@@ -4236,7 +4239,7 @@ class TestGetMediaBuysImplAuth:
             testing_context=None,
         )
 
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             _get_media_buys_impl(req, identity=identity)
         assert exc_info.value.recovery == "correctable"
 

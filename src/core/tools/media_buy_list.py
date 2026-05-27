@@ -61,7 +61,7 @@ from adcp.types import ContextObject, MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthRequiredError, AdCPValidationError
+from src.core.exceptions import AdCPAuthRequiredError, AdCPCapabilityNotSupportedError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -100,7 +100,10 @@ def _get_media_buys_impl(
         )
 
     if req.account is not None or req.account_id is not None:
-        raise AdCPValidationError("account filtering is not yet supported")
+        raise AdCPCapabilityNotSupportedError(
+            "account filtering is not yet supported",
+            suggestion="Omit account/account_id from the request; the seller infers the account from the auth token.",
+        )
 
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id

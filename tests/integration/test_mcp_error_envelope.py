@@ -31,11 +31,9 @@ from unittest.mock import patch
 import pytest
 from fastmcp import Client
 
-from src.core.database.database_session import get_db_session
 from src.core.main import mcp
-from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.principal import PrincipalFactory
-from tests.helpers.adcp_factories import create_test_package_request_dict, setup_error_test_tenant_chain
+from tests.helpers.adcp_factories import create_test_package_request_dict, make_real_tenant_identity
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -48,36 +46,16 @@ _PRODUCT_ID = "mcp_envelope_product"
 
 @pytest.fixture
 def mcp_real_tenant_setup(integration_db):
-    """Create tenant + principal + product so production validators see a real DB context.
-
-    Uses the shared ``setup_error_test_tenant_chain`` helper. Returns a
-    fully-bound ResolvedIdentity ready for end-to-end MCP wire tests against
-    real validators (BUDGET_TOO_LOW, INVALID_REQUEST past start_time, etc.).
-    """
-    from src.core.config_loader import set_current_tenant
-
-    with get_db_session() as session:
-        result = setup_error_test_tenant_chain(
-            session,
-            tenant_id=_TENANT_ID,
-            principal_id=_PRINCIPAL_ID,
-            access_token=_ACCESS_TOKEN,
-            product_id=_PRODUCT_ID,
-            subdomain="mcpenv",
-            tenant_name="MCP Envelope Test Tenant",
-            advertiser_id="mock_adv_456",
-        )
-
-        set_current_tenant(result["tenant_dict"])
-
-        identity = ResolvedIdentity(
-            principal_id=_PRINCIPAL_ID,
-            tenant_id=_TENANT_ID,
-            tenant=result["tenant_dict"],
-            auth_token=_ACCESS_TOKEN,
-            protocol="mcp",
-        )
-        yield identity
+    """Real-DB ResolvedIdentity for end-to-end MCP wire tests against production validators."""
+    yield from make_real_tenant_identity(
+        tenant_id=_TENANT_ID,
+        principal_id=_PRINCIPAL_ID,
+        access_token=_ACCESS_TOKEN,
+        product_id=_PRODUCT_ID,
+        subdomain="mcpenv",
+        tenant_name="MCP Envelope Test Tenant",
+        advertiser_id="mock_adv_456",
+    )
 
 
 @pytest.mark.integration
@@ -86,7 +64,7 @@ class TestMcpWireErrorEnvelope:
     """MCP-routed _impl raises typed AdCPError → spec two-layer envelope on wire."""
 
     def test_update_media_buy_not_found_emits_two_layer_envelope_on_wire(self, integration_db):
-        """AdCPNotFoundError from _impl surfaces as a two-layer envelope on the MCP wire.
+        """AdCPMediaBuyNotFoundError from _impl surfaces as a two-layer envelope on the MCP wire.
 
         Flow exercised end-to-end:
             Client(mcp).call_tool("update_media_buy", {"media_buy_id": "nonexistent", "paused": True})
@@ -94,7 +72,7 @@ class TestMcpWireErrorEnvelope:
               → TypeAdapter validates args
               → update_media_buy MCP wrapper (src/core/tools/media_buy_update.py)
               → _update_media_buy_impl → MediaBuyRepository.get_by_id returns None
-              → raise AdCPNotFoundError("Media buy 'nonexistent' not found.")
+              → raise AdCPMediaBuyNotFoundError("Media buy 'nonexistent' not found.")
               → with_error_logging wrapper catches it
               → _translate_to_tool_error builds envelope via build_two_layer_error_envelope
               → raises AdCPToolError(envelope, status_code=404)
@@ -104,8 +82,8 @@ class TestMcpWireErrorEnvelope:
         normally parse this and reconstruct an AdCPError — we bypass it here to
         inspect the wire bytes directly.
 
-        NOT_FOUND is translated to wire code INVALID_REQUEST via ERROR_CODE_MAPPING
-        (see src/core/exceptions.py:35 — STANDARD_ERROR_CODES mapping).
+        MEDIA_BUY_NOT_FOUND is a STANDARD_ERROR_CODES entry — it passes through
+        the boundary translator unchanged (no ERROR_CODE_MAPPING rewrite).
         """
         identity = PrincipalFactory.make_identity(protocol="mcp")
 
@@ -147,14 +125,15 @@ class TestMcpWireErrorEnvelope:
         ), f"Wire envelope must include top-level adcp_error. Got keys: {sorted(envelope.keys())}"
         assert "errors" in envelope, f"Wire envelope must include errors array. Got keys: {sorted(envelope.keys())}"
 
-        # NOT_FOUND → INVALID_REQUEST via STANDARD_ERROR_CODES wire translation.
-        assert envelope["adcp_error"]["code"] == "INVALID_REQUEST", (
-            f"Envelope-level code: NOT_FOUND must translate to INVALID_REQUEST on the wire, "
+        # MEDIA_BUY_NOT_FOUND is a STANDARD_ERROR_CODES entry — passes through unchanged.
+        assert envelope["adcp_error"]["code"] == "MEDIA_BUY_NOT_FOUND", (
+            f"Envelope-level code: typed AdCPMediaBuyNotFoundError emits MEDIA_BUY_NOT_FOUND on the wire, "
             f"got {envelope['adcp_error'].get('code')}"
         )
-        assert (
-            envelope["adcp_error"]["recovery"] == "terminal"
-        ), f"AdCPNotFoundError default recovery is terminal, got {envelope['adcp_error'].get('recovery')}"
+        assert envelope["adcp_error"]["recovery"] == "correctable", (
+            f"AdCPMediaBuyNotFoundError recovery is correctable (overrides AdCPNotFoundError's terminal default — "
+            f"the buyer can correct by supplying the right media_buy_id), got {envelope['adcp_error'].get('recovery')}"
+        )
         assert (
             "mb_does_not_exist_pr1306_wire_test" in envelope["adcp_error"]["message"]
         ), f"Envelope message must echo the missing media_buy_id, got: {envelope['adcp_error']['message']}"
@@ -162,9 +141,9 @@ class TestMcpWireErrorEnvelope:
         # errors[0] mirrors envelope-level adcp_error (single-error case).
         assert len(envelope["errors"]) > 0, "errors array must be non-empty"
         err = envelope["errors"][0]
-        assert err["code"] == "INVALID_REQUEST", f"errors[0].code must match envelope code, got: {err.get('code')}"
+        assert err["code"] == "MEDIA_BUY_NOT_FOUND", f"errors[0].code must match envelope code, got: {err.get('code')}"
         assert (
-            err["recovery"] == "terminal"
+            err["recovery"] == "correctable"
         ), f"errors[0].recovery must match envelope recovery, got: {err.get('recovery')}"
         assert (
             err["message"] == envelope["adcp_error"]["message"]

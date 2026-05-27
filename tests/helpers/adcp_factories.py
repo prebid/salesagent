@@ -1034,3 +1034,64 @@ def setup_error_test_tenant_chain(
         "product": product,
         "tenant_dict": tenant_dict,
     }
+
+
+def make_real_tenant_identity(
+    *,
+    tenant_id: str,
+    principal_id: str,
+    access_token: str,
+    product_id: str,
+    subdomain: str,
+    tenant_name: str = "Error Test Tenant",
+    advertiser_id: str = "mock_adv",
+    protocol: str = "mcp",
+):
+    """Build a fully-resolved real-DB ``ResolvedIdentity`` for error-emission tests.
+
+    Convenience wrapper that opens a DB session, calls
+    ``setup_error_test_tenant_chain``, sets the current tenant context,
+    constructs a ``ResolvedIdentity`` bound to the seeded principal, and
+    yields it. Intended to be the body of test fixtures so they can be
+    one-liners.
+
+    Yields:
+        ``ResolvedIdentity`` instance pointing at the freshly-seeded tenant.
+
+    Example:
+        @pytest.fixture
+        def my_tenant_setup(integration_db):
+            yield from make_real_tenant_identity(
+                tenant_id="my_test",
+                principal_id="my_principal",
+                access_token="my_token",
+                product_id="my_product",
+                subdomain="my",
+            )
+    """
+    from src.core.config_loader import set_current_tenant
+    from src.core.database.database_session import get_db_session
+    from src.core.resolved_identity import ResolvedIdentity
+
+    with get_db_session() as session:
+        result = setup_error_test_tenant_chain(
+            session,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            access_token=access_token,
+            product_id=product_id,
+            subdomain=subdomain,
+            tenant_name=tenant_name,
+            advertiser_id=advertiser_id,
+        )
+
+        set_current_tenant(result["tenant_dict"])
+
+        identity = ResolvedIdentity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            tenant=result["tenant_dict"],
+            auth_token=access_token,
+            protocol=protocol,
+        )
+        yield identity

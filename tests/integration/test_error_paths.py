@@ -32,7 +32,7 @@ from src.core.database.models import CurrencyLimit
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
 from src.core.schemas import CreateMediaBuyError, Error
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
 from tests.factories import PrincipalFactory
@@ -310,9 +310,11 @@ class TestCreateMediaBuyErrorPaths:
         future_start = datetime.now(UTC) + timedelta(days=1)
         future_end = future_start + timedelta(days=7)
 
-        # Typed AdCPValidationError now propagates past the boundary catch.
-        # Empty packages -> budget=0.0 -> "Budget must be positive" validator.
-        with pytest.raises(AdCPValidationError) as excinfo:
+        # Typed AdCPBudgetTooLowError now propagates past the boundary catch.
+        # Empty packages -> budget=0.0 -> "Budget must be positive" validator at
+        # media_buy_create.py:1758 raises AdCPBudgetTooLowError (typed subclass,
+        # not _StructuredValidationError translated to AdCPValidationError).
+        with pytest.raises(AdCPBudgetTooLowError) as excinfo:
             await create_media_buy_raw(
                 po_number="error_test_po",
                 brand={"domain": "testbrand.com"},
