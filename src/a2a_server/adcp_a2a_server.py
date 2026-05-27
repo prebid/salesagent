@@ -67,6 +67,7 @@ from src.core.exceptions import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
+from src.core.tool_error_logging import record_boundary_error
 from src.core.tools import (
     create_media_buy_raw as core_create_media_buy_tool,
 )
@@ -203,17 +204,17 @@ class AdCPRequestHandler(RequestHandler):
 
         Single source of truth for "wrap-arbitrary-exception → wire envelope"
         used by both the per-skill dispatcher (``_build_failed_skill_result``)
-        and the top-level ``on_message_send`` error handler. Untyped exceptions
-        are wrapped in a synthetic ``AdCPError`` (``INTERNAL_ERROR`` →
-        ``SERVICE_UNAVAILABLE`` via ``wire_error_code``) so the wire output
-        stays in ``STANDARD_ERROR_CODES`` and the envelope shape never
-        degrades to a flat ``{"error": "..."}`` dict the storyboard runner
-        would synthesize as ``MCP_ERROR``.
+        and the top-level ``on_message_send`` error handler. Delegates to
+        ``normalize_to_adcp_error`` for the type→AdCPError mapping
+        (``ValueError → AdCPValidationError``, ``PermissionError →
+        AdCPAuthorizationError``, arbitrary ``Exception →
+        AdCPError(INTERNAL_ERROR)``) so the wire output stays in
+        ``STANDARD_ERROR_CODES`` and the envelope shape never degrades to a
+        flat ``{"error": "..."}`` dict the storyboard runner would synthesize
+        as ``MCP_ERROR``.
         """
 
-        if not isinstance(exc, AdCPError):
-            exc = AdCPError(str(exc) or type(exc).__name__)
-        return build_two_layer_error_envelope(exc)
+        return build_two_layer_error_envelope(normalize_to_adcp_error(exc))
 
     @staticmethod
     def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
@@ -1477,24 +1478,16 @@ class AdCPRequestHandler(RequestHandler):
             # two-layer envelope.
             normalized = normalize_to_adcp_error(e)
 
-            logger.error(
-                "%s in skill handler %s: %s - %s",
-                type(e).__name__,
-                skill_name,
-                normalized.error_code,
-                normalized.message,
-            )
             # Defensive about identity shape — test fixtures sometimes pass a
             # string or partially-built identity instead of ResolvedIdentity.
-            tenant_id = getattr(identity, "tenant_id", None)
-            if tenant_id:
-                self._log_a2a_operation(
-                    operation=skill_name,
-                    tenant_id=tenant_id,
-                    principal_id=getattr(identity, "principal_id", None) or "anonymous",
-                    success=False,
-                    error=normalized.message,
-                )
+            # record_boundary_error handles None tenant_id internally.
+            record_boundary_error(
+                "a2a",
+                skill_name,
+                normalized,
+                tenant_id=getattr(identity, "tenant_id", None),
+                principal_id=getattr(identity, "principal_id", None) or "anonymous",
+            )
 
             if normalized is not e:
                 raise normalized from e

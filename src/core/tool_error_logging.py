@@ -159,51 +159,108 @@ def _coerce_recovery(value: object) -> RecoveryHint | None:
     return None
 
 
-def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, principal_id: str | None) -> None:
-    """Log tool errors to activity feed and audit logs.
+def record_boundary_error(
+    transport: str,
+    operation: str,
+    error: Exception,
+    *,
+    tenant_id: str | None = None,
+    principal_id: str | None = None,
+) -> None:
+    """Record an error at a transport boundary uniformly across MCP/A2A/REST.
+
+    Single source of truth for "what observability happens when a transport
+    boundary sees an error". All three boundaries delegate here so log
+    severity, activity-feed publishing, and audit logging stay in lockstep.
 
     Args:
-        tool_name: Name of the tool that failed
-        error: The exception that occurred
-        tenant_id: Tenant ID if available
-        principal_id: Principal ID if available
+        transport: ``"mcp"``, ``"a2a"``, or ``"rest"`` — controls the audit
+            logger's source string and adapter_id.
+        operation: Tool/skill/route name (e.g. ``"create_media_buy"`` or
+            ``"POST /v1/buy"``).
+        error: The exception that fired at the boundary.
+        tenant_id: Tenant ID if resolvable at the boundary. When None,
+            activity-feed + audit-log are skipped (the WARNING/ERROR log
+            line still captures the error).
+        principal_id: Principal ID if resolvable. Falls back to
+            ``"anonymous"`` for downstream sinks.
+
+    Behavior:
+        1. stdlib logger: WARNING for typed ``AdCPError`` (expected,
+           buyer-correctable error path), ERROR with ``exc_info=True`` for
+           untyped fallthrough so on-call sees the traceback.
+        2. ``activity_feed.log_error`` (when ``tenant_id`` present) so the
+           operator UI surfaces the error in real time.
+        3. ``get_audit_logger(transport.upper(), tenant_id).log_operation``
+           (when ``tenant_id`` present) for the persistent record.
+
+    All sinks are defensively wrapped — observability failures cannot
+    replace the buyer's original error. Sink failures log at WARNING (not
+    DEBUG) so a quiet outage in audit infrastructure is still findable
+    when on-call goes looking.
     """
+    error_code, error_message, _recovery = extract_error_info(error)
+    is_typed = isinstance(error, AdCPError)
+    transport_upper = transport.upper()
+
+    if is_typed:
+        logger.warning(
+            "%s boundary translating %s to envelope: %s - %s (operation=%s)",
+            transport_upper,
+            type(error).__name__,
+            error_code,
+            error_message,
+            operation,
+        )
+    else:
+        logger.error(
+            "%s boundary untyped %s: %s (operation=%s)",
+            transport_upper,
+            type(error).__name__,
+            error_message,
+            operation,
+            exc_info=True,
+        )
+
     if not tenant_id:
-        # Can't log to activity feed without tenant context
-        logger.warning("Tool %s failed without tenant context: %s", tool_name, error)
+        # No tenant context — activity feed and audit log require tenant scoping.
         return
 
-    # Extract error code, message, and recovery hint
-    error_code, error_message, _recovery = extract_error_info(error)
-
-    # Log to activity feed for real-time visibility
     try:
         from src.services.activity_feed import activity_feed
 
         activity_feed.log_error(
             tenant_id=tenant_id,
             principal_name=principal_id or "anonymous",
-            error_message=f"{tool_name}: {error_message}",
+            error_message=f"{operation}: {error_message}",
             error_code=error_code,
         )
     except Exception as e:
-        logger.debug("Failed to log error to activity feed: %s", e)
+        logger.warning("Failed to log %s error to activity feed: %s", transport_upper, e)
 
-    # Log to audit log for persistent record
     try:
         from src.core.audit_logger import get_audit_logger
 
-        audit_logger = get_audit_logger("MCP", tenant_id)
+        audit_logger = get_audit_logger(transport_upper, tenant_id)
         audit_logger.log_operation(
-            operation=tool_name,
+            operation=operation,
             principal_name=principal_id or "anonymous",
             principal_id=principal_id or "anonymous",
-            adapter_id="mcp_server",
+            adapter_id=f"{transport}_boundary",
             success=False,
             error=error_message,
         )
     except Exception as e:
-        logger.debug("Failed to log error to audit log: %s", e)
+        logger.warning("Failed to log %s error to audit log: %s", transport_upper, e)
+
+
+def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, principal_id: str | None) -> None:
+    """Backwards-compatible MCP wrapper for record_boundary_error.
+
+    Existing MCP-specific call sites delegate here; new code should call
+    ``record_boundary_error("mcp", ...)`` directly.
+    """
+    record_boundary_error("mcp", tool_name, error, tenant_id=tenant_id, principal_id=principal_id)
 
 
 def _translate_to_tool_error(error: Exception) -> NoReturn:
@@ -224,12 +281,11 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
         raise error
     # Normalize untyped exceptions (ValueError, PermissionError) to typed
     # AdCPError via the shared normalize_to_adcp_error() helper — same
-    # mapping the A2A and REST boundaries apply.
+    # mapping the A2A and REST boundaries apply. The result is always an
+    # AdCPError; the wrap-vs-passthrough branches produce byte-identical
+    # AdCPToolError values, so the function unconditionally builds the
+    # envelope and chains the original exception for traceback fidelity.
     typed = normalize_to_adcp_error(error)
-    if typed is not error:
-        # Wrapping happened — chain for traceback fidelity.
-        raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
-    # Already an AdCPError — no wrapping needed.
     raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
 
 

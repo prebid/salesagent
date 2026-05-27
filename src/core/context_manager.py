@@ -363,11 +363,18 @@ class ContextManager(DatabaseManager):
             # see codes in ``STANDARD_ERROR_CODES``. If the wire code falls
             # outside the standard set, override with SERVICE_UNAVAILABLE
             # so async subscribers never receive an internal-only code.
+            # Structured fields (details/field/suggestion/context) carry
+            # forward so buyer agents and webhook subscribers retain
+            # machine-actionable correction context across the rewrite.
             wire_code = source.wire_error_code
             if wire_code not in STANDARD_ERROR_CODES:
                 source = AdCPError(
                     source.message or str(source),
                     recovery="terminal",
+                    details=source.details,
+                    field=source.field,
+                    suggestion=source.suggestion,
+                    context=source.context,
                 )
                 source.error_code = "SERVICE_UNAVAILABLE"
 

@@ -100,7 +100,7 @@ from src.core.exceptions import (  # noqa: E402
     AdCPValidationError,
     build_two_layer_error_envelope,
 )
-from src.core.tool_error_logging import handle_tool_error  # noqa: E402
+from src.core.tool_error_logging import handle_tool_error, record_boundary_error  # noqa: E402
 
 
 def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
@@ -108,22 +108,17 @@ def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
 
     Single source of truth for the REST envelope-response shape — used by
     every exception handler so HTTP status, body envelope, wire codes,
-    and observability (logger + audit log) are constructed identically
-    regardless of which exception type fired the handler.
+    and observability (logger + activity feed + audit log) are constructed
+    identically regardless of which exception type fired the handler.
 
-    Symmetric with the A2A boundary at
-    ``AdCPRequestHandler._handle_explicit_skill`` which also normalizes
-    ValueError/PermissionError, logs, and audit-logs uniformly before
-    emitting the failed-Task envelope. Previously each REST handler
-    returned JSON silently — a 4xx response left no breadcrumb in logs.
+    Symmetric with the MCP and A2A boundaries: all three transports delegate
+    to ``record_boundary_error`` so log severity, activity-feed publishing,
+    and audit logging stay in lockstep. Identity is not yet resolved at the
+    REST exception-handler boundary, so tenant-scoped sinks (activity feed,
+    audit log) are skipped when ``tenant_id`` is unavailable — the WARNING
+    log line still captures the error code, message, and path.
     """
-    logger.warning(
-        "REST boundary translating %s to envelope: %s - %s (path=%s)",
-        type(exc).__name__,
-        exc.error_code,
-        exc.message,
-        request.url.path,
-    )
+    record_boundary_error("rest", request.url.path, exc)
     return JSONResponse(
         status_code=exc.status_code,
         content=build_two_layer_error_envelope(exc),
