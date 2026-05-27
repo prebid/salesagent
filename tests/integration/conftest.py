@@ -545,7 +545,7 @@ def mcp_server(integration_db):
         pg_url = make_url(postgres_url)
     except ArgumentError as exc:
         raise RuntimeError(f"Failed to parse DATABASE_URL: {postgres_url}") from exc
-    server_db_url = str(pg_url.set(database=db_name))
+    server_db_url = pg_url.set(database=db_name).render_as_string(hide_password=False)
 
     env = os.environ.copy()
     env["ADCP_SALES_PORT"] = str(port)
@@ -769,8 +769,9 @@ def migration_db():
 
     from sqlalchemy.engine import URL
 
-    db_url = str(URL.create("postgresql", username=user, password=password, host=host, port=port, database=db_name))
-    engine = create_engine(db_url, echo=False)
+    db_url_obj = URL.create("postgresql", username=user, password=password, host=host, port=port, database=db_name)
+    db_url = db_url_obj.render_as_string(hide_password=False)
+    engine = create_engine(db_url_obj, echo=False)
 
     yield engine, db_url
 
