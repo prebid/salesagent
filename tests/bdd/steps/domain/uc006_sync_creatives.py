@@ -3821,10 +3821,17 @@ def then_no_field_level_merging(ctx: dict) -> None:
 
 @then("the creative should be processed normally")
 def then_creative_processed_normally(ctx: dict) -> None:
-    """Assert the creative was processed successfully (no error)."""
-    assert "error" not in ctx, f"Expected normal processing, but got error: {ctx.get('error')}"
+    """Assert the creative was processed with a success action (created/updated)."""
+    error = ctx.get("error")
+    assert error is None, f"Expected normal processing, but got {type(error).__name__}: {error}"
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one creative result, got empty from {type(resp).__name__}"
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected a success action (created/updated) for normal processing, got {actions}"
+    )
 
 
 @then("no provenance warning should be generated")
@@ -3881,19 +3888,18 @@ def then_no_workflow_steps(ctx: dict) -> None:
 
 @then("no Slack notification should be sent")
 def then_no_slack_notification(ctx: dict) -> None:
-    """Assert no Slack notification was sent (INV-2/INV-6)."""
+    """Assert no Slack notification was sent (INV-2/INV-6).
+
+    The harness must wire the send_notifications mock so absence of the
+    notification seam is detectable. A missing mock is a harness setup error.
+    """
     _assert_success_response(ctx)
     mock_notify = ctx["env"].mock.get("send_notifications")
-    if mock_notify is not None:
-        assert mock_notify.call_count == 0, (
-            f"Expected no Slack notification but send_notifications was called "
-            f"{mock_notify.call_count} time(s). "
-            f"SPEC-PRODUCTION GAP: production calls _send_creative_notifications even "
-            f"when no slack_webhook_url is configured. The function no-ops internally "
-            f"(logs 'Slack notifications disabled'), but the mock still records the call. "
-            f"See BR-RULE-037 INV-6."
-        )
-    # If no mock is available, pass — no notification mock means no notification was possible
+    assert mock_notify is not None, "Harness must wire send_notifications mock to verify no-notification invariant"
+    assert mock_notify.call_count == 0, (
+        f"Expected no Slack notification but send_notifications was called "
+        f"{mock_notify.call_count} time(s). See BR-RULE-037 INV-6."
+    )
 
 
 @then("a Slack notification should be sent immediately")
@@ -4341,7 +4347,13 @@ def then_nonexistent_package_reported_as_warning(ctx: dict) -> None:
 
 @then("processing should continue normally")
 def then_processing_continues_normally(ctx: dict) -> None:
-    """Assert the overall sync succeeded (lenient mode does not abort)."""
+    """Assert the overall sync completed successfully in lenient mode.
+
+    In lenient mode, a raised error means the sync aborted instead of
+    continuing -- that is the failure mode this scenario catches.
+    Verifies the response contains at least one creative result with
+    a success outcome (created/updated), confirming the sync completed.
+    """
     error = ctx.get("error")
     if error is not None:
         pytest.xfail(
@@ -4350,6 +4362,12 @@ def then_processing_continues_normally(ctx: dict) -> None:
         )
     resp = ctx.get("response")
     assert resp is not None, "Expected a response (processing continued)"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, "Expected at least one creative result from a completed sync"
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected a success action (created/updated) confirming sync completed, got {actions}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4399,28 +4417,47 @@ def _expand_length_notation(value: str) -> str:
 
 @then("the request should proceed without idempotency check")
 def then_proceed_without_idempotency(ctx: dict) -> None:
-    """Assert request succeeded when idempotency_key is absent."""
+    """Assert request completed as a fresh sync (no idempotency short-circuit).
+
+    When idempotency_key is absent, the request must proceed as a normal
+    first-time sync: no error, and the response carries synced creative results.
+    """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: absent idempotency_key should proceed, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"Expected request to proceed without idempotency check, but production raised {type(error).__name__}: {error}"
+    )
     resp = ctx.get("response")
     assert resp is not None, "Expected a response when idempotency_key is absent"
+    # Verify the response represents a successful sync, not an error envelope
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, (
+        "Expected at least one creative result from a fresh sync without idempotency key, "
+        f"but got empty results from {type(resp).__name__}"
+    )
+    # Verify at least one creative was actually processed (created/updated)
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected a fresh sync action (created/updated), got {actions}"
+    )
 
 
 @then("the request should proceed normally")
 def then_request_proceed_normally(ctx: dict) -> None:
-    """Assert request succeeded (valid idempotency_key length)."""
+    """Assert the request completed successfully with no error raised.
+
+    Verifies the response is a valid successful result (has products or
+    creatives/results), confirming the request was not rejected.
+    """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: valid idempotency_key should proceed, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, f"Expected request to proceed normally, but production raised {type(error).__name__}: {error}"
     resp = ctx.get("response")
-    assert resp is not None, "Expected a response for valid idempotency_key"
+    assert resp is not None, "Expected a non-None response for a normal request"
+    # Confirm the response is a successful result, not an error envelope
+    has_products = getattr(resp, "products", None) is not None
+    has_creatives = getattr(resp, "creatives", None) is not None or getattr(resp, "results", None) is not None
+    assert has_products or has_creatives, (
+        f"Expected a successful response with products or creatives, got {type(resp).__name__}"
+    )
 
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))
@@ -4768,17 +4805,19 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    asset_prompt = "Design a responsive ad for holiday promotion"
     creative_payload = {
         "creative_id": "creative-gen-prompt-001",
         "name": "Generative With Prompt",
         "format_id": fmt,
         "assets": {
-            "message": {"content": "Design a responsive ad for holiday promotion"},
+            "message": {"content": asset_prompt},
         },
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
     ctx["generative_creative"] = True
+    ctx["expected_asset_prompt"] = asset_prompt
 
 
 @given("a new creative with a generative format and no prompt but a name")
@@ -4856,8 +4895,35 @@ def then_processed_without_generative_build(ctx: dict) -> None:
 
 @then("the system should invoke generative build with the asset prompt")
 def then_invoke_generative_with_asset_prompt(ctx: dict) -> None:
-    """Assert generative build was invoked using the prompt from assets."""
-    _assert_generative_build(ctx, prompt_source="assets")
+    """Assert generative build was invoked using the exact prompt from assets."""
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response for generative build"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected created/updated for generative build, got {actions}"
+    )
+    env = ctx["env"]
+    registry = env.mock["registry"].return_value
+    assert registry.build_creative.called, "build_creative should have been called for generative format"
+    # Positive assertion: the message arg matches the exact asset prompt from Given
+    call_kwargs = registry.build_creative.call_args
+    message_arg = call_kwargs.kwargs.get("message") or (call_kwargs.args[2] if len(call_kwargs.args) > 2 else None)
+    if message_arg is None:
+        for kw_name in ("prompt",):
+            message_arg = call_kwargs.kwargs.get(kw_name)
+            if message_arg:
+                break
+    assert message_arg is not None, "build_creative must be called with a message/prompt"
+    expected_prompt = ctx["expected_asset_prompt"]
+    assert expected_prompt in message_arg, (
+        f"Expected asset prompt {expected_prompt!r} in build_creative message, got {message_arg!r}"
+    )
 
 
 @then("the system should use the creative name as prompt fallback")
@@ -5266,7 +5332,8 @@ def then_user_assets_preserved(ctx: dict) -> None:
     """Assert user-provided assets are preserved in the DB after generative build.
 
     INV-6: user assets take priority over generative output. Verify the stored
-    creative data contains the user-provided assets, not generated replacements.
+    creative's assets match the user-provided values exactly (deep-equal), not just
+    that the key exists. This catches generated content overwriting user values.
     """
     error = ctx.get("error")
     if error is not None:
@@ -5274,8 +5341,7 @@ def then_user_assets_preserved(ctx: dict) -> None:
 
     env = ctx["env"]
     session = env._session
-    if session is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify asset preservation")
+    assert session is not None, "Harness must provide a DB session for asset preservation check"
 
     from sqlalchemy import select
 
@@ -5291,11 +5357,15 @@ def then_user_assets_preserved(ctx: dict) -> None:
     assert db_creative is not None, f"Creative {creative_id} not found in DB"
     creative_data = db_creative.data or {}
     stored_assets = creative_data.get("assets", {})
-    user_assets = ctx.get("user_provided_assets", {})
-    # The user-provided "image" key must exist in stored assets
-    for asset_key in user_assets:
+    user_assets = ctx["user_provided_assets"]
+    assert user_assets, "Given step must populate user_provided_assets with at least one asset"
+    for asset_key, user_value in user_assets.items():
         assert asset_key in stored_assets, (
-            f"User-provided '{asset_key}' asset should be preserved, got assets keys: {list(stored_assets.keys())}"
+            f"User-provided '{asset_key}' asset missing from stored assets: {list(stored_assets.keys())}"
+        )
+        assert stored_assets[asset_key] == user_value, (
+            f"User-provided '{asset_key}' asset was overwritten by generated content. "
+            f"Expected {user_value!r}, got {stored_assets[asset_key]!r}"
         )
 
 
@@ -5489,6 +5559,7 @@ def then_response_includes_assignment_errors(ctx: dict) -> None:
 
     In lenient mode with a non-existent package, the spec requires the
     response to record the failure in assignment_errors rather than aborting.
+    Warnings are NOT a substitute for assignment_errors.
     """
     error = ctx.get("error")
     if error is not None:
@@ -5499,15 +5570,13 @@ def then_response_includes_assignment_errors(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    if not results:
-        pytest.xfail("SPEC-PRODUCTION GAP: no creative results to check for assignment_errors")
+    assert results, "Expected at least one creative result to check for assignment_errors"
     first = results[0]
     assignment_errors = getattr(first, "assignment_errors", None) or []
-    warnings = getattr(first, "warnings", None) or []
-    if not assignment_errors and not warnings:
+    if not assignment_errors:
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors (or warnings) in response, "
-            f"but assignment_errors={assignment_errors}, warnings={warnings}"
+            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors on creative result "
+            f"(INV-4 lenient mode), but assignment_errors is empty: {assignment_errors!r}"
         )
 
 
@@ -5710,10 +5779,9 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
     """Assert the creative was processed through external agent validation.
 
     BR-RULE-035: HTTP-based format_ids trigger external creative agent validation.
-    We verify the registry mock's ``get_format`` was called (agent was reached).
+    Verifies registry.get_format was called for the specific format_id from Given,
+    and that the response shows a successful sync outcome (action created/updated).
     """
-    from unittest.mock import AsyncMock
-
     error = ctx.get("error")
     if error is not None:
         pytest.xfail(
@@ -5721,22 +5789,31 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
             f"but production raised {type(error).__name__}: {error}"
         )
     resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    assert resp is not None, "Expected a response for agent-validated creative"
 
+    # Assert observable outcome: the creative was successfully synced
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, "Expected at least one SyncCreativeResult from agent-validated sync"
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected created/updated action for agent-validated creative, got {actions}"
+    )
+
+    # Assert the registry was consulted for the specific format_id
     env = ctx["env"]
     registry_mock = env.mock.get("registry")
-    if registry_mock is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: no registry mock available to verify agent validation")
-
-    # The registry's get_format should have been called during validation
+    assert registry_mock is not None, "Harness must wire registry mock for agent validation scenario"
     registry_instance = registry_mock.return_value
-    get_format_mock = getattr(registry_instance, "get_format", None)
-    if get_format_mock is None or not isinstance(get_format_mock, AsyncMock):
-        # Cannot verify — but the creative was processed successfully
-        return
-    assert get_format_mock.call_count > 0, (
+    assert registry_instance.get_format.call_count > 0, (
         "Expected creative agent validation (registry.get_format called), but it was never called"
     )
+    expected_format_id = ctx.get("creative_format_id")
+    if expected_format_id is not None:
+        call_args_list = registry_instance.get_format.call_args_list
+        called_format_ids = [c.args[0] if c.args else c.kwargs.get("format_id") for c in call_args_list]
+        assert expected_format_id in called_format_ids, (
+            f"Expected get_format called with format_id={expected_format_id!r}, but was called with {called_format_ids}"
+        )
 
 
 @then(parsers.parse('the response should include one creative with action "{action}"'))
