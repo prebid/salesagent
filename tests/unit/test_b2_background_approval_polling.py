@@ -12,6 +12,8 @@ behaviour (rejected GAM forecast must not strand a MediaBuy in pending_approval)
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.core.schemas import CreateMediaBuySuccess, Principal
 from tests.helpers.execute_approved_mocks import (
     make_mock_media_buy,
@@ -135,9 +137,11 @@ class TestExecuteApprovedHandsOffToBackgroundOnApprovalFailure:
         _, mock_orders, _, _ = self._run(approval_return_value=True)
         # The kwargs must include max_retries=1
         _, kwargs = mock_orders.approve_order.call_args
-        assert (
-            kwargs.get("max_retries") == 1
-        ), f"Expected max_retries=1, got kwargs={kwargs}. The 40-default would block the admin request for 10 minutes."
+        max_retries = kwargs.get("max_retries")
+        msg = (
+            f"Expected max_retries=1, got kwargs={kwargs}. The 40-default would block the admin request for 10 minutes."
+        )
+        assert max_retries == 1, msg
 
     def test_kicks_off_background_polling_when_approve_returns_false(self):
         """On approve_order failure, start_order_approval_background must be invoked."""
@@ -173,6 +177,253 @@ class TestExecuteApprovedHandsOffToBackgroundOnApprovalFailure:
         assert error is None
         # On synchronous success, the existing 'active' status write must still fire.
         repo3.update_status.assert_called_once_with("mb_b2_001", "active")
+
+
+class TestExecuteApprovedPinsResolvedWebhookUrlIntoBackgroundCall:
+    """The admin handoff chain must forward the resolved webhook URL.
+
+    Pin-test for the chain ``lookup_webhook_url(tenant_id, principal_id)``
+    -> ``start_order_approval_background(..., webhook_url=resolved_webhook_url)``
+    at ``src/core/tools/media_buy_create.py``. Mutating that line to pass
+    ``webhook_url=None`` (or to drop the kwarg) must make this test fail —
+    otherwise the buyer registered a webhook but the polling thread fires
+    notifications into the void.
+    """
+
+    def test_webhook_url_from_lookup_pins_into_start_background_call(self):
+        principal = Principal(principal_id="principal_1", name="Test", platform_mappings={})
+        adapter_response = CreateMediaBuySuccess(media_buy_id="mb_b2_001", packages=[])
+
+        mock_orders_manager = MagicMock()
+        mock_orders_manager.approve_order.return_value = False  # forces handoff
+        mock_adapter = MagicMock()
+        mock_adapter.orders_manager = mock_orders_manager
+        mock_adapter.creatives_manager = None
+
+        repo3 = MagicMock()
+        uow_iter = _uow_chain(repo3)
+
+        resolved_url = "https://buyer.example/registered-webhook"
+
+        with (
+            patch("src.core.database.repositories.MediaBuyUoW", side_effect=lambda _: next(uow_iter)),
+            patch("src.core.config_loader.set_current_tenant"),
+            patch(
+                "src.core.config_loader.get_tenant_by_id",
+                return_value={"tenant_id": "tenant_1", "adapter_type": "google_ad_manager"},
+            ),
+            patch("src.core.auth.get_principal_object", return_value=principal),
+            patch(
+                "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
+                return_value=adapter_response,
+            ),
+            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+            patch(
+                "src.core.tools.media_buy_create.lookup_webhook_url",
+                return_value=resolved_url,
+            ) as mock_lookup,
+            patch(
+                "src.core.tools.media_buy_create.start_order_approval_background",
+                return_value="approval_mb_b2_001_xyz",
+            ) as mock_start_bg,
+        ):
+            from src.core.tools.media_buy_create import execute_approved_media_buy
+
+            success, error = execute_approved_media_buy("mb_b2_001", "tenant_1")
+
+        assert success is True, f"Expected handoff success, got {error!r}"
+        # lookup must be invoked with the tenant + principal of the approval target.
+        mock_lookup.assert_called_once_with("tenant_1", "principal_1")
+        # The single critical pin: the URL the lookup returned MUST be forwarded as
+        # the webhook_url kwarg into start_order_approval_background. Mutating
+        # media_buy_create.py to pass ``webhook_url=None`` or drop the kwarg
+        # must fail this test — otherwise the buyer's webhook is silently lost.
+        assert mock_start_bg.call_count == 1
+        kwargs = mock_start_bg.call_args.kwargs
+        assert kwargs.get("webhook_url") == resolved_url, (
+            f"Background handoff dropped the resolved webhook URL. "
+            f"Expected webhook_url={resolved_url!r}, got webhook_url={kwargs.get('webhook_url')!r}. "
+            "Buyer registered a webhook but the polling thread will not notify them."
+        )
+
+
+class TestFinalizeApprovalAtomicity:
+    """``_finalize_approval`` enforces a three-tier atomicity contract.
+
+    Three branches with distinct durability requirements:
+
+    1. **MediaBuy update is fatal.** If ``MediaBuyUoW.update_status`` raises,
+       the operation MUST hard-fail — audit + webhook MUST NOT fire, and the
+       exception MUST propagate so the SyncJob terminal write skips and the
+       stale-approval reaper later picks it up. Otherwise the buyer would
+       receive an "approved" notification for a media buy still pinned at
+       ``pending_approval``.
+    2. **Audit logging is best-effort.** An audit logger crash MUST NOT abort
+       the operation. The webhook MUST still fire (the buyer is the
+       customer; an internal audit miss is a follow-up triage item).
+    3. **Webhook fires after audit logged.** Ordering matters for log
+       correlation — the audit row exists before the buyer receives the
+       notification keyed on it.
+
+    These three tests pin the contract. Mutating ``_finalize_approval`` to
+    catch the MediaBuy exception silently, or to skip the webhook when
+    audit raises, must fail at least one of these tests.
+    """
+
+    def _build_mocks(self):
+        from src.services import order_approval_service as service_module
+
+        mock_media_buy_repo = MagicMock()
+        mock_media_buy_uow = MagicMock()
+        mock_media_buy_uow.__enter__ = MagicMock(return_value=mock_media_buy_uow)
+        mock_media_buy_uow.__exit__ = MagicMock(return_value=None)
+        mock_media_buy_uow.media_buys = mock_media_buy_repo
+        return service_module, mock_media_buy_repo, mock_media_buy_uow
+
+    def test_audit_failure_does_not_block_webhook(self):
+        """When ``AuditLogger.log_operation`` raises, the webhook must still fire.
+
+        Audit logging is best-effort — the buyer (webhook recipient) is the
+        customer of the operation, the audit row is for internal triage.
+        Failing the buyer notification because the audit log crashed would
+        invert the priority.
+        """
+        service_module, _, mock_media_buy_uow = self._build_mocks()
+
+        mock_audit_instance = MagicMock()
+        mock_audit_instance.log_operation.side_effect = RuntimeError("audit backend unreachable")
+
+        with (
+            patch.object(service_module, "MediaBuyUoW", return_value=mock_media_buy_uow),
+            patch.object(service_module, "AuditLogger", return_value=mock_audit_instance),
+            patch.object(service_module, "_send_approval_webhook") as mock_webhook,
+        ):
+            service_module._finalize_approval(
+                media_buy_id="mb_b2_001",
+                tenant_id="tenant_1",
+                principal_id="principal_1",
+                principal_name="Acme Corp",
+                media_buy_status="active",
+                audit_success=True,
+                audit_details={"order_id": "12345", "attempts": 1},
+                audit_error=None,
+                webhook_url="https://buyer.example/hook",
+                webhook_status="approved",
+                webhook_message="Order approved",
+                webhook_order_id="12345",
+                webhook_attempts=1,
+            )
+
+        # Audit raised — verify webhook still fired with the buyer-facing payload.
+        mock_audit_instance.log_operation.assert_called_once_with(
+            operation="approve_order",
+            principal_name="Acme Corp",
+            principal_id="principal_1",
+            adapter_id="12345",
+            success=True,
+            error=None,
+            details={"order_id": "12345", "attempts": 1},
+        )
+        mock_webhook.assert_called_once_with(
+            webhook_url="https://buyer.example/hook",
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+            media_buy_id="mb_b2_001",
+            status="approved",
+            message="Order approved",
+            order_id="12345",
+            attempts=1,
+        )
+
+    def test_media_buy_update_failure_propagates_and_skips_audit_and_webhook(self):
+        """When ``MediaBuyUoW.update_status`` raises, propagate and skip downstream.
+
+        The MediaBuy row is the consumer-visible state. If it failed to flip,
+        no audit row should be written claiming the operation succeeded, and
+        no buyer webhook should fire claiming the order is approved/failed.
+        The caller (``_mark_approval_complete`` / ``_mark_approval_failed``)
+        is responsible for catching the propagated exception and skipping the
+        SyncJob terminal write — that contract is enforced separately by
+        ``test_mark_complete_skips_terminal_write_when_finalize_raises``.
+        """
+        service_module, mock_media_buy_repo, mock_media_buy_uow = self._build_mocks()
+        mock_media_buy_repo.update_status.side_effect = RuntimeError("postgres connection lost")
+
+        mock_audit_instance = MagicMock()
+
+        with (
+            patch.object(service_module, "MediaBuyUoW", return_value=mock_media_buy_uow),
+            patch.object(service_module, "AuditLogger", return_value=mock_audit_instance),
+            patch.object(service_module, "_send_approval_webhook") as mock_webhook,
+            pytest.raises(RuntimeError, match="postgres connection lost"),
+        ):
+            service_module._finalize_approval(
+                media_buy_id="mb_b2_001",
+                tenant_id="tenant_1",
+                principal_id="principal_1",
+                principal_name="Acme Corp",
+                media_buy_status="active",
+                audit_success=True,
+                audit_details={"order_id": "12345"},
+                audit_error=None,
+                webhook_url="https://buyer.example/hook",
+                webhook_status="approved",
+                webhook_message="Order approved",
+                webhook_order_id="12345",
+                webhook_attempts=1,
+            )
+
+        # MediaBuy update was attempted but raised — neither audit nor webhook
+        # should have been touched. A silent swallow of the MediaBuy failure
+        # would let one or both of these mocks be called.
+        mock_media_buy_repo.update_status.assert_called_once_with("mb_b2_001", "active")
+        mock_audit_instance.log_operation.assert_not_called()
+        mock_webhook.assert_not_called()
+
+    def test_webhook_fires_after_audit_log_committed(self):
+        """Ordering: audit log MUST run before webhook fires.
+
+        Buyer-facing notifications reference the audit row via ``audit_details``.
+        Firing the webhook before the audit row exists would surface a notification
+        the operator cannot trace back. The test pins call order using a shared
+        sequence captured by both mocks.
+        """
+        service_module, _, mock_media_buy_uow = self._build_mocks()
+        mock_audit_instance = MagicMock()
+
+        call_order: list[str] = []
+        mock_audit_instance.log_operation.side_effect = lambda **_: call_order.append("audit")
+
+        def webhook_recorder(**_):
+            call_order.append("webhook")
+
+        with (
+            patch.object(service_module, "MediaBuyUoW", return_value=mock_media_buy_uow),
+            patch.object(service_module, "AuditLogger", return_value=mock_audit_instance),
+            patch.object(service_module, "_send_approval_webhook", side_effect=webhook_recorder),
+        ):
+            service_module._finalize_approval(
+                media_buy_id="mb_b2_001",
+                tenant_id="tenant_1",
+                principal_id="principal_1",
+                principal_name="Acme Corp",
+                media_buy_status="failed",
+                audit_success=False,
+                audit_details={"order_id": "12345", "attempts": 3},
+                audit_error="timed out after 3 attempts",
+                webhook_url="https://buyer.example/hook",
+                webhook_status="failed",
+                webhook_message="timed out",
+                webhook_order_id="12345",
+                webhook_attempts=3,
+            )
+
+        assert call_order == ["audit", "webhook"], (
+            f"Expected audit -> webhook ordering, got {call_order}. "
+            "Webhook firing before audit would surface buyer notifications "
+            "for which no audit trail yet exists."
+        )
 
 
 class TestMarkApprovalCompleteUpdatesMediaBuyAndAuditLogs:
