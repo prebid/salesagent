@@ -110,6 +110,8 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
     """Pre-create an account via sync so it exists for update/unchanged tests.
 
     Extra kwargs (e.g., payment_terms, governance_agents) are merged into the account entry.
+    Captures original field values in ctx["original_field_values"] for later
+    "unchanged from the original" assertions.
     """
     from src.core.schemas.account import SyncAccountsRequest
 
@@ -117,6 +119,20 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
     entry.update(extra)
     req = SyncAccountsRequest(accounts=[entry])
     dispatch_request(ctx, req=req)
+    # Capture original field values for "unchanged from the original" assertions
+    resp = ctx.get("response")
+    if resp is not None and resp.accounts:
+        acct = resp.accounts[0]
+        originals = ctx.setdefault("original_field_values", {})
+        originals["billing"] = billing
+        originals["operator"] = operator
+        if "payment_terms" in extra:
+            originals["payment_terms"] = extra["payment_terms"]
+        # Capture DB-assigned fields from the response
+        if hasattr(acct, "account_id"):
+            originals["account_id"] = acct.account_id
+        if hasattr(acct, "status"):
+            originals["status"] = _status_str(acct.status)
     # Clear response so the next When step's response is fresh
     ctx.pop("response", None)
     ctx.pop("error", None)
@@ -608,8 +624,8 @@ def then_accounts_from_first_page(ctx: dict) -> None:
     """Assert the response returns accounts from offset 0 (first page).
 
     Verifies that a malformed cursor was silently treated as offset 0 by
-    checking that the first account in the sorted list is present in the
-    response.
+    checking that the returned accounts match the first-page slice of the
+    full sorted expected set (offset 0 through page_size).
     """
     resp = ctx.get("response")
     error = ctx.get("error")
@@ -623,9 +639,13 @@ def then_accounts_from_first_page(ctx: dict) -> None:
     assert account_ids == sorted(account_ids), (
         f"Accounts not sorted by account_id — cannot confirm first-page ordering: {account_ids}"
     )
-    # First returned account must be the lexicographically first expected account
-    assert account_ids[0] == expected_ids[0], (
-        f"First page should start with account '{expected_ids[0]}', got '{account_ids[0]}'"
+    # The returned page must be exactly the first N elements of the sorted expected set,
+    # where N is the page size (number of returned accounts). This proves offset-0 semantics.
+    page_size = len(account_ids)
+    expected_first_page = expected_ids[:page_size]
+    assert account_ids == expected_first_page, (
+        f"First page should contain accounts {expected_first_page}, got {account_ids}. "
+        f"This indicates the malformed cursor was not treated as offset 0."
     )
 
 
@@ -692,13 +712,18 @@ def then_result_set_identical(ctx: dict) -> None:
 
     The Given step created accounts with 4 different statuses and tracked
     their IDs in ctx["expected_account_ids"]. The unfiltered response must
-    return exactly that set — no extras, no omissions.
+    return exactly that set — no extras, no omissions. The expected_ids
+    check is mandatory (not optional) — if Given steps did not track IDs,
+    the test setup is broken.
     """
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
     expected_ids = ctx.get("expected_account_ids")
     assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
     returned_ids = {acct.account_id for acct in resp.accounts}
+    assert len(returned_ids) == len(expected_ids), (
+        f"Expected exactly {len(expected_ids)} accounts, got {len(returned_ids)}"
+    )
     assert returned_ids == expected_ids, (
         f"Result set mismatch: returned {returned_ids}, expected {expected_ids}. "
         f"Extra: {returned_ids - expected_ids}, Missing: {expected_ids - returned_ids}"
@@ -1002,6 +1027,28 @@ def _get_error(ctx: dict) -> Exception:
     return error
 
 
+def _assert_error_has_code_and_message(err: Any, index: int) -> None:
+    """Assert a single error object has non-empty code and message fields.
+
+    Checks .code first (per-account errors), then .error_code (AdCPError).
+    Checks .message attribute directly (not str() which is always truthy).
+    """
+    code = getattr(err, "code", None) or getattr(err, "error_code", None)
+    assert isinstance(code, str) and code, f"Error [{index}] missing non-empty code: code={code!r}, error={err}"
+    message = getattr(err, "message", None)
+    assert isinstance(message, str) and message.strip(), (
+        f"Error [{index}] missing non-empty message attribute: message={message!r}, error={err}"
+    )
+
+
+def _get_errors_collection(error: Exception) -> list[Any]:
+    """Get the errors collection from an error, falling back to a single-element list."""
+    errors_list = getattr(error, "errors", None)
+    if isinstance(errors_list, (list, tuple)) and errors_list:
+        return list(errors_list)
+    return [error]
+
+
 @then("the response is an error variant with no accounts array")
 def then_error_variant_no_accounts(ctx: dict) -> None:
     """Assert the response is an error variant (exception raised, no accounts)."""
@@ -1009,16 +1056,61 @@ def then_error_variant_no_accounts(ctx: dict) -> None:
     assert ctx.get("response") is None, "Expected no response (error variant), but got a response"
 
 
-@then(
-    parsers.re(
-        r"the response is an error variant"
-        r"|no accounts were modified on the seller"
-        r"|the errors array may contain multiple errors"
-    )
-)
+@then(parsers.re(r"the response is an error variant"))
 def then_error_exists(ctx: dict) -> None:
-    """Assert an error occurred (matches multiple error-related phrasings)."""
-    _get_error(ctx)
+    """Assert an error occurred — the response is an error variant."""
+    error = _get_error(ctx)
+    # Verify the error has a meaningful error_code (not just any exception)
+    error_code = getattr(error, "error_code", None)
+    assert error_code is not None, f"Error variant must carry an error_code, got: {error}"
+    assert isinstance(error_code, str) and error_code.strip(), (
+        f"Error variant error_code must be a non-empty string, got: {error_code!r}"
+    )
+
+
+@then(parsers.re(r"no accounts were modified on the seller"))
+def then_no_accounts_modified(ctx: dict) -> None:
+    """Assert no accounts were created/modified/deleted by the failed request.
+
+    Queries the DB for the tenant's account set and verifies it matches
+    the pre-request baseline (zero accounts if none were pre-created, or
+    the exact set from ctx["pre_request_account_ids"] if captured).
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    _get_error(ctx)  # Confirm an error occurred
+    tenant = ctx.get("tenant")
+    principal = ctx.get("principal")
+    if tenant is not None and principal is not None:
+        with get_db_session() as session:
+            repo = AccountRepository(session, tenant.tenant_id)
+            current_accounts = repo.list_by_principal(principal.principal_id)
+            pre_request_ids = ctx.get("pre_request_account_ids", set())
+            current_ids = {a.account_id for a in current_accounts}
+            assert current_ids == pre_request_ids, (
+                f"Accounts were modified despite error. "
+                f"Before: {pre_request_ids}, After: {current_ids}. "
+                f"Created: {current_ids - pre_request_ids}, "
+                f"Deleted: {pre_request_ids - current_ids}"
+            )
+    else:
+        # Unauthenticated caller — no tenant context, so no accounts could have been created.
+        # The error itself proves no side effects occurred for this caller.
+        pass
+
+
+@then(parsers.re(r"the errors array may contain multiple errors"))
+def then_errors_array_may_contain_multiple(ctx: dict) -> None:
+    """Assert the error exposes a structured errors array with valid entries.
+
+    Each entry must have code and message fields, proving the array is
+    well-formed and could carry multiple errors.
+    """
+    error = _get_error(ctx)
+    items = _get_errors_collection(error)
+    for i, err in enumerate(items):
+        _assert_error_has_code_and_message(err, i)
 
 
 @then(parsers.parse('the error code is "{code}"'))
@@ -1162,12 +1254,17 @@ def then_response_is_success_variant(ctx: dict) -> None:
 
 @then("each error includes code and message")
 def then_each_error_has_code_message(ctx: dict) -> None:
-    """Assert the error has a non-empty error_code and a non-empty message."""
+    """Assert every error in the errors collection has non-empty code and message.
+
+    Iterates over the full errors collection (if the error carries a structured
+    errors list) or treats the single exception as a one-element collection.
+    For each error, asserts the code/error_code is a non-empty string and the
+    message attribute (not str()) is a non-empty string.
+    """
     error = _get_error(ctx)
-    error_code = error.error_code  # AttributeError if missing
-    assert isinstance(error_code, str) and error_code, f"Expected non-empty error_code, got {error_code!r}"
-    message = str(error)
-    assert message, f"Error has no message: {error}"
+    items = _get_errors_collection(error)
+    for i, err in enumerate(items):
+        _assert_error_has_code_and_message(err, i)
 
 
 @then("a response with both accounts and errors arrays is invalid")
@@ -1370,12 +1467,12 @@ def when_push_config(ctx: dict, url: str) -> None:
 
 @then("the system registers the webhook for async account status notifications")
 def then_webhook_registered(ctx: dict) -> None:
-    """Assert webhook URL was registered for async status notifications.
+    """Assert the system acknowledged webhook registration for status notifications.
 
     Verifies that the sync request succeeded (no error) and produced
-    accounts, confirming the push_notification_config was accepted.
-    The acknowledgement field (echoed URL / registration ID) is not yet
-    implemented in production, so that specific check is xfailed.
+    accounts with seller-assigned IDs, confirming the server processed
+    the request successfully. Then xfails on the specific acknowledgement
+    check (echoed URL / registration ID) which production does not yet implement.
     """
     import pytest
 
@@ -1385,13 +1482,20 @@ def then_webhook_registered(ctx: dict) -> None:
     )
     resp = ctx.get("response")
     assert resp is not None, "Expected sync response for webhook registration check"
-    assert resp.accounts, "Expected accounts in sync response for webhook registration"
-    # Assert the push URL was provided in the request
-    registered_url = ctx.get("push_notification_url")
-    assert registered_url is not None, "No push_notification_config URL was provided"
-    assert isinstance(registered_url, str) and registered_url.strip(), (
-        f"Push notification URL must be a non-empty string, got: {registered_url!r}"
+    assert isinstance(resp.accounts, list), f"Expected accounts list, got {type(resp.accounts)}"
+    # Verify the sync produced accounts with seller-assigned IDs
+    first_acct = resp.accounts[0] if resp.accounts else None
+    assert first_acct is not None and isinstance(first_acct.account_id, str), (
+        "Expected sync to produce at least one account with a seller-assigned account_id"
     )
+    for acct in resp.accounts:
+        assert acct.account_id is not None and isinstance(acct.account_id, str), (
+            f"Account missing seller-assigned account_id: {acct}"
+        )
+        assert _action_str(acct.action) in ("created", "updated", "unchanged"), (
+            f"Account has unexpected action '{_action_str(acct.action)}' — "
+            f"webhook registration requires successful account processing"
+        )
     # xfail: production does not yet echo/acknowledge the webhook config
     pytest.xfail(
         "SPEC-PRODUCTION GAP: push_notification_config webhook registration "
@@ -1402,55 +1506,78 @@ def then_webhook_registered(ctx: dict) -> None:
 
 @then(parsers.parse('when the account transitions from "{from_status}" to "{to_status}"'))
 def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> None:
-    """Assert account status transition triggers push notification flow.
+    """Assert account status transition from from_status to to_status.
 
     Verifies the sync created an account whose current status matches
-    from_status, and that from_status/to_status are distinct valid states.
-    Production does not yet implement transition notifications.
+    from_status (the pre-transition state), confirming the account is in
+    the correct starting state for a transition. Then attempts to verify
+    the post-transition state equals to_status.
     """
     import pytest
 
     resp = ctx.get("response")
     assert resp is not None, "Expected sync response before checking transitions"
-    assert resp.accounts, "Expected at least one account in sync response"
+    assert isinstance(resp.accounts, list), f"Expected accounts list, got {type(resp.accounts)}"
     # The account's current status must match the expected from_status
-    acct = ctx.get("last_account") or resp.accounts[0]
+    acct = ctx.get("last_account") or (resp.accounts[0] if resp.accounts else None)
+    assert acct is not None, "Expected at least one account in sync response"
     actual_status = _status_str(acct.status)
     assert actual_status == from_status, (
         f"Expected account status '{from_status}' as transition source, got '{actual_status}'"
     )
-    # from and to must be distinct (a transition implies a state change)
-    assert from_status != to_status, f"Transition must change status: from='{from_status}' to='{to_status}'"
-    # xfail: production does not yet support transition-triggered notifications
-    pytest.xfail("SPEC-PRODUCTION GAP: async account status transition notifications not yet implemented in production")
+    # Verify the account has an account_id assigned by the seller
+    assert acct.account_id is not None and isinstance(acct.account_id, str), (
+        f"Account missing seller-assigned account_id: {acct}"
+    )
+    # Record the transition expectation for the downstream push notification step
+    ctx["expected_transition"] = (from_status, to_status)
+    ctx["transition_account_id"] = acct.account_id
+    # xfail: production does not yet implement the actual status transition
+    # (the account remains in from_status; the to_status is never applied)
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: async account status transition not yet implemented — "
+        f"account {acct.account_id} remains in '{from_status}', expected '{to_status}'"
+    )
 
 
 @then(parsers.parse('a push notification is sent to "{url}"'))
 def then_push_sent(ctx: dict, url: str) -> None:
     """Assert push notification is delivered to the specified URL.
 
-    The sync must have completed and produced accounts. The push delivery
-    service should have sent exactly one notification to the registered URL
-    with the transitioned account's ID and new status in the payload.
-    Production does not yet implement webhook push delivery.
+    The sync must have completed and produced accounts with a valid
+    transition account. Verifies production preconditions (sync succeeded,
+    account exists with account_id, transition was recorded), then xfails
+    on the actual delivery check since production does not yet implement
+    webhook push delivery.
     """
     import pytest
 
-    # Assert push URL matches what was registered in the Given step
-    assert ctx.get("push_notification_url") == url, (
-        f"Expected push to {url}, registered: {ctx.get('push_notification_url')}"
-    )
     # Assert the sync produced accounts that could trigger a push
     resp = ctx.get("response")
     assert resp is not None, "Expected sync response before push notification"
-    assert resp.accounts, "Expected accounts in sync response before push"
-    # The real assertion: verify the delivery service sent a notification
-    # to the registered URL with the account's ID and new status.
-    # xfail because production does not yet implement webhook push delivery.
+    assert isinstance(resp.accounts, list), f"Expected accounts list, got {type(resp.accounts)}"
+    # Verify at least one account was produced with a seller-assigned ID
+    first_acct = resp.accounts[0] if resp.accounts else None
+    assert first_acct is not None and isinstance(first_acct.account_id, str), (
+        "Expected at least one account with a seller-assigned account_id before push"
+    )
+    # Assert the transition was recorded by the preceding transition step
+    expected_transition = ctx.get("expected_transition")
+    assert expected_transition is not None, (
+        "No expected_transition recorded — the preceding 'when the account transitions' step must run first"
+    )
+    from_status, to_status = expected_transition
+    assert from_status != to_status, f"Transition must change status: from='{from_status}' to='{to_status}'"
+    # Assert a specific account was identified for the transition
+    transition_account_id = ctx.get("transition_account_id")
+    assert transition_account_id is not None, (
+        "No transition_account_id recorded — the transition step should identify the account"
+    )
+    # xfail: production does not yet implement webhook push delivery
     pytest.xfail(
-        "SPEC-PRODUCTION GAP: push notification delivery to webhook URL "
-        "not yet implemented — expected outbound POST to registered URL "
-        "with account_id and status payload"
+        f"SPEC-PRODUCTION GAP: push notification delivery to '{url}' "
+        f"not yet implemented — expected outbound POST with account_id="
+        f"'{transition_account_id}' and status='{to_status}' payload"
     )
 
 
@@ -2002,8 +2129,15 @@ def when_sync_n_accounts(ctx: dict, count: int) -> None:
 
 @then(parsers.re(r"the response includes context (?P<ctx_json>\{.*\})"))
 def then_response_includes_context(ctx: dict, ctx_json: str) -> None:
-    """Assert the response (success or error) includes the expected context."""
+    """Assert the response (success or error) includes the expected context.
+
+    For success responses, reads context from the response object.
+    For error responses, attempts to read context from the error object.
+    Never falls back to comparing the test's own sent_context.
+    """
     import json
+
+    import pytest
 
     expected = json.loads(ctx_json)
 
@@ -2022,10 +2156,25 @@ def then_response_includes_context(ctx: dict, ctx_json: str) -> None:
         assert actual == expected, f"Context mismatch: expected {expected}, got {actual}"
         return
 
-    # For error path: verify the sent context matches (POST-F3 at transport level)
-    sent = ctx.get("sent_context")
-    assert sent is not None, "No response and no sent_context — cannot verify context echo"
-    assert sent == expected, f"Sent context {sent} != expected {expected}"
+    # Error path: read context from the error object/payload, not the sent value
+    error = ctx.get("error")
+    assert error is not None, "No response and no error — cannot verify context echo"
+    # Try to extract context from the error object
+    error_context = getattr(error, "context", None)
+    if error_context is not None:
+        if hasattr(error_context, "model_dump"):
+            actual = error_context.model_dump(mode="json", exclude_none=True)
+        elif isinstance(error_context, dict):
+            actual = error_context
+        else:
+            actual = dict(error_context)
+        assert actual == expected, f"Error context mismatch: expected {expected}, got {actual}"
+        return
+    # Production error objects (AdCPError) do not carry a context field yet
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: error variant does not echo context — "
+        "AdCPError has no context field, expected context echo on error responses"
+    )
 
 
 @then("the context is identical to what was sent")
@@ -2589,7 +2738,13 @@ def given_agent_granted_access(ctx: dict, a: str, domain: str) -> None:
 
 @then(parsers.parse("the account {field} in the database is unchanged from the original"))
 def then_db_field_unchanged(ctx: dict, field: str) -> None:
-    """Assert a DB field was not modified by sync (immutable fields preserved)."""
+    """Assert a DB field was not modified by sync — compare against captured original.
+
+    The preceding Given/When steps must have captured the original field value
+    into ctx["original_field_values"][field] before the sync ran. This step
+    re-fetches the account from the DB and asserts exact equality with the
+    captured original.
+    """
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
 
@@ -2603,11 +2758,23 @@ def then_db_field_unchanged(ctx: dict, field: str) -> None:
         db_acct = repo.get_by_natural_key(operator=domain, brand_domain=domain)
         assert db_acct is not None, f"Account for {domain} not found in DB"
         db_val = getattr(db_acct, field, None)
-        # The field should have its original value (set at creation), not be None
-        # unless it was always None. The key assertion: sync didn't overwrite it.
-        assert db_val is not None or field in ("advertiser", "rate_card"), (
-            f"Expected {field} to be preserved but got None"
-        )
+        # Compare against captured original value
+        original_values = ctx.get("original_field_values", {})
+        if field in original_values:
+            original_val = original_values[field]
+            assert db_val == original_val, (
+                f"Field '{field}' was modified by sync: original={original_val!r}, "
+                f"current={db_val!r} — expected unchanged"
+            )
+        else:
+            # No captured original — the preceding steps should have captured it.
+            # Fall back to asserting the DB has a meaningful value (non-None)
+            # to avoid silently passing when test setup is incomplete.
+            assert db_val is not None, (
+                f"Field '{field}' is None in DB and no original value was captured "
+                f"in ctx['original_field_values']. Test setup must capture the "
+                f"original value before sync."
+            )
 
 
 @then(parsers.parse('the agent has exactly one access grant for brand domain "{domain}"'))
