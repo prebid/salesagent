@@ -21,11 +21,25 @@ from src.adapters.gam_inventory_discovery import (
 )
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 
-# Create database session factory
-engine = create_engine(os.environ["DATABASE_URL"])
-SessionLocal = sessionmaker(bind=engine)
-# Use scoped_session for thread-local sessions
-db_session = scoped_session(SessionLocal)
+
+class _LazyDBSession:
+    """Defers create_engine() to first use so importing this module doesn't require DATABASE_URL."""
+
+    _session: "scoped_session | None" = None
+
+    def _ensure(self) -> "scoped_session":
+        if type(self)._session is None:
+            type(self)._session = scoped_session(sessionmaker(bind=create_engine(os.environ["DATABASE_URL"])))
+        return type(self)._session  # type: ignore[return-value]
+
+    def __getattr__(self, name: str):  # type: ignore[override]
+        return getattr(self._ensure(), name)
+
+    def __call__(self, *args, **kw):
+        return self._ensure()(*args, **kw)
+
+
+db_session = _LazyDBSession()
 
 logger = logging.getLogger(__name__)
 
