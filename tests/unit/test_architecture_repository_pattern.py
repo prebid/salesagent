@@ -385,9 +385,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/conftest.py", "create_test_product_with_pricing"),
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
-    # tests/integration/test_a2a_error_responses.py
-    ("tests/integration/test_a2a_error_responses.py", "test_tenant"),
-    ("tests/integration/test_a2a_error_responses.py", "test_principal"),
     # tests/integration/test_a2a_skill_invocation.py
     ("tests/integration/test_a2a_skill_invocation.py", "test_update_media_buy_skill"),
     ("tests/integration/test_a2a_skill_invocation.py", "test_list_authorized_properties_skill"),
