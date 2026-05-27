@@ -7,7 +7,7 @@ and geo mapping operations for Google Ad Manager campaigns.
 
 import json
 import logging
-import os
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -85,9 +85,9 @@ class GAMTargetingManager:
         This is static data that doesn't change per tenant.
         """
         try:
-            # Look for the geo mappings file relative to the adapters directory
-            mapping_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "gam_geo_mappings.json")
-            with open(mapping_file) as f:
+            # The packaged mapping lives in src/adapters/, shared by all GAM modules.
+            mapping_file = Path(__file__).resolve().parents[2] / "gam_geo_mappings.json"
+            with mapping_file.open() as f:
                 geo_data = json.load(f)
 
             self.geo_country_map = geo_data.get("countries", {})

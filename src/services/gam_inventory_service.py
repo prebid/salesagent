@@ -12,20 +12,24 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import String, and_, create_engine, delete, func, inspect, or_, select, text
-from sqlalchemy.orm import Session, scoped_session, sessionmaker
+from sqlalchemy import String, and_, delete, func, inspect, or_, select, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
 from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
-from src.core.database.db_config import DatabaseConfig
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
+from src.services.gam_db_session import LazyScopedSession
 
-# Create database session factory
-engine = create_engine(DatabaseConfig.get_connection_string())
-SessionLocal = sessionmaker(bind=engine)
-# Use scoped_session for thread-local sessions
-db_session = scoped_session(SessionLocal)
+# Use a lazy scoped_session proxy so importing admin modules in unit tests does not create a DB engine.
+db_session = LazyScopedSession()
+
+
+def get_service_engine() -> Engine:
+    """Return the canonical SQLAlchemy engine used by this legacy service."""
+    return db_session.engine
+
 
 logger = logging.getLogger(__name__)
 

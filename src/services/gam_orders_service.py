@@ -12,18 +12,22 @@ import logging
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
-from sqlalchemy import create_engine, or_, select
-from sqlalchemy.orm import Session, joinedload, scoped_session, sessionmaker
+from sqlalchemy import or_, select
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, joinedload
 
 from src.adapters.gam_orders_discovery import GAMOrdersDiscovery, LineItem, Order
-from src.core.database.db_config import DatabaseConfig
 from src.core.database.models import GAMLineItem, GAMOrder
+from src.services.gam_db_session import LazyScopedSession
 
-# Create database session factory
-engine = create_engine(DatabaseConfig.get_connection_string())
-SessionLocal = sessionmaker(bind=engine)
-# Use scoped_session for thread-local sessions
-db_session = scoped_session(SessionLocal)
+# Use a lazy scoped_session proxy so importing admin modules in unit tests does not create a DB engine.
+db_session = LazyScopedSession()
+
+
+def get_service_engine() -> Engine:
+    """Return the canonical SQLAlchemy engine used by this legacy service."""
+    return db_session.engine
+
 
 logger = logging.getLogger(__name__)
 

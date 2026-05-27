@@ -35,3 +35,6 @@ class TestGAMTargetingManagerConfigInjection:
         assert manager.axe_include_key == "hb_pb"
         assert manager.axe_exclude_key == "hb_exclude"
         assert manager.custom_targeting_key_ids == {"hb_pb": "123", "hb_source": "456"}
+
+        # Static geo mappings should load from the packaged src/adapters file.
+        assert manager.geo_country_map["US"] == "2840"
