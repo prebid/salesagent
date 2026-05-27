@@ -118,8 +118,13 @@ class AIServiceFactory:
         if config.logfire_token:
             configure_logfire(config.logfire_token)
 
-        # Normalize provider name
-        if provider == "gemini":
+        # Normalize all Google provider aliases to the internal "google-gla" handle.
+        # "gemini" is the legacy DB-stored name; "google-gla" was the pre-1.99.0
+        # pydantic-ai string; "google" is the new pydantic-ai 1.99.0 canonical name.
+        # All three must route through _create_provider_model("google-gla") so that
+        # the explicit GoogleProvider(api_key=api_key) path is taken and tenant API
+        # keys are injected — not silently bypassed via env-var fallback.
+        if provider in ("gemini", "google", "google-gla"):
             provider = "google-gla"
 
         logger.debug(f"Creating Pydantic AI model: {provider}:{model_name}")

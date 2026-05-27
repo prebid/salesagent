@@ -116,6 +116,42 @@ class TestGetPlatformDefaults:
             assert defaults["provider"] == "gemini"
             assert defaults["model"] == "gemini-2.0-flash"
 
+    def test_google_canonical_provider_resolves_gemini_api_key(self):
+        """PYDANTIC_AI_PROVIDER=google must resolve GEMINI_API_KEY, not return None.
+
+        Regression guard: before this fix, _get_provider_api_key('google') returned
+        None (missing from the mapping), so get_platform_defaults() produced
+        api_key=None and AIServiceFactory.is_ai_enabled() returned False even when
+        GEMINI_API_KEY was set.
+        """
+        with patch.dict(
+            os.environ,
+            {
+                "PYDANTIC_AI_PROVIDER": "google",
+                "PYDANTIC_AI_MODEL": "gemini-2.0-flash",
+                "GEMINI_API_KEY": "test-gemini-key",
+            },
+            clear=False,
+        ):
+            defaults = get_platform_defaults()
+            assert defaults["api_key"] == "test-gemini-key", (
+                "provider='google' must map to GEMINI_API_KEY; " "api_key=None would make is_ai_enabled() return False"
+            )
+
+    def test_google_gla_provider_resolves_gemini_api_key(self):
+        """PYDANTIC_AI_PROVIDER=google-gla (legacy DB value) also resolves GEMINI_API_KEY."""
+        with patch.dict(
+            os.environ,
+            {
+                "PYDANTIC_AI_PROVIDER": "google-gla",
+                "PYDANTIC_AI_MODEL": "gemini-2.0-flash",
+                "GEMINI_API_KEY": "test-gemini-key",
+            },
+            clear=False,
+        ):
+            defaults = get_platform_defaults()
+            assert defaults["api_key"] == "test-gemini-key"
+
 
 class TestAIServiceFactory:
     """Tests for AIServiceFactory class."""
@@ -137,6 +173,27 @@ class TestAIServiceFactory:
             model = factory.create_model()
             # Now returns a Model instance instead of a string
             assert isinstance(model, GoogleModel)
+
+    def test_create_model_with_google_canonical_provider(self):
+        """provider='google' (pydantic-ai 1.99.0 canonical) injects API key, not env fallback.
+
+        Regression guard: factory must normalize 'google' -> GoogleModel with explicit
+        GoogleProvider(api_key=...), not fall through to the string-return else-branch
+        which would silently bypass tenant API key injection.
+        """
+        from pydantic_ai.models.google import GoogleModel
+
+        factory = AIServiceFactory()
+        tenant_config = {
+            "provider": "google",
+            "model": "gemini-2.0-flash",
+            "api_key": "tenant-specific-key",
+        }
+        model = factory.create_model(tenant_ai_config=tenant_config)
+        assert isinstance(model, GoogleModel), (
+            "provider='google' must return a GoogleModel, not a plain string; "
+            "returning a string bypasses API key injection and leaks auth to env vars"
+        )
 
     def test_create_model_with_tenant_config(self):
         """Factory uses tenant config over platform defaults."""

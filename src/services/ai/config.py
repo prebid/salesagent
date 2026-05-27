@@ -61,6 +61,11 @@ def _get_provider_api_key(provider: str) -> str | None:
         API key if found, None otherwise
     """
     provider_env_vars = {
+        # All three Google aliases resolve to the same key.
+        # "google" is the pydantic-ai 1.99.0 canonical name;
+        # "gemini" and "google-gla" are legacy/DB-stored aliases.
+        "google": "GEMINI_API_KEY",
+        "google-gla": "GEMINI_API_KEY",
         "gemini": "GEMINI_API_KEY",
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
