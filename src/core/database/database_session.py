@@ -80,7 +80,13 @@ def get_engine():
             )
 
         # Get connection string from environment
-        connection_string = os.environ["DATABASE_URL"]
+        connection_string = os.environ.get("DATABASE_URL")
+        if not connection_string:
+            raise OSError(
+                "DATABASE_URL is not set. Set it to a PostgreSQL connection URL, "
+                "e.g. DATABASE_URL=postgresql://user:password@host:5432/dbname. "
+                "Individual DB_HOST/DB_PORT/DB_USER/DB_PASSWORD variables are not supported."
+            )
 
         if "postgresql" not in connection_string:
             raise ValueError("Only PostgreSQL is supported. Use DATABASE_URL=postgresql://...")

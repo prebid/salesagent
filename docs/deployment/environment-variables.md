@@ -76,18 +76,9 @@ These variables configure a **global** OAuth provider shared by all tenants. For
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | - | **Required.** Full PostgreSQL connection URL |
+| `DATABASE_URL` | - | **Required.** Full PostgreSQL connection URL, e.g. `postgresql://user:password@host:5432/adcp` |
 
-Or use individual variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DB_HOST` | `localhost` | Database host |
-| `DB_PORT` | `5432` | Database port |
-| `DB_NAME` | `adcp` | Database name |
-| `DB_USER` | `adcp` | Database user |
-| `DB_PASSWORD` | - | Database password |
-| `DB_SSLMODE` | `prefer` | PostgreSQL SSL mode |
+`DATABASE_URL` is the only supported form. Individual `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` variables are no longer read; set `DATABASE_URL` instead. Passwords with special characters must be percent-encoded (e.g. `@` → `%40`); SQLAlchemy handles decoding automatically.
 
 ### Connection Pool
 

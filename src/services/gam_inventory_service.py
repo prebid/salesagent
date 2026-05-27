@@ -29,7 +29,13 @@ class _LazyDBSession:
 
     def _ensure(self) -> "scoped_session":
         if type(self)._session is None:
-            type(self)._session = scoped_session(sessionmaker(bind=create_engine(os.environ["DATABASE_URL"])))
+            url = os.environ.get("DATABASE_URL")
+            if not url:
+                raise OSError(
+                    "DATABASE_URL is not set. Set it to a PostgreSQL connection URL, "
+                    "e.g. DATABASE_URL=postgresql://user:password@host:5432/dbname."
+                )
+            type(self)._session = scoped_session(sessionmaker(bind=create_engine(url)))
         return type(self)._session  # type: ignore[return-value]
 
     def __getattr__(self, name: str):  # type: ignore[override]
