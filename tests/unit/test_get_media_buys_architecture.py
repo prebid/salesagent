@@ -58,7 +58,8 @@ class TestGetMediaBuysImplRaisesAdCPError:
     def test_unsupported_account_id_raises_adcp_error(self):
         """Passing account_id should raise AdCPCapabilityNotSupportedError (not ToolError).
 
-        Migrated to typed subclass in audit B1 — was previously AdCPValidationError.
+        The wire code ``UNSUPPORTED_FEATURE`` lets buyers retry without the
+        unsupported parameter; a generic ``VALIDATION_ERROR`` would not.
         """
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
@@ -74,7 +75,8 @@ class TestGetMediaBuysImplRaisesAdCPError:
     def test_unsupported_account_raises_adcp_error(self):
         """Passing account (nested, AdCP 3.x) should raise AdCPCapabilityNotSupportedError.
 
-        Migrated to typed subclass in audit B1 — was previously AdCPValidationError.
+        The wire code ``UNSUPPORTED_FEATURE`` lets buyers retry without the
+        unsupported parameter; a generic ``VALIDATION_ERROR`` would not.
         """
         from src.core.tools.media_buy_list import _get_media_buys_impl
 

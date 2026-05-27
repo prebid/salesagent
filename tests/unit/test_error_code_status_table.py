@@ -8,7 +8,7 @@ The mutation test pinned here: removing ``error_code`` or ``status_code``
 from any ``AdCPError`` subclass must break the table derivation —
 otherwise the "derived from class attributes" claim is just a comment.
 
-Konstantine PR #1306 review item P14: structural-guard invariant.
+Structural-guard invariant.
 """
 
 from __future__ import annotations

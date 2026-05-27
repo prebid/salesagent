@@ -203,11 +203,10 @@ class TestA2AErrorShapes:
     async def test_missing_params_raises_typed_validation_error(self):
         """A2A create_media_buy raises typed AdCPValidationError for missing required params.
 
-        The previous behavior returned a custom error dict that bypassed
-        the envelope builder — Konstantine's structural follow-up review
-        flagged this as a Critical issue because buyers couldn't see the
-        real wire code. Skill handlers now raise typed AdCPError; the
-        outer dispatcher routes through ``_build_failed_skill_result``
+        A prior behavior returned a custom error dict that bypassed the
+        envelope builder — buyers could not see the real wire code. Skill
+        handlers now raise typed AdCPError; the outer dispatcher routes
+        through ``_build_failed_skill_result``
         which calls ``_build_error_envelope`` for the two-layer wire shape.
         """
 
@@ -398,10 +397,10 @@ class TestCrossTransportErrorConsistency:
         MCP path: CreateMediaBuyRequest validation -> ToolError with field details
         A2A path: _handle_create_media_buy_skill -> raises typed AdCPValidationError
 
-        Both should mention the missing fields. Skill handlers now raise
-        typed AdCPError on validation failure (Konstantine's Critical fix);
-        the outer dispatcher's _build_failed_skill_result produces the
-        two-layer envelope on the wire.
+        Both should mention the missing fields. Skill handlers raise
+        typed AdCPError on validation failure; the outer dispatcher's
+        ``_build_failed_skill_result`` produces the two-layer envelope on
+        the wire.
         """
         from src.core.schemas import CreateMediaBuyRequest
 

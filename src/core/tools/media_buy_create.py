@@ -2188,10 +2188,9 @@ async def _create_media_buy_impl(
         # wrappers translate them to AdCPValidationError / AdCPAuthorizationError with
         # correct wire codes (the prior "return CreateMediaBuyResult(VALIDATION_ERROR)"
         # path silently mis-tagged PermissionError as VALIDATION_ERROR).
-        # All validator raise sites in this function now use typed AdCPError
-        # subclasses directly (AdCPValidationError / AdCPBudgetTooLowError) — the
-        # typed AdCPValidationError raised directly at the boundary
-        # translation block was deleted (audit S2).
+        # Validator raise sites emit typed AdCPError subclasses
+        # (AdCPValidationError / AdCPBudgetTooLowError) directly so the wire
+        # code is preserved through the boundary translator.
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
         raise

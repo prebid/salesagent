@@ -1,14 +1,14 @@
 """Behavioral pin tests for typed AdCPError subclass raises.
 
-These tests prove that the converted production raise sites emit the
-correct typed subclass at the actual call site. They CALL production
-code (not just import the classes) — distinguishing them from
-test_adcp_exceptions.py (which only verifies class attributes).
+These tests prove that production raise sites emit the correct typed
+subclass at the actual call site. They CALL production code (not just
+import the classes) — distinguishing them from test_adcp_exceptions.py
+(which only verifies class attributes).
 
-Covered raise sites (audit B1 + S2 migration):
-- ``AdCPBudgetTooLowError`` at ``media_buy_create.py:1758`` (budget <= 0)
-- ``AdCPMediaBuyNotFoundError`` at ``media_buy_update.py:146`` (lookup miss)
-- ``AdCPCapabilityNotSupportedError`` at ``media_buy_list.py:103``
+Covered raise sites:
+- ``AdCPBudgetTooLowError`` in ``_create_media_buy_impl`` (budget <= 0)
+- ``AdCPMediaBuyNotFoundError`` in ``_update_media_buy_impl`` (lookup miss)
+- ``AdCPCapabilityNotSupportedError`` in ``_get_media_buys_impl``
   (account_id filtering)
 
 Each test is a structural pin — if the production raise site reverts to
@@ -29,7 +29,6 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPMediaBuyNotFoundError,
 )
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, GetMediaBuysRequest, UpdateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_list import _get_media_buys_impl
@@ -65,11 +64,11 @@ class TestTypedAdCPErrorRaises:
     """Behavioral pins: production raise sites emit the correct typed subclass."""
 
     async def test_budget_too_low_raises_typed_subclass(self, typed_raise_setup):
-        """media_buy_create.py:1758 raises AdCPBudgetTooLowError (not AdCPValidationError).
+        """The per-package budget validator raises ``AdCPBudgetTooLowError``.
 
-        Validates the audit S2 migration: the raise site moved from
-        ``AdCPBudgetTooLowError`` raised directly via boundary
-        translation to a direct typed ``AdCPBudgetTooLowError`` raise.
+        Pins the specific typed subclass so a future change that swaps it
+        back to the sibling ``AdCPValidationError`` breaks here rather than
+        silently losing the spec wire code ``BUDGET_TOO_LOW``.
         """
         identity = typed_raise_setup
         future_start = datetime.now(UTC) + timedelta(days=1)
@@ -96,12 +95,11 @@ class TestTypedAdCPErrorRaises:
         assert "budget" in exc_info.value.message.lower()
 
     def test_media_buy_not_found_raises_typed_subclass(self, typed_raise_setup):
-        """media_buy_update.py:146 raises AdCPMediaBuyNotFoundError (not AdCPNotFoundError).
+        """``_verify_principal`` raises ``AdCPMediaBuyNotFoundError`` on lookup miss.
 
-        Validates the audit B1 migration: the raise site moved from the
-        generic ``AdCPNotFoundError`` (wire code NOT_FOUND → INVALID_REQUEST)
-        to the specific ``AdCPMediaBuyNotFoundError`` (wire code
-        MEDIA_BUY_NOT_FOUND, recovery=correctable).
+        Pins the specific subclass so the wire code stays
+        ``MEDIA_BUY_NOT_FOUND`` (not the generic ``NOT_FOUND``) and
+        recovery stays ``correctable`` for buyer-correctable cases.
         """
         identity = typed_raise_setup
         # update_media_buy needs ≥1 updatable field; ``paused`` passes pre-lookup validation.
@@ -117,21 +115,20 @@ class TestTypedAdCPErrorRaises:
         assert "mb_nonexistent_typed_raise_pin" in exc_info.value.message
 
     def test_account_filter_unsupported_raises_typed_subclass(self):
-        """media_buy_list.py:103 raises AdCPCapabilityNotSupportedError (not AdCPValidationError).
+        """``_get_media_buys_impl`` raises ``AdCPCapabilityNotSupportedError``.
 
-        Validates the audit B1 migration: the raise site moved from
-        ``AdCPValidationError`` (wire code VALIDATION_ERROR) to the
-        specific ``AdCPCapabilityNotSupportedError`` (wire code
-        UNSUPPORTED_FEATURE, recovery=correctable per the seller-spec
-        divergence documented in exceptions.py:484).
+        Pins the specific subclass so the wire code is
+        ``UNSUPPORTED_FEATURE`` (not the generic ``VALIDATION_ERROR``).
+        Recovery is ``correctable`` per the documented spec divergence
+        (the buyer can drop the unsupported parameter).
         """
         # No DB setup needed — the unsupported-feature check fires before any DB access.
-        identity = ResolvedIdentity(
-            principal_id="any_principal",
+        from tests.factories import PrincipalFactory
+
+        identity = PrincipalFactory.make_identity(
             tenant_id="any_tenant",
-            tenant={"tenant_id": "any_tenant", "adapter_type": "mock"},
+            principal_id="any_principal",
             protocol="mcp",
-            testing_context=None,
         )
         req = GetMediaBuysRequest(account_id="acc_123")
 

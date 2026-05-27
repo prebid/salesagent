@@ -9,10 +9,10 @@ FastMCP CallToolResult content text. The MCP boundary translator
 via build_two_layer_error_envelope and wraps it in an AdCPToolError whose
 ``str(self)`` is the JSON-encoded envelope.
 
-Konstantine review (PR #1306, 2026-05-24): mock-only tests do not prove
-wiring; this exercises the full FastMCP pipeline end-to-end with
+Exercises the full FastMCP pipeline end-to-end:
 Client(mcp) → middleware → TypeAdapter → tool → _impl → typed raise →
-boundary translator → wire envelope.
+boundary translator → wire envelope. Mock-only equivalents do not prove
+this wiring.
 
 Production-validator tests (BUDGET_TOO_LOW, INVALID_REQUEST past start_time)
 drive REAL invalid input through the full pipeline — no ``_impl`` patching.
@@ -293,3 +293,39 @@ class TestMcpWireErrorEnvelope:
         assert "identity" in envelope["adcp_error"]["message"].lower() or (
             "auth" in envelope["adcp_error"]["message"].lower()
         ), f"Envelope message must mention identity/auth, got: {envelope['adcp_error']['message']}"
+
+    def test_get_media_buys_unsupported_account_filter_emits_envelope_on_wire(self, integration_db):
+        """``get_media_buys`` with ``account_id`` surfaces UNSUPPORTED_FEATURE on the MCP wire.
+
+        Flow:
+            Client(mcp).call_tool("get_media_buys", {"account_id": "..."})
+              → middleware resolves identity (patched)
+              → _get_media_buys_impl raises AdCPCapabilityNotSupportedError
+              → error_code "UNSUPPORTED_FEATURE" passes through STANDARD_ERROR_CODES
+              → boundary translator builds the wire envelope
+
+        Recovery is ``correctable`` per the documented spec divergence (the
+        buyer can retry without the unsupported parameter); a generic
+        VALIDATION_ERROR would not carry that retry semantic. Pins the
+        production raise → wire shape end-to-end.
+        """
+        from tests.factories import PrincipalFactory
+
+        identity = PrincipalFactory.make_identity(
+            tenant_id="any_tenant_unsupported_wire",
+            principal_id="any_principal_unsupported_wire",
+            protocol="mcp",
+        )
+
+        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+            "get_media_buys",
+            {"account_id": "acc_unsupported_wire_test"},
+            identity,
+        )
+
+        assert is_error, "Unsupported account_id filter must produce a tool error"
+        assert envelope is not None, "Error must include content text carrying the envelope"
+        assert_envelope_shape(envelope, "UNSUPPORTED_FEATURE", recovery="correctable")
+        assert "account" in envelope["adcp_error"]["message"].lower(), (
+            f"Envelope message must explain the unsupported parameter, " f"got: {envelope['adcp_error']['message']}"
+        )

@@ -820,10 +820,10 @@ class TestHandleToolErrorPreservesStatusCode:
         """Plain ToolError("AUTH_REQUIRED", "msg") → 403 via _ERROR_CODE_TO_STATUS.
 
         AUTH_REQUIRED is declared by both AdCPAuthenticationError (401) and
-        AdCPAuthorizationError (403). The auto-derived table picks the more
-        restrictive status (403) since a plain-ToolError fallback carries no
-        context to disambiguate. Konstantine flagged the previous hand-coded
-        ``AUTH_REQUIRED → 401`` mapping as a conflict against
+        AdCPAuthorizationError (403). The auto-derived table picks the
+        more restrictive status (403) since a plain-ToolError fallback
+        carries no context to disambiguate. A prior hand-coded
+        ``AUTH_REQUIRED → 401`` mapping conflicted with
         AdCPAuthorizationError.status_code=403.
         """
         from fastmcp.exceptions import ToolError

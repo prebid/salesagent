@@ -245,12 +245,10 @@ class TestA2AErrorPropagation:
     async def test_sync_creatives_missing_creatives_param_wire_envelope(self, handler, test_tenant, test_principal):
         """sync_creatives missing 'creatives' param surfaces two-layer envelope on the A2A wire.
 
-        Mirrors the gold-standard test_create_media_buy_validation_error_includes_errors_field
-        pattern: real on_message_send → real handler raises AdCPValidationError →
-        dispatcher routes through _build_failed_skill_result → wire envelope in DataPart.
-
-        Konstantine review (PR #1306, 2026-05-24): mock-only tests do not prove
-        wiring; this exercises the full A2A transport pipeline end-to-end.
+        Exercises the full A2A transport pipeline end-to-end: real
+        on_message_send → real handler raises AdCPValidationError →
+        dispatcher routes through _build_failed_skill_result → wire envelope
+        lands in DataPart. Mock-only equivalents do not prove the wiring.
         """
         identity = ResolvedIdentity(
             principal_id=test_principal["principal_id"],
@@ -365,8 +363,8 @@ class TestA2AErrorPropagation:
         BEFORE the unimplemented TODO branch, so this exercises only the
         validation path through the real dispatcher.
 
-        Mirrors test_create_media_buy_validation_error_includes_errors_field at
-        line 164 — the gold-standard pattern Konstantine cited.
+        Mirrors ``test_create_media_buy_validation_error_includes_errors_field``
+        as the reference pattern for A2A wire-envelope verification.
         """
         identity = ResolvedIdentity(
             principal_id=test_principal["principal_id"],
@@ -409,8 +407,8 @@ class TestA2AErrorPropagation:
         package_id, creative_id. Sending only media_buy_id triggers the missing-
         params check BEFORE the unimplemented TODO branch.
 
-        Mirrors test_create_media_buy_validation_error_includes_errors_field at
-        line 164 — the gold-standard pattern Konstantine cited.
+        Mirrors ``test_create_media_buy_validation_error_includes_errors_field``
+        as the reference pattern for A2A wire-envelope verification.
         """
         identity = ResolvedIdentity(
             principal_id=test_principal["principal_id"],
@@ -458,12 +456,10 @@ class TestA2AErrorResponseStructure:
     async def test_error_response_has_consistent_structure(self, integration_db, handler):
         """Skill handlers raise typed AdCPValidationError on missing required params.
 
-        Previously the handler returned a custom error dict bypassing the
-        envelope builder; Konstantine's structural follow-up flagged this as
-        Critical. Now the handler raises and the outer dispatcher's
-        ``_build_failed_skill_result`` produces the spec-compliant
-        two-layer envelope. This test verifies the contract at the
-        skill-handler layer.
+        Handlers raise rather than return custom error dicts so the outer
+        dispatcher's ``_build_failed_skill_result`` produces the
+        spec-compliant two-layer envelope. This test pins the contract at
+        the skill-handler layer.
         """
         from src.core.exceptions import AdCPValidationError
 
@@ -519,11 +515,11 @@ class TestA2AErrorResponseStructure:
     async def test_adcp_error_carries_recovery_through_a2a_boundary(self, integration_db, handler):
         """AdCPError propagates from _handle_explicit_skill with recovery preserved.
 
-        Post-B4 contract: _handle_explicit_skill no longer translates AdCPError
-        to a JSON-RPC A2AError. The typed exception propagates so the outer
-        dispatcher loop can wrap the two-layer envelope into a failed Task's
-        artifact DataPart. The envelope built from the exception carries
-        ``recovery`` from the AdCPError class default (or override).
+        ``_handle_explicit_skill`` does not translate AdCPError into a
+        JSON-RPC A2AError — the typed exception propagates so the outer
+        dispatcher wraps the two-layer envelope into a failed Task's
+        artifact DataPart. The envelope carries ``recovery`` from the
+        AdCPError class default (or override).
         """
         from unittest.mock import patch
 
@@ -564,9 +560,9 @@ class TestA2AErrorResponseStructure:
     async def test_custom_recovery_override_preserved_through_a2a(self, integration_db, handler):
         """Custom recovery= override on AdCPError is preserved when propagating.
 
-        Post-B4 contract: a raise-site override on ``recovery`` survives the
-        propagation through ``_handle_explicit_skill`` and round-trips through
-        the two-layer envelope builder unchanged.
+        A raise-site override on ``recovery`` survives propagation through
+        ``_handle_explicit_skill`` and round-trips through the two-layer
+        envelope builder unchanged.
         """
         from unittest.mock import patch
 
@@ -589,11 +585,11 @@ class TestA2AErrorResponseStructure:
     async def test_valueerror_wraps_to_adcp_validation_error(self, integration_db, handler):
         """ValueError in a skill handler propagates as AdCPValidationError.
 
-        Post-R3 fix: ``_handle_explicit_skill`` no longer translates ValueError
-        to a JSON-RPC ``InvalidParamsError``. It wraps the ValueError as a
-        synthetic ``AdCPValidationError`` and re-raises, so the outer dispatcher
-        catches it via ``except AdCPError`` and produces a failed Task with a
-        two-layer envelope — same wire shape as natively-raised AdCPErrors.
+        ``_handle_explicit_skill`` wraps the ValueError as a synthetic
+        ``AdCPValidationError`` and re-raises, so the outer dispatcher
+        catches it via ``except AdCPError`` and produces a failed Task
+        with a two-layer envelope — same wire shape as natively-raised
+        AdCPErrors. No JSON-RPC ``InvalidParamsError`` translation.
         """
         from unittest.mock import patch
 
@@ -637,11 +633,11 @@ class TestA2AErrorResponseStructure:
     async def test_untyped_exception_falls_through_to_dispatcher(self, integration_db, handler):
         """Untyped exceptions from a skill handler are no longer caught locally.
 
-        Post-R3 fix: the ``except Exception`` catch-all in ``_handle_explicit_skill``
-        was removed. Untyped exceptions propagate to the outer dispatcher's
+        ``_handle_explicit_skill`` has no local ``except Exception``
+        catch-all — untyped exceptions propagate to the outer dispatcher's
         ``except Exception`` branch, which routes them through
-        ``_build_failed_skill_result`` for uniform envelope shape — no double
-        wrapping, no JSON-RPC translation.
+        ``_build_failed_skill_result`` for uniform envelope shape. No
+        double wrapping, no JSON-RPC translation.
         """
         from unittest.mock import patch
 
@@ -665,8 +661,9 @@ class TestA2AContextEcho:
     this class focuses on the context-correlation field round-tripping
     through the full on_message_send → dispatcher → envelope-builder pipeline.
 
-    Konstantine review (PR #1306, 2026-05-24): "Send a request that triggers
-    an error carrying context, assert `context` appears in the response JSON."
+    Pins that a request triggering an error carrying ``context`` produces
+    a wire envelope where the ``context`` field round-trips into the
+    response JSON.
     """
 
     @pytest.fixture
