@@ -72,7 +72,7 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc002_nfr.py:122 then_auth_before_business_logic",
     "bdd/steps/domain/uc002_nfr.py:181 then_rate_limiting_enforced",
     "bdd/steps/domain/uc002_nfr.py:221 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:361 then_budget_validated_against_min_order",
+    "bdd/steps/domain/uc002_nfr.py:382 then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()
