@@ -20,7 +20,7 @@ from a2a.types import SendMessageRequest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.database.database_session import get_db_session
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import TEST_PROPERTY_LIST_TARGETING_OVERLAY, create_test_package_request_dict
 from tests.utils.a2a_helpers import create_a2a_message_with_skill
 from tests.utils.database_helpers import future_iso_date_range, seed_property_list_capability_tenant
@@ -159,20 +159,19 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
     from src.core.config_loader import set_current_tenant
     from src.core.testing_hooks import AdCPTestContext
 
-    tenant_dict = {
-        "tenant_id": TENANT_ID,
-        "name": "Property List Wire Publisher",
-        "subdomain": "prop-list-wire",
-        "ad_server": "mock",
-    }
-    identity = ResolvedIdentity(
+    # test_session_id bypasses the production setup-checklist gate so the
+    # test can reach the boundary check on a minimal test tenant.
+    identity = PrincipalFactory.make_identity(
         principal_id="test_adv",
         tenant_id=TENANT_ID,
-        tenant=tenant_dict,
         auth_token=ACCESS_TOKEN,
         protocol="a2a",
-        # test_session_id bypasses the production setup-checklist gate so the
-        # test can reach the boundary check on a minimal test tenant.
+        tenant={
+            "tenant_id": TENANT_ID,
+            "name": "Property List Wire Publisher",
+            "subdomain": "prop-list-wire",
+            "ad_server": "mock",
+        },
         testing_context=AdCPTestContext(
             dry_run=False,
             mock_time=None,
@@ -180,7 +179,7 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
             test_session_id="prop-list-wire-a2a-session",
         ),
     )
-    set_current_tenant(tenant_dict)
+    set_current_tenant(identity.tenant)
 
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=ACCESS_TOKEN)
