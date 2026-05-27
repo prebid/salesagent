@@ -29,19 +29,37 @@ def cleanup_approval_registry():
 
 
 @pytest.fixture
-def mock_db_session():
-    """Mock database session for code paths that still use get_db_session directly.
+def mock_sync_job_status_uow():
+    """Mock ``SyncJobUoW`` used by ``get_approval_status``.
 
-    Used for ``_send_approval_webhook`` and ``get_approval_status``. The
-    SyncJob read/write paths run through ``SyncJobUoW`` — see
-    ``mock_sync_job_uow``.
+    Read-only path — ``uow.sync_jobs.get(approval_id)`` returns whatever
+    the test stubs onto the repo. Tests rebind ``repo.get.return_value``
+    when they need a row to come back.
     """
-    with patch("src.services.order_approval_service.get_db_session") as mock_session:
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
-        mock_db.scalars.return_value.first.return_value = None  # No existing approval
-        mock_db.scalars.return_value.all.return_value = []
-        yield mock_db
+    with patch("src.services.order_approval_service.SyncJobUoW") as mock_uow_cls:
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_repo = MagicMock()
+        mock_repo.get.return_value = None
+        mock_uow.sync_jobs = mock_repo
+        mock_uow_cls.return_value = mock_uow
+        yield {"uow_cls": mock_uow_cls, "uow": mock_uow, "repo": mock_repo}
+
+
+@pytest.fixture
+def mock_push_notification_uow():
+    """Mock ``PushNotificationConfigUoW`` used by webhook-auth lookups."""
+    with patch("src.services.order_approval_service.PushNotificationConfigUoW") as mock_uow_cls:
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_repo = MagicMock()
+        mock_repo.find_active_by_url.return_value = None
+        mock_repo.find_most_recent_active_for_principal.return_value = None
+        mock_uow.push_notification_configs = mock_repo
+        mock_uow_cls.return_value = mock_uow
+        yield {"uow_cls": mock_uow_cls, "uow": mock_uow, "repo": mock_repo}
 
 
 @pytest.fixture
@@ -167,11 +185,10 @@ def test_approval_thread_tracks_in_registry(mock_sync_job_uow):
             keep_alive.set()
 
 
-def test_get_approval_status(mock_db_session):
+def test_get_approval_status(mock_sync_job_status_uow):
     """Test getting approval status."""
     from src.core.database.models import SyncJob
 
-    # Mock existing approval
     approval = SyncJob(
         sync_id="approval_12345_test",
         tenant_id="tenant_1",
@@ -183,7 +200,7 @@ def test_get_approval_status(mock_db_session):
         triggered_by_id="mb_123",
         progress={"order_id": "12345", "attempts": 3},
     )
-    mock_db_session.scalars.return_value.first.return_value = approval
+    mock_sync_job_status_uow["repo"].get.return_value = approval
 
     status = get_approval_status("approval_12345_test", tenant_id="tenant_1")
 
@@ -192,45 +209,41 @@ def test_get_approval_status(mock_db_session):
     assert status["status"] == "running"
     assert status["progress"]["order_id"] == "12345"
     assert status["progress"]["attempts"] == 3
+    # SyncJobUoW must be scoped to the requested tenant — otherwise a cross-tenant
+    # lookup could return another tenant's approval row.
+    mock_sync_job_status_uow["uow_cls"].assert_called_with("tenant_1")
 
 
-def test_get_approval_status_not_found(mock_db_session):
+def test_get_approval_status_not_found(mock_sync_job_status_uow):
     """Test getting approval status for non-existent approval."""
-    mock_db_session.scalars.return_value.first.return_value = None
+    mock_sync_job_status_uow["repo"].get.return_value = None
 
     status = get_approval_status("nonexistent", tenant_id="tenant_1")
     assert status is None
 
 
-def test_webhook_notification_sent_on_success():
+def test_webhook_notification_sent_on_success(mock_push_notification_uow):
     """Test webhook notification is sent when approval succeeds."""
+    from src.core.database.models import PushNotificationConfig
     from src.services.order_approval_service import _send_approval_webhook
 
-    with patch("src.services.order_approval_service.get_db_session") as mock_db, patch("httpx.Client") as mock_httpx:
-        # Mock push notification config
-        mock_db_instance = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_db_instance
+    mock_config = PushNotificationConfig(
+        tenant_id="tenant_1",
+        principal_id="principal_1",
+        url="https://example.com/webhook",
+        authentication_type="bearer",
+        authentication_token="test_token",
+        is_active=True,
+    )
+    mock_push_notification_uow["repo"].find_active_by_url.return_value = mock_config
 
-        from src.core.database.models import PushNotificationConfig
-
-        mock_config = PushNotificationConfig(
-            tenant_id="tenant_1",
-            principal_id="principal_1",
-            url="https://example.com/webhook",
-            authentication_type="bearer",
-            authentication_token="test_token",
-            is_active=True,
-        )
-        mock_db_instance.scalars.return_value.first.return_value = mock_config
-
-        # Mock HTTP client
+    with patch("httpx.Client") as mock_httpx:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_client_instance = MagicMock()
         mock_client_instance.post.return_value = mock_response
         mock_httpx.return_value.__enter__.return_value = mock_client_instance
 
-        # Send webhook
         _send_approval_webhook(
             webhook_url="https://example.com/webhook",
             tenant_id="tenant_1",
@@ -242,11 +255,9 @@ def test_webhook_notification_sent_on_success():
             attempts=3,
         )
 
-        # Verify HTTP POST was made
         mock_client_instance.post.assert_called_once()
         call_args = mock_client_instance.post.call_args
 
-        # Check webhook payload
         assert call_args[0][0] == "https://example.com/webhook"
         payload = call_args[1]["json"]
         assert payload["event"] == "order_approval_update"
@@ -255,29 +266,29 @@ def test_webhook_notification_sent_on_success():
         assert payload["order_id"] == "12345"
         assert payload["attempts"] == 3
 
-        # Check authentication header
         headers = call_args[1]["headers"]
         assert headers["Authorization"] == "Bearer test_token"
 
+    # The PushNotificationConfig lookup must be tenant-scoped via the UoW.
+    mock_push_notification_uow["uow_cls"].assert_called_with("tenant_1")
+    mock_push_notification_uow["repo"].find_active_by_url.assert_called_with(
+        "principal_1", "https://example.com/webhook"
+    )
+
 
 @patch("src.services.order_approval_service.time.sleep")
-def test_webhook_retries_on_failure(mock_sleep):
+def test_webhook_retries_on_failure(mock_sleep, mock_push_notification_uow):
     """Test webhook retries on HTTP failure."""
     import src.services.order_approval_service as service_module
 
-    with patch.object(service_module, "get_db_session") as mock_db, patch("httpx.Client") as mock_httpx:
-        # Mock DB
-        mock_db_instance = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_db_instance
-        mock_db_instance.scalars.return_value.first.return_value = None  # No auth config
+    mock_push_notification_uow["repo"].find_active_by_url.return_value = None
 
-        # Mock HTTP client - fails twice, succeeds third time
+    with patch("httpx.Client") as mock_httpx:
         mock_response_fail = MagicMock()
         mock_response_fail.status_code = 500
         mock_response_success = MagicMock()
         mock_response_success.status_code = 200
 
-        # Track calls explicitly with closure
         call_counter = {"count": 0}
         responses = [mock_response_fail, mock_response_fail, mock_response_success]
 
@@ -286,17 +297,14 @@ def test_webhook_retries_on_failure(mock_sleep):
             idx = min(call_counter["count"] - 1, len(responses) - 1)
             return responses[idx]
 
-        # Create a fresh MagicMock for the client instance
         mock_client_instance = MagicMock()
         mock_client_instance.post.side_effect = post_side_effect
 
-        # Create a fresh context manager mock
         mock_context = MagicMock()
         mock_context.__enter__.return_value = mock_client_instance
         mock_context.__exit__.return_value = None
         mock_httpx.return_value = mock_context
 
-        # Send webhook
         service_module._send_approval_webhook(
             webhook_url="https://example.com/webhook",
             tenant_id="tenant_1",
@@ -306,12 +314,10 @@ def test_webhook_retries_on_failure(mock_sleep):
             message="Order approved",
         )
 
-        # Verify retry logic works - should be at least 3 attempts
-        # Note: Due to test pollution in full suite, may see 4 calls, but minimum is 3
-        assert call_counter["count"] >= 3, f"Expected at least 3 retry attempts, got {call_counter['count']}"
-        assert (
-            call_counter["count"] <= 4
-        ), f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
+        # Test pollution from the full suite can add a 4th call; minimum 3 must occur.
+        count = call_counter["count"]
+        assert count >= 3, f"Expected at least 3 retry attempts, got {count}"
+        assert count <= 4, f"Expected at most 4 retry attempts (3 + 1 pollution), got {count}"
 
 
 class TestSyncJobTerminalOrdering:

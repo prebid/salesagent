@@ -12,11 +12,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.core.audit_logger import AuditLogger
-from src.core.database.database_session import get_db_session
 from src.core.database.repositories import (
+    AdapterConfigUoW,
     MediaBuyUoW,
-    PushNotificationConfigRepository,
-    SyncJobRepository,
+    PushNotificationConfigUoW,
     SyncJobUoW,
 )
 from src.core.thread_registry import ThreadRegistry
@@ -55,9 +54,9 @@ def lookup_webhook_url(tenant_id: str, principal_id: str) -> str | None:
     thread runs but the buyer never hears about the result.
     """
     try:
-        with get_db_session() as db:
-            repo = PushNotificationConfigRepository(db, tenant_id)
-            config = repo.find_most_recent_active_for_principal(principal_id)
+        with PushNotificationConfigUoW(tenant_id) as uow:
+            assert uow.push_notification_configs is not None
+            config = uow.push_notification_configs.find_most_recent_active_for_principal(principal_id)
             return config.url if config else None
     except Exception as e:
         logger.warning(
@@ -177,13 +176,11 @@ def _run_approval_thread(
 
         # Import here to avoid circular dependencies
         from src.adapters.gam.managers.orders import GAMOrdersManager
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-        # Get adapter config via repository
-        with get_db_session() as db:
-            from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-            adapter_repo = AdapterConfigRepository(db, tenant_id)
-            adapter_config = adapter_repo.find_by_tenant()
+        with AdapterConfigUoW(tenant_id) as uow:
+            assert uow.adapter_configs is not None
+            adapter_config = uow.adapter_configs.find_by_tenant()
 
             if not adapter_config or not adapter_config.gam_network_code:
                 _mark_approval_failed(
@@ -197,12 +194,13 @@ def _run_approval_thread(
                 )
                 return
 
-            gam_config = adapter_repo.get_gam_config(adapter_config)
+            gam_config = AdapterConfigRepository.get_gam_config(adapter_config)
+            gam_network_code = adapter_config.gam_network_code
 
         # Create GAM client
         from src.adapters.gam.client import GAMClientManager
 
-        client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
+        client_manager = GAMClientManager(gam_config, gam_network_code)
         orders_manager = GAMOrdersManager(client_manager, dry_run=False)
 
         # Poll GAM approval endpoint
@@ -564,9 +562,9 @@ def _send_approval_webhook(
             payload["attempts"] = attempts
 
         # Get webhook authentication from push notification config
-        with get_db_session() as db:
-            repo = PushNotificationConfigRepository(db, tenant_id)
-            config = repo.find_active_by_url(principal_id, webhook_url)
+        with PushNotificationConfigUoW(tenant_id) as uow:
+            assert uow.push_notification_configs is not None
+            config = uow.push_notification_configs.find_active_by_url(principal_id, webhook_url)
 
         headers = {
             "Content-Type": "application/json",
@@ -646,9 +644,9 @@ def get_approval_status(approval_id: str, tenant_id: str) -> dict[str, Any] | No
         Dictionary with approval status or ``None`` if no row matches.
     """
     try:
-        with get_db_session() as db:
-            repo = SyncJobRepository(db, tenant_id)
-            approval_job = repo.get(approval_id)
+        with SyncJobUoW(tenant_id) as uow:
+            assert uow.sync_jobs is not None
+            approval_job = uow.sync_jobs.get(approval_id)
 
             if not approval_job:
                 return None

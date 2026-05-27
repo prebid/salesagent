@@ -35,10 +35,12 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -272,6 +274,57 @@ class SyncJobUoW(BaseUoW):
 
     def _clear_repos(self) -> None:
         self.sync_jobs = None
+
+
+class PushNotificationConfigUoW(BaseUoW):
+    """Unit of Work for ``PushNotificationConfig`` operations.
+
+    Wraps a database session and provides a tenant-scoped
+    ``PushNotificationConfigRepository``. Auto-commits on clean exit,
+    rolls back on exception.
+
+    Used by buyer-webhook resolution paths (admin-handoff at
+    ``execute_approved_media_buy`` and the polling thread's outbound
+    notification site) to look up the buyer's registered webhook
+    configuration without opening a raw session.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    push_notification_configs: PushNotificationConfigRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.push_notification_configs = PushNotificationConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.push_notification_configs = None
+
+
+class AdapterConfigUoW(BaseUoW):
+    """Unit of Work for ``AdapterConfig`` operations.
+
+    Wraps a database session and provides a tenant-scoped
+    ``AdapterConfigRepository``. Auto-commits on clean exit, rolls back
+    on exception.
+
+    Background polling threads open a short ``AdapterConfigUoW`` to
+    resolve adapter credentials at the start of each polling window,
+    rather than holding a session open across the whole window.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    adapter_configs: AdapterConfigRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.adapter_configs = AdapterConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.adapter_configs = None
 
 
 class AdminCreativeUoW(BaseUoW):

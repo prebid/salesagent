@@ -187,18 +187,16 @@ class TestMarkApprovalCompleteUpdatesMediaBuyAndAuditLogs:
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.media_buys = mock_repo
 
-        sync_job = MagicMock()
-        sync_job.progress = {"order_id": "12345"}
-        mock_db_session = MagicMock()
-        mock_db_session.scalars.return_value.first.return_value = sync_job
+        mock_sync_uow = MagicMock()
+        mock_sync_uow.__enter__ = MagicMock(return_value=mock_sync_uow)
+        mock_sync_uow.__exit__ = MagicMock(return_value=None)
+        mock_sync_uow.sync_jobs = MagicMock()
 
         with (
-            patch("src.services.order_approval_service.get_db_session") as mock_get_db,
+            patch("src.services.order_approval_service.SyncJobUoW", return_value=mock_sync_uow),
             patch("src.services.order_approval_service.MediaBuyUoW", return_value=mock_uow),
             patch("src.services.order_approval_service.AuditLogger"),
         ):
-            mock_get_db.return_value.__enter__.return_value = mock_db_session
-
             _mark_approval_complete(
                 approval_id="approval_12345_test",
                 summary={"order_id": "12345", "media_buy_id": "mb_b2_001", "attempts": 2},
@@ -214,22 +212,20 @@ class TestMarkApprovalCompleteUpdatesMediaBuyAndAuditLogs:
     def test_fires_audit_log_with_success_true(self):
         from src.services.order_approval_service import _mark_approval_complete
 
-        sync_job = MagicMock()
-        sync_job.progress = {"order_id": "12345"}
-        mock_db_session = MagicMock()
-        mock_db_session.scalars.return_value.first.return_value = sync_job
+        mock_sync_uow = MagicMock()
+        mock_sync_uow.__enter__ = MagicMock(return_value=mock_sync_uow)
+        mock_sync_uow.__exit__ = MagicMock(return_value=None)
+        mock_sync_uow.sync_jobs = MagicMock()
 
         mock_audit_instance = MagicMock()
 
         with (
-            patch("src.services.order_approval_service.get_db_session") as mock_get_db,
+            patch("src.services.order_approval_service.SyncJobUoW", return_value=mock_sync_uow),
             patch("src.services.order_approval_service.MediaBuyUoW"),
             patch(
                 "src.services.order_approval_service.AuditLogger", return_value=mock_audit_instance
             ) as mock_audit_cls,
         ):
-            mock_get_db.return_value.__enter__.return_value = mock_db_session
-
             _mark_approval_complete(
                 approval_id="approval_12345_test",
                 summary={"order_id": "12345", "media_buy_id": "mb_b2_001", "attempts": 2},
