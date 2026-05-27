@@ -89,6 +89,24 @@ def _find_keyword(keywords: list, keyword: str, match_type: str | None = None) -
     return None
 
 
+def _get_option_id(opt: Any) -> str | None:
+    """Return the canonical pricing_option_id for a pricing option.
+
+    Uses the explicit ``pricing_option_id`` attribute when present,
+    otherwise synthesises one from (pricing_model, currency, is_fixed).
+    """
+    opt_id = getattr(opt, "pricing_option_id", None)
+    if opt_id is not None:
+        return opt_id
+    pm = getattr(opt, "pricing_model", None)
+    cur = getattr(opt, "currency", None)
+    fixed = getattr(opt, "is_fixed", None)
+    if pm and cur and fixed is not None:
+        fixed_str = "fixed" if fixed else "auction"
+        return f"{pm}_{cur.lower()}_{fixed_str}"
+    return None
+
+
 def _collect_pricing_option_ids(product: Any) -> set[str]:
     """Extract all valid pricing_option_id values from a product.
 
@@ -98,17 +116,38 @@ def _collect_pricing_option_ids(product: Any) -> set[str]:
     pricing_options = product.pricing_options if hasattr(product, "pricing_options") else []
     valid_ids: set[str] = set()
     for opt in pricing_options or []:
-        opt_id = getattr(opt, "pricing_option_id", None)
-        if opt_id is None:
-            pm = getattr(opt, "pricing_model", None)
-            cur = getattr(opt, "currency", None)
-            fixed = getattr(opt, "is_fixed", None)
-            if pm and cur and fixed is not None:
-                fixed_str = "fixed" if fixed else "auction"
-                opt_id = f"{pm}_{cur.lower()}_{fixed_str}"
+        opt_id = _get_option_id(opt)
         if opt_id:
             valid_ids.add(opt_id)
     return valid_ids
+
+
+def _find_pricing_option(product: Any, pricing_option_id: str) -> Any | None:
+    """Find a pricing option on the product matching the given pricing_option_id."""
+    pricing_options = getattr(product, "pricing_options", None) or []
+    for opt in pricing_options:
+        if _get_option_id(opt) == pricing_option_id:
+            return opt
+    return None
+
+
+def _resolve_pkg_pricing_option_id(ctx: dict, pkg: Any) -> str | None:
+    """Resolve the pricing_option_id for a package from response or request context."""
+    pkg_po_id = _pkg_field(pkg, "pricing_option_id")
+    if pkg_po_id is not None:
+        return pkg_po_id
+    # Fall back to request to identify the option
+    req_kwargs = ctx.get("request_kwargs", {})
+    req_pkgs = req_kwargs.get("packages", [])
+    if req_pkgs:
+        pkg_po_id = req_pkgs[0].get("pricing_option_id")
+    # Also check update_kwargs
+    if pkg_po_id is None:
+        update_kwargs = ctx.get("update_kwargs", {})
+        upd_pkgs = update_kwargs.get("packages", [])
+        if upd_pkgs:
+            pkg_po_id = upd_pkgs[0].get("pricing_option_id")
+    return pkg_po_id
 
 
 def _assert_pricing_option_max_bid(ctx: dict, pkg: Any, *, expected_is_ceiling: bool) -> None:
@@ -121,49 +160,24 @@ def _assert_pricing_option_max_bid(ctx: dict, pkg: Any, *, expected_is_ceiling: 
     product = ctx.get("default_product")
     if product is None:
         return
-    pricing_options = getattr(product, "pricing_options", None) or []
-    if not pricing_options:
-        return
-    # Determine which pricing option the package is using
-    pkg_po_id = _pkg_field(pkg, "pricing_option_id")
-    if pkg_po_id is None:
-        # Fall back to request to identify the option
-        req_kwargs = ctx.get("request_kwargs", {})
-        req_pkgs = req_kwargs.get("packages", [])
-        if req_pkgs:
-            pkg_po_id = req_pkgs[0].get("pricing_option_id")
-        # Also check update_kwargs
-        if pkg_po_id is None:
-            update_kwargs = ctx.get("update_kwargs", {})
-            upd_pkgs = update_kwargs.get("packages", [])
-            if upd_pkgs:
-                pkg_po_id = upd_pkgs[0].get("pricing_option_id")
+    pkg_po_id = _resolve_pkg_pricing_option_id(ctx, pkg)
     if pkg_po_id is None:
         return
-    # Find the matching pricing option on the product
-    for opt in pricing_options:
-        opt_id = getattr(opt, "pricing_option_id", None)
-        if opt_id is None:
-            pm = getattr(opt, "pricing_model", None)
-            cur = getattr(opt, "currency", None)
-            fixed = getattr(opt, "is_fixed", None)
-            if pm and cur and fixed is not None:
-                fixed_str = "fixed" if fixed else "auction"
-                opt_id = f"{pm}_{cur.lower()}_{fixed_str}"
-        if opt_id == pkg_po_id:
-            is_fixed = getattr(opt, "is_fixed", None)
-            if is_fixed is not None:
-                if expected_is_ceiling:
-                    assert not is_fixed, (
-                        f"Ceiling semantics expected (max_bid=true) but pricing option "
-                        f"'{opt_id}' has is_fixed={is_fixed} (max_bid should be true for non-fixed/auction options)"
-                    )
-                else:
-                    assert is_fixed, (
-                        f"Exact bid semantics expected (max_bid=false) but pricing option "
-                        f"'{opt_id}' has is_fixed={is_fixed} (max_bid should be false for fixed options)"
-                    )
-            return
+    opt = _find_pricing_option(product, pkg_po_id)
+    if opt is None:
+        return
+    is_fixed = getattr(opt, "is_fixed", None)
+    if is_fixed is not None:
+        if expected_is_ceiling:
+            assert not is_fixed, (
+                f"Ceiling semantics expected (max_bid=true) but pricing option "
+                f"'{pkg_po_id}' has is_fixed={is_fixed} (max_bid should be true for non-fixed/auction options)"
+            )
+        else:
+            assert is_fixed, (
+                f"Exact bid semantics expected (max_bid=false) but pricing option "
+                f"'{pkg_po_id}' has is_fixed={is_fixed} (max_bid should be false for fixed options)"
+            )
 
 
 def _normalize_item(item: Any) -> dict:
@@ -1671,25 +1685,38 @@ def then_package_has_id(ctx: dict) -> None:
 def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
     """Assert the response package echoes the submitted buyer_ref value.
 
-    The step locates a package in the success response and verifies its
-    buyer_ref field equals the parameter from the Gherkin scenario.
-
-    buyer_ref was removed from the adcp Package schema in 3.12, so the
-    value comparison is xfailed until the feature file is updated or the
-    field is restored upstream.
+    buyer_ref was removed from the adcp Package schema in 3.12. This step
+    asserts everything production DOES provide (structural correctness,
+    product/pricing fields) and xfails only the buyer_ref comparison.
     """
     import pytest
 
-    packages = _get_packages(ctx)
-    assert packages, "No packages in response"
-    # Production returns at least one package — structural correctness
-    pkg = packages[0]
+    _assert_no_error(ctx)
+    pkgs = _assert_has_packages(ctx)
+    pkg = pkgs[0]
+
+    # Structural correctness: package_id is seller-assigned, non-empty
     pkg_id = _pkg_field(pkg, "package_id")
     assert pkg_id is not None, "Package missing package_id"
     assert isinstance(pkg_id, str) and pkg_id.strip(), (
         f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
     )
-    # buyer_ref removed from adcp.types.Package in 3.12; xfail the value assertion
+
+    # Verify product_id echoed from request
+    product_id = _pkg_field(pkg, "product_id")
+    assert product_id is not None, "Package missing product_id"
+    product = ctx.get("default_product")
+    if product is not None:
+        assert product_id == product.product_id, (
+            f"Expected product_id '{product.product_id}' echoed in package, got '{product_id}'"
+        )
+
+    # Verify pricing_option_id present (package is complete)
+    po_id = _pkg_field(pkg, "pricing_option_id")
+    assert po_id is not None, "Package missing pricing_option_id — incomplete package state"
+    assert isinstance(po_id, str) and po_id.strip(), f"Expected non-empty pricing_option_id, got {po_id!r}"
+
+    # buyer_ref removed from adcp.types.Package in 3.12; xfail only this line
     actual_buyer_ref = _pkg_field(pkg, "buyer_ref")
     if actual_buyer_ref is None:
         pytest.xfail(
@@ -2495,31 +2522,89 @@ def then_no_bid_price(ctx: dict) -> None:
 def then_pricing_defaults(ctx: dict) -> None:
     """Assert pricing is determined by pricing option defaults (no bid_price override).
 
-    When no bid_price is submitted, the package uses the pricing option's
-    default rate. This step verifies:
+    When no bid_price is submitted, the package's pricing comes from the
+    pricing option's defaults.  This step verifies:
     1. bid_price is absent (no buyer override).
-    2. pricing_option_id is present and non-empty (links to pricing source).
-    3. The pricing_option_id matches a valid option from the product catalog.
+    2. pricing_option_id is present and references a valid product option.
+    3. The referenced option is fixed-price (production rejects omitting
+       bid_price for auction options).
+    4. The option carries a non-None default rate (the effective price).
     """
+    import pytest
+
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
-    # With no bid_price, pricing defaults apply — verify bid_price is absent
+
+    # 1. bid_price must be absent — no buyer override
     actual_bid = _pkg_field(pkg, "bid_price")
     assert actual_bid is None, f"Expected no bid_price (pricing by defaults), got {actual_bid}"
-    # The package must have a pricing_option_id (defaults come from the option)
+
+    # 2. pricing_option_id must be present and non-empty
     po_id = _pkg_field(pkg, "pricing_option_id")
     assert po_id is not None, "pricing_option_id not echoed — cannot verify pricing defaults source"
     assert isinstance(po_id, str) and po_id.strip() != "", (
         f"Expected non-empty pricing_option_id for default pricing, got {po_id!r}"
     )
-    # Cross-validate: pricing_option_id must reference a valid product option
+
+    # 3. Cross-validate: pricing_option_id must reference a valid product option
     product = ctx.get("default_product")
     assert product is not None, "default_product missing from ctx — Given step must set it"
     valid_ids = _collect_pricing_option_ids(product)
     assert po_id in valid_ids, (
         f"pricing_option_id '{po_id}' does not match any product pricing option. Valid options: {valid_ids}"
     )
+
+    # 4. Resolve the option and verify it defines default pricing values
+    option = _find_pricing_option(product, po_id)
+    assert option is not None, (
+        f"pricing_option_id '{po_id}' passed membership check but _find_pricing_option "
+        f"returned None — internal helper inconsistency"
+    )
+
+    # The option must be fixed-price: production validation
+    # (_validate_pricing_model_selection) raises AdCPValidationError when
+    # bid_price is omitted for auction options, so reaching here with a
+    # non-fixed option would be a production bug.
+    is_fixed = getattr(option, "is_fixed", None)
+    assert is_fixed is True, (
+        f"Pricing option '{po_id}' has is_fixed={is_fixed}; expected True. "
+        f"Omitting bid_price is only valid for fixed-price options."
+    )
+
+    # The fixed option must have a rate — that IS the default price.
+    rate = getattr(option, "rate", None)
+    assert rate is not None, (
+        f"Pricing option '{po_id}' is fixed but has no rate — cannot determine default pricing without a rate value"
+    )
+    assert float(rate) > 0, f"Pricing option '{po_id}' rate is {rate}; expected a positive default price"
+
+    # Verify pricing_model and currency are consistent
+    pricing_model = getattr(option, "pricing_model", None)
+    assert pricing_model is not None, f"Pricing option '{po_id}' missing pricing_model"
+    currency = getattr(option, "currency", None)
+    assert currency is not None, f"Pricing option '{po_id}' missing currency"
+
+    # If production eventually echoes price_breakdown with the default list_price,
+    # assert it equals the option rate.  Currently not populated in create response.
+    price_breakdown = _pkg_field(pkg, "price_breakdown")
+    if price_breakdown is not None:
+        list_price = (
+            price_breakdown.get("list_price")
+            if isinstance(price_breakdown, dict)
+            else getattr(price_breakdown, "list_price", None)
+        )
+        if list_price is not None:
+            assert float(list_price) == float(rate), (
+                f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
+            )
+    else:
+        pytest.xfail(
+            f"price_breakdown not populated in create response — "
+            f"cannot verify default list_price == option rate ({rate}). "
+            f"Option defaults verified via catalog: pricing_model={pricing_model}, "
+            f"currency={currency}, rate={rate}, is_fixed={is_fixed}"
+        )
 
 
 @then(parsers.parse("the package should be created with format_ids {fmt_ids}"))
