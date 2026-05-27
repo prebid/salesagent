@@ -68,9 +68,7 @@ class Kevel(AdServerAdapter):
         # ``get_adapter()``, so this dict is effectively request-scoped.
         # ``_check_property_list_supported`` and ``_build_targeting`` both
         # need the same ``ResolvedSiteIds`` per package; memoizing here keeps
-        # the resolver call count at 1 per (agent_url, list_id) per request
-        # — the pin Konstantine's #1313 review asks for (mock-only tests don't
-        # prove wiring if the resolver fires more than expected).
+        # the resolver call count at 1 per (agent_url, list_id) per request.
         self._property_list_cache: dict[tuple[str, str], ResolvedSiteIds] = {}
 
     # Supported device types (Kevel doesn't support CTV)
@@ -84,17 +82,15 @@ class Kevel(AdServerAdapter):
 
         Memoizes by ``(agent_url, list_id)`` so ``_check_property_list_supported``
         and ``_build_targeting`` share a single resolution per package per
-        request — Konstantine #1314 audit SHOULD-FIX-05.
+        request.
 
         Dry-run path (``_site_resolver is None``): still inspect identifier
         types (no Kevel HTTP needed — types come from the property-list agent
         fetch which is its own cached call). Returns ``ResolvedSiteIds`` with
-        ``site_ids=set()`` because we don't have Kevel's index, so per plan
-        SD2 the dry-run buy is accept-with-empty-siteIds. Crucially this
-        STILL surfaces ``unsupported_types`` so the dry-run path doesn't
-        silently accept ``ios_bundle``-only lists — Konstantine #1314 audit
-        SHOULD-FIX-04 (legacy super().check fall-through bypassed type
-        validation in dry-run).
+        ``site_ids=set()`` because we don't have Kevel's index, so the
+        dry-run buy is accept-with-empty-siteIds. Identifier-type validation
+        still runs in dry-run so ``ios_bundle``-only lists surface as
+        ``UNSUPPORTED_FEATURE`` instead of being silently accepted.
         """
         cache_key = (str(ref.agent_url), str(ref.list_id))
         if cache_key in self._property_list_cache:
@@ -125,18 +121,16 @@ class Kevel(AdServerAdapter):
         targeting.
 
         Zero-match (every supported-type identifier exists in the list but
-        none correspond to a Kevel ``Site``) is **accepted** here — per the
-        inventory-targeting plan SD2, the buy is created with empty
-        ``siteIds`` and the downstream ``inventory_list_no_match`` storyboard
-        contract handles surfacing that to the buyer. Compilation in
-        ``_build_targeting`` will write ``siteIds=[]`` in that case.
+        none correspond to a Kevel ``Site``) is **accepted** here: the buy
+        is created with empty ``siteIds`` and the downstream
+        ``inventory_list_no_match`` storyboard contract handles surfacing
+        that to the buyer. Compilation in ``_build_targeting`` will write
+        ``siteIds=[]`` in that case.
 
-        Dry-run path: STILL validates identifier types (the legacy
-        ``super().check`` fall-through skipped this and silently accepted
-        ``ios_bundle`` lists in dry-run — Konstantine #1314 audit
-        SHOULD-FIX-04). The type list comes from the property-list agent
-        fetch which doesn't hit Kevel's API, so dry-run can validate the
-        spec contract without crossing the live boundary.
+        Dry-run path: STILL validates identifier types. The type list comes
+        from the property-list agent fetch which doesn't hit Kevel's API,
+        so dry-run can validate the spec contract without crossing the live
+        boundary.
         """
         for package in packages:
             targeting = getattr(package, "targeting_overlay", None)
@@ -271,13 +265,12 @@ class Kevel(AdServerAdapter):
         # with UNSUPPORTED_FEATURE), so by the time we get here the list
         # contains only domain/subdomain identifiers. Unresolvable values
         # (publisher not onboarded to Kevel) silently fall out of the
-        # resulting set — per plan SD2, zero-match is accept-with-context,
-        # not reject. Uses ``_resolve_property_list`` so the resolver fires
-        # once per (agent_url, list_id) per request — the call already
-        # happened in ``_check_property_list_supported`` and the cache hit
-        # here returns the same ``ResolvedSiteIds`` (Konstantine #1314 audit
-        # SHOULD-FIX-05). Dry-run mode returns ``site_ids=set()`` which
-        # writes ``siteIds=[]`` — consistent with plan SD2.
+        # resulting set — zero-match is accept-with-context, not reject.
+        # Uses ``_resolve_property_list`` so the resolver fires once per
+        # (agent_url, list_id) per request — the call already happened in
+        # ``_check_property_list_supported`` and the cache hit here returns
+        # the same ``ResolvedSiteIds``. Dry-run mode returns
+        # ``site_ids=set()`` which writes ``siteIds=[]``.
         if targeting_overlay.property_list is not None:
             resolved = self._resolve_property_list(targeting_overlay.property_list)
             existing = set(kevel_targeting.get("siteIds") or [])

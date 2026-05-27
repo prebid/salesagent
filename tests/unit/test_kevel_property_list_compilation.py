@@ -18,13 +18,14 @@ These tests pin the three observable behaviors:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import PropertyListReference
+from adcp.types import Identifier, PropertyIdentifierTypes, PropertyListReference
 
 from src.adapters.kevel import Kevel
-from src.core.schemas import CreateMediaBuyError, MediaPackage, Principal
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest, MediaPackage, Principal, Targeting
 from src.services.kevel_site_resolver import ResolvedSiteIds
 
 pytestmark = pytest.mark.unit
@@ -80,7 +81,7 @@ class TestCheckPropertyListSupportedAcceptsCompilable:
         assert result is None
 
     def test_returns_none_when_zero_sites_match(self):
-        """Zero-match must be accept-with-context (SD2 in the inventory-targeting plan)."""
+        """Zero-match must be accept-with-context — the buy is created with empty siteIds rather than rejected."""
         adapter = _kevel()
         with patch.object(adapter, "_site_resolver") as mock_resolver:
             mock_resolver.resolve.return_value = ResolvedSiteIds(
@@ -115,22 +116,15 @@ class TestCheckPropertyListSupportedRejectsIncompatible:
         assert "podcast_guid" in result.errors[0].message
 
     def test_dry_run_still_rejects_unsupported_identifier_types(self):
-        """Dry-run mode must still validate identifier types (SHOULD-FIX-04).
+        """Dry-run mode must still validate identifier types.
 
-        Pre-fix contract: dry-run fell back to ``super()._check_property_list_supported``
-        which short-circuits when ``supports_property_list_filtering=True``, so
-        ``ios_bundle``-only lists silently passed dry-run even though the live
-        path would reject them. That meant test-mode validation gave a false
-        green for buyers who would fail in prod — exactly the kind of
-        dry_run-only short-circuit Konstantine #1313 flagged as illusory
-        coverage.
-
-        Post-fix: ``_resolve_property_list`` runs the typed-identifier fetch
-        (no Kevel HTTP) even in dry-run, populates ``unsupported_types``, and
+        ``_resolve_property_list`` runs the typed-identifier fetch (no Kevel
+        HTTP) even in dry-run, populates ``unsupported_types``, and
         ``_check_property_list_supported`` rejects with UNSUPPORTED_FEATURE.
+        Otherwise dry-run would silently accept ``ios_bundle``-only lists
+        even though the live path rejects them — test-mode would give a
+        false-green for buyers who would fail in prod.
         """
-        from adcp.types import Identifier, PropertyIdentifierTypes
-
         adapter = _kevel(dry_run=True)
         with patch(
             "src.adapters.kevel.resolve_property_list_typed_sync",
@@ -148,8 +142,6 @@ class TestCheckPropertyListSupportedRejectsIncompatible:
 
     def test_dry_run_with_supported_types_passes_validation(self):
         """Dry-run + only domain/subdomain identifiers → pre-flight passes (no rejection)."""
-        from adcp.types import Identifier, PropertyIdentifierTypes
-
         adapter = _kevel(dry_run=True)
         with patch(
             "src.adapters.kevel.resolve_property_list_typed_sync",
@@ -208,17 +200,16 @@ class TestBuildTargetingCompilesPropertyList:
 
     def test_resolver_called_once_per_request_across_check_and_build(self):
         """The resolver fires once per (agent_url, list_id), not once in
-        ``_check_property_list_supported`` and again in ``_build_targeting``
-        (SHOULD-FIX-05).
+        ``_check_property_list_supported`` and again in ``_build_targeting``.
 
         ``_resolve_property_list`` memoizes by ``(agent_url, list_id)`` on
         the adapter instance, so the underlying ``KevelSiteResolver.resolve``
         is called exactly once even though both lifecycle methods need the
-        result. The previous shape called the resolver twice (the cache made
-        the second call free in terms of HTTP, but the redundant walk
-        through identifiers and the cache-lookup contention were avoidable
-        — and the duplicate calls would survive a future refactor that
-        removed caching).
+        result. Without memoization the resolver fires twice (the cache
+        makes the second call free in HTTP terms, but the redundant walk
+        through identifiers and cache-lookup contention are avoidable — and
+        the duplicate calls would survive a future refactor that removed
+        the underlying cache).
 
         Pin: removing memoization from ``_resolve_property_list`` makes this
         test fail (call_count becomes 2 — the check call + the build call).
@@ -248,16 +239,12 @@ class TestBuildTargetingCompilesPropertyList:
         compilation step DOES run — it writes ``siteIds=[]`` (the empty set
         from ``ResolvedSiteIds`` constructed by the dry-run path).
 
-        Pre-fix: ``_build_targeting`` guarded on ``self._site_resolver is not None``
-        and produced no ``siteIds`` key in dry-run. After SHOULD-FIX-05's
-        memoizing ``_resolve_property_list``, dry-run still calls it (returns
-        empty ``site_ids``) and writes the empty list. This matches plan SD2:
-        zero-match is accept-with-context, not a no-op — the buy is created
-        with ``siteIds=[]`` and the downstream ``inventory_list_no_match``
-        contract surfaces it.
+        ``_build_targeting`` calls ``_resolve_property_list`` which returns
+        an empty ``site_ids`` set in dry-run, and the empty list is written
+        to the Kevel targeting payload. Zero-match is accept-with-context,
+        not a no-op — the buy is created with ``siteIds=[]`` and the
+        downstream ``inventory_list_no_match`` contract surfaces it.
         """
-        from adcp.types import Identifier, PropertyIdentifierTypes
-
         adapter = _kevel(dry_run=True)
         with patch(
             "src.adapters.kevel.resolve_property_list_typed_sync",
@@ -266,7 +253,7 @@ class TestBuildTargetingCompilesPropertyList:
             result = adapter._build_targeting(self._make_overlay(_ref()))
 
         assert result.get("siteIds") == [], (
-            "Dry-run must write siteIds=[] (accept-with-empty per plan SD2), "
+            "Dry-run must write siteIds=[] (accept-with-empty), "
             f"not skip the key entirely; got {result.get('siteIds')!r}"
         )
 
@@ -275,14 +262,13 @@ class TestEndToEndWiringSiteIdsLandInFlightPayload:
     """The full chain: ``create_media_buy → _check → _build_targeting → POST /flight``
     must put resolved ``siteIds`` into the Kevel flight payload sent on the wire.
 
-    Pre-#1314 BLOCKER-02 (per audit): all 28 unit tests mocked the resolver
-    directly. There was no test where the resolver could fire, the adapter
-    could call ``_build_targeting``, and the resulting Kevel flight payload
-    body could be inspected. Removing the ``siteIds`` write at
-    ``kevel.py:228-236`` would have left every test green. Konstantine's
-    P14 + P23 invariants apply directly: the PR's stated purpose
-    ("compile property_list to native siteIds") needs ONE test that fails
-    when the compilation is reverted.
+    Sibling unit tests mock ``KevelSiteResolver.resolve`` at the adapter
+    boundary, which proves the branching logic but does not prove that the
+    resolved set actually lands in the HTTP body Kevel receives. Removing
+    the ``siteIds`` write in ``_build_targeting`` would leave those tests
+    green. This class fills that gap by mocking only the HTTP boundary
+    (``requests.post`` / ``requests.get``) so the resolver-to-payload
+    plumbing is exercised end-to-end.
 
     This test boots a non-dry-run adapter, mocks ``requests.post`` /
     ``requests.get`` at the adapter boundary, mocks
@@ -290,17 +276,13 @@ class TestEndToEndWiringSiteIdsLandInFlightPayload:
     ``create_media_buy`` path, and asserts the captured POST body to
     ``/v1/flight`` contains the expected ``siteIds`` list.
 
-    Pin: revert ``kevel.py:228-236`` (the ``_build_targeting`` siteIds write)
-    and ``test_flight_payload_contains_resolved_site_ids`` must fail with
+    Pin: reverting the ``_build_targeting`` siteIds write makes
+    ``test_flight_payload_contains_resolved_site_ids`` fail with
     ``"siteIds" not in payload``.
     """
 
     def _build_request(self):
         """Build a minimal CreateMediaBuyRequest + MediaPackage with property_list."""
-        from datetime import UTC, datetime, timedelta
-
-        from src.core.schemas import CreateMediaBuyRequest, MediaPackage, Targeting
-
         ref = PropertyListReference(agent_url="https://gov.example/lists", list_id="cb_news_v1")
         targeting = Targeting(property_list=ref)
         package = MediaPackage(
@@ -330,11 +312,9 @@ class TestEndToEndWiringSiteIdsLandInFlightPayload:
         real Kevel API call fires, and mocks ``KevelSiteResolver.resolve``
         to return a controlled siteIds set. The body captured at
         ``requests.post(.../flight, json=...)`` is the wire shape Kevel
-        would receive — asserting on it is asserting on the contract this
-        PR exists to deliver.
+        would receive — asserting on it pins the contract that resolved
+        ``siteIds`` actually land in the native targeting payload.
         """
-        from datetime import UTC, datetime, timedelta
-
         # Use a numeric advertiser_id so the Kevel campaign payload's
         # int(self.advertiser_id) cast succeeds.
         principal = Principal(

@@ -20,6 +20,7 @@ import pytest
 from adcp.types import PropertyListReference
 
 from src.adapters.broadstreet.adapter import BroadstreetAdapter
+from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer
 from src.adapters.triton_digital import TritonDigital
 from src.adapters.xandr import XandrAdapter
@@ -193,3 +194,17 @@ class TestTritonAdapterRejectsPropertyList:
 
     def test_class_default_unsupported(self):
         assert TritonDigital.supports_property_list_filtering is False
+
+
+class TestKevelAdapterAdvertisesPropertyListSupport:
+    """Kevel compiles property_list to native Site.Id → flag must be True.
+
+    Symmetry pin alongside the 4 ``is False`` adapters above. If a future
+    refactor flips Kevel's class attribute to ``False`` without updating
+    ``_build_targeting`` to drop the siteIds write, the capability declared
+    on the wire diverges from what the adapter actually translates. This
+    test catches that drift at the introspection level.
+    """
+
+    def test_class_default_supported(self):
+        assert Kevel.supports_property_list_filtering is True

@@ -12,13 +12,16 @@ shape and Kevel's native ``Site.Id`` integers. These tests cover:
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from adcp.types import Identifier, PropertyIdentifierTypes, PropertyListReference
 
 from src.core.exceptions import AdCPAdapterError
+from src.core.property_list_resolver import clear_cache as clear_property_list_cache
 from src.services.kevel_site_resolver import (
     KevelSiteResolver,
     ResolvedSiteIds,
@@ -32,12 +35,10 @@ pytestmark = pytest.mark.unit
 def _clear_caches():
     """Each test starts with empty caches across the module-level resolver state."""
     KevelSiteResolver.clear_cache()
-    from src.core.property_list_resolver import clear_cache
-
-    clear_cache()
+    clear_property_list_cache()
     yield
     KevelSiteResolver.clear_cache()
-    clear_cache()
+    clear_property_list_cache()
 
 
 def _resolver() -> KevelSiteResolver:
@@ -241,27 +242,23 @@ class TestSiteIndexCache:
     def test_concurrent_cold_cache_resolves_share_same_lookup(self):
         """Two threads racing on a cold cache produce a consistent final state.
 
-        Pre-#1314 audit BLOCKER-01: ``_site_cache`` was a plain class-level dict
-        mutated without locks. Two simultaneous ``create_media_buy`` calls on
-        the same Kevel network could both observe ``cached is None``, both
-        call ``_fetch_all_sites()`` (double HTTP), and both write to the cache
-        (last-write-wins clobber). Worse: the expiry-drop branch used ``del``
-        which races a concurrent refresh and can raise ``KeyError``.
-
-        Post-fix: ``_cache_lock`` guards cache reads/writes; HTTP stays
-        OUTSIDE the lock so two threads on a cold cache may still both fetch
-        (acceptable — Kevel returns the same data), but the cache write is
-        atomic and the expiry-pop uses ``dict.pop(key, None)`` so it cannot
+        ``_cache_lock`` guards cache reads/writes; HTTP stays OUTSIDE the
+        lock so two threads on a cold cache may still both fetch (acceptable
+        — Kevel returns the same data), but the cache write is atomic and
+        the expiry-pop uses ``dict.pop(key, None)`` so it cannot
         ``KeyError``. This test pins the post-condition: after concurrent
         resolves both threads converge on a non-empty resolved set and the
         cache holds a single coherent lookup.
-        """
-        import threading as _threading
 
+        Without the lock, two simultaneous resolves on the same network
+        could observe ``cached is None`` simultaneously, both fetch, and
+        last-write-wins clobber the cache; the expiry-drop branch using
+        ``del`` could also race a concurrent refresh and raise ``KeyError``.
+        """
         resolver = _resolver()
         fetch_mock = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
         results: list[ResolvedSiteIds] = []
-        results_lock = _threading.Lock()
+        results_lock = threading.Lock()
 
         def _run():
             res = resolver.resolve(_ref())
@@ -275,7 +272,7 @@ class TestSiteIndexCache:
             ),
             patch.object(resolver, "_fetch_all_sites", fetch_mock),
         ):
-            threads = [_threading.Thread(target=_run) for _ in range(8)]
+            threads = [threading.Thread(target=_run) for _ in range(8)]
             for t in threads:
                 t.start()
             for t in threads:
@@ -296,11 +293,10 @@ class TestSiteIndexCache:
         """Concurrent expiry drops use ``pop`` not ``del`` so a second thread
         finding an already-popped key cannot ``KeyError``.
 
-        Pre-fix this would raise inside ``_get_site_lookup`` when two threads
-        simultaneously hit the expiry branch (one ``del``'d, the other tried
-        to ``del`` a missing key). Now both threads call
-        ``self._site_cache.pop(cache_key, None)`` which is a no-op on the
-        second pop.
+        Both threads call ``self._site_cache.pop(cache_key, None)`` which is
+        a no-op on the second pop. Using ``del`` instead would raise
+        ``KeyError`` when a second thread reaches the expiry branch after
+        the first has already removed the key.
         """
         resolver = _resolver()
         cache_key = (resolver.base_url, resolver.network_id)
@@ -352,8 +348,6 @@ class TestPaginationAndFetch:
         assert mock_client.get.call_count == 2
 
     def test_http_error_raises_adcp_adapter_error(self):
-        import httpx
-
         resolver = _resolver()
         mock_client = MagicMock()
         mock_client.__enter__ = MagicMock(return_value=mock_client)

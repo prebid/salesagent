@@ -46,9 +46,6 @@ logger = logging.getLogger(__name__)
 # identifiers without instantiating a resolver (no HTTP needed).
 SUPPORTED_IDENTIFIER_TYPES: frozenset[str] = frozenset({"domain", "subdomain"})
 
-# Internal alias preserved for back-compat with the resolver's own loops.
-_SUPPORTED_IDENTIFIER_TYPES = SUPPORTED_IDENTIFIER_TYPES
-
 _KEVEL_SITE_PAGE_SIZE = 200
 _DEFAULT_HTTP_TIMEOUT = 10.0
 _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
@@ -87,13 +84,14 @@ class KevelSiteResolver:
     _site_cache: ClassVar[dict[tuple[str, str], tuple[dict[str, int], datetime]]] = {}
 
     # Guards reads/writes on ``_site_cache`` so concurrent ``create_media_buy``
-    # calls on the same network can't race: previously two threads could both
-    # see ``cached is None``, both call ``_fetch_all_sites()`` (double HTTP),
-    # and both write to the cache (last-write-wins clobber). The expiry-drop
-    # branch could also ``del`` a key another thread had already refreshed,
-    # raising ``KeyError``. The HTTP fetch stays OUTSIDE the lock (slow) —
-    # two concurrent fetches on a cold cache are still possible and acceptable
-    # (both produce the same data), but the cache pop/write is atomic.
+    # calls on the same network can't race. Without the lock, two threads
+    # could observe ``cached is None`` simultaneously, both call
+    # ``_fetch_all_sites()`` (double HTTP), and both write to the cache
+    # (last-write-wins clobber). The expiry-drop branch could also ``del``
+    # a key another thread had already refreshed, raising ``KeyError``. The
+    # HTTP fetch stays OUTSIDE the lock (slow) — two concurrent fetches on
+    # a cold cache are still possible and acceptable (both produce the same
+    # data), but the cache pop/write is atomic.
     _cache_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(
@@ -122,7 +120,7 @@ class KevelSiteResolver:
 
         for ident in identifiers:
             ident_type = ident.type.value if hasattr(ident.type, "value") else str(ident.type)
-            if ident_type not in _SUPPORTED_IDENTIFIER_TYPES:
+            if ident_type not in SUPPORTED_IDENTIFIER_TYPES:
                 unsupported_types.add(ident_type)
                 continue
             normalized = _normalize_domain(ident.value)

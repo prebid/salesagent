@@ -197,14 +197,13 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
 def supports_property_list_filtering(adapter: object | None) -> bool:
     """Return True iff the bound adapter compiles ``targeting_overlay.property_list``.
 
-    Today no adapter sets ``supports_property_list_filtering=True``; the
-    declaration in ``get_adcp_capabilities`` is the canonical "False until an
-    adapter actually compiles it" anchor. When Kevel's siteId resolver lands,
-    Kevel's adapter class will set this ClassVar to True and the helper will
-    start returning True for tenants on Kevel. Other adapters hard-reject, at
-    which point this advisory path is unreachable for them. Centralizing the
-    check here keeps the wire declaration (capabilities) and the per-call
-    advisory (this module) in lockstep with one source of truth.
+    The result is sourced from the adapter class's
+    ``supports_property_list_filtering`` ClassVar — True for adapters with a
+    native compilation path (Kevel: domain/subdomain → ``Site.Id``), False
+    for adapters that hard-reject ``property_list`` with
+    ``UNSUPPORTED_FEATURE``. Centralizing the check here keeps the wire
+    capability declaration and the per-call advisory in lockstep with one
+    source of truth.
     """
     if adapter is None:
         return False

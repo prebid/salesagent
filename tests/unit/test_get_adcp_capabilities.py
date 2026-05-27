@@ -675,10 +675,10 @@ class TestResponseShapeCapabilities:
         """Adapter that sets supports_property_list_filtering=True flips the
         ``MediaBuyFeatures.property_list_filtering`` wire flag to True.
 
-        Kevel (this PR) is the first adapter to set the class attribute True; the
-        capability wire must reflect that so buyers can discover it. Without this
-        test the True path is silent — only the False path (other 4 adapters) is
-        covered by existing tests.
+        The capability declaration must reflect what the adapter actually
+        supports so buyers can discover it on the wire. Without this test
+        the True path is silent — only the False path (adapters that don't
+        compile property_list) is covered by other tests in this module.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
