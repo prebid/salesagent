@@ -2086,35 +2086,61 @@ def then_no_sandbox_field(ctx: dict) -> None:
 def then_no_real_api_calls(ctx: dict) -> None:
     """Assert no real ad platform API calls were made during query.
 
-    Two verification paths:
-    1. If the env has adapter mocks, verify no adapter methods were called.
-    2. If the env has NO adapter patches (MediaBuyListEnv — pure DB read),
-       verify by design: EXTERNAL_PATCHES is empty, confirming no adapter
-       wiring exists and the operation is database-only.
+    Verifies the invariant that sandbox / read-only operations never touch
+    external ad-platform APIs.  Two verification paths:
+
+    1. Adapter mock present: verify the adapter factory mock was never invoked
+       AND none of its methods were called.
+    2. No adapter mock (e.g. MediaBuyListEnv — pure DB read): verify
+       behaviorally that the response was served entirely from the database
+       with no adapter-enriched fields (snapshots require an adapter call).
     """
     env = ctx["env"]
+
+    # Unconditional: production must have produced a response.
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a response proving the operation completed, got error: {ctx.get('error')}"
+
     if "adapter" in env.mock:
-        # Path 1: adapter mock exists — verify no methods were called
-        adapter_mock = env.mock["adapter"].return_value
-        for method_name in ("create_line_item", "get_report", "sync_creative"):
-            method = getattr(adapter_mock, method_name, None)
+        # Path 1: adapter mock exists — verify the factory was never called
+        adapter_factory_mock = env.mock["adapter"]
+        assert not adapter_factory_mock.called, (
+            "get_adapter factory was called — expected zero adapter interactions for a sandbox/read-only operation"
+        )
+        # Belt-and-suspenders: even if the factory was somehow called without
+        # our assertion catching it, verify no adapter methods were invoked.
+        adapter_instance = adapter_factory_mock.return_value
+        for method_name in (
+            "create_line_item",
+            "get_report",
+            "sync_creative",
+            "get_delivery_metrics",
+            "get_delivery_data",
+        ):
+            method = getattr(adapter_instance, method_name, None)
             if method is not None and hasattr(method, "called"):
                 assert not method.called, (
                     f"Adapter method '{method_name}' was called — expected no real "
                     f"ad platform API calls in sandbox mode"
                 )
     else:
-        # Path 2: no adapter mock — verify the env is adapter-free by design.
-        # MediaBuyListEnv has EXTERNAL_PATCHES = {} (no adapter involvement).
-        assert env.EXTERNAL_PATCHES == {}, (
-            f"Expected EXTERNAL_PATCHES to be empty (adapter-free operation), "
-            f"got: {env.EXTERNAL_PATCHES}. An adapter-free env proves no real "
-            f"ad platform calls were possible."
+        # Path 2: no adapter mock — verify behaviorally that the response
+        # was served from the database without any adapter enrichment.
+        # Snapshots are the only adapter-sourced data in get_media_buys
+        # responses; their absence proves the adapter path was not taken.
+        assert resp.media_buys is not None, (
+            "Response.media_buys is None — expected database-sourced results "
+            "proving the operation completed without adapter calls"
         )
-        # Verify the response succeeded with data from DB (not empty/error)
-        resp = ctx.get("response")
-        assert resp is not None, "No adapter mock and no response — cannot confirm database-only operation"
-        assert resp.media_buys is not None, "Response.media_buys is None — expected database-sourced results"
+        for mb in resp.media_buys:
+            if hasattr(mb, "packages") and mb.packages:
+                for pkg in mb.packages:
+                    snapshot = getattr(pkg, "snapshot", None)
+                    assert snapshot is None, (
+                        f"Package '{getattr(pkg, 'package_id', '?')}' on media buy "
+                        f"'{mb.media_buy_id}' has snapshot data — snapshots require "
+                        f"adapter calls, which should not occur in sandbox/read-only mode"
+                    )
 
 
 @then("the response should indicate a validation error")
