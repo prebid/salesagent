@@ -237,18 +237,17 @@ class _PatchContext:
 
 
 class TestEmbeddedCampaignApprovalGate:
-    def test_storefront_owned_campaign_approval_fails_closed(self):
-        from src.core.exceptions import AdCPNotImplementedInEmbeddedError
+    def test_storefront_owned_campaign_approval_skips_publisher_manual_approval(self):
         from src.core.tools.media_buy_create import _effective_manual_approval_required
 
-        with pytest.raises(AdCPNotImplementedInEmbeddedError) as exc_info:
+        assert (
             _effective_manual_approval_required(
                 tenant_approval_required=True,
                 adapter_approval_required=True,
                 publisher_owns_campaign=False,
             )
-
-        assert exc_info.value.details == {"capability": "campaign_approval"}
+            is False
+        )
 
     def test_publisher_owned_campaign_approval_preserves_manual_approval(self):
         from src.core.tools.media_buy_create import _effective_manual_approval_required
@@ -260,6 +259,18 @@ class TestEmbeddedCampaignApprovalGate:
                 publisher_owns_campaign=True,
             )
             is True
+        )
+
+    def test_storefront_owned_campaign_approval_allows_auto_create_even_when_adapter_requires_approval(self):
+        from src.core.tools.media_buy_create import _effective_manual_approval_required
+
+        assert (
+            _effective_manual_approval_required(
+                tenant_approval_required=False,
+                adapter_approval_required=True,
+                publisher_owns_campaign=False,
+            )
+            is False
         )
 
 
@@ -771,8 +782,8 @@ class TestCreativeUploadFailure:
 
         # Mock adapter whose add_creative_assets raises a generic exception
         mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_adapter.manual_approval_operations = []
+        mock_adapter.manual_approval_required = True
+        mock_adapter.manual_approval_operations = ["add_creative_assets"]
         mock_adapter.__class__.__name__ = "MockAdapter"
         mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
         mock_adapter.validate_media_buy_request.return_value = []
@@ -802,6 +813,7 @@ class TestCreativeUploadFailure:
 
             with (
                 patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+                patch("src.core.tools.media_buy_create.publisher_owns_creative_approval", return_value=False),
                 patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
                 patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
                 patch(
@@ -848,6 +860,7 @@ class TestCreativeUploadFailure:
                 assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
                 assert "creative_no_platform" in str(exc_info.value)
                 assert "Network timeout" in str(exc_info.value)
+                assert "add_creative_assets" not in mock_adapter.manual_approval_operations
 
     @pytest.mark.asyncio
     async def test_auto_upload_uses_current_response_package_id_for_each_package(self):
@@ -1584,6 +1597,53 @@ class TestMainFlowObligations:
 
         # Auto-approval: adapter was called (not manual path)
         assert isinstance(result.response, CreateMediaBuySuccess)
+        mock_exec.assert_called_once_with(req, ANY, ANY, ANY, ANY, ANY, ANY, tenant=ANY)
+
+    @pytest.mark.asyncio
+    async def test_storefront_owned_campaign_approval_uses_mcp_a2a_create_path(self):
+        """Embedded storefront-owned approval does not block MCP/A2A create_media_buy."""
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request()
+        product = _mock_product("prod_1")
+
+        mock_schema_product = MagicMock()
+        mock_schema_product.product_id = "prod_1"
+        mock_schema_product.name = "Test Product"
+        mock_schema_product.implementation_config = None
+        mock_schema_product.format_ids = None
+        mock_schema_product.delivery_type = MagicMock()
+        mock_schema_product.delivery_type.value = "non_guaranteed"
+
+        with _PatchContext(products=[product], human_review_required=True) as pc:
+            with (
+                patch("src.core.tools.media_buy_create.publisher_owns_campaign_approval", return_value=False),
+                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
+                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+                patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_exec,
+                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
+                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
+                patch("src.core.tools.media_buy_create.get_slack_notifier"),
+                patch("src.core.tools.media_buy_create.activity_feed"),
+            ):
+                mock_adapter = MagicMock()
+                mock_adapter.manual_approval_required = True
+                mock_adapter.manual_approval_operations = ["create_media_buy"]
+                mock_adapter.__class__.__name__ = "MockAdapter"
+                mock_adapter_fn.return_value = mock_adapter
+                mock_upload.return_value = (req.packages, {})
+
+                from src.core.schemas import Package as RespPkg
+
+                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
+                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_storefront", packages=[resp_pkg])
+
+                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_storefront"
+        assert req._already_approved is True
+        assert "create_media_buy" not in mock_adapter.manual_approval_operations
         mock_exec.assert_called_once_with(req, ANY, ANY, ANY, ANY, ANY, ANY, tenant=ANY)
 
     @pytest.mark.asyncio

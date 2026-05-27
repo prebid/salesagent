@@ -16,10 +16,11 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
-from src.core.exceptions import AdCPNotFoundError, AdCPNotImplementedInEmbeddedError, AdCPValidationError
+from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._assignments import _process_assignments
-from src.core.tools.creatives._sync import _effective_approval_mode
+from src.core.tools.creatives._sync import _effective_approval_mode, _sync_creatives_impl
 from src.core.tools.creatives._workflow import _send_creative_notifications
 from tests.harness import make_mock_uow
 
@@ -81,20 +82,81 @@ def _make_creative_uow(assignment_repo=None):
 
 
 class TestEmbeddedCreativeApprovalGate:
-    def test_storefront_owned_creative_approval_fails_closed(self, monkeypatch):
+    def test_storefront_owned_creative_approval_auto_approves_locally(self, monkeypatch):
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"creative_approval": "storefront"}')
 
-        with pytest.raises(AdCPNotImplementedInEmbeddedError) as exc_info:
-            _effective_approval_mode("ai-powered")
-
-        assert exc_info.value.details == {"capability": "creative_approval"}
+        assert _effective_approval_mode("ai-powered") == "auto-approve"
 
     def test_publisher_owned_creative_approval_preserves_mode(self, monkeypatch):
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"creative_approval": "publisher"}')
 
         assert _effective_approval_mode("ai-powered") == "ai-powered"
+
+    def test_storefront_owned_provenance_warning_keeps_existing_creative_approved(self, monkeypatch):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"creative_approval": "storefront"}')
+
+        creative_repo = MagicMock()
+        creative_repo.get_provenance_policies.return_value = [MagicMock()]
+        creative_repo.begin_nested.return_value.__enter__.return_value = None
+        creative_repo.begin_nested.return_value.__exit__.return_value = None
+
+        existing_creative = Mock()
+        existing_creative.creative_id = "creative_1"
+        existing_creative.status = "approved"
+        creative_repo.get_by_id.return_value = existing_creative
+
+        _, mock_uow = make_mock_uow(
+            repos={
+                "creatives": creative_repo,
+                "assignments": MagicMock(),
+            }
+        )
+
+        identity = ResolvedIdentity(
+            principal_id="principal_1",
+            tenant_id="tenant_1",
+            tenant={"tenant_id": "tenant_1", "approval_mode": "ai-powered", "slack_webhook_url": None},
+            protocol="mcp",
+        )
+        update_result = SyncCreativeResult(
+            creative_id="creative_1",
+            action=CreativeAction.updated,
+            status="approved",
+        )
+
+        with (
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=MagicMock()),
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context", return_value=[]),
+            patch("src.core.tools.creatives._sync._validate_creative_input") as mock_validate,
+            patch("src.core.tools.creatives._sync.check_provenance_required", return_value="provenance missing"),
+            patch("src.core.tools.creatives._sync._update_existing_creative", return_value=(update_result, False)),
+            patch("src.core.tools.creatives._sync._process_assignments", return_value=[]),
+            patch("src.core.tools.creatives._sync._create_sync_workflow_steps") as mock_create_workflows,
+            patch("src.core.tools.creatives._sync._audit_log_sync"),
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+        ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+            mock_validate.return_value = MagicMock(format=MagicMock())
+
+            result = _sync_creatives_impl(
+                creatives=[
+                    {
+                        "creative_id": "creative_1",
+                        "name": "Creative 1",
+                        "format_id": {"agent_url": "https://example.com", "id": "display"},
+                    }
+                ],
+                identity=identity,
+            )
+
+        assert existing_creative.status == "approved"
+        assert result.creatives[0].status == "approved"
+        assert result.creatives[0].warnings == ["provenance missing"]
+        mock_create_workflows.assert_not_called()
 
 
 # ========================================================================

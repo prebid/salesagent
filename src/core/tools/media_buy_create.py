@@ -33,7 +33,6 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPError,
     AdCPNotFoundError,
-    AdCPNotImplementedInEmbeddedError,
     AdCPProductNotFoundError,
     AdCPTermsRejectedError,
     AdCPValidationError,
@@ -155,11 +154,26 @@ def _effective_manual_approval_required(
     """Apply the embedded campaign_approval gate to manual approval checks."""
     owns_approval = publisher_owns_campaign_approval() if publisher_owns_campaign is None else publisher_owns_campaign
     if not owns_approval:
-        raise AdCPNotImplementedInEmbeddedError(
-            "Campaign approval is managed by the embedding storefront.",
-            details={"capability": "campaign_approval"},
-        )
+        return False
     return owns_approval and (tenant_approval_required or adapter_approval_required)
+
+
+def _suppress_adapter_manual_approval(adapter: Any, operation: str) -> None:
+    """Disable an adapter manual-approval operation for this request instance."""
+    operations = getattr(adapter, "manual_approval_operations", None)
+    if not operations:
+        return
+
+    if hasattr(operations, "discard"):
+        operations.discard(operation)
+        return
+
+    if isinstance(operations, list):
+        adapter.manual_approval_operations = [op for op in operations if op != operation]
+        return
+
+    if isinstance(operations, tuple):
+        adapter.manual_approval_operations = tuple(op for op in operations if op != operation)
 
 
 class PackageAssignmentDict(TypedDict):
@@ -218,7 +232,7 @@ from src.core.context_manager import get_context_manager
 from src.core.database.models import MediaBuy
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
-from src.core.embedded_runtime import publisher_owns_campaign_approval
+from src.core.embedded_runtime import publisher_owns_campaign_approval, publisher_owns_creative_approval
 from src.core.format_cache import canonical_format_matches, upgrade_legacy_format_id
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
@@ -2773,11 +2787,17 @@ async def _create_media_buy_impl(
         tenant_approval_required = tenant.get("human_review_required", True)
         adapter_approval_required = adapter.manual_approval_required
         campaign_approval_owned = publisher_owns_campaign_approval()
+        creative_approval_owned = publisher_owns_creative_approval()
         manual_approval_required = _effective_manual_approval_required(
             tenant_approval_required=tenant_approval_required,
             adapter_approval_required=adapter_approval_required,
             publisher_owns_campaign=campaign_approval_owned,
         )
+        if not campaign_approval_owned:
+            _suppress_adapter_manual_approval(adapter, "create_media_buy")
+            setattr(req, "_already_approved", True)  # noqa: B010
+        if not creative_approval_owned:
+            _suppress_adapter_manual_approval(adapter, "add_creative_assets")
         manual_approval_operations = adapter.manual_approval_operations
 
         # DEBUG: Log manual approval settings

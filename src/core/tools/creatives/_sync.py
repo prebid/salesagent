@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.embedded_runtime import publisher_owns_creative_approval
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotImplementedInEmbeddedError
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeAsset, SyncCreativeResult, SyncCreativesResponse
@@ -36,14 +36,30 @@ logger = logging.getLogger(__name__)
 from src.core.schemas._asset_type_compat import infer_asset_types as _infer_asset_types  # noqa: E402
 
 
-def _effective_approval_mode(approval_mode: str) -> str:
-    """Return seller-side creative approval mode, failing closed when storefront-owned."""
-    if publisher_owns_creative_approval():
+def _effective_approval_mode(approval_mode: str, publisher_owns_approval: bool | None = None) -> str:
+    """Return seller-side creative approval mode.
+
+    Storefront-owned creative approval means salesagent has no approval work to
+    perform, so creatives should proceed as approved within this system.
+    """
+    owns_approval = publisher_owns_creative_approval() if publisher_owns_approval is None else publisher_owns_approval
+    if owns_approval:
         return approval_mode
-    raise AdCPNotImplementedInEmbeddedError(
-        "Creative approval is managed by the embedding storefront.",
-        details={"capability": "creative_approval"},
-    )
+    return "auto-approve"
+
+
+def _apply_provenance_warning(
+    result: SyncCreativeResult,
+    provenance_warning: str | None,
+    *,
+    publisher_owns_approval: bool,
+) -> bool:
+    """Append provenance warning and return whether seller review is needed."""
+    if not provenance_warning or result.action == CreativeAction.failed:
+        return False
+
+    result.warnings.append(provenance_warning)
+    return publisher_owns_approval
 
 
 @traced
@@ -144,7 +160,11 @@ def _sync_creatives_impl(
     # approval_mode: "auto-approve", "require-human", "ai-powered"
     logger.info(f"[sync_creatives] Tenant dict keys: {list(tenant.keys())}")
     logger.info(f"[sync_creatives] Tenant approval_mode field: {tenant.get('approval_mode', 'NOT FOUND')}")
-    approval_mode = _effective_approval_mode(tenant.get("approval_mode", "require-human"))
+    publisher_owns_approval = publisher_owns_creative_approval()
+    approval_mode = _effective_approval_mode(
+        tenant.get("approval_mode", "require-human"),
+        publisher_owns_approval=publisher_owns_approval,
+    )
     logger.info(f"[sync_creatives] Final approval mode: {approval_mode} (from tenant: {tenant.get('tenant_id')})")
 
     # Fetch creative formats ONCE before processing loop (outside any transaction)
@@ -315,11 +335,13 @@ def _sync_creatives_impl(
                                 creative_info["ai_review_reason"] = existing_creative.data["ai_review"].get("reason")
                             creatives_needing_approval.append(creative_info)
 
-                        # Add provenance warning if applicable
-                        if provenance_warning and update_result.action != CreativeAction.failed:
-                            update_result.warnings.append(provenance_warning)
-                            # Flag for review when provenance is missing
+                        if _apply_provenance_warning(
+                            update_result,
+                            provenance_warning,
+                            publisher_owns_approval=publisher_owns_approval,
+                        ):
                             existing_creative.status = "pending_review"
+                            update_result.status = existing_creative.status
                             needs_approval = True
 
                         results.append(update_result)
@@ -370,9 +392,11 @@ def _sync_creatives_impl(
                             # No ai_result available yet in async mode
                             creatives_needing_approval.append(creative_info)
 
-                        # Add provenance warning if applicable
-                        if provenance_warning and create_result.action != CreativeAction.failed:
-                            create_result.warnings.append(provenance_warning)
+                        if _apply_provenance_warning(
+                            create_result,
+                            provenance_warning,
+                            publisher_owns_approval=publisher_owns_approval,
+                        ):
                             needs_approval = True
 
                         results.append(create_result)
