@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 if TYPE_CHECKING:
@@ -198,7 +198,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
 
-    AdCP spec 3.0.7 ``error-handling.mdx`` allows non-fatal errors on the
+    AdCP spec 3.0.0 ``error-handling.mdx`` allows non-fatal errors on the
     success envelope ("populate only the payload... MUST NOT populate
     ``adcp_error``"). The ``errors`` field below carries per-package
     advisories like ``UNSUPPORTED_FEATURE`` for fields the seller persists but
@@ -338,7 +338,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
 
     Carries an optional ``errors`` field for non-fatal advisories on the
-    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.7 error-handling
+    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.0 error-handling
     "non-fatal in payload" rule). Used today for per-package
     ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
     not yet compiled by the adapter.
@@ -424,7 +424,7 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):
 UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Standardized task status enum per AdCP MCP Status specification.
 
     Provides crystal clear guidance on when operations need clarification,
@@ -2256,14 +2256,14 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 # DeliveryStatus: imported from adcp library at top of file (all 6 values).
 
 
-class SnapshotUnavailableReason(str, Enum):
+class SnapshotUnavailableReason(StrEnum):
     """Reason why a delivery snapshot is not available."""
 
     SNAPSHOT_UNSUPPORTED = "SNAPSHOT_UNSUPPORTED"
     SNAPSHOT_TEMPORARILY_UNAVAILABLE = "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
 
 
-class ApprovalStatus(str, Enum):
+class ApprovalStatus(StrEnum):
     """Approval status value for a creative assignment in a get_media_buys response."""
 
     pending_review = "pending_review"
