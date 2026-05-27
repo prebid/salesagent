@@ -1669,26 +1669,35 @@ def then_package_has_id(ctx: dict) -> None:
 
 @then(parsers.parse('the package should contain buyer_ref "{buyer_ref}"'))
 def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """Verify package structure: buyer_ref removed in adcp 3.12, package_id replaces it.
+    """Assert the response package echoes the submitted buyer_ref value.
 
-    Since buyer_ref was removed from the Package schema in adcp 3.12,
-    this step verifies:
-    1. The response contains a valid package (structural correctness).
-    2. The package has a seller-assigned package_id (the replacement for buyer_ref).
-    3. The buyer_ref field is absent from the package (spec compliance).
+    The step locates a package in the success response and verifies its
+    buyer_ref field equals the parameter from the Gherkin scenario.
+
+    buyer_ref was removed from the adcp Package schema in 3.12, so the
+    value comparison is xfailed until the feature file is updated or the
+    field is restored upstream.
     """
+    import pytest
+
     packages = _get_packages(ctx)
     assert packages, "No packages in response"
+    # Production returns at least one package — structural correctness
     pkg = packages[0]
-    # Package must have a seller-assigned package_id (the replacement for buyer_ref)
     pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id is not None, "Package missing package_id — seller must assign an identifier"
+    assert pkg_id is not None, "Package missing package_id"
     assert isinstance(pkg_id, str) and pkg_id.strip(), (
         f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
     )
-    # buyer_ref was removed in adcp 3.12; verify it's absent from the response
-    buyer_ref_value = _pkg_field(pkg, "buyer_ref")
-    assert buyer_ref_value is None, f"buyer_ref was removed in adcp 3.12 but is present on package: {buyer_ref_value!r}"
+    # buyer_ref removed from adcp.types.Package in 3.12; xfail the value assertion
+    actual_buyer_ref = _pkg_field(pkg, "buyer_ref")
+    if actual_buyer_ref is None:
+        pytest.xfail(
+            "buyer_ref removed from adcp Package schema in 3.12 — field absent in response, cannot verify echo"
+        )
+    assert actual_buyer_ref == buyer_ref, (
+        f"Expected buyer_ref '{buyer_ref}' echoed in package, got '{actual_buyer_ref}'"
+    )
 
 
 @then(parsers.parse("the package should contain budget {budget:d}"))
@@ -1928,24 +1937,41 @@ def _compare_echoed_scalar(field: str, expected: str | int | float | bool, actua
 # --- Operation outcome ---
 
 
+_FAILURE_STATUSES = frozenset({"failed", "rejected", "error", "canceled"})
+
+
 @then("the operation should succeed")
 def then_operation_succeeds(ctx: dict) -> None:
-    """Assert the operation succeeded with a valid response containing packages.
+    """Assert the operation succeeded (generic, transport-agnostic).
 
-    Verifies no error was recorded, the response exists, and the response
-    contains at least one package with a seller-assigned package_id — proving
-    production processed the request end-to-end.
+    This step is shared across use cases with different response shapes
+    (UC-026 create/update media buy, UC-009 performance feedback, etc.).
+    It asserts the transport-agnostic success contract common to all:
+      1. No error was recorded in ctx.
+      2. A response object exists.
+      3. If the response exposes a status field (directly or on an inner
+         .response wrapper), the status is not a failure value.
+
+    Shape-specific checks (packages, detail messages) belong in the
+    dedicated follow-on Then steps already present in each scenario.
     """
     assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none was recorded"
-    # Verify the response has packages (proves production processed the request)
-    packages = _get_packages(ctx)
-    # Verify the first package has a seller-assigned package_id
-    pkg_id = _pkg_field(packages[0], "package_id")
-    assert isinstance(pkg_id, str) and pkg_id.strip(), (
-        f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
-    )
+
+    # Check status on the response itself or on an inner .response wrapper
+    # (CreateMediaBuyResult wraps .response which may carry status).
+    status = getattr(resp, "status", None)
+    if status is None:
+        inner = getattr(resp, "response", None)
+        if inner is not None:
+            status = getattr(inner, "status", None)
+
+    if status is not None:
+        status_str = str(status).lower()
+        assert status_str not in _FAILURE_STATUSES, (
+            f"Operation returned failure status '{status}' — expected a success state"
+        )
 
 
 # --- Outcome dispatch step (partition/boundary) ---
