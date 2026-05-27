@@ -28,7 +28,12 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Get database URL directly from environment
-db_url = os.environ["DATABASE_URL"]
+db_url = os.environ.get("DATABASE_URL")
+if not db_url:
+    raise OSError(
+        "DATABASE_URL is not set. Set it to a PostgreSQL connection URL, "
+        "e.g. DATABASE_URL=postgresql://user:password@host:5432/dbname."
+    )
 config.set_main_option("sqlalchemy.url", db_url)
 
 # other values from the config, defined by the needs of env.py,
