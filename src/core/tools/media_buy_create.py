@@ -56,6 +56,19 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+def _raise_if_validation_failed(message: str | None) -> None:
+    """Raise ``AdCPValidationError`` when the validator returned a non-empty message.
+
+    Shared one-liner so the four ``validate_*`` call sites in
+    ``_create_media_buy_impl`` express their failure path uniformly without
+    each one repeating ``if x: raise AdCPValidationError(x)``. The update
+    path keeps its own return-envelope flow (different wire codes:
+    ``BUDGET_EXCEEDED``, ``BUDGET_TOO_LOW``) and does not use this helper.
+    """
+    if message:
+        raise AdCPValidationError(message)
+
+
 def validate_agent_url(url: str | None) -> bool:
     """Validate agent_url is a well-formed HTTP(S) URL per AdCP spec.
 
@@ -2087,18 +2100,15 @@ async def _create_media_buy_impl(
                                         package_min_spend = Decimal(str(currency_limit.min_package_budget))
 
                                 # Validate if minimum spend is set
-                                min_budget_error: str | None = (
-                                    validate_min_package_budget(
-                                        package_budget=package_budget,
-                                        min_package_budget=package_min_spend,
-                                        currency=package_currency,
-                                        context="for products in this package",
+                                if package_min_spend:
+                                    _raise_if_validation_failed(
+                                        validate_min_package_budget(
+                                            package_budget=package_budget,
+                                            min_package_budget=package_min_spend,
+                                            currency=package_currency,
+                                            context="for products in this package",
+                                        )
                                     )
-                                    if package_min_spend
-                                    else None
-                                )
-                                if min_budget_error:
-                                    raise AdCPValidationError(min_budget_error)
                     else:
                         # Legacy mode: single total_budget for all products
                         applicable_min_spends = list(product_min_spends.values())
@@ -2106,15 +2116,15 @@ async def _create_media_buy_impl(
                             required_min_spend = max(applicable_min_spends)
                             budget_decimal = Decimal(str(total_budget))
 
-                            legacy_min_budget_error: str | None = validate_min_package_budget(
-                                package_budget=budget_decimal,
-                                min_package_budget=required_min_spend,
-                                currency=request_currency,
-                                subject="Total",
-                                context="for the selected products",
+                            _raise_if_validation_failed(
+                                validate_min_package_budget(
+                                    package_budget=budget_decimal,
+                                    min_package_budget=required_min_spend,
+                                    currency=request_currency,
+                                    subject="Total",
+                                    context="for the selected products",
+                                )
                             )
-                            if legacy_min_budget_error:
-                                raise AdCPValidationError(legacy_min_budget_error)
 
             # Validate maximum daily spend per package (if set)
             # This is per-package to prevent buyers from splitting large budgets across many packages
@@ -2133,30 +2143,32 @@ async def _create_media_buy_impl(
                             continue
                         # Package.budget is now always float | None (per AdCP spec)
                         package_budget = Decimal(str(package.budget))
-                        daily_package_spend_error: str | None = validate_max_daily_package_spend(
-                            package_budget=package_budget,
+                        _raise_if_validation_failed(
+                            validate_max_daily_package_spend(
+                                package_budget=package_budget,
+                                flight_days=flight_days,
+                                max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
+                                currency=request_currency,
+                                limit_label="maximum daily spend per package",
+                                context=(
+                                    "This protects against accidental large budgets "
+                                    "and prevents GAM line item proliferation."
+                                ),
+                            )
+                        )
+                else:
+                    # Legacy mode: validate total budget
+                    _raise_if_validation_failed(
+                        validate_max_daily_package_spend(
+                            package_budget=Decimal(str(total_budget)),
                             flight_days=flight_days,
                             max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
                             currency=request_currency,
-                            limit_label="maximum daily spend per package",
-                            context="This protects against accidental large budgets and prevents GAM line item proliferation.",
+                            subject="Daily",
+                            limit_label="maximum daily spend",
+                            context="This protects against accidental large budgets.",
                         )
-                        if daily_package_spend_error:
-                            raise AdCPValidationError(daily_package_spend_error)
-                else:
-                    # Legacy mode: validate total budget
-                    legacy_daily_spend_error: str | None = validate_max_daily_package_spend(
-                        package_budget=Decimal(str(total_budget)),
-                        flight_days=flight_days,
-                        max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
-                        currency=request_currency,
-                        subject="Daily",
-                        limit_label="maximum daily spend",
-                        context="This protects against accidental large budgets.",
                     )
-
-                    if legacy_daily_spend_error:
-                        raise AdCPValidationError(legacy_daily_spend_error)
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
@@ -3829,19 +3841,17 @@ async def _create_media_buy_impl(
 
     except AdCPError as adcp_err:
         # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping.
-        # fail_workflow_step_for_exception threads the two-layer envelope into
+        # audit_step_failure_if_present threads the two-layer envelope into
         # response_data so push notification subscribers see the same wire shape
         # the synchronous caller receives, AND wraps in try/except so a DB hiccup
         # during audit can't shadow the original AdCPError on re-raise.
-        if step:
-            ctx_manager.fail_workflow_step_for_exception(step.step_id, adcp_err)
+        ctx_manager.audit_step_failure_if_present(step, adcp_err)
         raise
 
     except Exception as e:
-        # Untyped exception — same audit treatment (wire-shape response_data +
-        # original exception preserved on re-raise).
-        if step:
-            ctx_manager.fail_workflow_step_for_exception(step.step_id, e)
+        # Untyped exception — same workflow audit treatment, plus Slack
+        # notification + adapter audit log below before re-raising.
+        ctx_manager.audit_step_failure_if_present(step, e)
 
         # Send Slack notification for failed media buy creation
         try:

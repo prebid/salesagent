@@ -3,6 +3,8 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -394,6 +396,48 @@ class ContextManager(DatabaseManager):
                 "Failed to audit workflow_step %s after exception — original exception will still re-raise",
                 step_id,
             )
+
+    def audit_step_failure_if_present(self, step: WorkflowStep | None, exc: Exception) -> None:
+        """Mark ``step`` as failed if it exists; do not re-raise.
+
+        Standalone variant of :py:meth:`audit_step_failure` for callers
+        that need to interleave additional observability (e.g., Slack
+        notification on the untyped branch in ``_create_media_buy_impl``)
+        between the workflow-step audit and the re-raise. The caller
+        re-raises explicitly.
+
+        ``fail_workflow_step_for_exception`` is internally wrapped in
+        try/except so a DB hiccup during audit cannot shadow the original
+        exception when the caller re-raises.
+        """
+        if step is not None:
+            self.fail_workflow_step_for_exception(step.step_id, exc)
+
+    @contextmanager
+    def audit_step_failure(self, get_step: "Callable[[], WorkflowStep | None]") -> Iterator[None]:
+        """Context manager: mark the workflow step as failed if any exception escapes the block.
+
+        Single source of truth for "what happens when an _impl owning a
+        workflow step fails". Wraps the try-body so the wire-shape envelope
+        is threaded into ``response_data`` and async webhook subscribers
+        see the same shape the synchronous caller receives.
+
+        Accepts a ``get_step`` callable (typically ``lambda: step``) rather
+        than the step directly. Workflow steps are constructed INSIDE the
+        guarded block (after early validation), so the callable closure
+        resolves the current step value at exception time — not at entry,
+        when it may still be ``None``.
+
+        Re-raises the original exception unchanged. Delegates the actual
+        audit work to :py:meth:`audit_step_failure_if_present` so the two
+        public APIs (context manager + standalone helper) share the same
+        underlying call.
+        """
+        try:
+            yield
+        except Exception as exc:
+            self.audit_step_failure_if_present(get_step(), exc)
+            raise
 
     def mark_human_needed(
         self,

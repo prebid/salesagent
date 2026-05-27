@@ -1818,21 +1818,24 @@ class TestUC003UpdateTargetingOverlay:
         # the step would orphan in `in_progress` and the buyer's poller would
         # hang forever. Asserting here so any future raise added to
         # _update_media_buy_impl that escapes the wrapper gets caught.
-        # Round-7: the wrapper now calls ``fail_workflow_step_for_exception``
-        # which threads a two-layer envelope into response_data so async
-        # webhook subscribers see the same wire shape as the synchronous
-        # caller. Asserting on the new method's call args here so any future
-        # regression to ``update_workflow_step(..., error_message=...)`` (no
+        # The wrapper marks the workflow step failed via the
+        # ``audit_step_failure`` context manager, which calls
+        # ``audit_step_failure_if_present(step, exc)`` on the bound
+        # ContextManager. That helper threads a two-layer envelope into
+        # response_data so async webhook subscribers see the same wire
+        # shape as the synchronous caller. Asserting on the helper's call
+        # args here so any future regression to
+        # ``update_workflow_step(..., error_message=...)`` (no
         # response_data) gets caught — that would silently lose the
         # structured payload on the webhook path.
-        fail_calls = standard_mocks["ctx_mgr_instance"].fail_workflow_step_for_exception.call_args_list
+        audit_calls = standard_mocks["ctx_mgr_instance"].audit_step_failure_if_present.call_args_list
         assert (
-            len(fail_calls) == 1
-        ), f"Expected exactly one fail_workflow_step_for_exception call on raise, got {len(fail_calls)}"
-        fail_call = fail_calls[0]
-        # Positional args: (step_id, exception)
-        assert fail_call.args[0] == standard_mocks["step"].step_id
-        raised_exc = fail_call.args[1]
+            len(audit_calls) == 1
+        ), f"Expected exactly one audit_step_failure_if_present call on raise, got {len(audit_calls)}"
+        audit_call = audit_calls[0]
+        # Positional args: (step, exception)
+        assert audit_call.args[0] is standard_mocks["step"]
+        raised_exc = audit_call.args[1]
         assert isinstance(raised_exc, AdCPValidationError)
         assert "property_targeting_allowed" in raised_exc.message
 
