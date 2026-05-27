@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from adcp.types import CreativeAction
 from adcp.types import FormatId as AdcpFormatId
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types import CreativeAsset
 
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 
@@ -215,7 +215,7 @@ class TestCreativeExtendsListingBase:
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         """
-        from adcp.types.generated_poc.creative.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as ListingCreative,
         )
 
@@ -240,7 +240,7 @@ class TestCreativeExtendsListingBase:
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         """
-        from adcp.types.generated_poc.creative.get_creative_delivery_response import (
+        from adcp.types.generated_poc.creative.get_creative_delivery_response import (  # TODO: no stable alias in adcp.types
             Creative as DeliveryCreative,
         )
 

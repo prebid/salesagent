@@ -210,6 +210,7 @@ class _PatchContext:
         mock_uow.session = self.db_session
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []  # no duplicate buyer_refs
+        mock_media_buys.get_packages.return_value = []
         mock_uow.media_buys = mock_media_buys
 
         self._p_uow = patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow)
@@ -268,7 +269,7 @@ class TestProductNotFound:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "VALIDATION_ERROR"
+        assert errors[0].code == "PRODUCT_NOT_FOUND"
         assert "prod_missing" in errors[0].message
         assert "not found" in errors[0].message.lower()
 
@@ -576,10 +577,10 @@ class TestCreativeUploadFailure:
 
         with _PatchContext(products=[product]) as pc:
             # Override the scalars chain to handle multiple .all() and .first() calls.
-            # .all() call 1 (products query at line 1464) -> [product]
-            # .all() call 2 (creatives query at line 2954) -> [mock_creative]
-            # .first() calls: currency_limit (1554), adapter_config=None (1569),
-            #   package_record=None (2919), product_format_check=None (2986)
+            # .all() call 1 (products query) -> [product]
+            # .all() call 2 (creatives query) -> [mock_creative]
+            # platform_order_id persistence uses media_buys.get_packages() (not scalars)
+            # .first() calls: currency_limit, adapter_config=None, package_record=None, etc.
             all_results = iter([[product], [mock_creative]])
             first_results = iter([_mock_currency_limit(), None, None, None, None, None])
             scalars_mock = MagicMock()
@@ -888,8 +889,9 @@ class TestCreativeIdsNotFound:
 
         with _PatchContext(products=[product]) as pc:
             # Override the scalars chain to handle multiple .all() and .first() calls.
-            # .all() call 1 (products query at line 1464) -> [product]
-            # .all() call 2 (creatives query at line 2954) -> [mock_creative] (only 1 of 3)
+            # .all() call 1 (products query) -> [product]
+            # .all() call 2 (creatives query) -> [mock_creative] (only 1 of 3)
+            # platform_order_id persistence uses media_buys.get_packages() (not scalars)
             # .first() returns currency_limit then None for subsequent calls
             all_results = iter([[product], [mock_creative]])
             first_results = iter([_mock_currency_limit(), None, None, None, None, None])
@@ -1311,12 +1313,13 @@ class TestPreconditionObligations:
 
         Covers: UC-002-PRECOND-02
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
 
@@ -2042,16 +2045,16 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-I-03
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
         # Identity with no principal_id -> requires authentication
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity_no_principal = ResolvedIdentity(
             principal_id=None,

@@ -120,7 +120,8 @@ class MediaBuyUoW(BaseUoW):
     """Unit of Work for MediaBuy operations.
 
     Wraps a database session and provides tenant-scoped repositories for
-    media buys and related data (currency limits).
+    media buys, products (read-side; create_media_buy resolves product_map
+    via this), and currency limits.
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -128,15 +129,18 @@ class MediaBuyUoW(BaseUoW):
     """
 
     media_buys: MediaBuyRepository | None
+    products: ProductRepository | None
     currency_limits: CurrencyLimitRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
+        self.products = ProductRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
+        self.products = None
         self.currency_limits = None
 
 

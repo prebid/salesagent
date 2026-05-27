@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import factory
 from adcp.types import FormatId
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types import CreativeAsset
 
 from tests.factories.format import AGENT_URL
 

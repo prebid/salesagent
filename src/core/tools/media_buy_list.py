@@ -40,6 +40,8 @@ class _MediaBuyData:
     raw_request: dict | None
     created_at: datetime | None
     updated_at: datetime | None
+    status: str | None
+    is_paused: bool
 
 
 @dataclass
@@ -55,23 +57,24 @@ class _PackageData:
 
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthRequiredError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
+    Error,
     GetMediaBuysMediaBuy,
     GetMediaBuysPackage,
     GetMediaBuysRequest,
     GetMediaBuysResponse,
     Snapshot,
     SnapshotUnavailableReason,
+    Targeting,
 )
 from src.core.validation_helpers import format_validation_error
 
@@ -93,7 +96,9 @@ def _get_media_buys_impl(
         GetMediaBuysResponse with matching media buys
     """
     if identity is None:
-        raise AdCPAuthenticationError("Identity is required")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     if req.account is not None or req.account_id is not None:
         raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
@@ -103,14 +108,14 @@ def _get_media_buys_impl(
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "PRINCIPAL_ID_MISSING", "message": "Principal ID not found in context"}],
+            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
         )
 
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[{"code": "PRINCIPAL_NOT_FOUND", "message": f"Principal {principal_id} not found"}],
+            errors=[Error(code="AUTH_REQUIRED", message=f"Principal {principal_id} not found")],
         )
 
     tenant = identity.tenant
@@ -142,6 +147,7 @@ def _get_media_buys_impl(
             principal,
             dry_run=testing_ctx.dry_run if testing_ctx else False,
             testing_context=testing_ctx,
+            tenant=tenant,
         )
         if adapter.capabilities.supports_realtime_reporting:
             # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
@@ -157,6 +163,11 @@ def _get_media_buys_impl(
 
     # Build response
     response_media_buys = []
+    # Accumulate non-fatal targeting-rehydration failures here; one row per
+    # affected (media_buy_id, package_id). Surfaced on the response so the
+    # buyer can reconcile out-of-band — beats silently coercing to
+    # targeting_overlay=None which is indistinguishable from "no targeting".
+    hydration_errors: list[Error] = []
     for buy in target_media_buys:
         status = _compute_status(buy, today)
 
@@ -178,6 +189,55 @@ def _get_media_buys_impl(
             if include_snapshot and snapshot is None:
                 snapshot_unavailable = unavailable_reason or SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
 
+            # Materialize targeting_overlay from package_config so callers can verify
+            # what was persisted. Tolerates the legacy "targeting" key for data written
+            # before the targeting_overlay rename (see media_buy_create.py:638-642).
+            # A single corrupted package_config row must not crash the whole tenant's
+            # get_media_buys response — log the bad row, surface a non-fatal
+            # TARGETING_REHYDRATION_FAILED on the response's errors channel, and
+            # set this package's targeting_overlay=None so the rest of the buy
+            # still renders.
+            #
+            # Narrow ``except`` to ``TypeError`` only: production
+            # ``extra="ignore"`` already absorbs unknown-field drift, so
+            # ``ValidationError`` here would only fire in dev/CI and we want
+            # that canary to surface forgotten field declarations as a hard
+            # test failure (CLAUDE.md "No Quiet Failures"). ``TypeError``
+            # covers the real-corruption case (non-dict input from a bad row).
+            targeting_raw = pkg_config.get("targeting_overlay") or pkg_config.get("targeting")
+            targeting_overlay: Targeting | None
+            if not targeting_raw:
+                targeting_overlay = None
+            else:
+                try:
+                    targeting_overlay = Targeting(**targeting_raw)
+                except TypeError as exc:
+                    logger.warning(
+                        "Failed to rehydrate targeting_overlay for media_buy=%s package=%s; "
+                        "returning targeting_overlay=None for this package. Error: %s",
+                        buy.media_buy_id,
+                        pkg_id,
+                        exc,
+                    )
+                    # Use the spec-standard ``INTERNAL_ERROR`` code (data-integrity
+                    # is a seller-side issue; buyer can't fix). The specific
+                    # ``TARGETING_REHYDRATION_FAILED`` shape lives in the message
+                    # so callers can grep/route on it without us adding a
+                    # non-standard wire code.
+                    hydration_errors.append(
+                        Error(
+                            code="INTERNAL_ERROR",
+                            message=(
+                                f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
+                                f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "
+                                f"could not be rehydrated; returning "
+                                f"targeting_overlay=None for this package."
+                            ),
+                            field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
+                        )
+                    )
+                    targeting_overlay = None
+
             response_packages.append(
                 GetMediaBuysPackage(
                     package_id=pkg_id,
@@ -187,6 +247,7 @@ def _get_media_buys_impl(
                     start_time=pkg_config.get("start_time"),
                     end_time=pkg_config.get("end_time"),
                     paused=pkg_config.get("paused"),
+                    targeting_overlay=targeting_overlay,
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
                     snapshot_unavailable_reason=snapshot_unavailable if include_snapshot else None,
@@ -213,6 +274,7 @@ def _get_media_buys_impl(
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
         context=req.context,
+        errors=hydration_errors or None,
     )
 
 
@@ -304,7 +366,11 @@ def _fetch_target_media_buys(
 ) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters."""
     assert uow.media_buys is not None
-    filter_statuses = _resolve_status_filter(req.status_filter)
+    # Per AdCP spec: the default status filter (active-only) applies only when
+    # media_buy_ids are omitted. When the caller specifies
+    # explicit IDs, return all matching buys regardless of status.
+    has_explicit_ids = bool(req.media_buy_ids)
+    filter_statuses = _resolve_status_filter(req.status_filter, skip_default=has_explicit_ids)
 
     buys = uow.media_buys.get_by_principal(
         principal_id,
@@ -323,17 +389,26 @@ def _fetch_target_media_buys(
             raw_request=buy.raw_request,
             created_at=buy.created_at,
             updated_at=buy.updated_at,
+            status=buy.status,
+            is_paused=buy.is_paused,
         )
         for buy in buys
-        if _compute_status(buy, today) in filter_statuses
+        if filter_statuses is None or _compute_status(buy, today) in filter_statuses
     ]
 
 
 def _resolve_status_filter(
     status_filter: MediaBuyStatus | Any | None,
-) -> set[MediaBuyStatus]:
-    """Resolve status_filter request field to a set of MediaBuyStatus values."""
+    *,
+    skip_default: bool = False,
+) -> set[MediaBuyStatus] | None:
+    """Resolve status_filter request field to a set of MediaBuyStatus values.
+
+    Returns None when no filtering should be applied (explicit IDs with no filter).
+    """
     if status_filter is None:
+        if skip_default:
+            return None  # No filtering — return all statuses
         # Default: active only
         return {MediaBuyStatus.active}
 
@@ -346,8 +421,59 @@ def _resolve_status_filter(
     return {status_filter}
 
 
+# Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
+# transitions) maps onto the AdCP MediaBuyStatus wire vocabulary below.
+# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL (the
+# salesagent-18h.1 fix) but targets the AdCP enum used by list_media_buys
+# instead of the internal delivery filter vocabulary — the two output
+# vocabularies are genuinely different (AdCP has no "failed"/"ready"/"draft"),
+# so per the CLAUDE.md DRY guidance ("not about collapsing two genuinely
+# different operations") the mapping is mirrored, not shared.
+#
+# The persisted status is authoritative: terminal/explicit states
+# (paused, completed, rejected, canceled) are lifecycle decisions that
+# cannot be re-derived from flight dates. "failed" has no AdCP equivalent
+# and is reported as the closest terminal state, "rejected". Pre-serving
+# states (draft/pending/pending_approval) map to "pending_start"
+# (consistent with media_buy_create._compute_initial_media_buy_status).
+# Generic serving states (active/approved) are date-refined below.
+_PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
+    "active": MediaBuyStatus.active,
+    "approved": MediaBuyStatus.active,
+    "paused": MediaBuyStatus.paused,
+    "completed": MediaBuyStatus.completed,
+    "rejected": MediaBuyStatus.rejected,
+    "canceled": MediaBuyStatus.canceled,
+    "failed": MediaBuyStatus.rejected,
+    "draft": MediaBuyStatus.pending_start,
+    "pending": MediaBuyStatus.pending_start,
+    "pending_approval": MediaBuyStatus.pending_start,
+    "pending_creatives": MediaBuyStatus.pending_creatives,
+    "pending_start": MediaBuyStatus.pending_start,
+}
+
+
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
-    """Compute the current AdCP status of a media buy based on its dates."""
+    """Resolve a media buy's AdCP status from its persisted status column.
+
+    The persisted ``MediaBuy.status`` is the source of truth. Only when the
+    buy is in a generic serving state ("active"/"approved") do we refine
+    against the flight window — a serving buy whose flight has not started
+    yet is "pending_start", one past its end date is "completed", and one
+    flagged ``is_paused`` is "paused". Terminal/explicit lifecycle states
+    (paused, completed, rejected, canceled) come straight from the column
+    and cannot be re-derived from flight dates (salesagent-36d).
+    """
+    persisted = (buy.status or "").lower()
+    mapped = _PERSISTED_STATUS_TO_ADCP.get(persisted, MediaBuyStatus.active)
+
+    if mapped != MediaBuyStatus.active:
+        return mapped
+
+    # Generic serving state — refine against the flight window.
+    if getattr(buy, "is_paused", False):
+        return MediaBuyStatus.paused
+
     start = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
     end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
 

@@ -13,8 +13,7 @@ from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import PropertyListReference
-from adcp.types.generated_poc.core.brand_ref import BrandReference
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import BrandReference, ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field, ValidationError
@@ -22,7 +21,12 @@ from pydantic import Field, ValidationError
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPAuthRequiredError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
@@ -165,7 +169,9 @@ async def _get_products_impl(
 
     # Extract identity fields
     if identity is None:
-        raise AdCPValidationError("Identity is required")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id

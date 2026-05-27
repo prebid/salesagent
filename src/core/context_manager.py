@@ -13,14 +13,22 @@ from adcp.webhooks import GeneratedTaskStatus
 from rich.console import Console
 from sqlalchemy import select
 
+from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
+from src.core.exceptions import AdCPError
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+# Fire-and-forget webhook tasks are pinned against asyncio's weak-ref GC via
+# the shared src.core.async_utils.pin_task helper (single source of truth;
+# see its docstring). (Leak triage #6 from the production OOM-cycle
+# investigation: untracked create_task at context_manager.py was the smoking
+# gun.)
 
 
 class ContextManager(DatabaseManager):
@@ -325,6 +333,77 @@ class ContextManager(DatabaseManager):
                     console.print(f"[yellow]⚠️ WEBHOOK SKIPPED: status={status}, step={step is not None}[/yellow]")
         finally:
             session.close()
+
+    def fail_workflow_step_for_exception(self, step_id: str, exc: Exception) -> None:
+        """Mark a workflow step failed with BOTH ``error_message`` AND structured ``response_data``.
+
+        The webhook delivery path at ``_send_push_notifications`` emits
+        ``step.response_data`` (not ``error_message``) to push notification
+        subscribers. Without structured payload, async subscribers receive
+        ``status=failed`` with an empty body — they don't see the error
+        code, field path, or recovery classification the synchronous caller
+        gets via the spec-compliant payload. This helper builds a one-element
+        ``errors[]`` payload (same shape as the SDK's ``adcp_error()`` helper)
+        from the exception so async and sync paths are at parity.
+
+        Uses ``wire_error_code`` so internal-only codes (``NOT_FOUND``,
+        ``INTERNAL_ERROR``, etc.) get translated to ``STANDARD_ERROR_CODES``
+        before reaching the webhook subscriber — same translation the
+        synchronous transport boundaries apply.
+
+        Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
+        hiccup during audit doesn't replace the original exception that the
+        caller is about to re-raise. Python's bare ``raise`` would otherwise
+        pick up the new exception fired here and the buyer would see an
+        unrelated DB error instead of the actual ``AdCPError``.
+        """
+        from adcp.server.helpers import STANDARD_ERROR_CODES
+        from adcp.server.helpers import adcp_error as _sdk_adcp_error
+
+        try:
+            if isinstance(exc, AdCPError):
+                source: AdCPError = exc
+            else:
+                # Untyped exception — base ``AdCPError`` defaults to
+                # ``INTERNAL_ERROR`` which is in ``INTERNAL_CODES`` (never
+                # leaves the server).
+                source = AdCPError(str(exc) or type(exc).__name__)
+
+            # Defensive wire-code enforcement: webhook subscribers must only
+            # see codes in ``STANDARD_ERROR_CODES``. ``wire_error_code``
+            # applies the explicit ``ERROR_CODE_MAPPING`` translation; if any
+            # source code still falls outside the standard set after that,
+            # fall back to ``SERVICE_UNAVAILABLE`` so async subscribers never
+            # receive an internal-only code that the synchronous boundary
+            # would have rejected.
+            wire_code = source.wire_error_code
+            if wire_code not in STANDARD_ERROR_CODES:
+                wire_code = "SERVICE_UNAVAILABLE"
+
+            payload = _sdk_adcp_error(
+                wire_code,
+                source.message or str(source),
+                recovery=source.recovery,
+                field=source.field,
+                suggestion=source.suggestion,
+                details=source.details,
+            )
+            response_data = {"errors": payload["errors"]}
+            error_message = source.message or str(source)
+
+            self.update_workflow_step(
+                step_id,
+                status="failed",
+                error_message=error_message,
+                response_data=response_data,
+            )
+        except Exception:
+            # Original exception must survive — log and swallow so the caller's
+            # bare ``raise`` propagates the real error to the buyer.
+            logger.exception(
+                "Failed to audit workflow_step %s after exception — original exception will still re-raise",
+                step_id,
+            )
 
     def mark_human_needed(
         self,
@@ -737,13 +816,18 @@ class ContextManager(DatabaseManager):
                             def _log_task_result(
                                 t: asyncio.Task, config_url: str = push_notification_config.url
                             ) -> None:
+                                # Runs AFTER pin_task's discard (see pin_task
+                                # docstring), so this log-and-swallow can't hold
+                                # the strong ref past completion.
                                 try:
                                     t.result()
                                     console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
                                 except Exception as e:
                                     console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
 
-                            task.add_done_callback(_log_task_result)
+                            # Strong-ref pin against asyncio's weak-ref task
+                            # tracker; discard runs before _log_task_result.
+                            pin_task(task, on_done=_log_task_result)
                         except RuntimeError:
                             # No running loop; safe to run synchronously
                             asyncio.run(

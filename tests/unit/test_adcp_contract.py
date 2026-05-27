@@ -130,8 +130,11 @@ class TestSchemaMatchesLibrary:
         # GetMediaBuyDeliveryRequest - local extends library with spec fields
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        # adcp 3.9: all fields now in library — no local extensions remaining
-        local_extensions: set[str] = set()
+        # adcp library lags the spec: time_granularity + include_window_breakdown
+        # are defined in get-media-buy-delivery-request.json but not yet in the
+        # adcp library's GetMediaBuyDeliveryRequest (gh-#1299). Declared locally
+        # via Pattern #1 (extend library type) until the library catches up.
+        local_extensions: set[str] = {"time_granularity", "include_window_breakdown"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
         )
@@ -1393,7 +1396,7 @@ class TestAdCPContract:
         )
 
         # Test with spec-compliant fields only (adcp 3.9)
-        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment  # TODO: no stable alias in adcp.types  # TODO: no stable alias in adcp.types
 
         request = SyncCreativesRequest(
             creatives=[creative],
@@ -1517,8 +1520,8 @@ class TestAdCPContract:
         from adcp.types import CreativeFilters as LibraryCreativeFilters
 
         # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
-        from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-        from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
+        from adcp.types import PaginationRequest
+        from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort  # TODO: different Sort from adcp.types.Sort
 
         from src.core.schemas import ListCreativesRequest
 
@@ -2335,7 +2338,7 @@ class TestAdCPContract:
         # adcp 3.9: GetSignalsRequest is a regular model (not RootModel).
         # deliver_to replaced with top-level destinations + countries fields.
 
-        from adcp.types.generated_poc.core.destination import Destination1
+        from adcp.types.generated_poc.core.destination import Destination1  # TODO: no stable alias in adcp.types
 
         from src.core.schemas import GetSignalsRequest, SignalFilters
 

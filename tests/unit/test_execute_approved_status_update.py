@@ -106,10 +106,11 @@ class TestExecuteApprovedStatusUpdate:
         mock_adapter = MagicMock()
         mock_adapter.orders_manager = None
 
-        # Set up three UoW instances the function opens:
+        # Set up four UoW instances the function opens:
         # 1. Load tenant, media_buy, packages, products
-        # 2. Handle creative uploads
-        # 3. Update media buy status to 'active' (the fix)
+        # 2. Persist platform_order_id after adapter success
+        # 3. Handle creative uploads
+        # 4. Update media buy status to 'active' (the fix)
         mock_session_1 = MagicMock()
         mock_session_2 = MagicMock()
         mock_session_3 = MagicMock()
@@ -133,13 +134,20 @@ class TestExecuteApprovedStatusUpdate:
         mock_uow_1.session = mock_session_1
         mock_uow_1.media_buys = MagicMock()
 
+        mock_repo_plids = MagicMock()
+        mock_repo_plids.get_packages.return_value = [db_package]
+        mock_uow_plids = MagicMock()
+        mock_uow_plids.__enter__ = MagicMock(return_value=mock_uow_plids)
+        mock_uow_plids.__exit__ = MagicMock(return_value=None)
+        mock_uow_plids.media_buys = mock_repo_plids
+
         mock_uow_2 = MagicMock()
         mock_uow_2.__enter__ = MagicMock(return_value=mock_uow_2)
         mock_uow_2.__exit__ = MagicMock(return_value=None)
         mock_uow_2.session = mock_session_2
         mock_uow_2.media_buys = MagicMock()
 
-        # UoW 3 uses update_status on the repository — track it was called
+        # UoW 4 uses update_status on the repository — track it was called
         mock_repo_3 = MagicMock()
         mock_uow_3 = MagicMock()
         mock_uow_3.__enter__ = MagicMock(return_value=mock_uow_3)
@@ -147,7 +155,7 @@ class TestExecuteApprovedStatusUpdate:
         mock_uow_3.session = mock_session_3
         mock_uow_3.media_buys = mock_repo_3
 
-        uow_iter = iter([mock_uow_1, mock_uow_2, mock_uow_3])
+        uow_iter = iter([mock_uow_1, mock_uow_plids, mock_uow_2, mock_uow_3])
 
         with (
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=lambda _: next(uow_iter)),

@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import CreativeAction
 from sqlalchemy import select
 
 from src.core.config_loader import set_current_tenant
