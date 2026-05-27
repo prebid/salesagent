@@ -68,7 +68,7 @@ class TestTypedAdCPErrorRaises:
         """media_buy_create.py:1758 raises AdCPBudgetTooLowError (not AdCPValidationError).
 
         Validates the audit S2 migration: the raise site moved from
-        ``_StructuredValidationError(code="BUDGET_TOO_LOW")`` + boundary
+        ``AdCPBudgetTooLowError`` raised directly via boundary
         translation to a direct typed ``AdCPBudgetTooLowError`` raise.
         """
         identity = typed_raise_setup

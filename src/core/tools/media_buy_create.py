@@ -2190,7 +2190,7 @@ async def _create_media_buy_impl(
         # path silently mis-tagged PermissionError as VALIDATION_ERROR).
         # All validator raise sites in this function now use typed AdCPError
         # subclasses directly (AdCPValidationError / AdCPBudgetTooLowError) — the
-        # previous _StructuredValidationError(ValueError) → AdCPValidationError
+        # typed AdCPValidationError raised directly at the boundary
         # translation block was deleted (audit S2).
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))

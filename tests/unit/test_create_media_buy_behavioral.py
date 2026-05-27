@@ -262,7 +262,7 @@ class TestProductNotFound:
         existing_product = _mock_product("prod_exists")
 
         with _PatchContext(products=[existing_product]) as pc:
-            # _StructuredValidationError(code="PRODUCT_NOT_FOUND") is converted by
+            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") is converted by
             # the _impl boundary catch into AdCPValidationError with error_code
             # "PRODUCT_NOT_FOUND" (richer than the base NOT_FOUND default).
             with pytest.raises(AdCPValidationError) as excinfo:
@@ -1827,7 +1827,7 @@ class TestProposalBasedObligations:
         with _PatchContext(products=[]) as pc:
             # No products in DB -> products not found
             pc.db_session.scalars.return_value.all.return_value = []
-            # _StructuredValidationError(code="PRODUCT_NOT_FOUND") is converted by
+            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") is converted by
             # the _impl boundary catch into AdCPValidationError with the richer
             # PRODUCT_NOT_FOUND error_code (not the base NOT_FOUND default).
             with pytest.raises(AdCPValidationError) as excinfo:
@@ -2195,7 +2195,7 @@ class TestExtensionObligations:
 
         # Zero budget triggers the typed AdCPBudgetTooLowError raise at
         # media_buy_create.py:1758 directly — propagates through the boundary
-        # catch unchanged (no _StructuredValidationError translation).
+        # catch unchanged (typed AdCPError raised directly).
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
         with _PatchContext() as pc:
@@ -2306,7 +2306,7 @@ class TestPostconditionObligations:
 
         # Default _PatchContext mocks one product with id "prod_1"; req asks
         # for "nonexistent_prod" so the validation block hits the not-found
-        # branch. _StructuredValidationError(code="PRODUCT_NOT_FOUND") becomes
+        # branch. AdCPValidationError(error_code="PRODUCT_NOT_FOUND") becomes
         # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") via the _impl
         # boundary catch and propagates to the transport boundary.
         with _PatchContext() as pc:
@@ -2338,7 +2338,7 @@ class TestPostconditionObligations:
 
         with _PatchContext(products=[]) as pc:
             pc.db_session.scalars.return_value.all.return_value = []
-            # Production raises _StructuredValidationError(code="PRODUCT_NOT_FOUND"),
+            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
             # which the _impl boundary catch converts to AdCPValidationError with
             # error_code="PRODUCT_NOT_FOUND" (richer than the base NOT_FOUND default).
             with pytest.raises(AdCPValidationError) as excinfo:

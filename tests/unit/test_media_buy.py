@@ -409,7 +409,7 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            # Production raises _StructuredValidationError(code="PRODUCT_NOT_FOUND"),
+            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
             # converted to AdCPValidationError with error_code="PRODUCT_NOT_FOUND" at
             # the _impl boundary catch.
             with pytest.raises(AdCPValidationError) as excinfo:
@@ -1287,7 +1287,7 @@ class TestCreateMediaBuyIdempotency:
 
             # Without idempotency_key, the function proceeds past the check.
             # It will fail at product validation (no products in mock DB).
-            # Production raises _StructuredValidationError(code="PRODUCT_NOT_FOUND"),
+            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
             # which the _impl boundary catch converts to AdCPValidationError with
             # error_code="PRODUCT_NOT_FOUND" and propagates. The point of this test
             # is that find_by_idempotency_key was never called — capture the
@@ -1354,7 +1354,7 @@ class TestCreateMediaBuyIdempotency:
             # Idempotency probe miss → flow continues into product validation,
             # which fails with AdCPValidationError(error_code="PRODUCT_NOT_FOUND")
             # via the _impl boundary catch (sourced from
-            # _StructuredValidationError(code="PRODUCT_NOT_FOUND")). The typed error
+            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND")). The typed error
             # propagates past the narrowed boundary catch. Capture it so we can still
             # assert the idempotency probe ran.
             with pytest.raises(AdCPValidationError):

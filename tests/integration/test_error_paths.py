@@ -225,8 +225,7 @@ class TestCreateMediaBuyErrorPaths:
             )
 
         # Typed AdCPValidationError raised directly from _impl with
-        # error_code="INVALID_REQUEST" (was: _StructuredValidationError
-        # translation, deleted in audit S2).
+        # error_code="INVALID_REQUEST".
         exc = excinfo.value
         assert exc.error_code == "INVALID_REQUEST"
         assert "past" in exc.message.lower() or "start" in exc.message.lower()
@@ -314,7 +313,7 @@ class TestCreateMediaBuyErrorPaths:
         # Typed AdCPBudgetTooLowError now propagates past the boundary catch.
         # Empty packages -> budget=0.0 -> "Budget must be positive" validator at
         # media_buy_create.py:1758 raises AdCPBudgetTooLowError (typed subclass,
-        # not _StructuredValidationError translated to AdCPValidationError).
+        # typed AdCPValidationError raised directly).
         with pytest.raises(AdCPBudgetTooLowError) as excinfo:
             await create_media_buy_raw(
                 po_number="error_test_po",

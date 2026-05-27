@@ -274,22 +274,6 @@ class TestTypedSubclasses:
         assert exc.error_code == "PACKAGE_NOT_FOUND"
         assert exc.status_code == 404
 
-    def test_creative_rejected(self):
-        from src.core.exceptions import AdCPCreativeRejectedError
-
-        exc = AdCPCreativeRejectedError("policy violation")
-        assert exc.error_code == "CREATIVE_REJECTED"
-        assert exc.status_code == 422
-        assert exc.recovery == "correctable"
-
-    def test_budget_exceeded(self):
-        from src.core.exceptions import AdCPBudgetExceededError
-
-        exc = AdCPBudgetExceededError("over ceiling")
-        assert exc.error_code == "BUDGET_EXCEEDED"
-        assert exc.status_code == 422
-        assert exc.recovery == "correctable"
-
     def test_budget_too_low(self):
         from src.core.exceptions import AdCPBudgetTooLowError
 
@@ -306,20 +290,14 @@ class TestTypedSubclasses:
         assert exc.status_code == 422
         assert exc.recovery == "correctable"
 
-    def test_product_unavailable(self):
-        from src.core.exceptions import AdCPProductUnavailableError
-
-        exc = AdCPProductUnavailableError("product offline")
-        assert exc.error_code == "PRODUCT_UNAVAILABLE"
-        assert exc.status_code == 422
-        assert exc.recovery == "correctable"
-
     def test_substrate_subclasses_present_with_standard_codes(self):
         """Each substrate subclass exists and pins a code in STANDARD_ERROR_CODES.
 
-        Verifies by-name lookup against the exceptions module — keeps this test
-        decoupled from the harness's ``_CODE_TO_CLASS`` registry to avoid the
-        DRY guard catching duplicated class lists.
+        Codes used only in advisory-on-success Pattern A construction
+        (BUDGET_EXCEEDED, CREATIVE_REJECTED, PRODUCT_UNAVAILABLE) intentionally
+        have no dedicated exception subclass — they would be substrate without
+        a production raise site (P3 violation). Wire envelopes carrying those
+        codes round-trip via the base AdCPError fallback in the harness.
         """
         import importlib
 
@@ -329,11 +307,8 @@ class TestTypedSubclasses:
         substrate = {
             "AdCPMediaBuyNotFoundError": "MEDIA_BUY_NOT_FOUND",
             "AdCPPackageNotFoundError": "PACKAGE_NOT_FOUND",
-            "AdCPCreativeRejectedError": "CREATIVE_REJECTED",
-            "AdCPBudgetExceededError": "BUDGET_EXCEEDED",
             "AdCPBudgetTooLowError": "BUDGET_TOO_LOW",
             "AdCPCapabilityNotSupportedError": "UNSUPPORTED_FEATURE",
-            "AdCPProductUnavailableError": "PRODUCT_UNAVAILABLE",
         }
         for class_name, expected_code in substrate.items():
             cls = getattr(exc_mod, class_name, None)

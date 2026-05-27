@@ -457,22 +457,6 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     recovery: RecoveryHint = "correctable"
 
 
-class AdCPCreativeRejectedError(AdCPError):
-    """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
-
-    status_code = 422
-    error_code = "CREATIVE_REJECTED"
-    recovery: RecoveryHint = "correctable"
-
-
-class AdCPBudgetExceededError(AdCPError):
-    """Requested budget exceeds tenant or product ceiling (422, BUDGET_EXCEEDED)."""
-
-    status_code = 422
-    error_code = "BUDGET_EXCEEDED"
-    recovery: RecoveryHint = "correctable"
-
-
 class AdCPBudgetTooLowError(AdCPError):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
@@ -507,14 +491,6 @@ class AdCPCapabilityNotSupportedError(AdCPError):
 
     status_code = 422
     error_code = "UNSUPPORTED_FEATURE"
-    recovery: RecoveryHint = "correctable"
-
-
-class AdCPProductUnavailableError(AdCPError):
-    """Product is offline, deactivated, or otherwise unavailable (422, PRODUCT_UNAVAILABLE)."""
-
-    status_code = 422
-    error_code = "PRODUCT_UNAVAILABLE"
     recovery: RecoveryHint = "correctable"
 
 

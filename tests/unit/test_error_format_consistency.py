@@ -788,11 +788,13 @@ class TestErrorCodeVocabularyConsistency:
         # SDK standard codes added by the error-emission-architecture substrate.
         "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
-        "CREATIVE_REJECTED",  # SDK standard: AdCPCreativeRejectedError
-        "BUDGET_EXCEEDED",  # SDK standard: AdCPBudgetExceededError
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
-        "PRODUCT_UNAVAILABLE",  # SDK standard: AdCPProductUnavailableError
+        # Advisory-on-success Pattern A codes (no dedicated exception subclass —
+        # construction sites use Error(code=...) inside success envelopes).
+        "CREATIVE_REJECTED",
+        "BUDGET_EXCEEDED",
+        "PRODUCT_UNAVAILABLE",
     }
 
     def test_all_exception_error_codes_are_canonical(self):
@@ -865,9 +867,18 @@ class TestErrorCodeVocabularyConsistency:
             f"Add them to the canonical set or fix the error_code."
         )
 
-        # Every canonical code must correspond to a subclass
-        unused = self.CANONICAL_ERROR_CODES - subclass_codes
+        # Every canonical code must correspond to either a subclass OR an
+        # advisory-on-success Pattern A wire code (constructed via
+        # ``Error(code=...)`` inside success envelopes without an associated
+        # raise site, hence no dedicated exception class).
+        _ADVISORY_ONLY_CODES = {
+            "CREATIVE_REJECTED",
+            "BUDGET_EXCEEDED",
+            "PRODUCT_UNAVAILABLE",
+        }
+        unused = self.CANONICAL_ERROR_CODES - subclass_codes - _ADVISORY_ONLY_CODES
         assert not unused, (
             f"CANONICAL_ERROR_CODES entries without a matching exception: {unused}. "
-            f"Remove stale entries or create the missing exception class."
+            f"Remove stale entries, add to _ADVISORY_ONLY_CODES if Pattern A, "
+            f"or create the missing exception class."
         )

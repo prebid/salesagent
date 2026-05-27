@@ -18,7 +18,7 @@ Production-validator tests (BUDGET_TOO_LOW, INVALID_REQUEST past start_time)
 drive REAL invalid input through the full pipeline — no ``_impl`` patching.
 This exercises the actual production validators
 (src/core/tools/media_buy_create.py:1756 budget, :1791 start_time) and the
-_StructuredValidationError → AdCPValidationError translation at line 2221.
+AdCPValidationError raised directly.
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ class TestMcpWireErrorEnvelope:
               → middleware resolves identity (patched to use real tenant/principal)
               → create_media_buy MCP wrapper builds CreateMediaBuyRequest
               → _create_media_buy_impl validation: get_total_budget() == 0
-              → raise _StructuredValidationError(code="BUDGET_TOO_LOW") (line 1758)
+              → raise AdCPBudgetTooLowError(...) (line 1758)
               → except block translates to AdCPValidationError (line 2221)
               → with_error_logging → _translate_to_tool_error → wire envelope
 

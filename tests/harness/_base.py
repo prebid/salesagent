@@ -55,17 +55,14 @@ def _adcp_error_from_code(
         AdCPAccountSuspendedError,
         AdCPAdapterError,
         AdCPAuthenticationError,
-        AdCPBudgetExceededError,
         AdCPBudgetExhaustedError,
         AdCPBudgetTooLowError,
         AdCPCapabilityNotSupportedError,
         AdCPConflictError,
-        AdCPCreativeRejectedError,
         AdCPError,
         AdCPMediaBuyNotFoundError,
         AdCPNotFoundError,
         AdCPPackageNotFoundError,
-        AdCPProductUnavailableError,
         AdCPRateLimitError,
         AdCPServiceUnavailableError,
         AdCPValidationError,
@@ -87,16 +84,16 @@ def _adcp_error_from_code(
             AdCPRateLimitError,
             AdCPAdapterError,
             AdCPServiceUnavailableError,
-            # PR 1 substrate subclasses — match on their wire-standard codes so
-            # the harness reconstructs the specific subclass after a roundtrip
-            # (preserves type for isinstance() checks in tests).
+            # Substrate subclasses with production raise sites — the harness
+            # reconstructs the specific subclass after a roundtrip (preserves
+            # type for isinstance() checks in tests). Codes with only
+            # advisory-on-success Pattern A construction (BUDGET_EXCEEDED,
+            # CREATIVE_REJECTED, PRODUCT_UNAVAILABLE) round-trip via the
+            # base AdCPError fallback below and don't need a dedicated class.
             AdCPMediaBuyNotFoundError,
             AdCPPackageNotFoundError,
-            AdCPCreativeRejectedError,
-            AdCPBudgetExceededError,
             AdCPBudgetTooLowError,
             AdCPCapabilityNotSupportedError,
-            AdCPProductUnavailableError,
         )
     }
     # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED

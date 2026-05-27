@@ -770,12 +770,12 @@ class TestHandleToolErrorPreservesStatusCode:
         response = handle_tool_error(tool_error)
         assert response.status_code == 404
 
-    def test_budget_exceeded_tool_error_returns_422(self):
-        """AdCPToolError carrying a BUDGET_EXCEEDED envelope → 422."""
-        from src.core.exceptions import AdCPBudgetExceededError, build_two_layer_error_envelope
+    def test_budget_too_low_tool_error_returns_422(self):
+        """AdCPToolError carrying a BUDGET_TOO_LOW envelope → 422."""
+        from src.core.exceptions import AdCPBudgetTooLowError, build_two_layer_error_envelope
         from src.core.tool_error_logging import AdCPToolError, handle_tool_error
 
-        source = AdCPBudgetExceededError("over ceiling")
+        source = AdCPBudgetTooLowError("below minimum")
         tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
 
         response = handle_tool_error(tool_error)
