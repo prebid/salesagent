@@ -62,7 +62,7 @@ def test_request_scoped_capabilities_adds_portfolio_domains() -> None:
     from core.platforms._capabilities_envelope import capabilities_for_request
 
     base = DecisioningCapabilities(
-        media_buy=MediaBuy(supported_pricing_models=["cpm"]),
+        media_buy=MediaBuy(supported_pricing_models=["cpm"], supports_proposals=True),
         webhook_signing=WebhookSigning(supported=False, legacy_hmac_fallback=True),
     )
     context = SimpleNamespace(tenant_id="tenant_1")
@@ -86,12 +86,33 @@ def test_request_scoped_capabilities_adds_portfolio_domains() -> None:
     ]
 
 
+def test_request_scoped_capabilities_advertises_compose_products_disabled() -> None:
+    """Storefront-owned product composition is surfaced via supports_proposals."""
+    from core.platforms._capabilities_envelope import capabilities_for_request
+
+    base = DecisioningCapabilities(
+        media_buy=MediaBuy(supported_pricing_models=["cpm"], supports_proposals=True),
+        webhook_signing=WebhookSigning(supported=False, legacy_hmac_fallback=True),
+    )
+
+    with (
+        patch("core.platforms._capabilities_envelope.publisher_owns_compose_products", return_value=False),
+        patch("core.platforms._capabilities_envelope._publisher_domains_for_tenant_id", return_value=[]),
+        patch("src.services.webhook_signing.load_active_signing_credential", return_value=None),
+    ):
+        scoped = capabilities_for_request(base, context=SimpleNamespace(tenant_id="tenant_1"))
+
+    assert scoped is not None
+    assert scoped.media_buy is not None
+    assert scoped.media_buy.supports_proposals is False
+
+
 def test_request_scoped_capabilities_omits_empty_portfolio_domains() -> None:
     """Empty publisher-domain sets return None so the base capabilities project."""
     from core.platforms._capabilities_envelope import capabilities_for_request
 
     base = DecisioningCapabilities(
-        media_buy=MediaBuy(supported_pricing_models=["cpm"]),
+        media_buy=MediaBuy(supported_pricing_models=["cpm"], supports_proposals=True),
         webhook_signing=WebhookSigning(supported=False, legacy_hmac_fallback=True),
     )
 

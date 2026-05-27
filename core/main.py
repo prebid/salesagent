@@ -447,6 +447,7 @@ def build_router() -> LazyPlatformRouter:
         account=CapabilitiesAccount(supported_billing=["operator", "agent"]),
         media_buy=MediaBuy(
             supported_pricing_models=["cpm"],
+            supports_proposals=True,
             # inline_creative_management: sync_creatives / list_creatives
             # tools land creatives synchronously without a separate review
             # round-trip.

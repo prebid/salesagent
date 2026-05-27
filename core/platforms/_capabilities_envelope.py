@@ -36,6 +36,8 @@ from adcp.decisioning import DecisioningCapabilities
 from adcp.decisioning.capabilities import Portfolio, WebhookSigning
 from adcp.server.tenant_router import current_tenant
 
+from src.core.embedded_runtime import publisher_owns_compose_products
+
 logger = logging.getLogger(__name__)
 
 _WEBHOOK_SIGNING_PROFILE = "adcp/webhook-signing/v1"
@@ -101,16 +103,26 @@ def capabilities_for_request(
     tenant_id = _tenant_id_from_context(context)
     domains = _publisher_domains_for_tenant_id(tenant_id)
     webhook_signing = _webhook_signing_for_tenant_id(tenant_id)
+    supports_proposals = publisher_owns_compose_products()
     updates: dict[str, Any] = {}
 
-    if domains and base_capabilities.media_buy is not None:
+    if base_capabilities.media_buy is not None:
         existing_portfolio = base_capabilities.media_buy.portfolio
-        portfolio = (
-            existing_portfolio.model_copy(update={"publisher_domains": domains})
-            if existing_portfolio is not None
-            else Portfolio(publisher_domains=domains)
-        )
-        updates["media_buy"] = base_capabilities.media_buy.model_copy(update={"portfolio": portfolio})
+        media_buy_updates: dict[str, Any] = {}
+
+        if domains:
+            portfolio = (
+                existing_portfolio.model_copy(update={"publisher_domains": domains})
+                if existing_portfolio is not None
+                else Portfolio(publisher_domains=domains)
+            )
+            media_buy_updates["portfolio"] = portfolio
+
+        if base_capabilities.media_buy.supports_proposals != supports_proposals:
+            media_buy_updates["supports_proposals"] = supports_proposals
+
+        if media_buy_updates:
+            updates["media_buy"] = base_capabilities.media_buy.model_copy(update=media_buy_updates)
 
     base_webhook_signing = base_capabilities.webhook_signing
     if base_webhook_signing is None or webhook_signing.model_dump(mode="json", exclude_none=True) != (
