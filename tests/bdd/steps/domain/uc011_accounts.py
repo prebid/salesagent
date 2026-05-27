@@ -643,11 +643,36 @@ def then_validation_error(ctx: dict) -> None:
 
 @then("the error indicates the status value is not recognized")
 def then_error_invalid_status(ctx: dict) -> None:
-    """Assert the error message indicates invalid status."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
+    """Assert the error specifically targets an unrecognized status value.
+
+    The error must reference the 'status' field AND indicate an invalid/
+    unrecognized enum value — not just be any generic validation error.
+    For Pydantic ValidationErrors, the error's loc must contain 'status'.
+    For other errors, the message must contain both 'status' and the
+    offending value or an explicit invalid-value indicator.
+    """
+    from pydantic import ValidationError
+
+    error = _get_error(ctx)
     msg = str(error).lower()
-    assert "status" in msg or "valid" in msg or "invalid" in msg, f"Expected error about invalid status, got: {error}"
+
+    if isinstance(error, ValidationError):
+        # Structured error: at least one error detail must target the status field
+        found_status_error = False
+        for d in error.errors():
+            if any("status" in str(loc).lower() for loc in d.get("loc", ())):
+                found_status_error = True
+                break
+        assert found_status_error, (
+            f"ValidationError does not target 'status' field. Locations: {[d.get('loc') for d in error.errors()]}"
+        )
+    else:
+        # Unstructured error: must mention 'status' specifically (not just 'valid')
+        assert "status" in msg, f"Expected error to reference 'status' field, got: {error}"
+        # Must also indicate an invalid/unrecognized value condition
+        assert "invalid" in msg or "not recognized" in msg or "unknown" in msg or "not a valid" in msg, (
+            f"Expected error to indicate unrecognized value, got: {error}"
+        )
 
 
 @then("the response contains accounts with all statuses")
@@ -682,7 +707,16 @@ def then_result_set_identical(ctx: dict) -> None:
 
 @then(parsers.parse('the response has outcome "{outcome}"'))
 def then_response_outcome(ctx: dict, outcome: str) -> None:
-    """Assert response matches expected outcome (flexible matching)."""
+    """Assert response matches expected outcome (flexible matching).
+
+    Branches:
+    - "validation error": assert an error was raised
+    - "success with N account(s)": assert exact count (pagination)
+    - "success with per-account results": assert the response has one
+      result per submitted account, each with account_id and status
+    """
+    import re
+
     if "validation error" in outcome:
         error = ctx.get("error")
         assert error is not None, f"Expected validation error for outcome '{outcome}', but got no error"
@@ -692,14 +726,30 @@ def then_response_outcome(ctx: dict, outcome: str) -> None:
         resp = ctx.get("response")
         assert resp is not None, f"Expected a response for outcome '{outcome}'"
 
-        # Parse expected count from outcome like "success with 50 accounts"
-        import re
-
-        match = re.search(r"(\d+)\s+account", outcome)
-        if match:
-            expected_count = int(match.group(1))
-            actual = len(resp.accounts)
-            assert actual == expected_count, f"Expected {expected_count} accounts for outcome '{outcome}', got {actual}"
+        if "per-account results" in outcome:
+            # Sync BVA: verify per-account result count matches submitted count
+            submitted = ctx.get("submitted_account_count")
+            assert submitted is not None, "Test setup error: submitted_account_count not stored in ctx by When step"
+            actual_count = len(resp.accounts)
+            assert actual_count == submitted, f"Expected {submitted} per-account results, got {actual_count}"
+            # Each per-account result must have an identifier and status
+            for acct in resp.accounts:
+                assert acct.account_id is not None, f"Per-account result missing account_id: {acct}"
+                assert _status_str(acct.status) in {
+                    "active",
+                    "pending_approval",
+                    "suspended",
+                    "closed",
+                }, f"Unexpected account status: {_status_str(acct.status)}"
+        else:
+            # Parse expected count from outcome like "success with 50 accounts"
+            match = re.search(r"(\d+)\s+account", outcome)
+            if match:
+                expected_count = int(match.group(1))
+                actual = len(resp.accounts)
+                assert actual == expected_count, (
+                    f"Expected {expected_count} accounts for outcome '{outcome}', got {actual}"
+                )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1037,12 +1087,24 @@ def then_errors_array(ctx: dict, count: int) -> None:
 def then_no_accounts_in_response(ctx: dict) -> None:
     """Assert the error response has no accounts array.
 
-    In the error variant, ctx['response'] is None (error raised).
-    Verify no success response leaked through.
+    Verifies we are on the error path AND that neither the error payload
+    nor any leaked success response contains an 'accounts' key. This
+    ensures the error variant truly excludes account data on the wire.
     """
-    _get_error(ctx)  # Confirm we're in the error path
+    error = _get_error(ctx)
+    # Assert no success response leaked through
     resp = ctx.get("response")
     assert resp is None, f"Expected no success response in error variant, got: {resp}"
+    # Inspect the error payload itself for absence of accounts
+    error_payload = None
+    if hasattr(error, "model_dump"):
+        error_payload = error.model_dump()
+    elif hasattr(error, "__dict__"):
+        error_payload = vars(error)
+    if error_payload is not None:
+        assert "accounts" not in error_payload, (
+            f"Error payload should not contain 'accounts' key, but found: {error_payload.get('accounts')}"
+        )
 
 
 @then("the response does not contain a dry_run field")
@@ -1310,37 +1372,56 @@ def when_push_config(ctx: dict, url: str) -> None:
 def then_webhook_registered(ctx: dict) -> None:
     """Assert webhook URL was registered for async status notifications.
 
-    Verifies that the sync response or error acknowledges the
-    push_notification_config. Production does not yet implement webhook
-    registration, so assert what we can and xfail the gap.
+    Verifies that the sync request succeeded (no error) and produced
+    accounts, confirming the push_notification_config was accepted.
+    The acknowledgement field (echoed URL / registration ID) is not yet
+    implemented in production, so that specific check is xfailed.
     """
     import pytest
 
-    # Assert the sync request completed (response or error exists)
-    assert ctx.get("response") is not None or ctx.get("error") is not None, (
-        "Expected sync to complete before checking webhook registration"
+    # Assert the sync request succeeded — not just "some outcome exists"
+    assert ctx.get("error") is None, (
+        f"Sync request failed — webhook registration requires successful sync, got error: {ctx.get('error')}"
     )
-    pytest.xfail("SPEC-PRODUCTION GAP: push_notification_config webhook registration not yet implemented in production")
+    resp = ctx.get("response")
+    assert resp is not None, "Expected sync response for webhook registration check"
+    assert resp.accounts, "Expected accounts in sync response for webhook registration"
+    # Assert the push URL was provided in the request
+    registered_url = ctx.get("push_notification_url")
+    assert registered_url is not None, "No push_notification_config URL was provided"
+    assert isinstance(registered_url, str) and registered_url.strip(), (
+        f"Push notification URL must be a non-empty string, got: {registered_url!r}"
+    )
+    # xfail: production does not yet echo/acknowledge the webhook config
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: push_notification_config webhook registration "
+        "acknowledgement not yet implemented — expected response to echo "
+        "registered URL or return registration ID"
+    )
 
 
 @then(parsers.parse('when the account transitions from "{from_status}" to "{to_status}"'))
 def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> None:
     """Assert account status transition triggers push notification flow.
 
-    Verifies that the sync created an account and that the from_status
-    is a valid initial state. Production does not yet implement status
-    transition notifications, so assert what we can and xfail the gap.
+    Verifies the sync created an account whose current status matches
+    from_status, and that from_status/to_status are distinct valid states.
+    Production does not yet implement transition notifications.
     """
     import pytest
 
-    # Assert the sync created at least one account
     resp = ctx.get("response")
     assert resp is not None, "Expected sync response before checking transitions"
     assert resp.accounts, "Expected at least one account in sync response"
-    # Verify from_status is a plausible initial state
-    assert from_status in {"pending_approval", "active", "suspended", "closed"}, (
-        f"Unexpected from_status: {from_status}"
+    # The account's current status must match the expected from_status
+    acct = ctx.get("last_account") or resp.accounts[0]
+    actual_status = _status_str(acct.status)
+    assert actual_status == from_status, (
+        f"Expected account status '{from_status}' as transition source, got '{actual_status}'"
     )
+    # from and to must be distinct (a transition implies a state change)
+    assert from_status != to_status, f"Transition must change status: from='{from_status}' to='{to_status}'"
+    # xfail: production does not yet support transition-triggered notifications
     pytest.xfail("SPEC-PRODUCTION GAP: async account status transition notifications not yet implemented in production")
 
 
@@ -1348,19 +1429,29 @@ def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> Non
 def then_push_sent(ctx: dict, url: str) -> None:
     """Assert push notification is delivered to the specified URL.
 
-    Verifies that the sync completed successfully (prerequisite for push
-    delivery). Production does not yet implement webhook push delivery,
-    so assert the prerequisite and xfail the delivery check.
+    The sync must have completed and produced accounts. The push delivery
+    service should have sent exactly one notification to the registered URL
+    with the transitioned account's ID and new status in the payload.
+    Production does not yet implement webhook push delivery.
     """
     import pytest
 
-    # Assert the sync completed before push can fire
+    # Assert push URL matches what was registered in the Given step
+    assert ctx.get("push_notification_url") == url, (
+        f"Expected push to {url}, registered: {ctx.get('push_notification_url')}"
+    )
+    # Assert the sync produced accounts that could trigger a push
     resp = ctx.get("response")
     assert resp is not None, "Expected sync response before push notification"
     assert resp.accounts, "Expected accounts in sync response before push"
-    # Verify the URL is well-formed
-    assert url.startswith("https://"), f"Push URL should be HTTPS, got: {url}"
-    pytest.xfail("SPEC-PRODUCTION GAP: push notification delivery to webhook URL not yet implemented in production")
+    # The real assertion: verify the delivery service sent a notification
+    # to the registered URL with the account's ID and new status.
+    # xfail because production does not yet implement webhook push delivery.
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: push notification delivery to webhook URL "
+        "not yet implemented — expected outbound POST to registered URL "
+        "with account_id and status payload"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1897,6 +1988,7 @@ def when_sync_n_accounts(ctx: dict, count: int) -> None:
         {"brand": {"domain": f"brand-{i:04d}.com"}, "operator": f"brand-{i:04d}.com", "billing": "operator"}
         for i in range(count)
     ]
+    ctx["submitted_account_count"] = count
 
     try:
         req = SyncAccountsRequest(accounts=accounts)
@@ -2139,25 +2231,44 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
     Pydantic ValidationErrors include inline guidance ('Input should be ...').
     Per-account errors (AdCP Error objects) carry an explicit 'suggestion' field.
-    The assertion verifies the error message contains actionable text that helps
-    the caller correct their input.
+    The assertion verifies the error contains non-empty, human-readable fix text
+    appropriate to the error type.
     """
     from pydantic import ValidationError
 
+    # Check per-account errors first (AdCP Error objects with typed suggestion field)
+    acct = ctx.get("last_account")
+    if acct is not None and hasattr(acct, "errors") and acct.errors:
+        found_suggestion = False
+        for e in acct.errors:
+            s = getattr(e, "suggestion", None)
+            if s is not None:
+                assert isinstance(s, str) and s.strip(), f"Expected non-empty suggestion string, got: {s!r}"
+                found_suggestion = True
+        assert found_suggestion, f"Per-account errors lack 'suggestion' field: {[str(e) for e in acct.errors]}"
+        return
+
     error = _get_error(ctx)
-    msg = str(error).lower()
-    # Pydantic errors include "input should be" as inline fix guidance.
-    # AdCP errors include "use one of" or "supported" as suggestion text.
-    assert isinstance(error, (ValidationError, ValueError, Exception)), (
-        f"Expected an error with fix guidance, got {type(error).__name__}"
+
+    if isinstance(error, ValidationError):
+        # Pydantic errors must contain structured remediation text with msg field
+        error_details = error.errors()
+        assert error_details, "ValidationError has no error details"
+        for detail in error_details:
+            detail_msg = detail.get("msg", "")
+            assert isinstance(detail_msg, str) and detail_msg.strip(), (
+                f"ValidationError detail lacks remediation message: {detail}"
+            )
+        return
+
+    # Operation-level errors must carry a suggestion or recovery field
+    suggestion = getattr(error, "suggestion", None) or getattr(error, "recovery", None)
+    assert suggestion is not None, (
+        f"Error of type {type(error).__name__} lacks 'suggestion' or 'recovery' field: {error}"
     )
-    assert (
-        "input should be" in msg
-        or "should be" in msg
-        or "use one of" in msg
-        or "supported" in msg
-        or "suggestion" in msg
-    ), f"Error lacks fix guidance (no 'should be'/'use one of'/'supported'): {error}"
+    assert isinstance(suggestion, str) and len(suggestion.strip()) > 0, (
+        f"Expected non-empty suggestion/recovery string, got: {suggestion!r}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
