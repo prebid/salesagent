@@ -38,7 +38,7 @@ class _LazyDBSession:
             type(self)._session = scoped_session(sessionmaker(bind=create_engine(url)))
         return type(self)._session  # type: ignore[return-value]
 
-    def __getattr__(self, name: str):  # type: ignore[override]
+    def __getattr__(self, name: str):
         return getattr(self._ensure(), name)
 
     def __call__(self, *args, **kw):

@@ -7,8 +7,7 @@ Used by creative sync tests instead of hand-crafted dicts.
 from __future__ import annotations
 
 import factory
-from adcp.types import FormatId
-from adcp.types import CreativeAsset
+from adcp.types import CreativeAsset, FormatId
 
 from tests.factories.format import AGENT_URL
 

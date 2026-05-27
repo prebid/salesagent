@@ -9,7 +9,6 @@ import time
 from typing import Annotated, TypeVar
 
 from adcp import FormatId
-from adcp.types import Format as AdcpFormat
 from adcp.types import (
     AssetContentType,
     AudioFormatAsset,
@@ -20,6 +19,7 @@ from adcp.types import (
     UrlFormatAsset,
     VideoFormatAsset,
 )
+from adcp.types import Format as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
 from pydantic import Field
 
@@ -196,7 +196,14 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset] = []
+                        assets_list: list[
+                            ImageFormatAsset
+                            | VideoFormatAsset
+                            | AudioFormatAsset
+                            | TextFormatAsset
+                            | HtmlFormatAsset
+                            | UrlFormatAsset
+                        ] = []
                         for asset_id in template.get("required_assets", []):
                             asset_type = _infer_asset_type(asset_id)
                             assets_list.append(_make_asset(asset_id, asset_type, required=True))

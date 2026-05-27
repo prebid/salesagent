@@ -54,9 +54,8 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types import CreativeAction, CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
-from adcp.types import CreativeAsset
-from adcp.types import CreativeAction
 
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError
 from src.core.schemas import (
@@ -492,7 +491,9 @@ class TestSyncCreativesRequestSchema:
         assignments as optional list of Assignment objects (creative_id + package_id).
         Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
         """
-        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment  # TODO: no stable alias in adcp.types
+        from adcp.types.generated_poc.creative.sync_creatives_request import (
+            Assignment,
+        )  # TODO: no stable alias in adcp.types
 
         creative = _make_creative()
         req = SyncCreativesRequest(

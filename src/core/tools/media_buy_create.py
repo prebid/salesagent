@@ -24,10 +24,10 @@ if TYPE_CHECKING:
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
+from adcp.types import BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import MediaBuyStatus
+from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
-from adcp.types import BrandReference, ContextObject, PackageRequest as AdcpPackageRequest, ReportingWebhook
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
@@ -2990,9 +2990,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url

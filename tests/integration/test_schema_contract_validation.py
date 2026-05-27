@@ -27,7 +27,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # V3: Consolidated pricing types - CpmAuctionPricingOption/CpmFixedRatePricingOption → CpmPricingOption
 # Use fixed_price for fixed-rate, floor_price for auction
 from adcp import CpmPricingOption
-from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.core.vendor_pricing_option import (
+    VendorPricingOption,
+)  # TODO: no stable alias in adcp.types
 
 from src.core.schemas import (
     Budget,

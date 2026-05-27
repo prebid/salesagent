@@ -31,8 +31,7 @@ def given_request_with_account_id(ctx: dict, account_id: str) -> None:
 @given(parsers.parse('a valid create_media_buy request with account natural key brand "{brand}" operator "{operator}"'))
 def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None:
     """Set up a create_media_buy request referencing a natural key (brand + operator)."""
-    from adcp.types import AccountReference, AccountReferenceByNaturalKey
-    from adcp.types import BrandReference
+    from adcp.types import AccountReference, AccountReferenceByNaturalKey, BrandReference
 
     ctx["account_ref"] = AccountReference(
         root=AccountReferenceByNaturalKey(brand=BrandReference(domain=brand), operator=operator),
@@ -189,8 +188,7 @@ def given_account_active(ctx: dict) -> None:
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))
 def given_request_with_partition(ctx: dict, partition: str) -> None:
     """Set up request based on partition name (for Scenario Outline tables)."""
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
-    from adcp.types import BrandReference
+    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     if "tenant" not in ctx:
@@ -294,8 +292,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 @given(parsers.parse("a create_media_buy request with account: {config}"))
 def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     """Set up request based on boundary config string."""
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
-    from adcp.types import BrandReference
+    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     if "tenant" not in ctx:
