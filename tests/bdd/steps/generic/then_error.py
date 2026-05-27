@@ -104,6 +104,66 @@ def then_operation_fails(ctx: dict) -> None:
     )
 
 
+@then("the entire sync operation fails")
+def then_entire_sync_operation_fails(ctx: dict) -> None:
+    """Assert the sync operation failed entirely -- no partial successes.
+
+    Stronger than "the operation should fail": this step additionally verifies
+    that the failure is total.  When a sync runs in strict validation mode
+    (BR-RULE-172 INV-5), a single invalid catalog must cause the entire
+    operation to be rejected -- the response must NOT contain any successfully
+    processed items alongside the error.
+
+    Asserts:
+    1. An error was recorded (Exception or Error model).
+    2. If a response exists with a results/catalogs collection, NONE of the
+       items were processed successfully (no partial success).
+    """
+    # ── Resolve the error object ────────────────────────────────────
+    error = ctx.get("error")
+    resp = ctx.get("response")
+
+    # Promote response.errors if no top-level error was captured
+    if error is None and resp is not None and hasattr(resp, "errors") and resp.errors:
+        first_error = resp.errors[0]
+        assert first_error is not None, "response.errors[0] is None -- expected a concrete error"
+        ctx["error"] = first_error
+        error = first_error
+
+    assert error is not None, (
+        "Expected the entire sync operation to fail but no error was recorded. "
+        f"ctx keys: {list(ctx.keys())}, response: {resp!r}"
+    )
+
+    # ── Verify it is a proper error object ──────────────────────────
+    is_exception = isinstance(error, (Exception, BaseException))
+    is_error_model = getattr(error, "code", None) is not None
+    assert is_exception or is_error_model, (
+        f"ctx['error'] is not an Exception or Error model: {type(error).__name__} = {error!r}"
+    )
+
+    # ── Verify NO partial successes ─────────────────────────────────
+    # "Entire sync fails" means the operation was rejected wholesale.
+    # If a response exists with item-level results, none may have succeeded.
+    if resp is not None:
+        for attr in ("catalogs", "results", "items"):
+            items = getattr(resp, attr, None)
+            if items is None:
+                continue
+            successful = [
+                item
+                for item in items
+                if getattr(item, "action", None) not in (None, "failed", "error", "rejected")
+                or getattr(item, "status", None) == "success"
+            ]
+            assert not successful, (
+                f"Expected entire sync to fail but found {len(successful)} "
+                f"successfully processed item(s) in response.{attr} -- "
+                f"this indicates partial success, not total failure. "
+                f"BR-RULE-172 INV-5 requires the ENTIRE operation to fail."
+            )
+
+
 # ── Error code ───────────────────────────────────────────────────────
 
 
