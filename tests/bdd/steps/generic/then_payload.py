@@ -622,15 +622,42 @@ def then_partition_filtering_result(ctx: dict, field: str, expected: str) -> Non
 def then_boundary_handling_result(ctx: dict, field: str, expected: str) -> None:
     """Generic boundary test: field handling should be expected.
 
-    For expected == "valid":
-    1. Verifies the response is well-formed.
-    2. Verifies returned formats are a subset of the seeded registry.
-    3. Verifies field-specific filter semantics using the same content
-       assertions as partition tests.
-
-    For expected == "invalid": verifies error presence and no response.
+    Dispatches by response domain:
+    - Delivery responses (GetMediaBuyDeliveryResponse): field-specific delivery checks
+    - Creative format responses (ListCreativeFormatsResponse): format catalog checks
     """
-    _assert_partition_outcome(ctx, field, expected)
-    if expected == "valid":
-        _assert_returned_formats_subset_of_registry(ctx, field, label="Boundary")
-        _assert_filter_content(ctx, field, label="Boundary")
+    resp = ctx.get("response")
+    _DELIVERY_FIELDS = {"reporting_dimensions", "reporting dimensions", "attribution_window",
+                        "attribution window", "daily_breakdown", "daily breakdown",
+                        "include_package_daily_breakdown", "date_range", "date range",
+                        "ownership", "account", "status_filter", "status filter"}
+    is_delivery = field.strip().lower().replace(" ", "_") in _DELIVERY_FIELDS or (
+        resp is not None and hasattr(resp, "media_buy_deliveries")
+    )
+
+    if is_delivery:
+        # Delivery domain: assert based on response shape
+        if expected.strip().lower() in ("invalid", "error", "rejected"):
+            from pydantic import ValidationError as PydanticValidationError
+            from src.core.exceptions import AdCPError
+            error = ctx.get("error")
+            assert error is not None, (
+                f"Expected '{field}' boundary to be rejected as invalid, but no error in ctx"
+            )
+            assert isinstance(error, (AdCPError, PydanticValidationError)), (
+                f"Expected AdCPError or ValidationError for invalid '{field}' boundary, "
+                f"got {type(error).__name__}: {error}"
+            )
+        else:
+            assert "error" not in ctx, (
+                f"Expected valid '{field}' boundary but got error: {ctx.get('error')}"
+            )
+            assert resp is not None, f"Expected delivery response for valid '{field}' boundary"
+            deliveries = getattr(resp, "media_buy_deliveries", None) or []
+            assert deliveries, f"Valid '{field}' boundary: expected non-empty media_buy_deliveries"
+    else:
+        # Creative format domain: existing catalog checks
+        _assert_partition_outcome(ctx, field, expected)
+        if expected == "valid":
+            _assert_returned_formats_subset_of_registry(ctx, field, label="Boundary")
+            _assert_filter_content(ctx, field, label="Boundary")

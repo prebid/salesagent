@@ -377,7 +377,8 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
     expected_principal = ctx.get("principal_id") or ctx.get("identity", {}).get("principal_id") if isinstance(ctx.get("identity"), dict) else None
     creative_id = ctx["creatives"][-1]["creative_id"]
     env = ctx["env"]
-    if hasattr(env, "_session") and env._session is not None:
+    session = getattr(env, "_session", None)
+    if session is not None:
         from sqlalchemy import select
         from src.core.database.models import Creative as CreativeModel
         creative = env._session.scalars(

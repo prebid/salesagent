@@ -1496,7 +1496,14 @@ def then_webhook_registered(ctx: dict) -> None:
             f"Account has unexpected action '{_action_str(acct.action)}' — "
             f"webhook registration requires successful account processing"
         )
-    # xfail: production does not yet echo/acknowledge the webhook config
+    # Verify the request actually carried push_notification_config (distinguishes
+    # this step from a plain "sync succeeded" check)
+    push_config = ctx.get("push_notification_config") or ctx.get("request_push_config")
+    assert push_config is not None, (
+        "Then 'webhook registered' but the Given step did not set push_notification_config in ctx — "
+        "cannot verify webhook registration without a configured webhook"
+    )
+    # xfail: production does not yet echo/acknowledge the webhook config in response
     pytest.xfail(
         "SPEC-PRODUCTION GAP: push_notification_config webhook registration "
         "acknowledgement not yet implemented — expected response to echo "

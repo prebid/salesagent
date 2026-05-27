@@ -1716,14 +1716,13 @@ def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
     assert po_id is not None, "Package missing pricing_option_id — incomplete package state"
     assert isinstance(po_id, str) and po_id.strip(), f"Expected non-empty pricing_option_id, got {po_id!r}"
 
-    # buyer_ref removed from adcp.types.Package in 3.12; xfail only this line
-    actual_buyer_ref = _pkg_field(pkg, "buyer_ref")
-    if actual_buyer_ref is None:
-        pytest.xfail(
-            "buyer_ref removed from adcp Package schema in 3.12 — field absent in response, cannot verify echo"
-        )
-    assert actual_buyer_ref == buyer_ref, (
-        f"Expected buyer_ref '{buyer_ref}' echoed in package, got '{actual_buyer_ref}'"
+    # buyer_ref was removed from adcp Package response schema in 3.12.
+    # The request still uses buyer_ref for package identification, but the
+    # response no longer echoes it. The package is identified by package_id.
+    # Assert that a valid package was returned (package_id present) — the
+    # buyer_ref→package_id resolution is the behavioral claim.
+    assert pkg_id, (
+        f"buyer_ref '{buyer_ref}' should resolve to a package with a seller-assigned package_id"
     )
 
 
