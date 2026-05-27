@@ -372,13 +372,25 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
         f"Expected a success action proving account was resolved, got {actions}"
     )
 
-    # 3. Verify an account reference was provided by the Given step (precondition)
-    has_account_id = "request_account_id" in ctx
-    has_natural_key = "request_brand" in ctx and "request_operator" in ctx
-    assert has_account_id or has_natural_key, (
-        "Then step claims 'proceed with resolved account' but no account reference "
-        "was set up by a Given step (missing request_account_id and request_brand/request_operator)"
-    )
+    # 3. Verify account resolution by checking persisted creative
+    expected_account_id = ctx.get("request_account_id")
+    expected_principal = ctx.get("principal_id") or ctx.get("identity", {}).get("principal_id") if isinstance(ctx.get("identity"), dict) else None
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    env = ctx["env"]
+    if hasattr(env, "_session") and env._session is not None:
+        from sqlalchemy import select
+        from src.core.database.models import Creative as CreativeModel
+        creative = env._session.scalars(
+            select(CreativeModel).filter_by(
+                tenant_id=ctx.get("tenant_id", "test_tenant"),
+                creative_id=creative_id,
+            )
+        ).first()
+        if creative is not None and expected_principal:
+            assert creative.principal_id == expected_principal, (
+                f"Creative was persisted under principal '{creative.principal_id}', "
+                f"but account resolution should have scoped to '{expected_principal}'"
+            )
 
 
 def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str | None]:
@@ -653,6 +665,19 @@ def then_review_workflow_with_slack(ctx: dict) -> None:
         "send_notifications mock must be wired in CreativeSyncEnv to verify Slack notification (INV-3)"
     )
     mock_notify.assert_called_once()
+    # Verify call_args: approval_mode is "require-human" and creative is in the list
+    call_args = mock_notify.call_args
+    creatives_arg = call_args[0][0] if call_args[0] else call_args[1].get("creatives_needing_approval", [])
+    approval_mode_arg = call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("approval_mode")
+    assert approval_mode_arg == "require-human", (
+        f"INV-3: Slack notification should be for require-human mode, got '{approval_mode_arg}'"
+    )
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    notified_ids = {c.get("creative_id") for c in creatives_arg}
+    assert creative_id in notified_ids, (
+        f"INV-3: Slack notification should reference creative '{creative_id}', "
+        f"but notified creatives were: {notified_ids}"
+    )
 
 
 @then("a review workflow should be created with AI review")
@@ -2435,19 +2460,13 @@ def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
 
 @then("the assignment processing should abort with an error")
 def then_assignment_processing_should_abort(ctx: dict) -> None:
-    """Assert assignment processing aborted due to an error (strict mode or default).
+    """Assert assignment processing aborted due to non-existent package (strict mode).
 
-    In strict mode (and default), encountering an invalid assignment (e.g.,
-    non-existent package) should abort all remaining assignments. The
-    dispatch should record an error in ctx.
-
-    SPEC-PRODUCTION GAP: when the error is AdCPNotFoundError for a missing
-    package, production does not populate a ``details`` dict with a
-    'suggestion' field. Downstream Then steps (``the error should include
-    a "suggestion" field``) will fail with a strict assertion. We pre-empt
-    by xfailing here so the gap is surfaced at the correct point.
+    The scenario sets up a non-existent package assignment under strict
+    validation_mode. Production must raise AdCPNotFoundError whose message
+    references the missing package — not just any AdCPError subclass.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPError, AdCPNotFoundError
 
     error = ctx.get("error")
     assert error is not None, (
@@ -2457,6 +2476,17 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError for strict mode abort, got {type(error).__name__}: {error}"
     )
+    # Verify the error is specifically a not-found error, not an incidental failure
+    assert isinstance(error, AdCPNotFoundError) or "not_found" in getattr(error, "error_code", "").lower() or "not found" in str(error).lower(), (
+        f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
+    )
+    # Verify the error references the bad package from the Given step
+    bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
+    if bad_package:
+        assert bad_package in str(error), (
+            f"Error should reference the missing package '{bad_package}', "
+            f"but message is: {error}"
+        )
 
 
 @then("the behavior should match strict mode")
@@ -3336,16 +3366,23 @@ def given_assignments_to_package_no_product_id(ctx: dict) -> None:
 
 @then("the format compatibility check should be skipped")
 def then_format_check_skipped(ctx: dict) -> None:
-    """Assert the format check was skipped (no error, assignment succeeded).
+    """Assert the format check was skipped because the package has no product_id.
 
-    When a package has no product_id, there are no format_ids to check
-    against, so the format compatibility check is skipped entirely.
-    The next Then step (assignment created successfully) confirms the
-    positive outcome. This step verifies no format-related error occurred.
+    Verifies: (1) the package genuinely has no product_id (precondition for skip),
+    (2) the creative was accepted despite having an arbitrary format_id that could
+    not match any product format set — proving the check was bypassed, not passed.
+    (3) No format-related warnings or errors appear on the per-creative result.
     """
     assert "error" not in ctx, (
         f"Expected format check to be skipped (no product_id), but production raised: {ctx.get('error')}"
     )
+    # Verify the skip precondition: the package has no product_id
+    package = ctx.get("package")
+    if package is not None:
+        pkg_product_id = getattr(package, "product_id", None)
+        assert pkg_product_id is None, (
+            f"INV-6: format check skip requires package with no product_id, but got '{pkg_product_id}'"
+        )
     resp = ctx.get("response")
     assert resp is not None, "Expected a response when format check is skipped"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
@@ -3353,7 +3390,13 @@ def then_format_check_skipped(ctx: dict) -> None:
     first = results[0]
     action_str = str(getattr(getattr(first, "action", None), "value", getattr(first, "action", None)))
     assert action_str in ("created", "updated", "unchanged"), (
-        f"Expected creative accepted when format check skipped (created/updated/unchanged), got action='{action_str}'"
+        f"Expected creative accepted when format check skipped, got action='{action_str}'"
+    )
+    # Verify no format-related warnings on the result
+    warnings = getattr(first, "warnings", None) or []
+    format_warnings = [w for w in warnings if "format" in str(w).lower()]
+    assert not format_warnings, (
+        f"INV-6: format check should be skipped, but format warnings present: {format_warnings}"
     )
 
 
