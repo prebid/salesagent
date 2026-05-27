@@ -181,8 +181,9 @@ class TestA2AErrorPropagation:
         # "Principal not found" is an established Pattern A site — the
         # impl returns a CreateMediaBuyError variant carrying the
         # Error(code=AUTH_REQUIRED) inside its ``errors`` list, NOT a raised
-        # AdCPAuthorizationError producing the envelope. The advisory pattern
-        # is documented in test_media_buy.py::test_principal_not_found_returns_error_response
+        # AdCPAuthorizationError producing the two-layer envelope. The
+        # advisory pattern is documented in
+        # test_media_buy.py::test_principal_not_found_returns_error_response
         # and is allowlist-permanent per the error-emission design decisions.
         assert "errors" in artifact_data, "Response must include 'errors' field for auth errors"
         assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
@@ -191,6 +192,17 @@ class TestA2AErrorPropagation:
         error = artifact_data["errors"][0]
         assert "code" in error, "Error must include code"
         assert error["code"] == "AUTH_REQUIRED"
+
+        # Pin the envelope-level side: Pattern A advisory-on-success
+        # responses do NOT carry the ``adcp_error`` envelope key (no
+        # AdCPError was raised — the impl returned errors[] directly).
+        # Asserting absence guards against a future regression that
+        # accidentally wraps this advisory in a two-layer envelope (which
+        # would change the wire shape for an allowlist-permanent site).
+        assert "adcp_error" not in artifact_data, (
+            "Pattern A advisory site emits errors[] only; the envelope-level "
+            "adcp_error key is reserved for raised-AdCPError two-layer envelopes"
+        )
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""

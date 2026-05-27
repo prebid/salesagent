@@ -351,11 +351,20 @@ class TestMCPBoundaryAdCPErrorTranslation:
 # ---------------------------------------------------------------------------
 
 
-class TestA2ABoundaryAdCPErrorTranslation:
-    """_handle_explicit_skill propagates AdCPError; the dispatcher wraps it later.
+class TestA2AHandlerExplicitSkillReraises:
+    """``_handle_explicit_skill`` re-raises typed AdCPError verbatim.
 
-    ``_handle_explicit_skill`` re-raises typed AdCPError so the dispatcher
-    loop wraps it into a failed Task with a two-layer envelope DataPart.
+    This class verifies the handler-internal contract: the skill dispatcher
+    catches the typed exception, audits the workflow step, and re-raises so
+    the OUTER ``on_message_send`` boundary wraps the failure into a Task
+    artifact carrying the two-layer envelope DataPart.
+
+    Wire-envelope coverage for the A2A boundary lives in
+    ``tests/integration/test_a2a_error_responses.py`` — those tests drive
+    ``handler.on_message_send(...)`` and assert on ``result.artifacts[0]``
+    (the gold-standard pattern). The tests in this class stop at the
+    handler-internal re-raise so they're cheap unit-level pins for the
+    re-raise contract; they do NOT validate the envelope reaches the wire.
     """
 
     @pytest.mark.asyncio
@@ -493,7 +502,11 @@ class TestA2ADispatcherFailedSkillResult:
         """Untyped fallthrough produces the SAME envelope shape as the typed branch.
 
         Storyboard runners must be able to parse the DataPart uniformly
-        regardless of which catch branch produced the failure result.
+        regardless of which catch branch produced the failure result. The
+        set-equality on key names alone is not enough — values must also be
+        type-equivalent (e.g., ``recovery`` is a string in both branches,
+        not ``None`` in one and a value in the other) so a regression that
+        nulls one branch's recovery is caught here.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
@@ -502,7 +515,34 @@ class TestA2ADispatcherFailedSkillResult:
 
         assert set(typed.keys()) == set(untyped.keys())
         assert set(typed["error_envelope"].keys()) == set(untyped["error_envelope"].keys())
-        assert set(typed["error_envelope"]["errors"][0].keys()) == set(untyped["error_envelope"]["errors"][0].keys())
+
+        typed_envelope = typed["error_envelope"]
+        untyped_envelope = untyped["error_envelope"]
+        assert set(typed_envelope["errors"][0].keys()) == set(untyped_envelope["errors"][0].keys())
+
+        # Field-value pin: both branches must populate the same keys with
+        # non-None values for the contract storyboard runners depend on.
+        typed_adcp_error = typed_envelope["adcp_error"]
+        untyped_adcp_error = untyped_envelope["adcp_error"]
+        assert typed_adcp_error["code"] and untyped_adcp_error["code"], (
+            f"Both branches must populate adcp_error.code; "
+            f"typed={typed_adcp_error.get('code')!r}, untyped={untyped_adcp_error.get('code')!r}"
+        )
+        assert typed_adcp_error.get("recovery") and untyped_adcp_error.get("recovery"), (
+            f"Both branches must populate adcp_error.recovery; "
+            f"typed={typed_adcp_error.get('recovery')!r}, untyped={untyped_adcp_error.get('recovery')!r}"
+        )
+
+        typed_err0 = typed_envelope["errors"][0]
+        untyped_err0 = untyped_envelope["errors"][0]
+        assert typed_err0["code"] and untyped_err0["code"], (
+            f"Both branches must populate errors[0].code; "
+            f"typed={typed_err0.get('code')!r}, untyped={untyped_err0.get('code')!r}"
+        )
+        assert typed_err0["message"] and untyped_err0["message"], (
+            f"Both branches must populate errors[0].message; "
+            f"typed={typed_err0.get('message')!r}, untyped={untyped_err0.get('message')!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1078,8 +1118,14 @@ class TestRecoveryRoundtrip:
             assert recovery == expected_recovery, f"{exc_class.__name__}: roundtrip recovery mismatch"
 
     @pytest.mark.asyncio
-    async def test_a2a_roundtrip_all_subclasses(self):
-        """All 11 AdCPError subclasses propagate from _handle_explicit_skill with recovery intact."""
+    async def test_a2a_handler_explicit_skill_reraises_all_subclasses(self):
+        """All 11 AdCPError subclasses propagate verbatim from ``_handle_explicit_skill``.
+
+        Scope: handler-internal re-raise. The outer ``on_message_send``
+        boundary wraps the propagated exception into a Task artifact
+        carrying the two-layer envelope; that wire-level coverage is in
+        ``tests/integration/test_a2a_error_responses.py``.
+        """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.exceptions import (
             AdCPAdapterError,
