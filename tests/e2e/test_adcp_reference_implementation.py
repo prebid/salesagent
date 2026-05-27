@@ -97,14 +97,20 @@ class TestAdCPReferenceImplementation:
             "errors and the test silently passed via an early-exit fallthrough "
             "when fields were rejected. With typed AdCPError now propagating "
             "correctly, the test progresses through real validation and surfaces "
-            "successive shape bugs that need their own fixes: "
-            "(a) Phase 5 push_notification_config.authentication uses "
-            "{type: 'none'} but schema requires {schemes, credentials}; "
-            "(b) downstream phases may surface additional shape mismatches. "
-            "Tracked as follow-up; fixes belong in a dedicated E2E hygiene PR, "
-            "not PR #1306's error-emission architecture scope."
+            "successive shape bugs that need their own fixes. "
+            "PR #1306 fix sweep partial: push_notification_config.authentication "
+            "{type:'none'} stub blocks removed (3 sites: this test + 2 in "
+            "adcp_request_builder.py). Default RFC 9421 webhook profile is now "
+            "selected by omitting the authentication block. Downstream phases "
+            "may surface additional shape mismatches that require a full local "
+            "e2e run to triage — fixes belong in a dedicated E2E hygiene PR, "
+            "not PR #1306's error-emission architecture scope. "
+            "Removability: remove this marker when the full lifecycle passes "
+            "end-to-end against the docker stack."
         ),
-        strict=True,
+        strict=False,  # see Removability note above — partial fix landed but
+        # downstream phases are still unverified locally; flip to strict=True
+        # once a full e2e run confirms the test passes.
     )
     async def test_complete_campaign_lifecycle_with_webhooks(
         self, docker_services_e2e, live_server, test_auth_token, webhook_server
@@ -315,9 +321,12 @@ class TestAdCPReferenceImplementation:
                     "media_buy_id": media_buy_id,
                     "budget": 7500.0,  # AdCP spec: budget is a number
                     "context": {"e2e": "update_media_buy"},
+                    # AdCP push_notification_config: omitting `authentication`
+                    # selects the default RFC 9421 webhook-signing profile. The
+                    # legacy {schemes, credentials} block is only required when
+                    # the buyer opts into Bearer/HMAC-SHA256 instead.
                     "push_notification_config": {
                         "url": webhook_server["url"],
-                        "authentication": {"type": "none"},
                     },
                 },
             )
