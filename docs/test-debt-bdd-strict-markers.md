@@ -28,7 +28,7 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
 | C5 (`include_package_daily_breakdown` no-op) | OPEN P2 | `salesagent-kzk0` |
 | C6 (date-range validation in success envelope) | OPEN P3 | `salesagent-t6y9` |
 | C7 (end-only date_range default) | OPEN P3 | `salesagent-losz` |
-| C8 (MCP list_creative_formats missing fmt-id params) | OPEN P2 | `salesagent-95q3` |
+| C8 (MCP list_creative_formats missing fmt-id params) | RECONCILED (PR #1331) | — |
 | C10 (description-only spec constraints) | OPEN P3 | `salesagent-o9w4` |
 | C11 (reporting_period echo) | RECONCILED (salesagent-18h.1) | — |
 | B1 (Gherkin `pending_activation`) | OPEN P2 | `salesagent-8c78` |
@@ -154,21 +154,6 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
   media buy creation date (look up `MediaBuy.created_at`).
 - **Severity:** P3
 - **Origin:** Batch 2 audit
-
-### C8 — MCP `list_creative_formats` wrapper missing `output_format_ids`, `input_format_ids`
-- **Scope:** `T-UC-005-inv-049-9-violated`, `-9-nofield`, `-10-violated`,
-  `-10-nofield` on the `[mcp]` transport (currently strict=False, labeled
-  "vacuous pass")
-- **Where:** `src/core/tools/creative_formats.py:440-494` — MCP wrapper
-  signature does not accept these filter params; `mcp_compat_middleware`
-  strips them
-- **Impact:** Tests pass on MCP for the wrong reason (the param disappears
-  before reaching the filter). 4 vacuous xpasses.
-- **Unblocks:** add both params to the MCP wrapper signature so MCP becomes
-  a real test surface. Then flip strict=True (the underlying filter is
-  already implemented in `_impl`).
-- **Severity:** P2
-- **Origin:** Batch 5 audit
 
 ### C10 — Description-only spec constraints in adcp library
 - **Scope:** Two specific Examples rows already xfailed strict=True:
@@ -389,12 +374,12 @@ that scenario causes a hard suite failure rather than silent xpass.
 
 ## Tally
 
-- **Production gaps:** 9 (C1–C11; C9 retired by 2026-05-08 cleanup, C11 retired by salesagent-18h.1 on 2026-05-19)
+- **Production gaps:** 8 (C1–C11; C8, C9, and C11 retired)
 - **Test rewrites:** 7 (B1–B7)
 - **Test-helper improvements:** 2 (H1, H2)
-- **Total:** ~19 items
+- **Total:** ~18 items
 
-Severity distribution: 3× P1 (security/correctness), 7× P2, 9× P3.
+Severity distribution: 3× P1 (security/correctness), 6× P2, 9× P3.
 
 If filed as one umbrella GH issue with a checklist, this fits comfortably
 in a single tracking issue. If filed individually, only the 3 P1s warrant

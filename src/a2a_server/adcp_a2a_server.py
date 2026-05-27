@@ -1804,17 +1804,17 @@ class AdCPRequestHandler(RequestHandler):
         """
         # Identity already resolved at transport boundary (on_message_send)
 
-        # Build request from parameters (all optional)
-        # Use local schema (extends library type) for proper type compatibility
-        from src.core.schemas import ListCreativeFormatsRequest
+        # Build request from parameters (all optional).
+        from src.core.tools.creative_formats import build_list_creative_formats_request
 
-        req = ListCreativeFormatsRequest(
+        req = build_list_creative_formats_request(
             format_ids=parameters.get("format_ids"),
             output_format_ids=parameters.get("output_format_ids"),
             input_format_ids=parameters.get("input_format_ids"),
             is_responsive=parameters.get("is_responsive"),
             name_search=parameters.get("name_search"),
             asset_types=parameters.get("asset_types"),
+            wcag_level=parameters.get("wcag_level"),
             min_width=parameters.get("min_width"),
             max_width=parameters.get("max_width"),
             min_height=parameters.get("min_height"),

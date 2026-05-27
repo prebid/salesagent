@@ -6,6 +6,7 @@ implementation pattern from CLAUDE.md.
 
 import logging
 import time
+from collections.abc import Sequence
 from typing import Annotated, TypeVar
 
 from adcp import FormatId
@@ -18,6 +19,7 @@ from adcp.types import (
     TextFormatAsset,
     UrlFormatAsset,
     VideoFormatAsset,
+    WcagLevel,
 )
 from adcp.types import Format as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
@@ -101,6 +103,41 @@ def _make_asset(
         asset_id=asset_id,
         asset_type=asset_type,
         required=required,
+    )
+
+
+def build_list_creative_formats_request(
+    *,
+    format_ids: list[FormatId] | None = None,
+    output_format_ids: list[FormatId] | None = None,
+    input_format_ids: list[FormatId] | None = None,
+    is_responsive: bool | None = None,
+    name_search: str | None = None,
+    asset_types: Sequence[AssetContentType | str] | None = None,
+    min_width: int | None = None,
+    max_width: int | None = None,
+    min_height: int | None = None,
+    max_height: int | None = None,
+    wcag_level: WcagLevel | str | None = None,
+    context: ContextObject | None = None,
+) -> ListCreativeFormatsRequest:
+    """Build the shared list_creative_formats request for transport wrappers."""
+    asset_types_strs = (
+        [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
+    )
+    return ListCreativeFormatsRequest(
+        format_ids=format_ids,
+        output_format_ids=output_format_ids,
+        input_format_ids=input_format_ids,
+        is_responsive=is_responsive,
+        name_search=name_search,
+        asset_types=asset_types_strs,
+        min_width=min_width,
+        max_width=max_width,
+        min_height=min_height,
+        max_height=max_height,
+        wcag_level=wcag_level,
+        context=context,
     )
 
 
@@ -452,9 +489,12 @@ def _list_creative_formats_impl(
 
 async def list_creative_formats(
     format_ids: list[FormatId] | None = None,
+    output_format_ids: list[FormatId] | None = None,
+    input_format_ids: list[FormatId] | None = None,
     is_responsive: Annotated[bool | None, Field(description="Filter for responsive formats only")] = None,
     name_search: Annotated[str | None, Field(description="Search formats by name substring")] = None,
     asset_types: list[AssetContentType] | None = None,
+    wcag_level: Annotated[WcagLevel | None, Field(description="Minimum WCAG conformance level")] = None,
     min_width: Annotated[int | None, Field(description="Minimum format width in pixels")] = None,
     max_width: Annotated[int | None, Field(description="Maximum format width in pixels")] = None,
     min_height: Annotated[int | None, Field(description="Minimum format height in pixels")] = None,
@@ -469,9 +509,12 @@ async def list_creative_formats(
 
     Args:
         format_ids: Filter by FormatId objects
+        output_format_ids: Filter by formats that can generate any of these output format IDs
+        input_format_ids: Filter by formats that can consume any of these input format IDs
         is_responsive: Filter for responsive formats (True/False)
         name_search: Search formats by name (case-insensitive partial match)
         asset_types: Filter by asset content types (e.g., ["image", "video"])
+        wcag_level: Minimum WCAG conformance level
         min_width: Minimum format width in pixels
         max_width: Maximum format width in pixels
         min_height: Minimum format height in pixels
@@ -483,16 +526,14 @@ async def list_creative_formats(
         ToolResult with ListCreativeFormatsResponse data
     """
     try:
-        # Coerce raw strings to enums at the transport boundary (Pattern #5).
-        # FastMCP normally coerces, but direct callers may pass raw strings.
-        asset_types_strs = (
-            [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
-        )
-        req = ListCreativeFormatsRequest(
+        req = build_list_creative_formats_request(
             format_ids=format_ids,
+            output_format_ids=output_format_ids,
+            input_format_ids=input_format_ids,
             is_responsive=is_responsive,
             name_search=name_search,
-            asset_types=asset_types_strs,
+            asset_types=asset_types,
+            wcag_level=wcag_level,
             min_width=min_width,
             max_width=max_width,
             min_height=min_height,
