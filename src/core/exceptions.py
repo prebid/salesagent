@@ -36,7 +36,8 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
-    "AUTH_TOKEN_INVALID": "AUTH_REQUIRED",
+    # AUTH_TOKEN_INVALID is not mapped — it passes through directly as the
+    # spec error code for invalid/missing tokens (per AdCP BDD feature files).
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
     "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
     "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
@@ -97,9 +98,9 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 )
 
 # Sanity check: every mapping target must be a standard code.
-assert all(v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()), (
-    "ERROR_CODE_MAPPING contains non-standard target codes"
-)
+assert all(
+    v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()
+), "ERROR_CODE_MAPPING contains non-standard target codes"
 
 
 def translate_error_code(code: str) -> str:
@@ -274,6 +275,9 @@ class AdCPValidationError(AdCPError):
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
+    Default error_code is AUTH_TOKEN_INVALID per AdCP spec; the wire passes
+    it through unchanged (AUTH_TOKEN_INVALID is a standard SDK code).
+
     Recovery defaults to ``terminal`` to match
     ``STANDARD_ERROR_CODES["AUTH_REQUIRED"]["recovery"]`` in adcp 4.3 (the SDK
     we run). AdCP spec 3.0.4 (CHANGELOG ``78b1dc4``) reclassified AUTH_REQUIRED
@@ -282,7 +286,17 @@ class AdCPAuthenticationError(AdCPError):
     """
 
     status_code = 401
-    error_code = "AUTH_REQUIRED"
+    error_code = "AUTH_TOKEN_INVALID"
+
+
+class AdCPAuthRequiredError(AdCPAuthenticationError):
+    """No authentication context present (401, AUTH_TOKEN_INVALID).
+
+    Raised when the request contains no auth token at all.
+    Uses same error_code as parent (AUTH_TOKEN_INVALID) per spec.
+    """
+
+    error_code = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthorizationError(AdCPError):

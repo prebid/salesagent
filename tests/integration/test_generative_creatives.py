@@ -11,7 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session

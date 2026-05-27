@@ -38,12 +38,17 @@ class TestEnvelopeShape:
         assert envelope["adcp_error"]["code"] == envelope["errors"][0]["code"]
 
     def test_wire_translation_applied(self):
-        """Internal error_code is translated through ERROR_CODE_MAPPING."""
-        exc = AdCPError("bad token")
-        exc.error_code = "AUTH_TOKEN_INVALID"
+        """Internal error_code is translated through ERROR_CODE_MAPPING.
+
+        NOT_FOUND is an INTERNAL_CODES entry mapped to INVALID_REQUEST (a
+        spec STANDARD code). AUTH_TOKEN_INVALID is itself a STANDARD code so
+        passes through unchanged — it is not in ERROR_CODE_MAPPING.
+        """
+        exc = AdCPError("resource gone")
+        exc.error_code = "NOT_FOUND"
         envelope = build_two_layer_error_envelope(exc)
-        assert envelope["adcp_error"]["code"] == "AUTH_REQUIRED"
-        assert envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+        assert envelope["adcp_error"]["code"] == "INVALID_REQUEST"
+        assert envelope["errors"][0]["code"] == "INVALID_REQUEST"
 
     def test_message_present_in_both_layers(self):
         exc = AdCPValidationError("budget must be positive")
@@ -333,9 +338,9 @@ class TestTypedSubclasses:
         for class_name, expected_code in substrate.items():
             cls = getattr(exc_mod, class_name, None)
             assert cls is not None, f"{class_name} missing from src.core.exceptions"
-            assert cls.error_code == expected_code, (
-                f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
-            )
+            assert (
+                cls.error_code == expected_code
+            ), f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
             assert expected_code in STANDARD_ERROR_CODES, f"{expected_code!r} missing from STANDARD_ERROR_CODES"
 
 
@@ -392,14 +397,14 @@ class TestWireBytesIdenticalAcrossTransports:
         exc = AdCPValidationError("budget must be positive", field="budget")
         rest_bytes = self._rest_envelope_bytes(exc)
         a2a_bytes = self._a2a_envelope_bytes(exc)
-        assert rest_bytes == a2a_bytes, (
-            f"REST and A2A envelopes drifted apart for AdCPValidationError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
-        )
+        assert (
+            rest_bytes == a2a_bytes
+        ), f"REST and A2A envelopes drifted apart for AdCPValidationError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
 
     def test_not_found_error_envelope_matches_across_transports(self):
         exc = AdCPNotFoundError("media buy missing")
         rest_bytes = self._rest_envelope_bytes(exc)
         a2a_bytes = self._a2a_envelope_bytes(exc)
-        assert rest_bytes == a2a_bytes, (
-            f"REST and A2A envelopes drifted apart for AdCPNotFoundError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
-        )
+        assert (
+            rest_bytes == a2a_bytes
+        ), f"REST and A2A envelopes drifted apart for AdCPNotFoundError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"

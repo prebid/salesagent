@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from adcp import PushNotificationConfig
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import CreativeAction
 from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
@@ -634,7 +634,7 @@ class TestValidationEdgeCases:
 
     def test_tags_passthrough(self, mock_format_spec):
         """Line 72: creative with non-empty tags."""
-        from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+        from adcp.types import CreativeAsset
 
         from src.core.tools.creatives._validation import _validate_creative_input
 

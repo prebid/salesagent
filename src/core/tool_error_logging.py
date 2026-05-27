@@ -9,7 +9,7 @@ import inspect
 import json
 import logging
 from collections.abc import Callable
-from typing import Any, NoReturn, get_args
+from typing import Any, NoReturn, cast, get_args
 
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
@@ -155,7 +155,7 @@ def _coerce_recovery(value: object) -> RecoveryHint | None:
     through this helper so downstream consumers can trust the declared type.
     """
     if value in _VALID_RECOVERY_VALUES:
-        return value  # type: ignore[return-value]
+        return cast(RecoveryHint, value)
     return None
 
 

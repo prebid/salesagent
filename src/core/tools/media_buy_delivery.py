@@ -18,18 +18,21 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import Field, RootModel, ValidationError
 from rich.console import Console
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import Error, MediaBuyStatus
-from adcp.types.generated_poc.core.attribution_window import AttributionWindow as ResponseAttributionWindow
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.duration import Duration, Unit
-from adcp.types.generated_poc.enums.attribution_model import AttributionModel
+from adcp.types import ContextObject, Duration, Error, MediaBuyStatus
+from adcp.types.generated_poc.core.attribution_window import (
+    AttributionWindow as ResponseAttributionWindow,  # TODO: no stable alias in adcp.types
+)
+from adcp.types.generated_poc.core.duration import (
+    Unit as DurationUnit,  # TODO: no stable alias in adcp.types — Unit from adcp.types is DimensionUnit
+)
+from adcp.types.generated_poc.enums.attribution_model import AttributionModel  # TODO: no stable alias in adcp.types
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
@@ -91,7 +94,9 @@ def _get_media_buy_delivery_impl(
 
     # Validate identity is provided
     if identity is None:
-        raise AdCPValidationError("Context is required")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()
@@ -860,12 +865,12 @@ def _resolve_attribution_window(
     def _echo_duration(dur: Duration | None) -> Duration | None:
         if dur is None:
             return None
-        if dur.unit == Unit.campaign:
+        if dur.unit == DurationUnit.campaign:
             # ``campaign`` spans the full flight — express it concretely in
             # days so the buyer sees the resolved lookback. Fall back to the
             # nominal interval when the flight length is unknown.
             days = campaign_length_days if campaign_length_days is not None else dur.interval
-            return Duration(interval=max(days, 1), unit=Unit.days)
+            return Duration(interval=max(days, 1), unit=DurationUnit.days)
         return Duration(interval=dur.interval, unit=dur.unit)
 
     model = requested.model or PLATFORM_DEFAULT_ATTRIBUTION_MODEL

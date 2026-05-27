@@ -43,7 +43,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthenticationError("bad token")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 401
-        assert exc.error_code == "AUTH_REQUIRED"
+        assert exc.error_code == "AUTH_TOKEN_INVALID"
 
     def test_authorization_error(self):
         """AdCPAuthorizationError must have status_code=403."""
@@ -335,7 +335,10 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
-        assert_envelope_shape(response.json(), "AUTH_REQUIRED")
+        # AdCPAuthenticationError.error_code = "AUTH_TOKEN_INVALID" (spec STANDARD code,
+        # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_TOKEN_INVALID, not
+        # AUTH_REQUIRED (which is for AdCPAuthorizationError).
+        assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID")
 
     def test_not_found_error_returns_404(self):
         """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
@@ -478,17 +481,17 @@ class TestNoDeadA2AMap:
         """_A2A_ERROR_CODE_MAP was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), (
-            "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
-        )
+        assert not hasattr(
+            exc_module, "_A2A_ERROR_CODE_MAP"
+        ), "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
 
     def test_no_to_a2a_error_code_in_exceptions(self):
         """to_a2a_error_code() was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(exc_module, "to_a2a_error_code"), (
-            "to_a2a_error_code() is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
-        )
+        assert not hasattr(
+            exc_module, "to_a2a_error_code"
+        ), "to_a2a_error_code() is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
 
 
 # ---------------------------------------------------------------------------
@@ -513,8 +516,8 @@ class TestErrorCodeWireTranslation:
     def test_translate_mapped_code(self):
         from src.core.exceptions import translate_error_code
 
-        # AUTH_TOKEN_INVALID is mapped to AUTH_REQUIRED
-        assert translate_error_code("AUTH_TOKEN_INVALID") == "AUTH_REQUIRED"
+        # AUTH_TOKEN_INVALID passes through (spec error code for auth)
+        assert translate_error_code("AUTH_TOKEN_INVALID") == "AUTH_TOKEN_INVALID"
         # BUDGET_CEILING_EXCEEDED is mapped to BUDGET_EXCEEDED
         assert translate_error_code("BUDGET_CEILING_EXCEEDED") == "BUDGET_EXCEEDED"
         # RATE_LIMIT_EXCEEDED is mapped to RATE_LIMITED

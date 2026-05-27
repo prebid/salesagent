@@ -49,9 +49,7 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
-from adcp.types import GeneratedTaskStatus
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
 from sqlalchemy import select
 
@@ -1829,6 +1827,7 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
+    @_a2a_skill("list_accounts")
     async def _handle_list_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_accounts skill invocation.
 
@@ -1845,6 +1844,7 @@ class AdCPRequestHandler(RequestHandler):
         )
         return core_list_accounts_tool(req=request, identity=identity)
 
+    @_a2a_skill("sync_accounts")
     async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit sync_accounts skill invocation.
 

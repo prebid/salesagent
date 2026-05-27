@@ -26,15 +26,20 @@ class TestMCPErrorShapes:
     """Test that MCP tool errors have consistent structure."""
 
     @pytest.mark.asyncio
-    async def test_missing_identity_raises_adcp_validation_error(self):
-        """_create_media_buy_impl raises AdCPValidationError when identity is missing.
+    async def test_missing_identity_raises_adcp_auth_required_error(self):
+        """_create_media_buy_impl raises AdCPAuthRequiredError when identity is missing.
 
-        Pins on the typed exception (not ``(AdCPValidationError, ToolError)``):
-        boundary translation to ToolError is the transport wrapper's job, so
-        calling ``_impl`` directly bypasses it and we can assert the
-        production code's actual contract — typed exception + error_code +
-        message — without the union dilution.
+        Pins on the typed exception (not a transport-union): boundary translation
+        to ToolError is the transport wrapper's job, so calling ``_impl`` directly
+        bypasses it and we can assert the production code's actual contract —
+        typed exception + error_code + message — without the union dilution.
+
+        Merged behavior (after main's #1335 reshape): missing identity in
+        ``_create_media_buy_impl`` now raises ``AdCPAuthRequiredError``
+        (``AUTH_TOKEN_INVALID``) instead of the older ``AdCPValidationError``,
+        because identity-required is auth, not validation.
         """
+        from src.core.exceptions import AdCPAuthRequiredError
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -45,11 +50,11 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPAuthRequiredError) as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
         error = exc_info.value
-        assert error.error_code == "VALIDATION_ERROR"
+        assert error.error_code == "AUTH_TOKEN_INVALID"
         assert "Identity is required" in error.message
 
     def test_pydantic_validation_error_for_invalid_request_shape(self):
@@ -75,9 +80,9 @@ class TestMCPErrorShapes:
         # missing brand.domain field. We don't pin on a specific code because
         # Pydantic v2's error codes vary by union/discriminator path.
         error_msg = str(exc_info.value)
-        assert "packages" in error_msg or "domain" in error_msg, (
-            f"Pydantic error should reference the malformed field, got: {error_msg}"
-        )
+        assert (
+            "packages" in error_msg or "domain" in error_msg
+        ), f"Pydantic error should reference the malformed field, got: {error_msg}"
 
     @pytest.mark.asyncio
     async def test_auth_error_raises_validation_error(self):
@@ -93,8 +98,8 @@ class TestMCPErrorShapes:
             end_time="2026-02-01T00:00:00Z",
         )
 
-        # _create_media_buy_impl requires identity; passing None triggers AdCPValidationError
-        with pytest.raises(AdCPValidationError) as exc_info:
+        # _create_media_buy_impl requires identity; passing None triggers AdCPAuthenticationError
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
         assert "Identity is required" in str(exc_info.value)
@@ -205,7 +210,6 @@ class TestA2AErrorShapes:
         outer dispatcher routes through ``_build_failed_skill_result``
         which calls ``_build_error_envelope`` for the two-layer wire shape.
         """
-        from src.core.exceptions import AdCPValidationError
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
@@ -226,7 +230,6 @@ class TestA2AErrorShapes:
 
         Same envelope-builder contract as the missing-params case.
         """
-        from src.core.exceptions import AdCPValidationError
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
@@ -279,7 +282,7 @@ class TestUpdateMediaBuyErrorShapes:
             media_buy_id="buy_001",
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _update_media_buy_impl(req=req, identity=None)
 
         assert "Identity is required" in str(exc_info.value)
@@ -400,7 +403,6 @@ class TestCrossTransportErrorConsistency:
         the outer dispatcher's _build_failed_skill_result produces the
         two-layer envelope on the wire.
         """
-        from src.core.exceptions import AdCPValidationError
         from src.core.schemas import CreateMediaBuyRequest
 
         # MCP path: test the request validation itself
@@ -586,7 +588,7 @@ class TestMCPRecoveryInErrorResponses:
             # translator maps them to STANDARD_ERROR_CODES at wire emission.
             ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPAuthenticationError", "bad token", "AUTH_REQUIRED", "terminal"),
+            ("AdCPAuthenticationError", "bad token", "AUTH_TOKEN_INVALID", "terminal"),
             ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
             ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
@@ -618,15 +620,15 @@ class TestMCPRecoveryInErrorResponses:
         from src.core.tool_error_logging import AdCPToolError
 
         tool_error = exc_info.value
-        assert isinstance(tool_error, AdCPToolError), (
-            f"MCP boundary must raise AdCPToolError for {exc_class}, got {type(tool_error).__name__}"
-        )
+        assert isinstance(
+            tool_error, AdCPToolError
+        ), f"MCP boundary must raise AdCPToolError for {exc_class}, got {type(tool_error).__name__}"
         err = tool_error.envelope["errors"][0]
         assert err["code"] == expected_code, f"{exc_class}: code={err['code']!r}, expected {expected_code!r}"
         assert err["message"] == msg, f"{exc_class}: message={err['message']!r}, expected {msg!r}"
-        assert err["recovery"] == expected_recovery, (
-            f"{exc_class}: recovery={err['recovery']!r}, expected {expected_recovery!r}"
-        )
+        assert (
+            err["recovery"] == expected_recovery
+        ), f"{exc_class}: recovery={err['recovery']!r}, expected {expected_recovery!r}"
         # adcp_error envelope-level mirror also present
         assert tool_error.envelope["adcp_error"]["code"] == expected_code
 
@@ -769,7 +771,8 @@ class TestErrorCodeVocabularyConsistency:
         # SDK standard codes used by our exception classes
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
-        "AUTH_REQUIRED",  # SDK standard: authentication + authorisation
+        "AUTH_TOKEN_INVALID",  # AdCP spec: invalid/missing auth token (AdCPAuthenticationError)
+        "AUTH_REQUIRED",  # SDK standard: authorisation (AdCPAuthorizationError)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
         "ACCOUNT_AMBIGUOUS",  # adcp-req: Natural key matches multiple accounts (BR-RULE-080)
@@ -805,7 +808,6 @@ class TestErrorCodeVocabularyConsistency:
             AdCPNotFoundError,
             AdCPRateLimitError,
             AdCPServiceUnavailableError,
-            AdCPValidationError,
         )
 
         exception_classes = [

@@ -109,7 +109,18 @@ elif [ "$MODE" = "ci" ]; then
         TOX_RC=${PIPESTATUS[0]}
         set -eo pipefail
         collect_reports
-        [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+        # Determine success from JSON reports, not tox exit code —
+        # PIPESTATUS[0] with process substitution returns stale values.
+        _any_fail=false
+        for _rpt in "$RESULTS_DIR"/*.json; do
+            [ -f "$_rpt" ] || continue
+            if python3 -c "import json,sys; d=json.load(open('$_rpt')); sys.exit(0 if d.get('exitcode',1)==0 else 1)" 2>/dev/null; then
+                :
+            else
+                _any_fail=true; break
+            fi
+        done
+        [ "$_any_fail" = true ] && FAILURES="tox"
 
         # Coverage combine runs separately — tox -p hangs when the coverage
         # env fails (e.g. missing .coverage.e2e from HTTP-only e2e tests).

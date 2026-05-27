@@ -224,8 +224,10 @@ class TestCreateMediaBuyErrorPaths:
                 identity=identity,
             )
 
+        # Typed AdCPValidationError raised from _impl carries the structured
+        # INVALID_REQUEST code (sourced from _StructuredValidationError.code).
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "INVALID_REQUEST"
         assert "past" in exc.message.lower() or "start" in exc.message.lower()
 
     async def test_end_time_before_start_returns_validation_error(self, test_tenant_with_principal):
@@ -257,7 +259,7 @@ class TestCreateMediaBuyErrorPaths:
             )
 
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "INVALID_REQUEST"
         assert "end" in exc.message.lower() or "after" in exc.message.lower()
 
     async def test_negative_budget_raises_tool_error(self, test_tenant_with_principal):
@@ -321,7 +323,7 @@ class TestCreateMediaBuyErrorPaths:
             )
 
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "BUDGET_TOO_LOW"
         assert "budget" in exc.message.lower() or "package" in exc.message.lower()
 
 
@@ -535,9 +537,9 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             body = response.json()
-            assert body["adcp_error"]["recovery"] == "transient", (
-                "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
-            )
+            assert (
+                body["adcp_error"]["recovery"] == "transient"
+            ), "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
             assert body["errors"][0]["recovery"] == "transient"
 
     def test_to_dict_serialization_roundtrip(self):
@@ -561,6 +563,6 @@ class TestRecoveryFieldInErrorResponses:
             # Simulate JSON roundtrip (what happens in real HTTP response)
             json_str = json.dumps(d)
             deserialized = json.loads(json_str)
-            assert deserialized["recovery"] == expected_recovery, (
-                f"{type(exc).__name__}: recovery lost in JSON roundtrip"
-            )
+            assert (
+                deserialized["recovery"] == expected_recovery
+            ), f"{type(exc).__name__}: recovery lost in JSON roundtrip"

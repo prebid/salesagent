@@ -262,11 +262,14 @@ class TestProductNotFound:
         existing_product = _mock_product("prod_exists")
 
         with _PatchContext(products=[existing_product]) as pc:
-            with pytest.raises(AdCPNotFoundError) as excinfo:
+            # _StructuredValidationError(code="PRODUCT_NOT_FOUND") is converted by
+            # the _impl boundary catch into AdCPValidationError with error_code
+            # "PRODUCT_NOT_FOUND" (richer than the base NOT_FOUND default).
+            with pytest.raises(AdCPValidationError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         exc = excinfo.value
-        assert exc.error_code == "NOT_FOUND"
+        assert exc.error_code == "PRODUCT_NOT_FOUND"
         assert "prod_missing" in exc.message
         assert "not found" in exc.message.lower()
 
@@ -1307,12 +1310,13 @@ class TestPreconditionObligations:
 
         Covers: UC-002-PRECOND-02
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
 
@@ -1823,11 +1827,14 @@ class TestProposalBasedObligations:
         with _PatchContext(products=[]) as pc:
             # No products in DB -> products not found
             pc.db_session.scalars.return_value.all.return_value = []
-            with pytest.raises(AdCPNotFoundError) as excinfo:
+            # _StructuredValidationError(code="PRODUCT_NOT_FOUND") is converted by
+            # the _impl boundary catch into AdCPValidationError with the richer
+            # PRODUCT_NOT_FOUND error_code (not the base NOT_FOUND default).
+            with pytest.raises(AdCPValidationError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         exc = excinfo.value
-        assert exc.error_code == "NOT_FOUND"
+        assert exc.error_code == "PRODUCT_NOT_FOUND"
         assert "not found" in exc.message.lower()
         assert "nonexistent_product" in exc.message
 
@@ -2043,16 +2050,16 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-I-03
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
         # Identity with no principal_id -> requires authentication
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity_no_principal = ResolvedIdentity(
             principal_id=None,
@@ -2186,7 +2193,8 @@ class TestExtensionObligations:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Zero budget should fail validation
+        # Zero budget should fail validation; _StructuredValidationError(code=BUDGET_TOO_LOW)
+        # is converted to AdCPValidationError with that error_code by the _impl boundary catch.
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
         with _PatchContext() as pc:
@@ -2194,7 +2202,7 @@ class TestExtensionObligations:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "BUDGET_TOO_LOW"
         assert "budget" in exc.message.lower()
 
     def test_proposal_currency_mismatch_error_code(self):
@@ -2297,10 +2305,11 @@ class TestPostconditionObligations:
 
         # Default _PatchContext mocks one product with id "prod_1"; req asks
         # for "nonexistent_prod" so the validation block hits the not-found
-        # branch and raises AdCPNotFoundError, which now propagates past the
-        # narrowed boundary catch.
+        # branch. _StructuredValidationError(code="PRODUCT_NOT_FOUND") becomes
+        # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") via the _impl
+        # boundary catch and propagates to the transport boundary.
         with _PatchContext() as pc:
-            with pytest.raises(AdCPNotFoundError):
+            with pytest.raises(AdCPValidationError):
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         # Postcondition: the typed raise happens BEFORE any session.add() —
@@ -2328,16 +2337,19 @@ class TestPostconditionObligations:
 
         with _PatchContext(products=[]) as pc:
             pc.db_session.scalars.return_value.all.return_value = []
-            with pytest.raises(AdCPNotFoundError) as excinfo:
+            # Production raises _StructuredValidationError(code="PRODUCT_NOT_FOUND"),
+            # which the _impl boundary catch converts to AdCPValidationError with
+            # error_code="PRODUCT_NOT_FOUND" (richer than the base NOT_FOUND default).
+            with pytest.raises(AdCPValidationError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         exc = excinfo.value
         # Recovery guidance lives on the typed exception itself: the
         # exception's message must identify the unknown product so the buyer
         # knows exactly what to correct on retry, and the typed error_code
-        # ("NOT_FOUND") gives the buyer a machine-readable classification.
+        # ("PRODUCT_NOT_FOUND") gives the buyer a machine-readable classification.
         assert "nonexistent_prod" in exc.message
-        assert exc.error_code == "NOT_FOUND"
+        assert exc.error_code == "PRODUCT_NOT_FOUND"
 
 
 class TestUpgradeObligations:

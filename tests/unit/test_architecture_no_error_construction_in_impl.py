@@ -47,8 +47,6 @@ PATTERN_A_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/kevel.py": 5,
     "src/adapters/triton_digital.py": 5,
     "src/core/tools/accounts.py": 2,
-    "src/core/tools/creative_formats.py": 1,
-    "src/core/tools/creatives/_processing.py": 1,
     "src/core/tools/media_buy_create.py": 3,
     "src/core/tools/media_buy_delivery.py": 5,
     # Advisory Error() in success envelope (2 AUTH_REQUIRED + 1 TARGETING_REHYDRATION_FAILED).

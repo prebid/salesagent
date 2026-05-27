@@ -20,8 +20,15 @@ from src.core.exceptions import INTERNAL_CODES
 
 logger = logging.getLogger(__name__)
 
-# All acceptable codes: SDK standard + justified internal
-_ALLOWED_CODES = set(STANDARD_ERROR_CODES) | INTERNAL_CODES
+# Spec-required codes not yet in SDK STANDARD_ERROR_CODES.
+# These are mandated by AdCP BDD feature files but the SDK hasn't added them yet.
+_SPEC_CODES = {
+    "AUTH_TOKEN_INVALID",  # BR-UC-011: invalid/missing auth token
+    "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
+}
+
+# All acceptable codes: SDK standard + justified internal + spec-required
+_ALLOWED_CODES = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | _SPEC_CODES
 
 # Anchor scan paths on the test file's location so they resolve correctly
 # regardless of pytest's working directory (CI runs from the repo root;

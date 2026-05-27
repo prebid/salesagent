@@ -1,7 +1,8 @@
 """Transport enum and TransportResult for multi-transport behavioral tests.
 
-Defines the four dispatch transports (IMPL, A2A, REST, MCP) and a frozen
-result container that separates transport-specific envelope from shared payload.
+Defines the seven dispatch transports (IMPL, A2A, REST, MCP + E2E variants)
+and a frozen result container that separates transport-specific envelope from
+shared payload.
 
 Usage::
 
@@ -13,19 +14,22 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
 
 
-class Transport(str, Enum):
+class Transport(StrEnum):
     """Dispatch transports for behavioral tests."""
 
     IMPL = "impl"  # Direct _impl() call
     A2A = "a2a"  # _raw() A2A wrapper
     REST = "rest"  # FastAPI TestClient → route → _raw() → _impl()
     MCP = "mcp"  # Mock Context → MCP wrapper → _impl()
+    E2E_REST = "e2e_rest"  # Real HTTP via httpx → nginx → server
+    E2E_MCP = "e2e_mcp"  # Real MCP via httpx → nginx → server (placeholder)
+    E2E_A2A = "e2e_a2a"  # Real A2A via httpx → nginx → server (placeholder)
 
 
 # Maps Transport → ResolvedIdentity.protocol value
@@ -34,7 +38,23 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.A2A: "a2a",
     Transport.REST: "rest",
     Transport.MCP: "mcp",
+    Transport.E2E_REST: "rest",
+    Transport.E2E_MCP: "mcp",
+    Transport.E2E_A2A: "a2a",
 }
+
+
+@dataclass(frozen=True)
+class E2EConfig:
+    """Configuration for E2E transport dispatch.
+
+    Attributes:
+        base_url: Docker stack URL (e.g., ``http://localhost:8092``).
+        postgres_url: Docker PostgreSQL URL for factory data writes.
+    """
+
+    base_url: str
+    postgres_url: str
 
 
 @dataclass(frozen=True)
