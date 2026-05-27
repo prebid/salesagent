@@ -5,12 +5,18 @@ import sys
 from pathlib import Path
 
 from alembic.config import Config
+from dotenv import load_dotenv
 
 from alembic import command
 
 # Project root (two levels up from scripts/ops/)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _ALEMBIC_INI = _PROJECT_ROOT / "alembic.ini"
+
+# Load .env and .test-stack.env if present so DATABASE_URL is available
+# for local development without needing to export it manually.
+load_dotenv(_PROJECT_ROOT / ".env", override=False)
+load_dotenv(_PROJECT_ROOT / ".test-stack.env", override=False)
 
 
 def _get_alembic_cfg() -> Config:
