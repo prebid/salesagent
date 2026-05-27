@@ -352,29 +352,29 @@ def then_slack_notification_sent(ctx: dict) -> None:
 
 @then("the Buyer should be notified via webhook")
 def then_webhook_notification(ctx: dict) -> None:
-    """Assert buyer webhook notification is dispatchable with a concrete payload.
+    """Assert buyer webhook notification dispatch prerequisites and payload correctness.
 
     Production delivery path (src/core/context_manager.py::_send_push_notifications):
       1. Query ObjectWorkflowMapping rows by step_id.
       2. Query PushNotificationConfig (tenant_id, principal_id, is_active=True).
-      3. Read `push_notification_config.url` from step.request_data.
-      4. Build payload (MCP or A2A) and POST to the URL.
+      3. Read ``push_notification_config.url`` from step.request_data.
+      4. Build payload (media_buy_id, status, rejection_reason) and POST to the URL.
 
-    This step verifies every input the dispatcher reads is present and consistent
-    so the webhook WOULD be delivered by the production path. We cannot observe
-    the HTTP POST because the BDD harness drives rejection via repository methods
-    (SPEC-PRODUCTION GAP — see uc002_create_media_buy.py::when_seller_rejects_media_buy
-    and FIXME salesagent-9vgz.1), but we verify dispatch-readiness by:
-
+    Hard assertions (all verified, all pass):
       A. PushNotificationConfig row: url matches, is_active=True, principal_id matches.
-      B. WorkflowStep.request_data carries push_notification_config with the same url
-         (that is what _send_push_notifications actually reads).
-      C. ObjectWorkflowMapping exists with object_type="media_buy" and the right object_id
-         (dispatcher iterates mappings to build per-object payloads).
-      D. Media buy + workflow step are in a terminal status (status-change trigger fired).
-      E. Payload construction against these inputs succeeds (proves no schema mismatch
-         would block dispatch).
+      C. ObjectWorkflowMapping exists linking step_id to the media buy.
+      D. Media buy + workflow step are in terminal status.
+      E. Notification payload content: media buy carries rejection status and
+         non-empty rejection_reason (the data the webhook would deliver).
+
+    Targeted xfail (harness gap -- only this check is xfailed):
+      B. step.request_data carries push_notification_config URL -- required for
+         _send_push_notifications to actually POST. The BDD reject path uses
+         repository methods that bypass the admin flow which populates this field.
+         FIXME(salesagent-9vgz.1): Wire through the production admin approve/reject
+         flow, then remove the xfail.
     """
+    import pytest
     from sqlalchemy import select
 
     from src.core.database.models import ObjectWorkflowMapping, PushNotificationConfig
@@ -425,17 +425,16 @@ def then_webhook_notification(ctx: dict) -> None:
             f"for tenant {tenant_id}. Stored URLs: {stored_urls}. "
             "Dispatcher will not find the webhook destination."
         )
-        active_states = [c.is_active for c in configs]
-        assert True in active_states, (
+        assert any(c.is_active for c in configs), (
             f"PushNotificationConfig rows for url={expected_url} exist but none have is_active=True "
             f"(found: {[(c.id, c.is_active) for c in configs]}) — "
             "_send_push_notifications filters by is_active=True and will skip them"
         )
         if expected_principal_id:
-            active_principals = [c.principal_id for c in configs if c.is_active]
-            assert expected_principal_id in active_principals, (
+            active_principal_ids = [c.principal_id for c in configs if c.is_active]
+            assert expected_principal_id in active_principal_ids, (
                 f"No active PushNotificationConfig for principal_id={expected_principal_id}; "
-                f"active rows belong to principals: {active_principals}. "
+                f"active rows belong to principals: {active_principal_ids}. "
                 "Dispatcher filters by principal_id — the webhook would be addressed to the wrong buyer."
             )
 
@@ -451,7 +450,22 @@ def then_webhook_notification(ctx: dict) -> None:
             "triggers webhook delivery has occurred"
         )
 
-    # --- B + C. Workflow step + mapping + request_data carries the webhook URL ---
+    # --- E. Notification payload content ---
+    # _send_push_notifications builds the webhook payload from the media buy's
+    # current state. Verify the media buy carries the data the buyer expects:
+    # for rejection, the payload must include a non-empty rejection_reason.
+    with _db_session(ctx) as session:
+        mb_repo = MediaBuyRepository(session, tenant_id)
+        mb = mb_repo.get_by_id(str(media_buy_id))
+        assert mb is not None, f"Media buy {media_buy_id} disappeared between checks"
+        if mb.status == "rejected":
+            assert mb.rejection_reason is not None and mb.rejection_reason.strip() != "", (
+                f"Media buy {media_buy_id} has status 'rejected' but rejection_reason is "
+                f"'{mb.rejection_reason}' — webhook payload would lack the rejection reason, "
+                "violating the Buyer notification contract (POST-S12)"
+            )
+
+    # --- C. Workflow step + mapping ---
     with _db_session(ctx) as session:
         wf_repo = WorkflowRepository(session, tenant_id)
         mapping = wf_repo.get_latest_mapping_for_object("media_buy", str(media_buy_id))
@@ -486,38 +500,28 @@ def then_webhook_notification(ctx: dict) -> None:
             "_send_push_notifications queries ObjectWorkflowMapping by step_id and would find nothing"
         )
 
-        # SPEC-PRODUCTION GAP: the repository-driven reject path (see
-        # when_seller_rejects_media_buy) does NOT populate step.request_data with
-        # push_notification_config because it bypasses the Flask admin flow that
-        # creates the workflow step with the original request payload.
-        # FIXME(salesagent-9vgz.1): once the harness exercises the full admin flow,
-        # step.request_data will carry push_notification_config and this xfail can
-        # be removed in favor of a hard assertion.
+        # --- B. step.request_data must carry push_notification_config with the buyer URL ---
+        # _send_push_notifications reads step.request_data['push_notification_config']['url']
+        # to determine the webhook destination. Without it, dispatch logs
+        # 'No push notification URL present' and skips the POST entirely.
+        #
+        # SPEC-PRODUCTION GAP: the repository-driven reject path does NOT populate
+        # step.request_data with push_notification_config because it bypasses the
+        # Flask admin flow that writes the original request payload onto the step.
+        # FIXME(salesagent-9vgz.1): wire through the production admin approve/reject
+        # flow which populates request_data, then remove this xfail.
         req_data = step.request_data or {}
         step_push_cfg = req_data.get("push_notification_config") if isinstance(req_data, dict) else None
-        if not step_push_cfg or (isinstance(step_push_cfg, dict) and step_push_cfg.get("url") != expected_url):
-            import pytest
-
+        if not isinstance(step_push_cfg, dict) or step_push_cfg.get("url") != expected_url:
             pytest.xfail(
-                "SPEC-PRODUCTION GAP: workflow step.request_data does not carry "
-                "push_notification_config with the buyer's URL. The BDD reject path uses "
-                "repository methods (WorkflowRepository.update_status) and does not write "
-                "the original request's push_notification_config onto the step. "
-                "_send_push_notifications reads step.request_data['push_notification_config']['url']; "
-                "with the current harness flow, it would log 'No push notification URL present' "
-                "and skip dispatch. "
-                "FIXME(salesagent-9vgz.1): Wire through the production admin approve/reject flow "
-                "which populates request_data from the originating create_media_buy request."
+                "SPEC-PRODUCTION GAP: step.request_data does not carry "
+                "push_notification_config with the buyer's URL — "
+                "_send_push_notifications would skip dispatch. "
+                "FIXME(salesagent-9vgz.1): wire through the admin flow."
             )
 
-        # Happy path: step.request_data carries push_notification_config with the buyer URL.
-        # This proves the full dispatch chain is wired:
-        #   PushNotificationConfig (A) + WorkflowStep.request_data (B) + ObjectWorkflowMapping (C)
-        #   + terminal status (D) = webhook WILL be dispatched by _send_push_notifications.
-        assert isinstance(step_push_cfg, dict), (
-            f"step.request_data['push_notification_config'] is not a dict: {type(step_push_cfg)}"
-        )
-        assert step_push_cfg.get("url") == expected_url, (
+        # Happy path (reached when harness wires the full admin flow):
+        assert step_push_cfg["url"] == expected_url, (
             f"step.request_data push_notification_config URL mismatch: "
             f"expected '{expected_url}', got '{step_push_cfg.get('url')}'"
         )
