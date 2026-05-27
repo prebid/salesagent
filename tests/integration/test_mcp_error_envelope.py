@@ -33,6 +33,7 @@ from fastmcp import Client
 
 from src.core.main import mcp
 from tests.factories.principal import PrincipalFactory
+from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_package_request_dict, make_real_tenant_identity
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -119,34 +120,18 @@ class TestMcpWireErrorEnvelope:
         # Parse the wire envelope from the JSON-encoded ToolError content text.
         envelope = json.loads(envelope_text)
 
-        # CRITICAL: spec two-layer envelope shape on the wire.
-        assert (
-            "adcp_error" in envelope
-        ), f"Wire envelope must include top-level adcp_error. Got keys: {sorted(envelope.keys())}"
-        assert "errors" in envelope, f"Wire envelope must include errors array. Got keys: {sorted(envelope.keys())}"
-
         # MEDIA_BUY_NOT_FOUND is a STANDARD_ERROR_CODES entry — passes through unchanged.
-        assert envelope["adcp_error"]["code"] == "MEDIA_BUY_NOT_FOUND", (
-            f"Envelope-level code: typed AdCPMediaBuyNotFoundError emits MEDIA_BUY_NOT_FOUND on the wire, "
-            f"got {envelope['adcp_error'].get('code')}"
+        # AdCPMediaBuyNotFoundError overrides AdCPNotFoundError's terminal default
+        # with correctable (the buyer can correct by supplying the right media_buy_id).
+        assert_envelope_shape(
+            envelope,
+            "MEDIA_BUY_NOT_FOUND",
+            recovery="correctable",
+            message_substr="mb_does_not_exist_pr1306_wire_test",
         )
-        assert envelope["adcp_error"]["recovery"] == "correctable", (
-            f"AdCPMediaBuyNotFoundError recovery is correctable (overrides AdCPNotFoundError's terminal default — "
-            f"the buyer can correct by supplying the right media_buy_id), got {envelope['adcp_error'].get('recovery')}"
-        )
+        # Two-layer invariant: errors[0].message is byte-identical to adcp_error.message.
         assert (
-            "mb_does_not_exist_pr1306_wire_test" in envelope["adcp_error"]["message"]
-        ), f"Envelope message must echo the missing media_buy_id, got: {envelope['adcp_error']['message']}"
-
-        # errors[0] mirrors envelope-level adcp_error (single-error case).
-        assert len(envelope["errors"]) > 0, "errors array must be non-empty"
-        err = envelope["errors"][0]
-        assert err["code"] == "MEDIA_BUY_NOT_FOUND", f"errors[0].code must match envelope code, got: {err.get('code')}"
-        assert (
-            err["recovery"] == "correctable"
-        ), f"errors[0].recovery must match envelope recovery, got: {err.get('recovery')}"
-        assert (
-            err["message"] == envelope["adcp_error"]["message"]
+            envelope["errors"][0]["message"] == envelope["adcp_error"]["message"]
         ), "errors[0].message must be byte-identical to adcp_error.message in single-error case"
 
     def _call_mcp_tool_capturing_envelope(self, tool_name: str, params: dict, identity) -> tuple[bool, dict | None]:
@@ -219,17 +204,7 @@ class TestMcpWireErrorEnvelope:
 
         assert is_error, "BUDGET_TOO_LOW must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
-        assert "adcp_error" in envelope, f"Wire envelope must include adcp_error. Got: {sorted(envelope.keys())}"
-        assert "errors" in envelope, f"Wire envelope must include errors[]. Got: {sorted(envelope.keys())}"
-        assert (
-            envelope["adcp_error"]["code"] == "BUDGET_TOO_LOW"
-        ), f"Envelope code must be BUDGET_TOO_LOW (STANDARD passthrough), got {envelope['adcp_error'].get('code')}"
-        assert (
-            envelope["adcp_error"]["recovery"] == "correctable"
-        ), f"AdCPValidationError default recovery is correctable, got {envelope['adcp_error'].get('recovery')}"
-        # errors[0] mirrors envelope-level adcp_error.
-        err = envelope["errors"][0]
-        assert err["code"] == "BUDGET_TOO_LOW", f"errors[0].code must match envelope code, got {err.get('code')}"
+        assert_envelope_shape(envelope, "BUDGET_TOO_LOW", recovery="correctable")
 
     def test_create_media_buy_validation_error_emits_envelope_on_wire(self, mcp_real_tenant_setup):
         """Production past-start-time validator surfaces INVALID_REQUEST on the wire.
@@ -237,9 +212,8 @@ class TestMcpWireErrorEnvelope:
         Drives REAL invalid input (``start_time`` in the past) through the
         full pipeline. Production validator at
         src/core/tools/media_buy_create.py:1791 raises
-        ``_StructuredValidationError(code="INVALID_REQUEST")``; the except
-        block at line 2221 translates to ``AdCPValidationError``; the MCP
-        boundary translator builds the wire envelope.
+        ``AdCPValidationError(error_code="INVALID_REQUEST")`` directly; the
+        MCP boundary translator builds the wire envelope.
 
         No ``_impl`` patching — exercises the actual production validator.
 
@@ -266,12 +240,7 @@ class TestMcpWireErrorEnvelope:
 
         assert is_error, "INVALID_REQUEST must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
-        assert (
-            envelope["adcp_error"]["code"] == "INVALID_REQUEST"
-        ), f"Envelope code must be INVALID_REQUEST for past start_time, got {envelope['adcp_error'].get('code')}"
-        assert (
-            envelope["adcp_error"]["recovery"] == "correctable"
-        ), f"AdCPValidationError default recovery is correctable, got {envelope['adcp_error'].get('recovery')}"
+        assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
         msg_lower = envelope["adcp_error"]["message"].lower()
         assert (
             "past" in msg_lower or "start" in msg_lower
@@ -317,17 +286,10 @@ class TestMcpWireErrorEnvelope:
         assert envelope_text is not None, "Error must include content text carrying the envelope"
 
         envelope = json.loads(envelope_text)
-        assert "adcp_error" in envelope, f"Wire envelope must include adcp_error. Got: {sorted(envelope.keys())}"
 
         # AdCPAuthRequiredError -> AUTH_TOKEN_INVALID (spec STANDARD passthrough, not AUTH_REQUIRED).
-        assert envelope["adcp_error"]["code"] == "AUTH_TOKEN_INVALID", (
-            f"Envelope code must be AUTH_TOKEN_INVALID (passthrough STANDARD code), "
-            f"got {envelope['adcp_error'].get('code')}"
-        )
         # Recovery is terminal for AdCPAuthenticationError (per adcp 4.3 STANDARD_ERROR_CODES).
-        assert (
-            envelope["adcp_error"]["recovery"] == "terminal"
-        ), f"AdCPAuthRequiredError default recovery is terminal, got {envelope['adcp_error'].get('recovery')}"
+        assert_envelope_shape(envelope, "AUTH_TOKEN_INVALID", recovery="terminal")
         assert "identity" in envelope["adcp_error"]["message"].lower() or (
             "auth" in envelope["adcp_error"]["message"].lower()
         ), f"Envelope message must mention identity/auth, got: {envelope['adcp_error']['message']}"

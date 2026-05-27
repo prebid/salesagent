@@ -224,8 +224,9 @@ class TestCreateMediaBuyErrorPaths:
                 identity=identity,
             )
 
-        # Typed AdCPValidationError raised from _impl carries the structured
-        # INVALID_REQUEST code (sourced from _StructuredValidationError.code).
+        # Typed AdCPValidationError raised directly from _impl with
+        # error_code="INVALID_REQUEST" (was: _StructuredValidationError
+        # translation, deleted in audit S2).
         exc = excinfo.value
         assert exc.error_code == "INVALID_REQUEST"
         assert "past" in exc.message.lower() or "start" in exc.message.lower()

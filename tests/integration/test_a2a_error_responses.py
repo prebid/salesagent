@@ -20,6 +20,7 @@ from a2a.types import Message, SendMessageRequest, Task
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.database.database_session import get_db_session
 from src.core.resolved_identity import ResolvedIdentity
+from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_package_request_dict, setup_error_test_tenant_chain
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
@@ -128,18 +129,11 @@ class TestA2AErrorPropagation:
         # ``error_envelope`` (built by ``build_two_layer_error_envelope``) as the
         # DataPart. The wire shape is the spec envelope (adcp_error + errors),
         # not the previous {success: False, errors: [...]} ad-hoc dict.
-        assert "adcp_error" in artifact_data, "Response must carry the envelope-level adcp_error key"
-        assert (
-            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
-        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
-        assert "errors" in artifact_data, "Response must include 'errors' field"
-        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
-
-        # Verify error structure
-        error = artifact_data["errors"][0]
-        assert "message" in error, "Error must include message"
-        assert "Missing required AdCP parameters" in error["message"]
-        assert error["code"] == "VALIDATION_ERROR"
+        assert_envelope_shape(
+            artifact_data,
+            "VALIDATION_ERROR",
+            message_substr="Missing required AdCP parameters",
+        )
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Test that authentication errors include errors field in A2A response."""
@@ -288,16 +282,11 @@ class TestA2AErrorPropagation:
         artifact_data = self.extract_data_from_artifact(artifact)
 
         # CRITICAL: full two-layer envelope on the wire.
-        assert "adcp_error" in artifact_data, "Wire envelope must carry top-level adcp_error key"
-        assert (
-            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
-        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
-        assert "errors" in artifact_data, "Wire envelope must include errors array"
-        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
-
-        error = artifact_data["errors"][0]
-        assert error["code"] == "VALIDATION_ERROR", f"Per-error code must match envelope code, got {error.get('code')}"
-        assert "creatives" in error["message"], f"Error message must name the missing field, got: {error['message']}"
+        assert_envelope_shape(
+            artifact_data,
+            "VALIDATION_ERROR",
+            message_substr="creatives",
+        )
 
     async def test_create_media_buy_response_includes_all_adcp_fields(self, handler, test_tenant, test_principal):
         """Test that A2A response includes all AdCP domain fields (not just cherry-picked ones).
@@ -406,17 +395,9 @@ class TestA2AErrorPropagation:
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
 
         # Full two-layer envelope on the wire.
-        assert "adcp_error" in artifact_data, "Wire envelope must carry top-level adcp_error key"
-        assert (
-            artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
-        ), f"Wire code must be VALIDATION_ERROR, got {artifact_data['adcp_error'].get('code')}"
-        assert "errors" in artifact_data, "Wire envelope must include errors array"
-        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
-
-        error = artifact_data["errors"][0]
-        assert error["code"] == "VALIDATION_ERROR", f"Per-error code must match envelope code, got {error.get('code')}"
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
         # Per-error message enumerates the missing required fields.
-        msg = error["message"]
+        msg = artifact_data["errors"][0]["message"]
         assert (
             "format_id" in msg and "content_uri" in msg and "name" in msg
         ), f"Per-error message must name all missing required fields, got: {msg}"
@@ -457,15 +438,9 @@ class TestA2AErrorPropagation:
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
 
-        assert "adcp_error" in artifact_data
-        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
-        assert "errors" in artifact_data
-        assert len(artifact_data["errors"]) > 0
-
-        error = artifact_data["errors"][0]
-        assert error["code"] == "VALIDATION_ERROR"
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
         # Per-error message enumerates ONLY the missing fields (not the provided media_buy_id).
-        msg = error["message"]
+        msg = artifact_data["errors"][0]["message"]
         assert "package_id" in msg and "creative_id" in msg, f"Per-error message must name missing fields, got: {msg}"
 
 
@@ -752,8 +727,7 @@ class TestA2AContextEcho:
         artifact_data = extract_data_from_artifact(result.artifacts[0])
 
         # Two-layer envelope present
-        assert "adcp_error" in artifact_data
-        assert artifact_data["adcp_error"]["code"] == "VALIDATION_ERROR"
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
 
         # CRITICAL: context echoes at top-level of the envelope (NOT nested under errors[]).
         assert "context" in artifact_data, (
