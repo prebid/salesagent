@@ -109,9 +109,9 @@ class TestErrorCodeStatusTableDerivation:
         used for a plain-ToolError fallback that has no carried context.
         """
         table = _build_error_code_to_status()
-        assert table["SERVICE_UNAVAILABLE"] == 503, (
-            f"SERVICE_UNAVAILABLE must resolve to 503 (highest status wins), " f"got {table.get('SERVICE_UNAVAILABLE')}"
-        )
+        assert (
+            table["SERVICE_UNAVAILABLE"] == 503
+        ), f"SERVICE_UNAVAILABLE must resolve to 503 (highest status wins), got {table.get('SERVICE_UNAVAILABLE')}"
 
     def test_table_is_built_from_function_not_module_const(self):
         """Pin: the function returns a fresh dict (no module-level mutation).

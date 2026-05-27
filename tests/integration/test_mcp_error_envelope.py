@@ -92,9 +92,9 @@ class TestMcpWireErrorEnvelope:
         envelope = json.loads(envelope_text)
 
         # CRITICAL: spec two-layer envelope shape on the wire.
-        assert "adcp_error" in envelope, (
-            f"Wire envelope must include top-level adcp_error. Got keys: {sorted(envelope.keys())}"
-        )
+        assert (
+            "adcp_error" in envelope
+        ), f"Wire envelope must include top-level adcp_error. Got keys: {sorted(envelope.keys())}"
         assert "errors" in envelope, f"Wire envelope must include errors array. Got keys: {sorted(envelope.keys())}"
 
         # NOT_FOUND → INVALID_REQUEST via STANDARD_ERROR_CODES wire translation.
@@ -102,20 +102,217 @@ class TestMcpWireErrorEnvelope:
             f"Envelope-level code: NOT_FOUND must translate to INVALID_REQUEST on the wire, "
             f"got {envelope['adcp_error'].get('code')}"
         )
-        assert envelope["adcp_error"]["recovery"] == "terminal", (
-            f"AdCPNotFoundError default recovery is terminal, got {envelope['adcp_error'].get('recovery')}"
-        )
-        assert "mb_does_not_exist_pr1306_wire_test" in envelope["adcp_error"]["message"], (
-            f"Envelope message must echo the missing media_buy_id, got: {envelope['adcp_error']['message']}"
-        )
+        assert (
+            envelope["adcp_error"]["recovery"] == "terminal"
+        ), f"AdCPNotFoundError default recovery is terminal, got {envelope['adcp_error'].get('recovery')}"
+        assert (
+            "mb_does_not_exist_pr1306_wire_test" in envelope["adcp_error"]["message"]
+        ), f"Envelope message must echo the missing media_buy_id, got: {envelope['adcp_error']['message']}"
 
         # errors[0] mirrors envelope-level adcp_error (single-error case).
         assert len(envelope["errors"]) > 0, "errors array must be non-empty"
         err = envelope["errors"][0]
         assert err["code"] == "INVALID_REQUEST", f"errors[0].code must match envelope code, got: {err.get('code')}"
-        assert err["recovery"] == "terminal", (
-            f"errors[0].recovery must match envelope recovery, got: {err.get('recovery')}"
+        assert (
+            err["recovery"] == "terminal"
+        ), f"errors[0].recovery must match envelope recovery, got: {err.get('recovery')}"
+        assert (
+            err["message"] == envelope["adcp_error"]["message"]
+        ), "errors[0].message must be byte-identical to adcp_error.message in single-error case"
+
+    def _call_mcp_tool_capturing_envelope(self, tool_name: str, params: dict, identity) -> tuple[bool, dict | None]:
+        """Shared helper: invoke an MCP tool and return (is_error, parsed_envelope).
+
+        Single source of truth for the "Client(mcp) → patch identity → call_tool →
+        parse content[0].text as JSON envelope" pattern used by every wire test.
+        Returns ``None`` envelope when the result lacks content (caller asserts
+        that's not the case).
+        """
+
+        async def _call() -> tuple[bool, str | None]:
+            with patch(
+                "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                return_value=identity,
+            ):
+                async with Client(mcp) as client:
+                    result = await client.call_tool(tool_name, params, raise_on_error=False)
+                    if not result.content:
+                        return result.is_error, None
+                    text = None
+                    for c in result.content:
+                        if hasattr(c, "text"):
+                            text = c.text
+                            break
+                    return result.is_error, text
+
+        is_error, envelope_text = asyncio.run(_call())
+        if envelope_text is None:
+            return is_error, None
+        return is_error, json.loads(envelope_text)
+
+    def test_create_media_buy_budget_too_low_emits_envelope_on_wire(self, integration_db):
+        """Typed AdCPValidationError(BUDGET_TOO_LOW) surfaces as a wire envelope.
+
+        Patches ``_create_media_buy_impl`` to raise the typed AdCPError directly,
+        bypassing the validation prelude (tenant lookup, currency limits, product
+        catalog) that comes before the budget check in production. Verifies the
+        full MCP boundary translator → wire envelope path:
+            typed raise → with_error_logging → _translate_to_tool_error →
+            AdCPToolError → CallToolResult.content[0].text
+
+        BUDGET_TOO_LOW is a spec STANDARD code (passthrough — not in ERROR_CODE_MAPPING).
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        identity = PrincipalFactory.make_identity(protocol="mcp")
+
+        # Patch _impl to raise the typed error the validator would emit at the
+        # production budget site (media_buy_create.py:1760, BUDGET_TOO_LOW).
+        # The pre-raise validation chain (tenant/principal/product/currency lookups)
+        # is not under test here — the wire envelope shape is.
+        async def _raise_budget_too_low(**kwargs):
+            raise AdCPValidationError(
+                "Invalid budget: 0. Budget must be positive.",
+                error_code="BUDGET_TOO_LOW",
+                suggestion="Set each package budget to a positive amount.",
+                field="packages[].budget",
+            )
+
+        with patch(
+            "src.core.tools.media_buy_create._create_media_buy_impl",
+            side_effect=_raise_budget_too_low,
+        ):
+            is_error, envelope = self._call_mcp_tool_capturing_envelope(
+                "create_media_buy",
+                {
+                    "brand": {"domain": "wiretest.example"},
+                    "packages": [
+                        {
+                            "product_id": "p1",
+                            "pricing_option_id": "cpm_usd_fixed",
+                            "budget": 0,
+                        }
+                    ],
+                    "start_time": "2027-01-01T00:00:00Z",
+                    "end_time": "2027-02-01T00:00:00Z",
+                },
+                identity,
+            )
+
+        assert is_error, "BUDGET_TOO_LOW must produce a tool error"
+        assert envelope is not None, "Error must include content text carrying the envelope"
+        assert "adcp_error" in envelope, f"Wire envelope must include adcp_error. Got: {sorted(envelope.keys())}"
+        assert "errors" in envelope, f"Wire envelope must include errors[]. Got: {sorted(envelope.keys())}"
+        assert (
+            envelope["adcp_error"]["code"] == "BUDGET_TOO_LOW"
+        ), f"Envelope code must be BUDGET_TOO_LOW (STANDARD passthrough), got {envelope['adcp_error'].get('code')}"
+        assert (
+            envelope["adcp_error"]["recovery"] == "correctable"
+        ), f"AdCPValidationError default recovery is correctable, got {envelope['adcp_error'].get('recovery')}"
+        # errors[0] mirrors envelope-level adcp_error.
+        err = envelope["errors"][0]
+        assert err["code"] == "BUDGET_TOO_LOW", f"errors[0].code must match envelope code, got {err.get('code')}"
+
+    def test_create_media_buy_validation_error_emits_envelope_on_wire(self, integration_db):
+        """Typed AdCPValidationError(INVALID_REQUEST) surfaces as a wire envelope.
+
+        Patches ``_create_media_buy_impl`` to raise the typed error a past-
+        start-time validator would emit (production: media_buy_create.py:1799).
+        Verifies the full MCP boundary translator path.
+
+        INVALID_REQUEST is a spec STANDARD code (passthrough — not in ERROR_CODE_MAPPING).
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        identity = PrincipalFactory.make_identity(protocol="mcp")
+
+        async def _raise_past_start(**kwargs):
+            raise AdCPValidationError(
+                "Invalid start time: 2020-01-01T00:00:00Z. Start time cannot be in the past.",
+                error_code="INVALID_REQUEST",
+                suggestion="Use a future datetime or 'asap' for immediate start.",
+                field="start_time",
+            )
+
+        with patch(
+            "src.core.tools.media_buy_create._create_media_buy_impl",
+            side_effect=_raise_past_start,
+        ):
+            is_error, envelope = self._call_mcp_tool_capturing_envelope(
+                "create_media_buy",
+                {
+                    "brand": {"domain": "wiretest.example"},
+                    "packages": [{"product_id": "p1", "pricing_option_id": "cpm_usd_fixed", "budget": 5000.0}],
+                    "start_time": "2020-01-01T00:00:00Z",
+                    "end_time": "2020-02-01T00:00:00Z",
+                },
+                identity,
+            )
+
+        assert is_error, "INVALID_REQUEST must produce a tool error"
+        assert envelope is not None, "Error must include content text carrying the envelope"
+        assert (
+            envelope["adcp_error"]["code"] == "INVALID_REQUEST"
+        ), f"Envelope code must be INVALID_REQUEST for past start_time, got {envelope['adcp_error'].get('code')}"
+        assert (
+            envelope["adcp_error"]["recovery"] == "correctable"
+        ), f"AdCPValidationError default recovery is correctable, got {envelope['adcp_error'].get('recovery')}"
+        msg_lower = envelope["adcp_error"]["message"].lower()
+        assert (
+            "past" in msg_lower or "start" in msg_lower
+        ), f"Envelope message must explain the failure, got: {envelope['adcp_error']['message']}"
+
+    def test_get_media_buy_delivery_missing_identity_emits_auth_envelope_on_wire(self, integration_db):
+        """Missing identity in get_media_buy_delivery surfaces AUTH_TOKEN_INVALID on the MCP wire.
+
+        Flow:
+            Client(mcp).call_tool("get_media_buy_delivery", {...}) with identity=None
+              → MCP wrapper resolve_identity returns None
+              → _get_media_buy_delivery_impl raises AdCPAuthRequiredError("Identity is required")
+              → AdCPAuthRequiredError carries error_code="AUTH_TOKEN_INVALID" (passthrough STANDARD code)
+              → with_error_logging → _translate_to_tool_error → wire envelope
+
+        AUTH_TOKEN_INVALID is a STANDARD spec code — passes through unchanged.
+        """
+
+        async def _call_no_identity() -> tuple[bool, str | None]:
+            # Patch identity resolution to return None (simulates missing/unparseable auth).
+            with patch(
+                "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                return_value=None,
+            ):
+                async with Client(mcp) as client:
+                    result = await client.call_tool(
+                        "get_media_buy_delivery",
+                        {"media_buy_ids": ["any_id"]},
+                        raise_on_error=False,
+                    )
+                    if not result.content:
+                        return result.is_error, None
+                    text = None
+                    for c in result.content:
+                        if hasattr(c, "text"):
+                            text = c.text
+                            break
+                    return result.is_error, text
+
+        is_error, envelope_text = asyncio.run(_call_no_identity())
+
+        assert is_error, "Missing identity must produce a tool error"
+        assert envelope_text is not None, "Error must include content text carrying the envelope"
+
+        envelope = json.loads(envelope_text)
+        assert "adcp_error" in envelope, f"Wire envelope must include adcp_error. Got: {sorted(envelope.keys())}"
+
+        # AdCPAuthRequiredError -> AUTH_TOKEN_INVALID (spec STANDARD passthrough, not AUTH_REQUIRED).
+        assert envelope["adcp_error"]["code"] == "AUTH_TOKEN_INVALID", (
+            f"Envelope code must be AUTH_TOKEN_INVALID (passthrough STANDARD code), "
+            f"got {envelope['adcp_error'].get('code')}"
         )
-        assert err["message"] == envelope["adcp_error"]["message"], (
-            "errors[0].message must be byte-identical to adcp_error.message in single-error case"
-        )
+        # Recovery is terminal for AdCPAuthenticationError (per adcp 4.3 STANDARD_ERROR_CODES).
+        assert (
+            envelope["adcp_error"]["recovery"] == "terminal"
+        ), f"AdCPAuthRequiredError default recovery is terminal, got {envelope['adcp_error'].get('recovery')}"
+        assert "identity" in envelope["adcp_error"]["message"].lower() or (
+            "auth" in envelope["adcp_error"]["message"].lower()
+        ), f"Envelope message must mention identity/auth, got: {envelope['adcp_error']['message']}"
