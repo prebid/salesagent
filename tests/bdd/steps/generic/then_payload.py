@@ -419,18 +419,82 @@ def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
         raise AssertionError(f"Unexpected outcome value '{expected}' for '{field}' — expected 'valid' or 'invalid'")
 
 
+def _assert_returned_formats_subset_of_registry(ctx: dict, field: str, label: str) -> None:
+    """Assert returned formats are a proper subset of the seeded registry.
+
+    Shared helper for both partition-filtering and boundary-handling steps.
+    Checks three invariants that any filter/boundary must uphold:
+
+    1. **Containment** -- every returned format name exists in the registry
+       (no phantom formats that were not in the catalog).
+    2. **Cardinality** -- returned count does not exceed the registry size
+       (filtering/boundary handling can only narrow, never expand).
+    3. **Uniqueness** -- no duplicate format names in the response.
+
+    Skips silently when no registry is seeded (no baseline to compare against).
+    """
+    formats = _get_formats(ctx)
+    registry = ctx.get("registry_formats", [])
+
+    if not registry:
+        return
+
+    registry_names: set[str] = {n for r in registry if (n := _fmt_name(r)) is not None}
+
+    # 1. Containment
+    returned_names = [_fmt_name(f) for f in formats]
+    returned_names_set: set[str] = {n for n in returned_names if n is not None}
+    unexpected = returned_names_set - registry_names
+    assert not unexpected, (
+        f"{label} '{field}' returned formats not in the seeded registry: {sorted(unexpected)}. "
+        f"Registry names: {sorted(registry_names)}"
+    )
+
+    # 2. Cardinality
+    assert len(formats) <= len(registry), (
+        f"{label} '{field}' returned {len(formats)} formats but registry has only "
+        f"{len(registry)} — cannot produce more formats than the catalog"
+    )
+
+    # 3. Uniqueness
+    if returned_names:
+        seen: set[str | None] = set()
+        dupes = [n for n in returned_names if n in seen or seen.add(n)]  # type: ignore[func-returns-value]
+        assert not dupes, f"{label} '{field}' returned duplicate format names: {dupes}"
+
+
 @then(parsers.re(r"the (?P<field>.+) filtering should result in (?P<expected>\w+)"))
 def then_partition_filtering_result(ctx: dict, field: str, expected: str) -> None:
     """Generic partition test: any '<field> filtering should result in <expected>'.
 
-    Delegates to ``_assert_partition_outcome`` — same logic as
-    ``then_boundary_handling_result`` to guarantee consistent semantics
-    across partition and boundary Gherkin phrasings.
+    For ``expected == "valid"``: verifies the response is well-formed AND that
+    the returned formats are a proper subset of the seeded registry catalog.
+    Every returned format must trace back to a registry entry (no phantom
+    formats), and the count must not exceed the catalog size.  This prevents
+    a filter from silently returning the full catalog on every partition.
+
+    For ``expected == "invalid"``: delegates entirely to
+    ``_assert_partition_outcome`` (error presence, no response).
     """
     _assert_partition_outcome(ctx, field, expected)
+    if expected == "valid":
+        _assert_returned_formats_subset_of_registry(ctx, field, label="Filter")
 
 
 @then(parsers.re(r"the (?P<field>.+) handling should be (?P<expected>\w+)"))
 def then_boundary_handling_result(ctx: dict, field: str, expected: str) -> None:
-    """Generic boundary test: any '<field> handling should be <expected>'."""
+    """Generic boundary test: any '<field> handling should be <expected>'.
+
+    For ``expected == "valid"``: verifies the response is well-formed AND that
+    the returned formats are a proper subset of the seeded registry catalog.
+    Boundary tests exercise the same filters as partition tests but at
+    edge values (e.g. min/max enum members, omitted filters).  The content
+    assertion ensures the boundary value was actually applied rather than
+    silently returning the full catalog for every boundary point.
+
+    For ``expected == "invalid"``: delegates entirely to
+    ``_assert_partition_outcome`` (error presence, no response).
+    """
     _assert_partition_outcome(ctx, field, expected)
+    if expected == "valid":
+        _assert_returned_formats_subset_of_registry(ctx, field, label="Boundary")
