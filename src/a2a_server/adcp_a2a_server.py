@@ -938,7 +938,6 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
             # Use identity resolved at transport boundary (if available)
             err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
             err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
@@ -950,6 +949,13 @@ class AdCPRequestHandler(RequestHandler):
                 False,
                 {"error_type": type(e).__name__},
                 str(e),
+            )
+            record_boundary_error(
+                "a2a",
+                "message_processing",
+                e,
+                tenant_id=err_tenant_id,
+                principal_id=err_principal_id,
             )
 
             # Send protocol-level webhook notification for failure if configured
@@ -1063,6 +1069,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.database.database_session import get_db_session
 
+        tool_context = None
         try:
             # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
@@ -1106,7 +1113,13 @@ class AdCPRequestHandler(RequestHandler):
         except A2AError:
             raise
         except Exception as e:
-            logger.error(f"Error getting push notification config: {e}")
+            record_boundary_error(
+                "a2a",
+                "get_push_notification_config",
+                e,
+                tenant_id=tool_context.tenant_id if tool_context else None,
+                principal_id=tool_context.principal_id if tool_context else None,
+            )
             raise InternalError(message=f"Failed to get push notification config: {str(e)}")
 
     async def on_create_task_push_notification_config(
@@ -1125,6 +1138,7 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 
+        tool_context = None
         try:
             # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
@@ -1207,7 +1221,13 @@ class AdCPRequestHandler(RequestHandler):
         except A2AError:
             raise
         except Exception as e:
-            logger.error(f"Error setting push notification config: {e}")
+            record_boundary_error(
+                "a2a",
+                "create_push_notification_config",
+                e,
+                tenant_id=tool_context.tenant_id if tool_context else None,
+                principal_id=tool_context.principal_id if tool_context else None,
+            )
             raise InternalError(message=f"Failed to set push notification config: {str(e)}")
 
     async def on_list_task_push_notification_configs(
@@ -1222,6 +1242,7 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 
+        tool_context = None
         try:
             # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
@@ -1262,7 +1283,13 @@ class AdCPRequestHandler(RequestHandler):
         except A2AError:
             raise
         except Exception as e:
-            logger.error(f"Error listing push notification configs: {e}")
+            record_boundary_error(
+                "a2a",
+                "list_push_notification_configs",
+                e,
+                tenant_id=tool_context.tenant_id if tool_context else None,
+                principal_id=tool_context.principal_id if tool_context else None,
+            )
             raise InternalError(message=f"Failed to list push notification configs: {str(e)}")
 
     async def on_delete_task_push_notification_config(
@@ -1279,6 +1306,7 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 
+        tool_context = None
         try:
             # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
@@ -1313,7 +1341,13 @@ class AdCPRequestHandler(RequestHandler):
         except A2AError:
             raise
         except Exception as e:
-            logger.error(f"Error deleting push notification config: {e}")
+            record_boundary_error(
+                "a2a",
+                "delete_push_notification_config",
+                e,
+                tenant_id=tool_context.tenant_id if tool_context else None,
+                principal_id=tool_context.principal_id if tool_context else None,
+            )
             raise InternalError(message=f"Failed to delete push notification config: {str(e)}")
 
     async def on_get_extended_agent_card(
