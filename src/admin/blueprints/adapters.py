@@ -1,6 +1,7 @@
 """Adapters management blueprint."""
 
 import logging
+from typing import get_args
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from pydantic import ValidationError
@@ -8,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.adapters import get_adapter_schemas
+from src.adapters.mock_ad_server import MockProductConfig
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -69,9 +71,11 @@ def mock_config(tenant_id, product_id, **kwargs):
                 config["latency_ms"] = parse_int("latency_ms", 50, min_val=0, max_val=60000)
                 config["error_rate"] = parse_float("error_rate", 0.1, min_val=0, max_val=100)
 
-                # Test scenarios (validated choices)
+                # Test scenarios (validated choices) — single source of truth is the
+                # Literal annotation on MockProductConfig.test_mode; derive the allowed
+                # set here so the two surfaces can't drift.
                 test_mode = request.form.get("test_mode", "normal")
-                valid_modes = ["normal", "high_demand", "degraded", "outage"]
+                valid_modes = get_args(MockProductConfig.model_fields["test_mode"].annotation)
                 if test_mode not in valid_modes:
                     raise ValueError(f"Invalid test_mode: {test_mode}")
                 config["test_mode"] = test_mode

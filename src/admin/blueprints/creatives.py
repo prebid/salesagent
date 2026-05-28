@@ -656,9 +656,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         # Use the status snapshot from the first loop — no need for a second UoW
         buys_to_push = [
-            buy_id
-            for buy_id in assignment_buy_ids
-            if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
+            buy_id for buy_id in assignment_buy_ids if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
         ]
 
         for buy_id in buys_to_push:
