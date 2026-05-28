@@ -19,11 +19,9 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     ReportingDimensions,
 )
 from fastapi import APIRouter
-from fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
-from src.core.tool_error_logging import handle_tool_error
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -42,9 +40,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 
-# Note: handle_tool_error and the wire-code -> HTTP status table moved to
-# src/core/tool_error_logging.py so the REST module does not import an MCP-
-# boundary type (AdCPToolError). app.py imports handle_tool_error directly.
+# Note: ToolError handling lives entirely in the global ``@app.exception_handler``
+# in src/app.py — REST routes never catch ToolError or import the MCP-boundary
+# type (AdCPToolError). The wire-code -> HTTP status table moved to
+# src/core/tool_error_logging.py alongside handle_tool_error.
 
 
 # ---------------------------------------------------------------------------
@@ -192,11 +191,7 @@ async def list_creative_formats(body: ListCreativeFormatsBody, identity: Resolve
     body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
     req = ListCreativeFormatsRequest(**body_fields) if body_fields else None
 
-    try:
-        response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
-    except ToolError as e:
-        return handle_tool_error(e)
-
+    response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 
@@ -210,11 +205,7 @@ async def list_authorized_properties(
     body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
     req = ListAuthorizedPropertiesRequest(**body_fields) if body_fields else None
 
-    try:
-        response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
-    except ToolError as e:
-        return handle_tool_error(e)
-
+    response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 
