@@ -26,6 +26,7 @@ scanning.
 """
 
 import socket
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -73,6 +74,11 @@ class TestPortScanStartScattersByProcess:
         """A non-trivial fraction of PIDs must start above the low bound."""
         above = sum(1 for p in range(1, 500) if port_scan_start(50000, 60000, pid=p) > 50000)
         assert above > 400, "scan start barely moves off the low bound"
+
+    def test_pid_like_objects_are_normalized(self):
+        """Allocator should stay stable even if pid-like value is mocked."""
+        start = port_scan_start(50000, 60000, pid=MagicMock())
+        assert 50000 <= start < 60000
 
 
 class TestFindFreePortDetectsDockerStyleBind:

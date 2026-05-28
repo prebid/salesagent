@@ -42,10 +42,16 @@ def port_scan_start(start_port: int, end_port: int, pid: int | None = None) -> i
     span = end_port - start_port
     if span <= 1:
         return start_port
+    # Test suites may temporarily monkeypatch process metadata. Keep allocator
+    # robust by normalizing PID-like values while preserving scan scatter.
+    try:
+        normalized_pid = int(pid)
+    except (TypeError, ValueError):
+        normalized_pid = id(pid)
     # Spread the origin across the whole span. PID modulo span gives a
     # stable, well-distributed offset; distinct PIDs land on distinct
     # origins so parallel agents start scanning different sub-ranges.
-    return start_port + (pid % span)
+    return start_port + (normalized_pid % span)
 
 
 def find_free_port(start_port: int = 10000, end_port: int = 60000) -> int:
