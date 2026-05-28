@@ -52,11 +52,11 @@ from adcp import create_a2a_webhook_payload
 from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -1072,48 +1072,46 @@ class AdCPRequestHandler(RequestHandler):
 
         Retrieves the push notification configuration for a specific config ID.
         """
-        from src.core.database.database_session import get_db_session
-
         tool_context = None
         try:
-            # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "get_push_notification_config")
 
-            # Extract config_id from params
             config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
             if not config_id:
                 raise InvalidParamsError(message="Missing required parameter: id")
 
-            # Query database for config
-            with get_db_session() as db:
-                stmt = select(DBPushNotificationConfig).filter_by(
-                    id=config_id,
-                    tenant_id=tool_context.tenant_id,
+            with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
+                assert uow.push_notification_configs is not None
+                config = uow.push_notification_configs.get_by_id(
+                    config_id,
                     principal_id=tool_context.principal_id,
-                    is_active=True,
                 )
-                config = db.scalars(stmt).first()
 
                 if not config:
                     raise TaskNotFoundError(message=f"Push notification config not found: {config_id}")
 
-                # Return TaskPushNotificationConfig (protobuf)
-                auth_info = None
-                if config.authentication_type and config.authentication_token:
-                    auth_info = AuthenticationInfo(
-                        scheme=config.authentication_type, credentials=config.authentication_token
-                    )
-                return TaskPushNotificationConfig(
-                    id=config.id,
-                    task_id=params.task_id,
-                    url=config.url,
-                    authentication=auth_info,
-                    token=config.validation_token or "",
-                )
+                response_id = config.id
+                response_url = config.url
+                response_validation_token = config.validation_token or ""
+                auth_scheme = config.authentication_type
+                auth_credentials = config.authentication_token
+
+            auth_info = (
+                AuthenticationInfo(scheme=auth_scheme, credentials=auth_credentials)
+                if auth_scheme and auth_credentials
+                else None
+            )
+            return TaskPushNotificationConfig(
+                id=response_id,
+                task_id=params.task_id,
+                url=response_url,
+                authentication=auth_info,
+                token=response_validation_token,
+            )
 
         except A2AError:
             raise
@@ -1137,15 +1135,8 @@ class AdCPRequestHandler(RequestHandler):
         Creates or updates a push notification configuration for async operation callbacks.
         Buyers use this to register webhook URLs where they want to receive status updates.
         """
-        import uuid
-        from datetime import UTC, datetime
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-
         tool_context = None
         try:
-            # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise InvalidRequestError(message="Missing authentication token")
@@ -1158,70 +1149,44 @@ class AdCPRequestHandler(RequestHandler):
             url = params.url
             config_id = params.id or f"pnc_{uuid.uuid4().hex[:16]}"
             validation_token = params.token
-            session_id = None  # Not in A2A spec
 
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
-            # Extract authentication details from protobuf AuthenticationInfo
             auth_type = None
             auth_token_value = None
             if params.HasField("authentication"):
                 auth_type = params.authentication.scheme or None
                 auth_token_value = params.authentication.credentials or None
 
-            # Create or update configuration
-            with get_db_session() as db:
-                # Check if config exists
-                stmt = select(DBPushNotificationConfig).filter_by(
-                    id=config_id, tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id
-                )
-                existing_config = db.scalars(stmt).first()
-
-                if existing_config:
-                    # Update existing config
-                    existing_config.url = url
-                    existing_config.authentication_type = auth_type
-                    existing_config.authentication_token = auth_token_value
-                    existing_config.validation_token = validation_token
-                    existing_config.session_id = session_id
-                    existing_config.updated_at = datetime.now(UTC)
-                    existing_config.is_active = True
-                else:
-                    # Create new config
-                    new_config = DBPushNotificationConfig(
-                        id=config_id,
-                        tenant_id=tool_context.tenant_id,
-                        principal_id=tool_context.principal_id,
-                        session_id=session_id,
-                        url=url,
-                        authentication_type=auth_type,
-                        authentication_token=auth_token_value,
-                        validation_token=validation_token,
-                        is_active=True,
-                    )
-                    db.add(new_config)
-
-                db.commit()
-
-                logger.info(
-                    f"Push notification config {'updated' if existing_config else 'created'}: {config_id} for tenant {tool_context.tenant_id}"
-                )
-
-                # Return A2A response (TaskPushNotificationConfig format)
-                # Build authentication info if present
-                auth_info = None
-                if auth_type and auth_token_value:
-                    auth_info = AuthenticationInfo(scheme=auth_type, credentials=auth_token_value)
-
-                # Return TaskPushNotificationConfig (protobuf)
-                return TaskPushNotificationConfig(
-                    task_id=task_id or "*",
+            with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
+                assert uow.push_notification_configs is not None
+                _config, created = uow.push_notification_configs.upsert(
+                    config_id=config_id,
+                    principal_id=tool_context.principal_id,
                     url=url,
-                    authentication=auth_info,
-                    id=config_id,
-                    token=validation_token or "",
+                    authentication_type=auth_type,
+                    authentication_token=auth_token_value,
+                    validation_token=validation_token,
+                    session_id=None,
                 )
+
+            logger.info(
+                f"Push notification config {'created' if created else 'updated'}: {config_id} for tenant {tool_context.tenant_id}"
+            )
+
+            auth_info = (
+                AuthenticationInfo(scheme=auth_type, credentials=auth_token_value)
+                if auth_type and auth_token_value
+                else None
+            )
+            return TaskPushNotificationConfig(
+                task_id=task_id or "*",
+                url=url,
+                authentication=auth_info,
+                id=config_id,
+                token=validation_token or "",
+            )
 
         except A2AError:
             raise
@@ -1244,46 +1209,42 @@ class AdCPRequestHandler(RequestHandler):
 
         Returns all active push notification configurations for the authenticated principal.
         """
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-
         tool_context = None
         try:
-            # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "list_push_notification_configs")
 
-            # Query database for all active configs
-            with get_db_session() as db:
-                stmt = select(DBPushNotificationConfig).filter_by(
-                    tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id, is_active=True
+            with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
+                assert uow.push_notification_configs is not None
+                configs = uow.push_notification_configs.list_active_by_principal(
+                    principal_id=tool_context.principal_id,
                 )
-                configs = db.scalars(stmt).all()
+                config_snapshots = [
+                    (c.id, c.url, c.authentication_type, c.authentication_token, c.validation_token or "")
+                    for c in configs
+                ]
 
-                # Convert to protobuf TaskPushNotificationConfig list
-                configs_list = []
-                for config in configs:
-                    auth_info = None
-                    if config.authentication_type and config.authentication_token:
-                        auth_info = AuthenticationInfo(
-                            scheme=config.authentication_type, credentials=config.authentication_token
-                        )
-                    configs_list.append(
-                        TaskPushNotificationConfig(
-                            id=config.id,
-                            task_id=params.task_id,
-                            url=config.url,
-                            authentication=auth_info,
-                            token=config.validation_token or "",
-                        )
-                    )
+            configs_list = [
+                TaskPushNotificationConfig(
+                    id=snap_id,
+                    task_id=params.task_id,
+                    url=snap_url,
+                    authentication=(
+                        AuthenticationInfo(scheme=snap_auth_type, credentials=snap_auth_token)
+                        if snap_auth_type and snap_auth_token
+                        else None
+                    ),
+                    token=snap_validation_token,
+                )
+                for snap_id, snap_url, snap_auth_type, snap_auth_token, snap_validation_token in config_snapshots
+            ]
 
-                logger.info(f"Listed {len(configs_list)} push notification configs for tenant {tool_context.tenant_id}")
+            logger.info(f"Listed {len(configs_list)} push notification configs for tenant {tool_context.tenant_id}")
 
-                return ListTaskPushNotificationConfigsResponse(configs=configs_list)
+            return ListTaskPushNotificationConfigsResponse(configs=configs_list)
 
         except A2AError:
             raise
@@ -1306,42 +1267,29 @@ class AdCPRequestHandler(RequestHandler):
 
         Marks a push notification configuration as inactive (soft delete).
         """
-        from datetime import UTC, datetime
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-
         tool_context = None
         try:
-            # Get authentication token and resolve identity at transport boundary
             auth_token = self._get_auth_token(context)
             if not auth_token:
                 raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "delete_push_notification_config")
 
-            # Extract config_id from protobuf params
             config_id = params.id
             if not config_id:
                 raise InvalidParamsError(message="Missing required parameter: id")
 
-            # Query database and mark as inactive
-            with get_db_session() as db:
-                stmt = select(DBPushNotificationConfig).filter_by(
-                    id=config_id, tenant_id=tool_context.tenant_id, principal_id=tool_context.principal_id
+            with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
+                assert uow.push_notification_configs is not None
+                deleted = uow.push_notification_configs.soft_delete(
+                    config_id,
+                    principal_id=tool_context.principal_id,
                 )
-                config = db.scalars(stmt).first()
-
-                if not config:
+                if not deleted:
                     raise TaskNotFoundError(message=f"Push notification config not found: {config_id}")
 
-                # Soft delete by marking as inactive
-                config.is_active = False
-                config.updated_at = datetime.now(UTC)
-                db.commit()
-
-                logger.info(f"Deleted push notification config: {config_id} for tenant {tool_context.tenant_id}")
-                return None
+            logger.info(f"Deleted push notification config: {config_id} for tenant {tool_context.tenant_id}")
+            return None
 
         except A2AError:
             raise
