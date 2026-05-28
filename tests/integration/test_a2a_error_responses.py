@@ -468,8 +468,7 @@ class TestA2AErrorPropagation:
 
         MEDIA_BUY_NOT_FOUND is a STANDARD_ERROR_CODES entry (passthrough — not
         rewritten by ERROR_CODE_MAPPING) so the wire code matches the source
-        exception's ``error_code``. Closes the wire-level coverage gap for
-        typed-subclass envelope construction through on_message_send.
+        exception's ``error_code``.
         """
         identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
@@ -487,7 +486,7 @@ class TestA2AErrorPropagation:
 
         # Send paused=True so _update_media_buy_impl has ≥1 updatable field and
         # reaches _verify_principal where the lookup fires the typed exception.
-        skill_params = {"media_buy_id": "mb_does_not_exist_pr1306_a2a_wire", "paused": True}
+        skill_params = {"media_buy_id": "mb_does_not_exist_a2a_wire", "paused": True}
         message = self.create_message_with_skill("update_media_buy", skill_params)
         params = SendMessageRequest(message=message)
 
@@ -504,7 +503,7 @@ class TestA2AErrorPropagation:
             artifact_data,
             "MEDIA_BUY_NOT_FOUND",
             recovery="correctable",
-            message_substr="mb_does_not_exist_pr1306_a2a_wire",
+            message_substr="mb_does_not_exist_a2a_wire",
         )
 
 
@@ -758,7 +757,7 @@ class TestA2AContextEcho:
 
         # Construct context with multiple correlation fields to verify dict-level echo.
         echoed_context = ContextObject(
-            session_id="sess_pr1306_context_echo",
+            session_id="sess_a2a_context_echo",
             workflow_step="echo_validation",
             request_id="req_abc_42",
         )
@@ -799,7 +798,7 @@ class TestA2AContextEcho:
         )
         echoed = artifact_data["context"]
         assert (
-            echoed.get("session_id") == "sess_pr1306_context_echo"
+            echoed.get("session_id") == "sess_a2a_context_echo"
         ), f"session_id must round-trip unchanged, got: {echoed}"
         assert (
             echoed.get("workflow_step") == "echo_validation"

@@ -1811,30 +1811,44 @@ class TestUC003UpdateTargetingOverlay:
         assert exc.details is not None
         assert "violations" in exc.details
 
-        # Reviewer-flagged P1 fence: the outer wrapper marks the workflow step
-        # failed BEFORE re-raising, which fires the buyer-facing push
-        # notification at context_manager.update_workflow_step:330-332. Without
-        # this fence, the step would orphan in `in_progress` and the buyer's
-        # poller would hang forever. Asserting here so any future raise added
-        # to _update_media_buy_impl that escapes the wrapper gets caught.
-        # The wrapper enters the ``audit_step_failure(lambda: step)`` context
-        # manager, which calls ``audit_step_failure_if_present(step, exc)``
-        # on exit when an exception escapes the body. That helper threads a
-        # two-layer envelope into response_data so async webhook subscribers
-        # see the same wire shape as the synchronous caller. Asserting on
-        # the context manager being entered with the step-resolver lambda
-        # here so any future regression that bypasses the wrapper (or wires
-        # ``update_workflow_step(..., error_message=...)`` without
-        # response_data) gets caught — that would silently lose the
-        # structured payload on the webhook path.
+        # The outer ``audit_step_failure(lambda: step)`` context manager
+        # marks the workflow step failed BEFORE re-raising, which fires the
+        # buyer-facing push notification at
+        # context_manager.update_workflow_step:330-332. Without this fence,
+        # the step would orphan in ``in_progress`` and the buyer's poller
+        # would hang forever. The CM's __exit__ receives the propagating
+        # exception and calls ``audit_step_failure_if_present(step, exc)``
+        # internally — that helper threads a two-layer envelope into
+        # response_data so async webhook subscribers see the same wire
+        # shape as the synchronous caller.
+        #
+        # Two assertions pin the contract:
+        #   1. The CM was entered with a step-resolver lambda that resolves
+        #      to the current step (covers wrapper-bypass regressions).
+        #   2. The CM's __exit__ received the typed AdCPValidationError
+        #      carrying the expected violation in its message (covers
+        #      type-mismatch and message-content regressions, plus the
+        #      ``update_workflow_step(..., error_message=...)`` shape that
+        #      would silently lose response_data on the webhook path).
         audit_cm_calls = standard_mocks["ctx_mgr_instance"].audit_step_failure.call_args_list
         assert (
             len(audit_cm_calls) == 1
         ), f"Expected exactly one audit_step_failure context manager entry on raise, got {len(audit_cm_calls)}"
-        audit_call = audit_cm_calls[0]
-        # The single positional arg is a callable that resolves to the current step.
-        get_step = audit_call.args[0]
+        get_step = audit_cm_calls[0].args[0]
         assert get_step() is standard_mocks["step"]
+
+        cm_return = standard_mocks["ctx_mgr_instance"].audit_step_failure.return_value
+        exit_calls = cm_return.__exit__.call_args_list
+        assert (
+            len(exit_calls) == 1
+        ), f"Expected exactly one __exit__ on the audit_step_failure CM, got {len(exit_calls)}"
+        # __exit__(exc_type, exc_val, exc_tb) — pin both the class and the message.
+        exit_args = exit_calls[0].args
+        assert (
+            exit_args[0] is AdCPValidationError
+        ), f"Expected AdCPValidationError to escape the audit_step_failure CM, got {exit_args[0]}"
+        assert isinstance(exit_args[1], AdCPValidationError)
+        assert "property_targeting_allowed" in exit_args[1].message
 
     def test_collection_list_update_skips_property_targeting_check(self, standard_mocks):
         """Update with only collection_list does not trigger the property_list-specific

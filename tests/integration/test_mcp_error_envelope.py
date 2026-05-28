@@ -91,7 +91,7 @@ class TestMcpWireErrorEnvelope:
         is_error, envelope = self._call_mcp_tool_capturing_envelope(
             "update_media_buy",
             {
-                "media_buy_id": "mb_does_not_exist_pr1306_wire_test",
+                "media_buy_id": "mb_does_not_exist_mcp_wire",
                 "paused": True,  # need ≥1 updatable field to pass pre-lookup validation
             },
             identity,
@@ -107,7 +107,7 @@ class TestMcpWireErrorEnvelope:
             envelope,
             "MEDIA_BUY_NOT_FOUND",
             recovery="correctable",
-            message_substr="mb_does_not_exist_pr1306_wire_test",
+            message_substr="mb_does_not_exist_mcp_wire",
         )
         # Two-layer invariant: errors[0].message is byte-identical to adcp_error.message.
         assert (
