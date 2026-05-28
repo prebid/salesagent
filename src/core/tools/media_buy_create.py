@@ -2196,17 +2196,18 @@ async def _create_media_buy_impl(
                         )
 
     except (AdCPError, ValueError, PermissionError) as e:
-        # Audit-update then re-raise. Mirrors media_buy_update.py:1441 — typed AdCPError
-        # propagates to the transport boundary which translates to the spec two-layer
-        # wire envelope; ValueError/PermissionError propagate so the A2A boundary
-        # wrappers translate them to AdCPValidationError / AdCPAuthorizationError with
-        # correct wire codes (the prior "return CreateMediaBuyResult(VALIDATION_ERROR)"
-        # path silently mis-tagged PermissionError as VALIDATION_ERROR).
-        # Validator raise sites emit typed AdCPError subclasses
-        # (AdCPValidationError / AdCPBudgetTooLowError) directly so the wire
-        # code is preserved through the boundary translator.
-        if step:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
+        # Audit-update then re-raise via the shared helper so this early-validation
+        # exit threads the two-layer envelope into workflow_step.response_data the
+        # same way the post-adapter failure exits do — push-notification subscribers
+        # see the same wire shape the synchronous caller receives, and the audit
+        # write is try/except-wrapped so a DB hiccup can't shadow the original error.
+        # Typed AdCPError propagates to the transport boundary which translates to
+        # the spec two-layer wire envelope; ValueError/PermissionError propagate so
+        # the boundary wrappers translate them to AdCPValidationError /
+        # AdCPAuthorizationError with correct wire codes (the prior
+        # "return CreateMediaBuyResult(VALIDATION_ERROR)" path silently mis-tagged
+        # PermissionError as VALIDATION_ERROR).
+        ctx_manager.audit_step_failure_if_present(step, e)
         raise
 
     # Type narrowing: in non-dry_run mode, step and persistent_ctx are guaranteed to exist
