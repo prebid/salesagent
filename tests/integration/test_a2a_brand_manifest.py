@@ -161,6 +161,6 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     assert result.artifacts, "Failed task must carry an envelope artifact"
     envelope = extract_data_from_artifact(result.artifacts[0])
     # Two-layer envelope: adcp_error mirror + errors[] payload
-    assert envelope.get("adcp_error", {}).get("code") == "VALIDATION_ERROR"
-    assert isinstance(envelope.get("errors"), list)
-    assert envelope["errors"][0].get("code") == "VALIDATION_ERROR"
+    from tests.helpers import assert_envelope_shape
+
+    assert_envelope_shape(envelope, "VALIDATION_ERROR")

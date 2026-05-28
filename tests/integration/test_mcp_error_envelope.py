@@ -88,37 +88,17 @@ class TestMcpWireErrorEnvelope:
         """
         identity = PrincipalFactory.make_identity(protocol="mcp")
 
-        async def _call() -> tuple[bool, str | None]:
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=identity,
-            ):
-                async with Client(mcp) as client:
-                    result = await client.call_tool(
-                        "update_media_buy",
-                        {
-                            "media_buy_id": "mb_does_not_exist_pr1306_wire_test",
-                            "paused": True,  # need ≥1 updatable field to pass pre-lookup validation
-                        },
-                        raise_on_error=False,
-                    )
-                    if not result.content:
-                        return result.is_error, None
-                    # First content part text is the JSON-encoded envelope.
-                    text = None
-                    for c in result.content:
-                        if hasattr(c, "text"):
-                            text = c.text
-                            break
-                    return result.is_error, text
-
-        is_error, envelope_text = asyncio.run(_call())
+        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+            "update_media_buy",
+            {
+                "media_buy_id": "mb_does_not_exist_pr1306_wire_test",
+                "paused": True,  # need ≥1 updatable field to pass pre-lookup validation
+            },
+            identity,
+        )
 
         assert is_error, "Nonexistent media_buy_id must produce a tool error"
-        assert envelope_text is not None, "Error must include content text carrying the envelope"
-
-        # Parse the wire envelope from the JSON-encoded ToolError content text.
-        envelope = json.loads(envelope_text)
+        assert envelope is not None, "Error must include content text carrying the envelope"
 
         # MEDIA_BUY_NOT_FOUND is a STANDARD_ERROR_CODES entry — passes through unchanged.
         # AdCPMediaBuyNotFoundError overrides AdCPNotFoundError's terminal default
@@ -258,34 +238,14 @@ class TestMcpWireErrorEnvelope:
 
         AUTH_TOKEN_INVALID is a STANDARD spec code — passes through unchanged.
         """
-
-        async def _call_no_identity() -> tuple[bool, str | None]:
-            # Patch identity resolution to return None (simulates missing/unparseable auth).
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=None,
-            ):
-                async with Client(mcp) as client:
-                    result = await client.call_tool(
-                        "get_media_buy_delivery",
-                        {"media_buy_ids": ["any_id"]},
-                        raise_on_error=False,
-                    )
-                    if not result.content:
-                        return result.is_error, None
-                    text = None
-                    for c in result.content:
-                        if hasattr(c, "text"):
-                            text = c.text
-                            break
-                    return result.is_error, text
-
-        is_error, envelope_text = asyncio.run(_call_no_identity())
+        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+            "get_media_buy_delivery",
+            {"media_buy_ids": ["any_id"]},
+            identity=None,
+        )
 
         assert is_error, "Missing identity must produce a tool error"
-        assert envelope_text is not None, "Error must include content text carrying the envelope"
-
-        envelope = json.loads(envelope_text)
+        assert envelope is not None, "Error must include content text carrying the envelope"
 
         # AdCPAuthRequiredError -> AUTH_TOKEN_INVALID (spec STANDARD passthrough, not AUTH_REQUIRED).
         # Recovery is terminal for AdCPAuthenticationError (per adcp 4.3 STANDARD_ERROR_CODES).

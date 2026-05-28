@@ -490,6 +490,7 @@ class TestRecoveryFieldInErrorResponses:
 
         from src.app import app
         from src.core.exceptions import AdCPValidationError
+        from tests.helpers import assert_envelope_shape
 
         with patch(
             "src.core.tools.capabilities.get_adcp_capabilities_raw",
@@ -498,9 +499,7 @@ class TestRecoveryFieldInErrorResponses:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 400
-            body = response.json()
-            assert body["adcp_error"]["recovery"] == "correctable"
-            assert body["errors"][0]["recovery"] == "correctable"
+            assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
 
     def test_rest_adapter_error_has_transient_recovery(self):
         """REST 502 from AdCPAdapterError includes recovery='transient' in both layers."""
@@ -510,6 +509,7 @@ class TestRecoveryFieldInErrorResponses:
 
         from src.app import app
         from src.core.exceptions import AdCPAdapterError
+        from tests.helpers import assert_envelope_shape
 
         with patch(
             "src.core.tools.capabilities.get_adcp_capabilities_raw",
@@ -518,9 +518,7 @@ class TestRecoveryFieldInErrorResponses:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
-            body = response.json()
-            assert body["adcp_error"]["recovery"] == "transient"
-            assert body["errors"][0]["recovery"] == "transient"
+            assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
     def test_rest_custom_recovery_override_preserved(self):
         """Custom recovery= override is preserved through REST boundary (both layers)."""

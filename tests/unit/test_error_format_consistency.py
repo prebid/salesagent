@@ -594,20 +594,15 @@ class TestMCPRecoveryInErrorResponses:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        from src.core.tool_error_logging import AdCPToolError
+        from tests.helpers import assert_envelope_shape
 
-        tool_error = exc_info.value
-        assert isinstance(
-            tool_error, AdCPToolError
-        ), f"MCP boundary must raise AdCPToolError for {exc_class}, got {type(tool_error).__name__}"
-        err = tool_error.envelope["errors"][0]
-        assert err["code"] == expected_code, f"{exc_class}: code={err['code']!r}, expected {expected_code!r}"
-        assert err["message"] == msg, f"{exc_class}: message={err['message']!r}, expected {msg!r}"
-        assert (
-            err["recovery"] == expected_recovery
-        ), f"{exc_class}: recovery={err['recovery']!r}, expected {expected_recovery!r}"
-        # adcp_error envelope-level mirror also present
-        assert tool_error.envelope["adcp_error"]["code"] == expected_code
+        assert_envelope_shape(
+            exc_info.value,
+            expected_code,
+            recovery=expected_recovery,
+            message_substr=msg,
+            check_mcp_tool_error=True,
+        )
 
 
 # ---------------------------------------------------------------------------
