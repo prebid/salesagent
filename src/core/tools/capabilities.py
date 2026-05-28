@@ -255,7 +255,7 @@ def _get_adcp_capabilities_impl(
     #
     # We declare the specialism even though `pending_creatives_to_start` and
     # `invalid_transitions` are not yet fully green. The CI storyboard job is
-    # advisory (see `.github/workflows/test.yml`), so those scenario failures
+    # advisory (see `.github/workflows/ci.yml`), so those scenario failures
     # don't block merge — and the public declaration forces prioritization of
     # the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(

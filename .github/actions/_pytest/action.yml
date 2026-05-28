@@ -1,0 +1,12 @@
+name: Run pytest command
+description: Execute a pytest command through uv.
+inputs:
+  command:
+    description: Full pytest command to execute.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Run pytest
+      shell: bash
+      run: ${{ inputs.command }}

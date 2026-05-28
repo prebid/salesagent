@@ -1,0 +1,373 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.6"
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Run pre-commit
+        run: uv run pre-commit run --all-files
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Run mypy
+        run: uv run python -m mypy src --config-file=mypy.ini
+
+  schema-contract:
+    name: Schema Contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Run AdCP schema contract tests
+        run: uv run pytest tests/unit/test_adcp_contract.py -q --tb=line
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Run security audit
+        run: ./scripts/security-audit.sh
+
+  quickstart:
+    name: Quickstart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Start services with docker compose
+        run: docker compose up -d --wait --wait-timeout 120
+      - name: Verify health endpoint
+        run: curl -f http://localhost:8000/health
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
+
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - uses: ./.github/actions/_pytest
+        with:
+          command: uv run pytest tests/smoke/ -v --tb=short
+        env:
+          GEMINI_API_KEY: test_key
+          PYTEST_CURRENT_TEST: true
+          ADCP_TESTING: true
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Run unit tests
+        env:
+          GEMINI_API_KEY: test_key_for_mocking
+          GOOGLE_CLIENT_ID: test_client_id
+          GOOGLE_CLIENT_SECRET: test_client_secret
+          SUPER_ADMIN_EMAILS: test@example.com
+          ADCP_TESTING: true
+        run: uv run pytest tests/unit/ tests/harness/ -q --tb=line --cov=src --cov-report=xml --cov-report=term
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - uses: ./.github/actions/_postgres
+        with:
+          database-url: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+      - name: Start pinned creative agent
+        run: ./scripts/creative-agent-stack.sh up
+      - name: Run integration tests
+        env:
+          DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+          GEMINI_API_KEY: test_key_for_mocking
+          GOOGLE_CLIENT_ID: test_client_id
+          GOOGLE_CLIENT_SECRET: test_client_secret
+          SUPER_ADMIN_EMAILS: test@example.com
+          ENCRYPTION_KEY: test-encryption-key
+          ADCP_TESTING: true
+          CREATIVE_AGENT_URL: http://localhost:9999/api/creative-agent
+        run: uv run pytest tests/integration/ -n auto --dist=loadscope -m "not requires_server and not skip_ci" -q --tb=line --cov=src --cov-report=xml --cov-report=term
+      - name: Cleanup pinned creative agent
+        if: always()
+        run: ./scripts/creative-agent-stack.sh down
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Run E2E tests
+        env:
+          GEMINI_API_KEY: test_key_for_mocking
+          GOOGLE_CLIENT_ID: test_client_id
+          GOOGLE_CLIENT_SECRET: test_client_secret
+          SUPER_ADMIN_EMAILS: test@example.com
+          ADCP_SALES_PORT: 8080
+          POSTGRES_PORT: 5435
+          DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+        run: uv run pytest tests/e2e/ -q --tb=line --timeout=300 --cov=src --cov-report=xml --cov-report=term
+
+  admin-ui-tests:
+    name: Admin UI Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Run admin tests
+        env:
+          GEMINI_API_KEY: test_key_for_mocking
+          GOOGLE_CLIENT_ID: test_client_id
+          GOOGLE_CLIENT_SECRET: test_client_secret
+          SUPER_ADMIN_EMAILS: test@example.com
+          ADCP_TESTING: true
+        run: uv run pytest tests/admin/ -m "not requires_server and not slow" -q --tb=line --cov=src --cov-report=xml --cov-report=term
+
+  bdd-tests:
+    name: BDD Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - uses: ./.github/actions/_postgres
+        with:
+          database-url: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+      - name: Run BDD tests
+        env:
+          DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+          GEMINI_API_KEY: test_key_for_mocking
+          GOOGLE_CLIENT_ID: test_client_id
+          GOOGLE_CLIENT_SECRET: test_client_secret
+          SUPER_ADMIN_EMAILS: test@example.com
+          ENCRYPTION_KEY: test-encryption-key
+          ADCP_TESTING: true
+        run: uv run pytest tests/bdd/ -n auto --dist=loadfile -q --tb=line --cov=src --cov-report=xml --cov-report=term --timeout=60
+
+  migration-roundtrip:
+    name: Migration Roundtrip
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Migration roundtrip
+        env:
+          DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Coverage gate
+        run: |
+          FAIL_UNDER="$(cat .coverage-baseline)"
+          uv run pytest tests/unit/ tests/harness/ --cov=src --cov-report=term --cov-fail-under="${FAIL_UNDER}" -q --tb=line
+
+  summary:
+    name: Summary
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      [
+        quality-gate,
+        type-check,
+        schema-contract,
+        security-audit,
+        quickstart,
+        smoke-tests,
+        unit-tests,
+        integration-tests,
+        e2e-tests,
+        admin-ui-tests,
+        bdd-tests,
+        migration-roundtrip,
+        coverage,
+      ]
+    steps:
+      - name: Validate job results
+        run: |
+          if [ "${{ needs.quality-gate.result }}" != "success" ] || \
+             [ "${{ needs.type-check.result }}" != "success" ] || \
+             [ "${{ needs.schema-contract.result }}" != "success" ] || \
+             [ "${{ needs.security-audit.result }}" != "success" ] || \
+             [ "${{ needs.quickstart.result }}" != "success" ] || \
+             [ "${{ needs.smoke-tests.result }}" != "success" ] || \
+             [ "${{ needs.unit-tests.result }}" != "success" ] || \
+             [ "${{ needs.integration-tests.result }}" != "success" ] || \
+             [ "${{ needs.e2e-tests.result }}" != "success" ] || \
+             [ "${{ needs.admin-ui-tests.result }}" != "success" ] || \
+             [ "${{ needs.bdd-tests.result }}" != "success" ] || \
+             [ "${{ needs.migration-roundtrip.result }}" != "success" ] || \
+             [ "${{ needs.coverage.result }}" != "success" ]; then
+            echo "One or more required checks failed."
+            exit 1
+          fi
+          echo "All required CI checks passed."
