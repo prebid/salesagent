@@ -482,43 +482,49 @@ class TestRecoveryFieldInErrorResponses:
     -> exception handler -> envelope JSON body.
     """
 
-    def test_rest_validation_error_has_correctable_recovery(self):
-        """REST 400 from AdCPValidationError includes recovery='correctable' in both layers."""
+    @pytest.mark.parametrize(
+        ("error_factory_path", "exc_message", "expected_status", "expected_code", "expected_recovery"),
+        [
+            (
+                "src.core.exceptions.AdCPValidationError",
+                "bad input",
+                400,
+                "VALIDATION_ERROR",
+                "correctable",
+            ),
+            (
+                "src.core.exceptions.AdCPAdapterError",
+                "GAM unavailable",
+                502,
+                "SERVICE_UNAVAILABLE",
+                "transient",
+            ),
+        ],
+        ids=["validation_error_correctable", "adapter_error_transient"],
+    )
+    def test_rest_recovery_field_propagates_from_typed_error(
+        self, error_factory_path, exc_message, expected_status, expected_code, expected_recovery
+    ):
+        """REST exception handler propagates recovery hint from typed AdCPError to both envelope layers."""
+        import importlib
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
 
         from src.app import app
-        from src.core.exceptions import AdCPValidationError
         from tests.helpers import assert_envelope_shape
+
+        module_path, _, class_name = error_factory_path.rpartition(".")
+        exc_class = getattr(importlib.import_module(module_path), class_name)
 
         with patch(
             "src.core.tools.capabilities.get_adcp_capabilities_raw",
-            side_effect=AdCPValidationError("bad input"),
+            side_effect=exc_class(exc_message),
         ):
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
-            assert response.status_code == 400
-            assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
-
-    def test_rest_adapter_error_has_transient_recovery(self):
-        """REST 502 from AdCPAdapterError includes recovery='transient' in both layers."""
-        from unittest.mock import patch
-
-        from starlette.testclient import TestClient
-
-        from src.app import app
-        from src.core.exceptions import AdCPAdapterError
-        from tests.helpers import assert_envelope_shape
-
-        with patch(
-            "src.core.tools.capabilities.get_adcp_capabilities_raw",
-            side_effect=AdCPAdapterError("GAM unavailable"),
-        ):
-            client = TestClient(app, raise_server_exceptions=False)
-            response = client.get("/api/v1/capabilities")
-            assert response.status_code == 502
-            assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
+            assert response.status_code == expected_status
+            assert_envelope_shape(response.json(), expected_code, recovery=expected_recovery)
 
     def test_rest_custom_recovery_override_preserved(self):
         """Custom recovery= override is preserved through REST boundary (both layers)."""
