@@ -6,7 +6,7 @@ import pytest
 from pydantic import AnyUrl
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPServiceUnavailableError
 
 
 class TestCacheKeyAcceptsAnyUrl:
@@ -220,9 +220,7 @@ class TestCreativeAgentRegistry:
         mock_client.agent = Mock(return_value=mock_agent_client)
 
         # Should re-raise as typed src.core.AdCPAuthenticationError (wrapped)
-        from src.core.exceptions import AdCPAuthenticationError as CoreAdCPAuthenticationError
-
-        with pytest.raises(CoreAdCPAuthenticationError, match="Authentication failed"):
+        with pytest.raises(AdCPAuthenticationError, match="Authentication failed"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio
@@ -253,8 +251,6 @@ class TestCreativeAgentRegistry:
         mock_client.agent = Mock(return_value=mock_agent_client)
 
         # Should raise typed AdCPServiceUnavailableError with timeout message
-        from src.core.exceptions import AdCPServiceUnavailableError
-
         with pytest.raises(AdCPServiceUnavailableError, match="Request timed out"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
@@ -281,8 +277,6 @@ class TestCreativeAgentRegistry:
         mock_client.agent = Mock(return_value=mock_agent_client)
 
         # Should raise typed AdCPServiceUnavailableError
-        from src.core.exceptions import AdCPServiceUnavailableError
-
         with pytest.raises(AdCPServiceUnavailableError, match="Connection failed"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPRateLimitError, AdCPServiceUnavailableError
 
 
 @pytest.fixture
@@ -176,8 +176,6 @@ class TestFetchFormatsRawMcpErrorHandling:
         """httpx timeout → AdCPServiceUnavailableError (SERVICE_UNAVAILABLE, transient)."""
         import httpx
 
-        from src.core.exceptions import AdCPServiceUnavailableError
-
         mock_http = AsyncMock()
         mock_http.post.side_effect = httpx.ReadTimeout("timed out")
         mock_http.__aenter__ = AsyncMock(return_value=mock_http)
@@ -191,8 +189,6 @@ class TestFetchFormatsRawMcpErrorHandling:
     async def test_connection_error_raises_service_unavailable(self, registry, agent):
         """httpx connection error → AdCPServiceUnavailableError (SERVICE_UNAVAILABLE, transient)."""
         import httpx
-
-        from src.core.exceptions import AdCPServiceUnavailableError
 
         mock_http = AsyncMock()
         mock_http.post.side_effect = httpx.ConnectError("connection refused")
@@ -211,8 +207,6 @@ class TestFetchFormatsRawMcpErrorHandling:
         is up but failing. AdCPServiceUnavailableError is the correct typed wrap.
         """
         import httpx
-
-        from src.core.exceptions import AdCPServiceUnavailableError
 
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -237,8 +231,6 @@ class TestFetchFormatsRawMcpErrorHandling:
         raises the typed rate-limit error carrying Retry-After in details.
         """
         import httpx
-
-        from src.core.exceptions import AdCPRateLimitError
 
         mock_response = MagicMock()
         mock_response.status_code = 429
