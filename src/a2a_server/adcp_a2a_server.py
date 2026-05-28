@@ -942,14 +942,6 @@ class AdCPRequestHandler(RequestHandler):
             err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
             err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
-            self._log_a2a_operation(
-                "message_processing",
-                err_tenant_id,
-                err_principal_id,
-                False,
-                {"error_type": type(e).__name__},
-                str(e),
-            )
             record_boundary_error(
                 "a2a",
                 "message_processing",
