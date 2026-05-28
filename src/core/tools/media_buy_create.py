@@ -1772,8 +1772,10 @@ async def _create_media_buy_impl(
                 computed_start_time = raw_start_time
             else:
                 # StartTiming that wasn't unwrapped - this shouldn't happen but handle gracefully
-                error_msg = f"Unexpected start_time type: {type(raw_start_time)}"
-                raise ValueError(error_msg)
+                raise AdCPValidationError(
+                    f"Unexpected start_time type: {type(raw_start_time).__name__}",
+                    field="start_time",
+                )
             if computed_start_time.tzinfo is None:
                 computed_start_time = computed_start_time.replace(tzinfo=UTC)
 

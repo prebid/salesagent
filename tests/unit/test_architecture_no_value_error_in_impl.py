@@ -53,8 +53,7 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/xandr.py": 5,
     "src/core/tools/creatives/_processing.py": 2,
     "src/core/tools/creatives/_validation.py": 5,
-    "src/core/tools/media_buy_create.py": 3,  # 272: null-session guard, 698: non-_impl approval helper, 1581: type-dispatch guard
-    "src/core/tools/media_buy_update.py": 2,
+    "src/core/tools/media_buy_create.py": 2,  # 272: null-session guard, 698: non-_impl approval helper
     "src/core/tools/performance.py": 1,
     "src/core/tools/products.py": 1,
     "src/core/tools/task_management.py": 4,

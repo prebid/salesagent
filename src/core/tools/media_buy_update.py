@@ -37,6 +37,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
+    AdCPError,
     AdCPGoneError,
     AdCPMediaBuyNotFoundError,
     AdCPValidationError,
@@ -192,7 +193,7 @@ def _update_media_buy_impl(
     # CRITICAL: Extract principal from identity
     principal_id = identity.principal_id
     if principal_id is None:
-        raise ValueError("principal_id is required but was None - authentication required")
+        raise AdCPAuthRequiredError("principal_id missing from authentication context")
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = identity.tenant
@@ -278,7 +279,10 @@ def _update_media_buy_impl(
 
                 # Verify persistent_ctx is not None
                 if persistent_ctx is None:
-                    raise ValueError("Failed to create or get persistent context")
+                    raise AdCPError(
+                        "Failed to create or get persistent context",
+                        error_code="WORKFLOW_CREATION_FAILED",
+                    )
 
                 # Create workflow step for this tool call
                 step = ctx_manager.create_workflow_step(

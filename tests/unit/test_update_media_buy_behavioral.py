@@ -2025,14 +2025,16 @@ class TestUC003ExtA:
     """Authentication error obligations."""
 
     def test_no_principal_in_context(self, standard_mocks):
-        """Missing principal_id raises ValueError.
+        """Missing principal_id raises typed AdCPAuthRequiredError.
 
         Covers: UC-003-EXT-A-01
         """
+        from src.core.exceptions import AdCPAuthRequiredError
+
         identity = _make_identity(principal_id=None)
         req = UpdateMediaBuyRequest(media_buy_id="mb_no_auth")
 
-        with pytest.raises(ValueError, match="principal_id is required"):
+        with pytest.raises(AdCPAuthRequiredError, match="principal_id missing"):
             _update_media_buy_impl(req=req, identity=identity)
 
     def test_principal_not_found_in_database(self, standard_mocks):
