@@ -29,24 +29,22 @@ if TYPE_CHECKING:
 def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
     """Build a SYNTHESIZED envelope from an AdCPError instance.
 
-    Used as a fallback when no real wire envelope is available — that is,
-    the IMPL transport (no wire by definition) and the A2A path when an
-    exception was raised before the artifact DataPart was built (e.g.,
-    during pre-handler auth resolution). Production code uses the same
+    Used by ImplDispatcher to populate the separate
+    ``synthesized_error_envelope`` field — IMPL has no wire by definition
+    and ``wire_error_envelope`` is reserved for real wire bytes captured
+    by REST/MCP/A2A. Production code uses the same
     ``build_two_layer_error_envelope`` helper at the boundary, so the
-    synthesized envelope here matches what production would emit for the
-    same exception. It does NOT verify that a regression in
+    synthesized envelope matches what production would emit for the same
+    exception. It does NOT verify that a regression in
     ``build_two_layer_error_envelope`` actually reaches the wire.
 
     A2A and REST tests asserting on ``result.wire_error_envelope`` see
-    REAL wire bytes when available:
+    REAL wire bytes:
         - A2A: the artifact DataPart, attached to the reconstructed
           ``AdCPError`` as ``_wire_error_envelope`` by
           ``tests.harness._base._envelope_to_adcp_error``.
         - REST: the HTTP response body, captured directly by RestDispatcher.
         - MCP: the JSON string in ``ToolError``, parsed by McpDispatcher.
-
-    IMPL has no wire — its ``wire_error_envelope`` is always synthesized.
     """
     from src.core.exceptions import AdCPError, build_two_layer_error_envelope
 
@@ -90,11 +88,13 @@ class ImplDispatcher:
     """Dispatch via direct ``_impl()`` call.
 
     IMPL is the in-process direct call — there is no wire by definition.
-    ``wire_error_envelope`` here is always SYNTHESIZED via
-    ``build_two_layer_error_envelope`` (the same helper production calls
-    at the boundary). Tests using IMPL transport see what production
-    WOULD emit, not what reaches the wire — a real wire-shape regression
-    must be caught by the A2A, REST, or MCP transports.
+    ``wire_error_envelope`` is left ``None`` on this transport; the envelope
+    that production WOULD emit at the boundary is exposed on the separate
+    ``synthesized_error_envelope`` field so tests cannot accidentally lean
+    on IMPL to catch real-wire regressions (a regression in the production
+    boundary translator would not change what this dispatcher computes,
+    because both call ``build_two_layer_error_envelope`` on the same
+    in-memory exception). Use A2A, REST, or MCP for wire-shape coverage.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
@@ -103,7 +103,7 @@ class ImplDispatcher:
         except Exception as exc:
             return TransportResult(
                 error=exc,
-                wire_error_envelope=_envelope_from_adcp_error(exc),
+                synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
         return TransportResult(payload=payload, envelope={"transport": "impl"})
 

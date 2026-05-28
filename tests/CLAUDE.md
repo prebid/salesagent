@@ -377,19 +377,24 @@ error verification.
 
 **Authenticity per transport (matters for what regressions the field catches):**
 
-| Transport | Source of `wire_error_envelope`                                       | Catches a regression in...                                |
-|-----------|-----------------------------------------------------------------------|-----------------------------------------------------------|
-| REST      | HTTP response body (real wire)                                        | exception handler + envelope serialization + HTTP framing |
-| MCP       | JSON string in `ToolError` (real wire)                                | `_handle_tool_exception` + `build_two_layer_error_envelope` |
-| A2A       | Failed Task's artifact DataPart, stashed by `_envelope_to_adcp_error` | `on_message_send` + `_serialize_for_a2a` + envelope build |
-| IMPL      | **Synthesized** via `build_two_layer_error_envelope` (no wire exists) | `build_two_layer_error_envelope` only                     |
+| Transport | `wire_error_envelope` source                                          | `synthesized_error_envelope`                                          | Catches a regression in...                                |
+|-----------|-----------------------------------------------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------|
+| REST      | HTTP response body (real wire)                                        | `None`                                                                | exception handler + envelope serialization + HTTP framing |
+| MCP       | JSON string in `ToolError` (real wire)                                | `None`                                                                | `_handle_tool_exception` + `build_two_layer_error_envelope` |
+| A2A       | Failed Task's artifact DataPart, stashed by `_envelope_to_adcp_error` | `None`                                                                | `on_message_send` + `_serialize_for_a2a` + envelope build |
+| IMPL      | `None` (no wire by definition)                                        | Built via `build_two_layer_error_envelope` against the caught error   | `build_two_layer_error_envelope` only                     |
 
-IMPL has no wire by definition — its `wire_error_envelope` reflects what
-production WOULD emit, not what reaches the wire. Tests that need to catch
-real wire-shape regressions must run on REST, MCP, or A2A.
+IMPL has no wire. Use `result.synthesized_error_envelope` to see what
+production WOULD emit at the boundary for the same exception, but be aware
+that field cannot catch a regression in the production boundary translator
+— both IMPL and production call the same envelope builder, so the
+synthesized value moves in lockstep with whatever the builder produces.
+Tests that need to catch real wire-shape regressions must run on REST,
+MCP, or A2A — only those transports observe actual wire bytes.
 
 `result.error` (reconstructed exception) remains available for backward
-compatibility. Reconstruction is lossy — assert on `wire_error_envelope`.
+compatibility. Reconstruction is lossy — assert on `wire_error_envelope`
+(or `synthesized_error_envelope` for IMPL).
 
 ## Infrastructure
 

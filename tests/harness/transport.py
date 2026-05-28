@@ -66,10 +66,20 @@ class TransportResult:
         envelope: Transport-specific metadata (HTTP status, ToolResult, etc.).
         error: Exception raised during dispatch, if any.
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
-        wire_error_envelope: Raw two-layer error envelope dict from the wire,
-            before reconstruction.  ``None`` on success.  This is the canonical
-            field for error verification — see ``tests/CLAUDE.md`` § Error
+        wire_error_envelope: Raw two-layer error envelope dict captured from
+            the actual wire bytes (REST HTTP body, MCP ToolError content text,
+            A2A failed-Task artifact DataPart). ``None`` on success or on the
+            IMPL transport, which has no wire. This is the canonical field
+            for error verification — see ``tests/CLAUDE.md`` § Error
             Verification Policy.
+        synthesized_error_envelope: Two-layer envelope produced by
+            ``build_two_layer_error_envelope`` against the IMPL-caught
+            ``AdCPError`` — what production WOULD emit at the boundary.
+            ``None`` on success and on REST/MCP/A2A (those expose the real
+            wire envelope above instead). Tests asserting on this field
+            verify the envelope-builder contract, NOT the wire shape — a
+            regression in the production boundary translator would not be
+            caught here. Use REST/MCP/A2A for wire-shape regressions.
     """
 
     payload: BaseModel | None = None
@@ -77,6 +87,7 @@ class TransportResult:
     error: Exception | None = None
     raw_response: Any = None
     wire_error_envelope: dict[str, Any] | None = None
+    synthesized_error_envelope: dict[str, Any] | None = None
 
     @property
     def is_success(self) -> bool:
