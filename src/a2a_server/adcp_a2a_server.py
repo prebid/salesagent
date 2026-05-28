@@ -161,17 +161,25 @@ DISCOVERY_SKILLS = frozenset(
 
 def _a2a_skill(skill_name: str):
     """Decorator: wrap a skill handler in the canonical AdCPError-passthrough +
-    untyped-Exception → InternalError ladder.
+    untyped-Exception → AdCPError ladder.
 
-    AdCPError flows through unchanged so the dispatcher's ``except AdCPError``
-    branch (in ``on_message_send``) routes it through
-    ``_build_failed_skill_result`` → the two-layer envelope. Untyped Exception
-    is logged with full traceback (``exc_info=True``) and wrapped in
-    ``InternalError`` with a standardized message — previously each handler
-    picked its own prefix ("Unable to retrieve", "Failed to", "Error in")
-    so semantically identical failures had divergent wire messages.
+    Both branches re-raise into the AdCPError surface so the dispatcher's
+    ``except AdCPError`` branch in ``_handle_explicit_skill`` routes the
+    failure through ``_build_failed_skill_result`` → two-layer envelope on a
+    failed Task's DataPart. Wrapping the untyped path as ``InternalError``
+    instead would land at the dispatcher's earlier ``except A2AError``
+    branch, which re-raises into the JSON-RPC error surface — the buyer
+    would receive a JSON-RPC InternalError without an envelope code, while
+    a non-decorated handler raising the same untyped exception would
+    surface as a typed DataPart envelope. Wrapping as ``AdCPError`` keeps
+    decorated and non-decorated handlers symmetric on the wire; the wire
+    code translates to ``SERVICE_UNAVAILABLE`` via the standard
+    INTERNAL_CODES → ERROR_CODE_MAPPING rewrite.
 
-    Removes ~10 lines of try/except boilerplate per handler (~14 handlers).
+    Removes ~10 lines of try/except boilerplate per handler (~14 handlers)
+    and converges error prefixes — handlers previously picked their own
+    ("Unable to retrieve", "Failed to", "Error in") for semantically
+    identical failures.
     """
 
     def decorator(handler):
@@ -182,9 +190,14 @@ def _a2a_skill(skill_name: str):
             except AdCPError:
                 # Let dispatcher translate to wire envelope.
                 raise
+            except A2AError:
+                # JSON-RPC protocol errors (InvalidParamsError, TaskNotFoundError,
+                # etc.) flow through unchanged so the dispatcher's `except A2AError`
+                # branch re-raises them as JSON-RPC errors.
+                raise
             except Exception as e:
                 logger.error(f"Error in {skill_name} skill: {e}", exc_info=True)
-                raise InternalError(message=f"{skill_name} skill handler failed: {e}") from e
+                raise AdCPError(f"{skill_name} skill handler failed: {e}") from e
 
         return wrapper
 

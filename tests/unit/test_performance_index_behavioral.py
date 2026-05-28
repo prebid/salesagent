@@ -363,7 +363,7 @@ class TestHighRiskA2A:
 
         Skill handlers raise typed AdCPError on validation failure; the outer
         dispatcher's _build_failed_skill_result produces the two-layer envelope
-        on the wire (Konstantine's Critical fix from 2026-05-20 review).
+        on the wire.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.exceptions import AdCPValidationError

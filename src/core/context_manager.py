@@ -370,13 +370,13 @@ class ContextManager(DatabaseManager):
             if wire_code not in STANDARD_ERROR_CODES:
                 source = AdCPError(
                     source.message or str(source),
+                    error_code="SERVICE_UNAVAILABLE",
                     recovery="terminal",
                     details=source.details,
                     field=source.field,
                     suggestion=source.suggestion,
                     context=source.context,
                 )
-                source.error_code = "SERVICE_UNAVAILABLE"
 
             response_data = build_two_layer_error_envelope(source)
             error_message = source.message or str(source)

@@ -246,7 +246,8 @@ class TestA2AParameterMapping:
             # outer dispatcher catches AdCPError and routes through
             # _build_failed_skill_result to produce the two-layer envelope.
             # Asserting on the raised exception (not a returned dict) verifies the
-            # bypass path Konstantine flagged is gone.
+            # flat-dict bypass path is closed — handlers must raise, never return
+            # {"success": False, ...} that bypasses envelope construction.
             from src.core.exceptions import AdCPValidationError
 
             with pytest.raises(AdCPValidationError) as exc_info:
