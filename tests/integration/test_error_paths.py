@@ -476,7 +476,7 @@ class TestImportValidation:
 class TestRecoveryFieldInErrorResponses:
     """Verify recovery field appears in REST error responses via the exception handler.
 
-    The REST boundary now serializes the AdCP spec 3.0.6 two-layer envelope:
+    The REST boundary now serializes the AdCP spec 3.0.0 two-layer envelope:
     recovery lives inside ``adcp_error.recovery`` and ``errors[0].recovery``,
     not at the top level. These tests confirm the full chain: AdCPError raised
     -> exception handler -> envelope JSON body.
@@ -572,3 +572,48 @@ class TestRecoveryFieldInErrorResponses:
             assert (
                 deserialized["recovery"] == expected_recovery
             ), f"{type(exc).__name__}: recovery lost in JSON roundtrip"
+
+
+class TestRestBoundaryAuditObservability:
+    """A REST boundary error leaves an audit row when identity is resolvable.
+
+    The MCP and A2A boundaries already write a tenant-scoped audit row on
+    error; REST previously emitted only a WARNING log line because identity
+    is not resolved on ``request.state`` at the exception-handler boundary.
+    ``_envelope_response`` now resolves identity best-effort from the request's
+    ``x-adcp-auth`` token and forwards it to ``record_boundary_error`` so all
+    three transports leave the same persistent trail.
+    """
+
+    def test_rest_error_with_valid_token_writes_audit_row(self, sample_principal):
+        """REST 4xx with a valid token writes an audit row scoped to the resolved principal."""
+        from unittest.mock import patch
+
+        from sqlalchemy import select
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AuditLog
+        from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=AdCPMediaBuyNotFoundError("buy_x missing"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get(
+                "/api/v1/capabilities",
+                headers={"x-adcp-auth": sample_principal["access_token"]},
+            )
+
+        assert response.status_code == 404
+
+        with get_db_session() as session:
+            stmt = select(AuditLog).filter_by(tenant_id="test_tenant", adapter_id="rest_boundary")
+            audit_log = session.scalars(stmt).first()
+
+        assert audit_log is not None, "REST boundary error must write an audit row when identity resolves"
+        assert audit_log.success is False
+        assert audit_log.principal_id == "test_principal"
+        assert "buy_x missing" in (audit_log.error_message or "")

@@ -99,6 +99,7 @@ from src.core.exceptions import (  # noqa: E402
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
+from src.core.resolved_identity import resolve_identity  # noqa: E402
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error  # noqa: E402
 
 
@@ -112,16 +113,38 @@ def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
 
     Symmetric with the MCP and A2A boundaries: all three transports delegate
     to ``record_boundary_error`` so log severity, activity-feed publishing,
-    and audit logging stay in lockstep. Identity is not yet resolved at the
-    REST exception-handler boundary, so tenant-scoped sinks (activity feed,
-    audit log) are skipped when ``tenant_id`` is unavailable — the WARNING
-    log line still captures the error code, message, and path.
+    and audit logging stay in lockstep. Identity is not resolved on
+    ``request.state`` at the exception-handler boundary, so we resolve it
+    best-effort here (auth token + tenant headers) to populate the
+    tenant-scoped sinks (activity feed, audit log) for REST errors the same
+    way MCP and A2A do. Identity resolution never raises into the error path —
+    a lookup miss degrades to anonymous and ``record_boundary_error`` falls
+    back to the WARNING log line carrying the error code, message, and path.
     """
-    record_boundary_error("rest", request.url.path, exc)
+    tenant_id, principal_id = _best_effort_rest_identity(request)
+    record_boundary_error("rest", request.url.path, exc, tenant_id=tenant_id, principal_id=principal_id)
     return JSONResponse(
         status_code=exc.status_code,
         content=build_two_layer_error_envelope(exc),
     )
+
+
+def _best_effort_rest_identity(request: Request) -> tuple[str | None, str | None]:
+    """Resolve ``(tenant_id, principal_id)`` for boundary observability only.
+
+    Used solely to scope the activity-feed and audit-log sinks in
+    ``record_boundary_error`` — never to make an authorization decision.
+    ``require_valid_token=False`` so an invalid/expired token (which may be
+    the very error being handled) still yields a tenant from the host headers
+    instead of raising. Any failure degrades to ``(None, None)``; observability
+    must not shadow the buyer's original error.
+    """
+    try:
+        identity = resolve_identity(dict(request.headers), protocol="rest", require_valid_token=False)
+        return identity.tenant_id, identity.principal_id
+    except Exception:
+        logger.debug("REST boundary: best-effort identity resolution failed", exc_info=True)
+        return None, None
 
 
 @app.exception_handler(AdCPError)
