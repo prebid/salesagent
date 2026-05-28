@@ -453,6 +453,60 @@ class TestA2AErrorPropagation:
         msg = artifact_data["errors"][0]["message"]
         assert "package_id" in msg and "creative_id" in msg, f"Per-error message must name missing fields, got: {msg}"
 
+    async def test_update_media_buy_not_found_wire_envelope(self, handler, test_tenant, test_principal):
+        """update_media_buy with unknown media_buy_id surfaces MEDIA_BUY_NOT_FOUND on the A2A wire.
+
+        Drives ``AdCPMediaBuyNotFoundError`` raised inside ``_verify_principal``
+        through the real ``on_message_send`` pipeline:
+            update_media_buy_raw → _update_media_buy_impl → _verify_principal
+                → repo.get_by_id returns None
+                → raise AdCPMediaBuyNotFoundError
+                → audit_step_failure re-raises (step is None at this point)
+                → A2A dispatcher's _handle_explicit_skill catches the typed AdCPError
+                → _build_failed_skill_result builds the two-layer envelope
+                → DataPart on a failed Task
+
+        MEDIA_BUY_NOT_FOUND is a STANDARD_ERROR_CODES entry (passthrough — not
+        rewritten by ERROR_CODE_MAPPING) so the wire code matches the source
+        exception's ``error_code``. Closes the wire-level coverage gap for
+        typed-subclass envelope construction through on_message_send.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        # Send paused=True so _update_media_buy_impl has ≥1 updatable field and
+        # reaches _verify_principal where the lookup fires the typed exception.
+        skill_params = {"media_buy_id": "mb_does_not_exist_pr1306_a2a_wire", "paused": True}
+        message = self.create_message_with_skill("update_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+
+        # Full two-layer envelope on the wire — typed-subclass code passes through.
+        assert_envelope_shape(
+            artifact_data,
+            "MEDIA_BUY_NOT_FOUND",
+            recovery="correctable",
+            message_substr="mb_does_not_exist_pr1306_a2a_wire",
+        )
+
 
 @pytest.mark.integration
 @pytest.mark.requires_db
