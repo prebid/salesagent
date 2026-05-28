@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
@@ -137,6 +138,8 @@ def _serialize_context(
         return None
     if isinstance(context, dict):
         return dict(context)
+    if not isinstance(context, BaseModel):
+        raise TypeError(f"_serialize_context expected dict or BaseModel, got {type(context).__name__}")
     return context.model_dump(mode="json", exclude_none=True)
 
 

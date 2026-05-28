@@ -19,7 +19,7 @@ from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
-from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -355,8 +355,6 @@ class ContextManager(DatabaseManager):
         caller is about to re-raise.
         """
         from adcp.server.helpers import STANDARD_ERROR_CODES
-
-        from src.core.exceptions import normalize_to_adcp_error
 
         try:
             source = normalize_to_adcp_error(exc)

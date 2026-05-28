@@ -102,6 +102,11 @@ def _adcp_error_from_code(
     # buyer-facing case. Pin Authentication explicitly here so the mapping
     # doesn't depend on dict-comprehension insertion order.
     _CODE_TO_CLASS[AdCPAuthenticationError.error_code] = AdCPAuthenticationError
+    from src.core.exceptions import INTERNAL_CODES
+
+    assert (
+        error_code not in INTERNAL_CODES
+    ), f"INTERNAL code {error_code!r} reached harness reconstruction — production wire leaked an internal-only code"
     exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
     reconstructed = exc_cls(
         message=message,
@@ -151,6 +156,7 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
 
     # Legacy shape (test fixtures that mock ToolError directly):
     # tuple-stringified `('CODE', 'message', 'recovery', '{"details": ...}')`.
+    # Deprecated: legacy ToolError tuple-string parsing — remove when no test fixtures depend on raw ToolError raises.
     try:
         parsed = ast.literal_eval(error_str)
         if isinstance(parsed, tuple) and len(parsed) >= 2:
@@ -214,13 +220,13 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
         message = adcp_err.get("message", message) or message
         recovery = adcp_err.get("recovery")
         details = adcp_err.get("details")
-    if not error_code:
-        errors = envelope.get("errors")
-        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
-            error_code = errors[0].get("code")
-            message = errors[0].get("message", message) or message
-            recovery = errors[0].get("recovery", recovery)
-            details = details or errors[0].get("details")
+    errors = envelope.get("errors")
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+        first = errors[0]
+        error_code = error_code or first.get("code")
+        message = first.get("message", message) or message
+        recovery = recovery or first.get("recovery")
+        details = details or first.get("details")
     if not error_code:
         return None
     reconstructed = _adcp_error_from_code(error_code, message, recovery, details)

@@ -22,8 +22,11 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
+from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
+
+_CONTEXT_LIKE_TYPES: tuple[type, ...] = (FastMCPContext, ToolContext)
 
 
 class AdCPToolError(ToolError):
@@ -50,7 +53,10 @@ class AdCPToolError(ToolError):
         # opt in explicitly when not supplying a typed source AdCPError.
         self.envelope = envelope
         self.status_code = status_code
-        super().__init__(json.dumps(envelope))
+        super().__init__()
+
+    def __str__(self) -> str:
+        return json.dumps(self.envelope)
 
 
 def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]:
@@ -301,18 +307,14 @@ def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, k
     # declare a ``tenant_id`` field, leading the helper to treat request
     # bodies as Contexts. Only the actual transport-context types should
     # qualify.
-    from src.core.tool_context import ToolContext
-
-    _ContextLike = (FastMCPContext, ToolContext)
-
     context = None
     for arg in args:
-        if isinstance(arg, _ContextLike):
+        if isinstance(arg, _CONTEXT_LIKE_TYPES):
             context = arg
             break
     if context is None:
         for v in kwargs.values():
-            if isinstance(v, _ContextLike):
+            if isinstance(v, _CONTEXT_LIKE_TYPES):
                 context = v
                 break
 
