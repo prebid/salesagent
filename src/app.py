@@ -95,10 +95,9 @@ app.mount("/mcp", mcp_app)
 # ---------------------------------------------------------------------------
 
 from src.core.exceptions import (  # noqa: E402
-    AdCPAuthorizationError,
     AdCPError,
-    AdCPValidationError,
     build_two_layer_error_envelope,
+    normalize_to_adcp_error,
 )
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error  # noqa: E402
 
@@ -160,7 +159,7 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
     ValueError subclass) — request-body validation keeps its existing handler.
     """
-    return _envelope_response(request, AdCPValidationError(str(exc)))
+    return _envelope_response(request, normalize_to_adcp_error(exc))
 
 
 @app.exception_handler(PermissionError)
@@ -173,7 +172,7 @@ async def permission_error_handler(request: Request, exc: PermissionError) -> JS
     error instead of the 403 authorization envelope every transport should
     emit for the same condition.
     """
-    return _envelope_response(request, AdCPAuthorizationError(str(exc)))
+    return _envelope_response(request, normalize_to_adcp_error(exc))
 
 
 @app.exception_handler(ToolError)
