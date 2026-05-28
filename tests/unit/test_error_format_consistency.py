@@ -251,8 +251,13 @@ class TestA2AErrorShapes:
     @pytest.mark.asyncio
     async def test_discovery_skill_no_auth_does_not_raise_auth_error(self):
         """Discovery skills (get_products, etc.) do not require auth."""
+        from src.core.schemas import GetProductsResponse
+
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_tool:
-            mock_tool.return_value = {"products": []}
+            # core_get_products_tool returns a Pydantic GetProductsResponse;
+            # _serialize_for_a2a calls model_dump() so the mock must return a
+            # real model (not a raw dict) for the discovery path to complete.
+            mock_tool.return_value = GetProductsResponse(products=[])
 
             # Should NOT raise "Authentication required"
             anon_identity = ResolvedIdentity(
@@ -539,33 +544,6 @@ class TestCrossTransportErrorConsistency:
         assert len(serialized["errors"]) > 0
         assert serialized["errors"][0]["code"] == "VALIDATION_ERROR"
         assert "message" in serialized  # Protocol message field added by serializer
-
-    @pytest.mark.asyncio
-    async def test_serialize_for_a2a_passes_dict_through(self):
-        """Verify _serialize_for_a2a passes dict responses through unchanged.
-
-        A2A handlers may return early-exit error dicts directly (e.g., for
-        missing required parameters). These should pass through as-is.
-        """
-        error_dict = {
-            "success": False,
-            "message": "Missing required AdCP parameters: ['packages', 'start_time', 'end_time']",
-            "required_parameters": ["brand", "packages", "start_time", "end_time"],
-            "received_parameters": ["brand"],
-            "errors": [
-                {
-                    "code": "VALIDATION_ERROR",
-                    "message": "Missing required AdCP parameters: ['packages', 'start_time', 'end_time']",
-                }
-            ],
-        }
-
-        serialized = AdCPRequestHandler._serialize_for_a2a(error_dict)
-
-        # Dict should pass through unchanged
-        assert serialized == error_dict
-        assert serialized["success"] is False
-        assert serialized["errors"][0]["code"] == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------

@@ -51,6 +51,7 @@ from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
 from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
@@ -59,6 +60,7 @@ from src.core.database.models import PushNotificationConfig as DBPushNotificatio
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
+    AdCPCapabilityNotSupportedError,
     AdCPError,
     AdCPValidationError,
     build_two_layer_error_envelope,
@@ -852,35 +854,13 @@ class AdCPRequestHandler(RequestHandler):
                     )
                 )
             elif any(word in combined_text for word in ["create", "buy", "campaign", "media"]):
-                result = await self._create_media_buy(combined_text, identity)
-                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-                self._log_a2a_operation(
-                    "create_media_buy",
-                    tenant_id,
-                    principal_id,
-                    result.get("success", False),
-                    {"query": combined_text[:100], "success": result.get("success", False)},
-                    result.get("message") if not result.get("success") else None,
-                )
-                del task.artifacts[:]
-                if result.get("success"):
-                    task.artifacts.append(
-                        Artifact(
-                            artifact_id="media_buy_1",
-                            name="media_buy_created",
-                            parts=[Part(data=_dict_to_value(result))],
-                        )
-                    )
-                else:
-                    task.artifacts.append(
-                        Artifact(
-                            artifact_id="media_buy_error_1",
-                            name="media_buy_error",
-                            parts=[Part(data=_dict_to_value(result))],
-                        )
-                    )
+                # ``_create_media_buy`` is an NL stub that always raises
+                # ``AdCPCapabilityNotSupportedError`` — the explicit-skill
+                # path is the spec contract for media buy creation. The
+                # outer error handler at on_message_send catches the raise
+                # and attaches a spec-compliant two-layer envelope to the
+                # failed Task artifact.
+                await self._create_media_buy(combined_text, identity)
             else:
                 # General help response
                 capabilities = {
@@ -1345,25 +1325,26 @@ class AdCPRequestHandler(RequestHandler):
         raise UnsupportedOperationError(message="Extended agent card not supported")
 
     @staticmethod
-    def _serialize_for_a2a(response: Any) -> dict:
+    def _serialize_for_a2a(response: BaseModel | dict) -> dict:
         """Serialize a handler response for A2A protocol at the framework boundary.
 
-        This is the single serialization point for all A2A skill responses.
-        Handlers return raw Pydantic models; this method converts them to
-        A2A-compatible dicts with protocol fields (message, success).
+        Single serialization point for all explicit-skill A2A responses.
 
-        - Pydantic models: serialized via model_dump(mode="json"), protocol fields added
-        - Dicts: passed through as-is (early-return error/stub responses from handlers)
-
-        Protocol fields added:
-        - message: human-readable string from response.__str__()
-        - success: derived from absence of errors field (for responses that have one)
+        - Pydantic models: serialized via ``model_dump(mode="json")`` here,
+          and the protocol fields (``message``, ``success``) are added.
+        - Dicts: passed through. Only skill handlers that pre-apply version
+          compat (e.g., ``_handle_get_products_skill`` calls
+          ``apply_version_compat`` and emits a dict already populated with
+          ``message``/``success``) use this path. Error dicts that bypass
+          the envelope contract were retired in this PR — NL handlers now
+          raise typed ``AdCPError`` instead.
 
         Args:
-            response: Pydantic model or dict from a skill handler
+            response: Pydantic model OR pre-serialized dict from a skill
+                handler.
 
         Returns:
-            Dict ready for A2A DataPart
+            Dict ready for A2A DataPart.
         """
         if isinstance(response, dict):
             return response
@@ -2030,29 +2011,28 @@ class AdCPRequestHandler(RequestHandler):
         Returns:
             Dictionary containing product information
         """
-        try:
-            # Identity already resolved at transport boundary (on_message_send)
+        # Identity already resolved at transport boundary (on_message_send).
+        # Exceptions propagate to the outer ``on_message_send`` handler, which
+        # attaches a spec-compliant two-layer envelope to the failed Task
+        # artifact. The previous ``except Exception → return {"products": []}``
+        # bypass synthesized a fake-success Task DataPart that storyboard
+        # runners parsed as ``MCP_ERROR`` — that violates the envelope contract.
 
-            # Call core function directly using the underlying function
-            response = await core_get_products_tool(
-                brief=query,
-                identity=identity,
-            )
+        # Call core function directly using the underlying function
+        response = await core_get_products_tool(
+            brief=query,
+            identity=identity,
+        )
 
-            # Convert to A2A response format with v2.x backward compatibility
-            from src.core.version_compat import apply_version_compat
+        # Convert to A2A response format with v2.x backward compatibility
+        from src.core.version_compat import apply_version_compat
 
-            products = [product.model_dump(mode="json") for product in response.products]
-            response_data = {
-                "products": products,
-                "message": str(response),  # Use __str__ method for human-readable message
-            }
-            return apply_version_compat("get_products", response_data, None)
-
-        except Exception as e:
-            logger.error(f"Error getting products: {e}")
-            # Return empty products list instead of fallback data
-            return {"products": [], "message": f"Unable to retrieve products: {str(e)}"}
+        products = [product.model_dump(mode="json") for product in response.products]
+        response_data = {
+            "products": products,
+            "message": str(response),  # Use __str__ method for human-readable message
+        }
+        return apply_version_compat("get_products", response_data, None)
 
     def _extract_brand_name_from_query(self, query: str) -> str:
         """Extract or infer brand name from the user query.
@@ -2088,47 +2068,25 @@ class AdCPRequestHandler(RequestHandler):
             return "Business advertising products and services"
 
     async def _create_media_buy(self, request: str, identity: ResolvedIdentity | None) -> dict:
-        """Create a media buy based on the request.
+        """Natural-language create_media_buy is not supported; explicit skill is the spec contract.
 
-        Args:
-            request: User's media buy request
-            identity: Pre-resolved identity from transport boundary
+        Always raises ``AdCPCapabilityNotSupportedError``. Buyer agents reach
+        the explicit-skill path via ``create_media_buy`` skill invocation
+        through ``_handle_explicit_skill`` — that path runs the full
+        ``_create_media_buy_impl``, produces a spec-compliant Pydantic
+        response, and goes through ``_serialize_for_a2a``.
 
-        Returns:
-            Dictionary containing media buy creation result
+        The previous NL stub returned a flat ``{"success": False, "message": "...
+        use explicit skill"}`` dict that bypassed the two-layer-envelope
+        contract — storyboard runners parsing that artifact synthesized
+        ``MCP_ERROR`` rather than seeing the real wire code. Raising here
+        flows to the outer ``on_message_send`` error handler which attaches
+        the proper two-layer envelope to the failed Task artifact.
         """
-        # For now, return a mock response indicating authentication is working
-        # but media buy creation needs more implementation
-        try:
-            # Identity already resolved at transport boundary (on_message_send)
-            tenant_id = identity.tenant_id if identity else "unknown"
-            principal_id = identity.principal_id if identity else "unknown"
-
-            return {
-                "success": False,
-                "message": f"Authentication successful for {principal_id}. To create a media buy, use explicit skill invocation with AdCP v2.2.0 spec-compliant format.",
-                "required_fields": ["brand", "packages", "start_time", "end_time"],
-                "note": "Per AdCP v2.2.0 spec, budget is specified at the PACKAGE level, not top level",
-                "authenticated_tenant": tenant_id,
-                "authenticated_principal": principal_id,
-                "example": {
-                    "brand": {"domain": "example.com"},
-                    "packages": [
-                        {
-                            "product_id": "video_premium",
-                            "budget": 10000.0,  # Budget is per package (required)
-                            "pricing_option_id": "cpm-fixed",
-                        }
-                    ],
-                    # Note: NO top-level budget field per AdCP v2.2.0 spec
-                    "start_time": "2025-02-01T00:00:00Z",
-                    "end_time": "2025-02-28T23:59:59Z",
-                },
-                "documentation": "https://adcontextprotocol.org/docs/",
-            }
-        except Exception as e:
-            logger.error(f"Error in media buy creation: {e}")
-            raise InternalError(message=f"Authentication failed: {str(e)}")
+        raise AdCPCapabilityNotSupportedError(
+            "Natural-language create_media_buy is not supported. "
+            "Invoke the explicit ``create_media_buy`` skill with AdCP-spec parameters."
+        )
 
 
 def create_agent_card() -> AgentCard:

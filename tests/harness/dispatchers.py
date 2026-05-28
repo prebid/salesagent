@@ -27,12 +27,48 @@ if TYPE_CHECKING:
 
 
 def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
-    """Build the wire envelope from an AdCPError for TransportResult capture."""
+    """Build a SYNTHESIZED envelope from an AdCPError instance.
+
+    Used as a fallback when no real wire envelope is available — that is,
+    the IMPL transport (no wire by definition) and the A2A path when an
+    exception was raised before the artifact DataPart was built (e.g.,
+    during pre-handler auth resolution). Production code uses the same
+    ``build_two_layer_error_envelope`` helper at the boundary, so the
+    synthesized envelope here matches what production would emit for the
+    same exception. It does NOT verify that a regression in
+    ``build_two_layer_error_envelope`` actually reaches the wire.
+
+    A2A and REST tests asserting on ``result.wire_error_envelope`` see
+    REAL wire bytes when available:
+        - A2A: the artifact DataPart, attached to the reconstructed
+          ``AdCPError`` as ``_wire_error_envelope`` by
+          ``tests.harness._base._envelope_to_adcp_error``.
+        - REST: the HTTP response body, captured directly by RestDispatcher.
+        - MCP: the JSON string in ``ToolError``, parsed by McpDispatcher.
+
+    IMPL has no wire — its ``wire_error_envelope`` is always synthesized.
+    """
     from src.core.exceptions import AdCPError, build_two_layer_error_envelope
 
     if isinstance(exc, AdCPError):
         return build_two_layer_error_envelope(exc)
     return None
+
+
+def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
+    """Prefer the REAL wire envelope stashed by the harness; fall back to synthesized.
+
+    When the A2A pipeline reconstructs an AdCPError from a failed Task's
+    artifact DataPart, ``tests.harness._base._envelope_to_adcp_error``
+    attaches the captured envelope to the exception as
+    ``_wire_error_envelope``. This helper returns that real wire envelope
+    if present; otherwise falls back to ``_envelope_from_adcp_error``
+    (synthesized — same helper production calls).
+    """
+    real_wire = getattr(exc, "_wire_error_envelope", None)
+    if isinstance(real_wire, dict):
+        return real_wire
+    return _envelope_from_adcp_error(exc)
 
 
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
@@ -51,7 +87,15 @@ def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
 
 
 class ImplDispatcher:
-    """Dispatch via direct _impl() call."""
+    """Dispatch via direct ``_impl()`` call.
+
+    IMPL is the in-process direct call — there is no wire by definition.
+    ``wire_error_envelope`` here is always SYNTHESIZED via
+    ``build_two_layer_error_envelope`` (the same helper production calls
+    at the boundary). Tests using IMPL transport see what production
+    WOULD emit, not what reaches the wire — a real wire-shape regression
+    must be caught by the A2A, REST, or MCP transports.
+    """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
@@ -65,16 +109,23 @@ class ImplDispatcher:
 
 
 class A2ADispatcher:
-    """Dispatch via _raw() A2A wrapper."""
+    """Dispatch via ``handler.on_message_send`` — exercises the full A2A pipeline.
+
+    ``env.call_a2a`` drives ``AdCPRequestHandler.on_message_send`` end-to-end
+    (message parsing → skill routing → handler dispatch → ``_serialize_for_a2a``
+    → Task/Artifact framing). On a failed Task, the harness reconstructs the
+    ``AdCPError`` from the artifact DataPart and stashes the real wire
+    envelope on the exception via ``_wire_error_envelope`` — captured here
+    by ``_wire_envelope_from_exception``.
+    """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
             payload = env.call_a2a(**kwargs)
         except Exception as exc:
-            # env.call_a2a already unwraps A2AError → AdCPError; build from that.
             return TransportResult(
                 error=exc,
-                wire_error_envelope=_envelope_from_adcp_error(exc),
+                wire_error_envelope=_wire_envelope_from_exception(exc),
             )
         return TransportResult(payload=payload, envelope={"transport": "a2a"})
 

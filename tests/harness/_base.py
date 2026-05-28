@@ -223,7 +223,16 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
             details = details or errors[0].get("details")
     if not error_code:
         return None
-    return _adcp_error_from_code(error_code, message, recovery, details)
+    reconstructed = _adcp_error_from_code(error_code, message, recovery, details)
+    if reconstructed is not None:
+        # Stash the REAL wire envelope on the reconstructed exception so the
+        # A2A/REST dispatchers can capture the actual wire bytes (artifact
+        # DataPart for A2A, HTTP body for REST) rather than re-synthesizing
+        # via build_two_layer_error_envelope — re-synthesis would just
+        # regenerate from the lossy reconstructed exception. Read by
+        # ``A2ADispatcher.dispatch`` via ``getattr(exc, '_wire_error_envelope', None)``.
+        reconstructed._wire_error_envelope = envelope  # type: ignore[attr-defined]
+    return reconstructed
 
 
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
