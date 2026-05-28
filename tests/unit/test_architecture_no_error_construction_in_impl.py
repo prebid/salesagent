@@ -7,8 +7,8 @@ adapters that need to surface an error to the buyer MUST raise a typed
 
 This guard counts ``Error(code=...)`` literal construction sites in
 ``src/core/tools/`` and ``src/adapters/`` per file, with a per-file CAP frozen
-at substrate landing. The cap can only SHRINK over time (per PR 2 cleanup
-sweep). New code is never added to the cap — the only way to add a new file or
+at substrate landing. The cap can only SHRINK over time as the cleanup
+sweep lands. New code is never added to the cap — the only way to add a new file or
 raise a cap is to land a fix that exceeds it intentionally, which is a code-
 review red flag.
 
@@ -17,7 +17,7 @@ AdCPError raise`` comment at every Error(code=...) site so reviewers can grep
 their way to the cleanup work. The comments are aspirational; the cap dict
 + ratchet (`assert_caps_only_shrink`) is the actual enforcement mechanism.
 
-Spec: AdCP 3.0.6 CHANGELOG 91b6e2c — two-layer envelope is normative.
+Spec: AdCP 3.0.0 (error-handling.mdx) — two-layer envelope is normative.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-# Per-file caps captured at substrate landing. PR 2 drains these to zero.
+# Per-file caps captured at substrate landing. The cleanup sweep drains these to zero.
 # Cannot be raised; only lowered. The guard fails if any file exceeds its cap
 # or if a new file shows up with Pattern A sites.
 #
@@ -39,7 +39,7 @@ from pathlib import Path
 # (e.g., GetMediaBuysResponse.errors[]) live in this dict too — they're
 # allowlist-permanent, not migration targets. Their entries are marked with
 # an inline comment.
-# When PR 2 sub-batches land, drop the relevant entry below to zero rather
+# When cleanup sub-batches land, drop the relevant entry below to zero rather
 # than gradually lowering it — keep the cap honest.
 PATTERN_A_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/broadstreet/adapter.py": 13,

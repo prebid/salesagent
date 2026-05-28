@@ -99,9 +99,8 @@ class TestExtractErrorInfoAdCPError:
     def test_adcp_gone_error_extracts_code_and_message(self):
         """AdCPGoneError → ('INVALID_STATE', 'proposal expired', 'correctable').
 
-        Recovery defaults to ``correctable`` per the B1 review fix — the
-        resource itself is gone but the buyer can recover by referencing a
-        different resource.
+        Recovery defaults to ``correctable`` — the resource itself is gone but
+        the buyer can recover by referencing a different resource.
         """
         from src.core.exceptions import AdCPGoneError
         from src.core.tool_error_logging import extract_error_info

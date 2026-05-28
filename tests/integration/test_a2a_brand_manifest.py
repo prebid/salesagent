@@ -130,8 +130,8 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
 
     The handler raises AdCPValidationError; the explicit-skill dispatcher
     catches it and surfaces a failed Task with the two-layer envelope as
-    the artifact DataPart (B4 contract — AdCP-domain errors are async-task
-    failures, not JSON-RPC transport errors).
+    the artifact DataPart — AdCP-domain errors are async-task failures, not
+    JSON-RPC transport errors.
     """
     from a2a.types import TaskState
 

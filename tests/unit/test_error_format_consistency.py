@@ -34,10 +34,9 @@ class TestMCPErrorShapes:
         bypasses it and we can assert the production code's actual contract —
         typed exception + error_code + message — without the union dilution.
 
-        Merged behavior (after main's #1335 reshape): missing identity in
-        ``_create_media_buy_impl`` now raises ``AdCPAuthRequiredError``
-        (``AUTH_TOKEN_INVALID``) instead of the older ``AdCPValidationError``,
-        because identity-required is auth, not validation.
+        Missing identity in ``_create_media_buy_impl`` raises
+        ``AdCPAuthRequiredError`` (``AUTH_TOKEN_INVALID``) rather than
+        ``AdCPValidationError`` — identity-required is auth, not validation.
         """
         from src.core.exceptions import AdCPAuthRequiredError
         from src.core.schemas import CreateMediaBuyRequest
@@ -613,9 +612,9 @@ class TestMCPRecoveryInErrorResponses:
 class TestA2ARecoveryInErrorResponses:
     """Verify recovery semantics propagate from every AdCPError subclass.
 
-    After the B4 review fix, ``_handle_explicit_skill`` no longer translates
-    AdCPError to A2AError — the typed exception propagates so the explicit-
-    skill dispatcher can wrap it into a failed Task with a two-layer envelope
+    ``_handle_explicit_skill`` does not translate AdCPError to A2AError — the
+    typed exception propagates so the explicit-skill dispatcher can wrap it
+    into a failed Task with a two-layer envelope
     DataPart. The buyer agent parses ``recovery`` from the propagated exception
     (or from the envelope's ``adcp_error.recovery`` once it reaches the wire).
     """
@@ -659,7 +658,7 @@ class TestA2ARecoveryInErrorResponses:
             # Recovery is on the propagated exception itself (the dispatcher will
             # build the envelope when wrapping into the failed Task's DataPart).
             assert exc_info.value.recovery == expected_recovery
-            # And the envelope builder surfaces it on the wire shape.
+            # And the two-layer envelope builder echoes it onto both layers.
             envelope = build_two_layer_error_envelope(exc_info.value)
             assert envelope["adcp_error"]["recovery"] == expected_recovery
 

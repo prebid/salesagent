@@ -561,8 +561,8 @@ class BaseTestEnv:
             raise TypeError(f"Expected Task, got {type(task_result).__name__}: {task_result}")
 
         # AdCP-domain errors now surface as a failed Task with the two-layer
-        # envelope in the artifact DataPart (B4 contract). Reconstruct the
-        # AdCPError so callers can catch domain exceptions instead of getting
+        # envelope in the artifact DataPart. Reconstruct the AdCPError so
+        # callers can catch domain exceptions instead of getting
         # a pydantic ValidationError from trying to parse the envelope as a
         # success response.
         from a2a.types import TaskState

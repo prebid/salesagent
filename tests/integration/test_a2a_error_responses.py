@@ -581,10 +581,12 @@ class TestA2AErrorResponseStructure:
         """AdCPError propagates from _handle_explicit_skill with recovery preserved.
 
         ``_handle_explicit_skill`` does not translate AdCPError into a
-        JSON-RPC A2AError — the typed exception propagates so the outer
-        dispatcher wraps the two-layer envelope into a failed Task's
-        artifact DataPart. The envelope carries ``recovery`` from the
-        AdCPError class default (or override).
+        JSON-RPC A2AError — the typed exception propagates with ``recovery``
+        intact (from the class default or a raise-site override), and the
+        two-layer envelope builder echoes it onto both layers. The end-to-end
+        wire path — the dispatcher wrapping that envelope into a failed Task's
+        artifact DataPart — is exercised by the ``on_message_send``-driven
+        ``*_wire_envelope`` tests in this module.
         """
         from unittest.mock import patch
 
@@ -739,7 +741,7 @@ class TestA2AContextEcho:
     async def test_adcp_error_with_context_echoes_through_a2a_wire_envelope(self, integration_db, handler):
         """ContextObject set on AdCPError echoes through to the A2A wire DataPart.
 
-        AdCPError carries an optional ``context`` (spec 3.0.6 normative) so buyer
+        AdCPError carries an optional ``context`` (spec 3.0.0 normative) so buyer
         agents can correlate failures to the request that produced them.
         build_two_layer_error_envelope serializes it at envelope top-level (not
         inside errors[]). _build_failed_skill_result surfaces the envelope as the

@@ -2,7 +2,7 @@
 
 Every transport translator MUST call ``build_two_layer_error_envelope()`` so
 the wire response has both ``adcp_error.code`` (envelope) and ``errors[0].code``
-(payload) — required by AdCP spec 3.0.6 and by storyboard runners that check
+(payload) — required by AdCP spec 3.0.0 and by storyboard runners that check
 either layer.
 
 This guard is AST-based: scan the production boundary functions and verify their
@@ -115,7 +115,7 @@ class TestBoundaryTranslatorsUseEnvelope:
         path, fn = "src/core/tool_error_logging.py", "_translate_to_tool_error"
         assert _function_calls_builder(path, fn), (
             f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so the MCP wire response "
-            f"carries both adcp_error.code and errors[0].code (spec 3.0.6)."
+            f"carries both adcp_error.code and errors[0].code (spec 3.0.0)."
         )
 
     def test_a2a_boundary_uses_envelope(self):
@@ -133,9 +133,9 @@ class TestBoundaryTranslatorsUseEnvelope:
     def test_rest_boundary_uses_envelope(self):
         """``adcp_error_handler`` must call build_two_layer_error_envelope()."""
         path, fn = "src/app.py", "adcp_error_handler"
-        assert _function_calls_builder(path, fn), (
-            f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so REST responses have the spec two-layer envelope shape."
-        )
+        assert _function_calls_builder(
+            path, fn
+        ), f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so REST responses have the spec two-layer envelope shape."
 
     def test_envelope_builder_exported(self):
         """The envelope builder is the single source of truth — verify it exists and is callable."""

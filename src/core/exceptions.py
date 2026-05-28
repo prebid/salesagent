@@ -31,8 +31,8 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # Internal-only codes that occasionally leak to the wire when a raise site
     # uses a base class (AdCPError / AdCPNotFoundError / AdCPConfigurationError)
     # instead of a specific subclass. Mapped to the closest STANDARD_ERROR_CODES
-    # entry so the wire stays spec-compliant. PR 2 cleanup migrates the raise
-    # sites to specific subclasses; the mappings stay as a safety net.
+    # entry so the wire stays spec-compliant. Raise sites can later migrate to
+    # specific subclasses; the mappings stay as a safety net.
     "NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
@@ -157,7 +157,7 @@ class AdCPError(Exception):
         suggestion: Optional correction hint for buyer agents.
         context: Optional AdCP ContextObject (or dict) echoed in the
             envelope so buyer agents can correlate failures to the
-            request that produced them (spec 3.0.6 normative).
+            request that produced them (spec 3.0.0 normative).
     """
 
     status_code: int = 500
@@ -284,9 +284,9 @@ class AdCPAuthenticationError(AdCPError):
 
     Recovery defaults to ``terminal`` to match
     ``STANDARD_ERROR_CODES["AUTH_REQUIRED"]["recovery"]`` in adcp 4.3 (the SDK
-    we run). AdCP spec 3.0.4 (CHANGELOG ``78b1dc4``) reclassified AUTH_REQUIRED
-    to ``correctable`` (re-auth recovers); pending the SDK upgrade we keep
-    ``terminal`` so wire output matches the installed SDK's expectation.
+    we run). That SDK table diverges from the spec's ``error-code.json``, which
+    classifies AUTH_REQUIRED as ``correctable`` (re-auth recovers); we keep
+    ``terminal`` so wire output matches the installed SDK's validator.
     """
 
     status_code = 401
@@ -507,7 +507,7 @@ class AdCPCapabilityNotSupportedError(AdCPError):
 # two-layer shape. _impl functions never build wire shape; they raise
 # AdCPError subclasses and the boundary translator runs this.
 #
-# Spec: two-layer model is normative since AdCP 3.0.6 (CHANGELOG 91b6e2c).
+# Spec: two-layer model is normative since AdCP 3.0.0 (``error-handling.mdx``).
 # Storyboard runners (@adcp/sdk 6.11.0+) check errors[0].code (when
 # success===false) AND adcp_error.code; missing either layer causes the
 # runner to synthesize "MCP_ERROR" and erase the real code.
@@ -542,8 +542,8 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
         details=exc.details,
     )
     # Copy errors[0] for the envelope-level mirror so callers that mutate one
-    # layer don't accidentally mutate the other (aliasing footgun before PR 3
-    # async/submitted work starts touching both).
+    # layer don't accidentally mutate the other (aliasing footgun once both
+    # layers may be mutated independently).
     envelope: dict[str, Any] = {
         "adcp_error": dict(payload["errors"][0]),
         "errors": payload["errors"],

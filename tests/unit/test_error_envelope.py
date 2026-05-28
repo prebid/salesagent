@@ -5,7 +5,7 @@ two-layer error responses. Boundary translators (MCP, A2A, REST) and
 ContextManager.fail_workflow_step_for_exception all call this so wire
 responses and persisted workflow_step.response_data share the same shape.
 
-The two-layer model is normative since AdCP spec 3.0.6 (CHANGELOG 91b6e2c).
+The two-layer model is normative since AdCP spec 3.0.0 (error-handling.mdx).
 Storyboard runners (e.g., @adcp/sdk@6.11.0) read errors[0].code AND
 adcp_error.code; missing either layer triggers MCP_ERROR synthesis.
 """
@@ -72,7 +72,7 @@ class TestEnvelopeShape:
 
 
 class TestContextEcho:
-    """exc.context echoes into envelope.context when present (3.0.6 spec)."""
+    """exc.context echoes into envelope.context when present (3.0.0 spec)."""
 
     def test_context_echoed_when_present(self):
         from adcp.types import ContextObject
@@ -101,8 +101,8 @@ class TestContextEcho:
         ``build_two_layer_error_envelope``) all funnel through
         ``_serialize_context`` and must shallow-copy dict context so an
         exception held across multiple serializations doesn't leak mutations
-        from one envelope into another (aliasing footgun before PR 3
-        async/submitted work starts touching both layers).
+        from one envelope into another (aliasing footgun once both layers
+        may be mutated independently).
         """
         source_ctx = {"correlation_id": "orig"}
         exc = AdCPNotFoundError("not found", context=source_ctx)

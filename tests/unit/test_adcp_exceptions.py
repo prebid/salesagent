@@ -451,7 +451,7 @@ class TestFastAPIExceptionHandlers:
         assert body["errors"][0]["details"] == {"field": "x"}
 
     def test_error_response_echoes_context(self):
-        """When raised with context, the envelope echoes it (spec 3.0.6)."""
+        """When raised with context, the envelope echoes it (spec 3.0.0)."""
         from adcp.types import ContextObject
 
         from src.app import app
