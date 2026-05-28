@@ -19,7 +19,7 @@ from a2a.types import Message, SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.database.database_session import get_db_session
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_package_request_dict, setup_error_test_tenant_chain
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
@@ -90,7 +90,7 @@ class TestA2AErrorPropagation:
 
     async def test_create_media_buy_validation_error_includes_errors_field(self, handler, test_tenant, test_principal):
         """Test that validation errors include errors field in A2A response."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -138,7 +138,7 @@ class TestA2AErrorPropagation:
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Test that authentication errors include errors field in A2A response."""
         # Mock identity with non-existent principal — simulates resolved but invalid principal
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="nonexistent_principal",
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -206,7 +206,7 @@ class TestA2AErrorPropagation:
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -262,7 +262,7 @@ class TestA2AErrorPropagation:
         dispatcher routes through _build_failed_skill_result → wire envelope
         lands in DataPart. Mock-only equivalents do not prove the wiring.
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -309,7 +309,7 @@ class TestA2AErrorPropagation:
         This test verifies that all domain fields from CreateMediaBuyResponse schema are preserved
         when wrapped by the A2A handler.
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -378,7 +378,7 @@ class TestA2AErrorPropagation:
         Mirrors ``test_create_media_buy_validation_error_includes_errors_field``
         as the reference pattern for A2A wire-envelope verification.
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -422,7 +422,7 @@ class TestA2AErrorPropagation:
         Mirrors ``test_create_media_buy_validation_error_includes_errors_field``
         as the reference pattern for A2A wire-envelope verification.
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=test_principal["principal_id"],
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
@@ -475,7 +475,7 @@ class TestA2AErrorResponseStructure:
         """
         from src.core.exceptions import AdCPValidationError
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -502,7 +502,7 @@ class TestA2AErrorResponseStructure:
         """
         from src.core.exceptions import AdCPValidationError
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},

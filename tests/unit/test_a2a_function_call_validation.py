@@ -179,9 +179,9 @@ class TestFunctionCallIntegration:
 
     def test_tool_context_creation_does_not_fail(self):
         """Test that _make_tool_context creates ToolContext from identity without errors."""
-        from src.core.resolved_identity import ResolvedIdentity
+        from tests.factories.principal import PrincipalFactory
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -229,9 +229,7 @@ class TestFunctionCallIntegration:
 
             async def test_call():
                 # Mock the database and other external dependencies
-                with (
-                    pytest.MonkeyPatch().context() as m,
-                ):
+                with (pytest.MonkeyPatch().context() as m,):
                     # Mock database session and queries
                     m.setattr("src.core.main.get_db_session", lambda: Mock())
 

@@ -12,8 +12,8 @@ Beads: salesagent-2yt6
 from unittest.mock import patch
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
 from tests.a2a_helpers import make_a2a_context
+from tests.factories.principal import PrincipalFactory
 
 
 class TestA2ATestingContextExtraction:
@@ -34,7 +34,7 @@ class TestA2ATestingContextExtraction:
         }
         ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test-tenant",
             tenant={"tenant_id": "test-tenant"},
@@ -47,9 +47,9 @@ class TestA2ATestingContextExtraction:
         mock_resolve.assert_called_once()
         call_kwargs = mock_resolve.call_args.kwargs
         testing_ctx = call_kwargs.get("testing_context")
-        assert testing_ctx is not None, (
-            "_resolve_a2a_identity should pass testing_context to resolve_identity when test headers are present."
-        )
+        assert (
+            testing_ctx is not None
+        ), "_resolve_a2a_identity should pass testing_context to resolve_identity when test headers are present."
         assert testing_ctx.dry_run is True, "X-Dry-Run: true header should set testing_context.dry_run=True"
 
     def test_test_session_id_passed_to_resolve_identity(self):
@@ -63,7 +63,7 @@ class TestA2ATestingContextExtraction:
         }
         ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test-tenant",
             tenant={"tenant_id": "test-tenant"},
@@ -76,9 +76,9 @@ class TestA2ATestingContextExtraction:
         call_kwargs = mock_resolve.call_args.kwargs
         testing_ctx = call_kwargs.get("testing_context")
         assert testing_ctx is not None, "_resolve_a2a_identity should pass testing_context to resolve_identity."
-        assert testing_ctx.test_session_id == "session-abc-123", (
-            "X-Test-Session-ID header should be extracted by A2A transport."
-        )
+        assert (
+            testing_ctx.test_session_id == "session-abc-123"
+        ), "X-Test-Session-ID header should be extracted by A2A transport."
 
     def test_no_test_headers_passes_none_context(self):
         """When no test headers are present, testing_context=None should be passed."""
@@ -90,7 +90,7 @@ class TestA2ATestingContextExtraction:
         }
         ctx = make_a2a_context(auth_token="test-token", headers=headers)
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test-tenant",
             tenant={"tenant_id": "test-tenant"},
