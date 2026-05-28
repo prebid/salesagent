@@ -172,9 +172,11 @@ class TestFetchFormatsRawMcpErrorHandling:
     """Test error handling in the raw HTTP fallback."""
 
     @pytest.mark.asyncio
-    async def test_timeout_raises_runtime_error(self, registry, agent):
-        """httpx timeout → RuntimeError with message."""
+    async def test_timeout_raises_service_unavailable(self, registry, agent):
+        """httpx timeout → AdCPServiceUnavailableError (SERVICE_UNAVAILABLE, transient)."""
         import httpx
+
+        from src.core.exceptions import AdCPServiceUnavailableError
 
         mock_http = AsyncMock()
         mock_http.post.side_effect = httpx.ReadTimeout("timed out")
@@ -182,13 +184,15 @@ class TestFetchFormatsRawMcpErrorHandling:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="Request timed out"):
+            with pytest.raises(AdCPServiceUnavailableError, match="Request timed out"):
                 await registry._fetch_formats_raw_mcp(agent)
 
     @pytest.mark.asyncio
-    async def test_connection_error_raises_runtime_error(self, registry, agent):
-        """httpx connection error → RuntimeError with message."""
+    async def test_connection_error_raises_service_unavailable(self, registry, agent):
+        """httpx connection error → AdCPServiceUnavailableError (SERVICE_UNAVAILABLE, transient)."""
         import httpx
+
+        from src.core.exceptions import AdCPServiceUnavailableError
 
         mock_http = AsyncMock()
         mock_http.post.side_effect = httpx.ConnectError("connection refused")
@@ -196,13 +200,19 @@ class TestFetchFormatsRawMcpErrorHandling:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="Connection failed"):
+            with pytest.raises(AdCPServiceUnavailableError, match="Connection failed"):
                 await registry._fetch_formats_raw_mcp(agent)
 
     @pytest.mark.asyncio
-    async def test_http_status_error_raises_runtime_error(self, registry, agent):
-        """httpx HTTP 500 → RuntimeError with status code."""
+    async def test_http_5xx_raises_service_unavailable(self, registry, agent):
+        """httpx HTTP 500 → AdCPServiceUnavailableError (SERVICE_UNAVAILABLE, transient).
+
+        5xx responses from a creative agent are treated as transient — the agent
+        is up but failing. AdCPServiceUnavailableError is the correct typed wrap.
+        """
         import httpx
+
+        from src.core.exceptions import AdCPServiceUnavailableError
 
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -216,7 +226,34 @@ class TestFetchFormatsRawMcpErrorHandling:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="HTTP error: 500"):
+            with pytest.raises(AdCPServiceUnavailableError, match="HTTP 500"):
+                await registry._fetch_formats_raw_mcp(agent)
+
+    @pytest.mark.asyncio
+    async def test_http_429_raises_rate_limited(self, registry, agent):
+        """httpx HTTP 429 → AdCPRateLimitError (RATE_LIMITED, transient).
+
+        After the inner-retry loop exhausts on repeated 429s, the boundary
+        raises the typed rate-limit error carrying Retry-After in details.
+        """
+        import httpx
+
+        from src.core.exceptions import AdCPRateLimitError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.headers = {"Retry-After": "1"}
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Too Many Requests", request=MagicMock(), response=mock_response
+        )
+
+        mock_http = AsyncMock()
+        mock_http.post.return_value = mock_response
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            with pytest.raises(AdCPRateLimitError, match="rate-limited"):
                 await registry._fetch_formats_raw_mcp(agent)
 
 
@@ -303,9 +340,10 @@ class TestTolerantPerFormatIngestion:
             formats = registry._parse_mcp_tool_result(result, logging.getLogger())
 
         ids = sorted(f.format_id.id for f in formats)
-        assert ids == ["display_300x250_image", "display_728x90_image"], (
-            "Known formats must survive; only the additive-asset_type format is dropped"
-        )
+        assert ids == [
+            "display_300x250_image",
+            "display_728x90_image",
+        ], "Known formats must survive; only the additive-asset_type format is dropped"
         # Exactly one structured aggregating WARNING naming the unsupported value + skipped count.
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1, f"Expected ONE aggregated warning, got {len(warnings)}: {warnings}"

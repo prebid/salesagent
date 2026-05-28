@@ -34,7 +34,12 @@ from adcp.types import ImageFormatAsset
 from pydantic import ValidationError
 from yarl import URL
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPRateLimitError,
+    AdCPServiceUnavailableError,
+)
 from src.core.schemas import Format, FormatId, url
 
 
@@ -469,16 +474,16 @@ class CreativeAgentRegistry:
 
         except ADCPAuthenticationError as e:
             logger.error(f"Authentication failed for creative agent {agent.name}: {e.message}")
-            raise RuntimeError(f"Authentication failed: {e.message}") from e
+            raise AdCPAuthenticationError(f"Authentication failed: {e.message}") from e
         except ADCPTimeoutError as e:
             logger.error(f"Request to creative agent {agent.name} timed out: {e.message}")
-            raise RuntimeError(f"Request timed out: {e.message}") from e
+            raise AdCPServiceUnavailableError(f"Request timed out: {e.message}") from e
         except ADCPConnectionError as e:
             logger.error(f"Failed to connect to creative agent {agent.name}: {e.message}")
-            raise RuntimeError(f"Connection failed: {e.message}") from e
+            raise AdCPServiceUnavailableError(f"Connection failed: {e.message}") from e
         except ADCPError as e:
             logger.error(f"AdCP error with creative agent {agent.name}: {e.message}")
-            raise RuntimeError(str(e.message)) from e
+            raise AdCPAdapterError(str(e.message)) from e
 
     async def _fetch_formats_raw_mcp(self, agent: CreativeAgent) -> list[Format]:
         """Fallback: fetch formats via raw HTTP when adcp SDK rejects TextContent.
@@ -532,7 +537,16 @@ class CreativeAgentRegistry:
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
-                raise RuntimeError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
+                if exc.response.status_code == 429:
+                    raise AdCPRateLimitError(
+                        f"Creative agent rate-limited: {mcp_url}",
+                        details={"retry_after": exc.response.headers.get("Retry-After")},
+                    ) from exc
+                if exc.response.status_code >= 500:
+                    raise AdCPServiceUnavailableError(
+                        f"Creative agent unavailable (HTTP {exc.response.status_code}): {mcp_url}"
+                    ) from exc
+                raise AdCPAdapterError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < max_retries - 1:
@@ -540,13 +554,13 @@ class CreativeAgentRegistry:
                     await asyncio.sleep(2**attempt)
                     continue
                 logger.error(f"Creative agent fallback timed out: {mcp_url}")
-                raise RuntimeError(f"Request timed out: {mcp_url}") from exc
+                raise AdCPServiceUnavailableError(f"Request timed out: {mcp_url}") from exc
             except httpx.RequestError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
-                raise RuntimeError(f"Connection failed: {mcp_url} — {exc}") from exc
+                raise AdCPServiceUnavailableError(f"Connection failed: {mcp_url} — {exc}") from exc
         else:
-            raise RuntimeError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
+            raise AdCPServiceUnavailableError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
 
         # Parse SSE or JSON response
         content_type = response.headers.get("content-type", "")
