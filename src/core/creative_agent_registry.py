@@ -83,7 +83,10 @@ def _as_format_dict(fmt: Any) -> dict[str, Any]:
     model_dump = getattr(fmt, "model_dump", None)
     if callable(model_dump):
         return model_dump(mode="json")
-    raise AdCPAdapterError(f"Unexpected format item type from creative agent: {type(fmt)!r}")
+    raise AdCPAdapterError(
+        f"Unexpected format item type from creative agent: {type(fmt)!r}",
+        recovery="terminal",
+    )
 
 
 def _unknown_asset_types(fmt_data: dict[str, Any]) -> set[str]:
@@ -410,7 +413,10 @@ class CreativeAgentRegistry:
             if result.status == "completed":
                 formats_data = result.data
                 if formats_data is None:
-                    raise AdCPAdapterError("Completed status but no data in response")
+                    raise AdCPAdapterError(
+                        "Completed status but no data in response",
+                        recovery="terminal",
+                    )
 
                 logger.info(
                     f"_fetch_formats_from_agent: Got response with {len(formats_data.formats) if hasattr(formats_data, 'formats') else 'N/A'} formats"
@@ -429,7 +435,10 @@ class CreativeAgentRegistry:
                 return _validate_formats_tolerant(format_dicts, logger)
 
             elif result.status == "submitted":
-                raise AdCPAdapterError(f"Unexpected submitted status for list_creative_formats from {agent.name}")
+                raise AdCPAdapterError(
+                    f"Unexpected submitted status for list_creative_formats from {agent.name}",
+                    recovery="terminal",
+                )
 
             elif result.status == "failed":
                 # Log detailed error information for debugging
@@ -470,7 +479,10 @@ class CreativeAgentRegistry:
                 raise AdCPAdapterError(f"Creative agent format fetch failed: {error_msg}")
 
             else:
-                raise AdCPAdapterError(f"Unexpected result status from {agent.name}: {result.status}")
+                raise AdCPAdapterError(
+                    f"Unexpected result status from {agent.name}: {result.status}",
+                    recovery="terminal",
+                )
 
         except ADCPAuthenticationError as e:
             logger.error(f"Authentication failed for creative agent {agent.name}: {e.message}")
@@ -546,7 +558,14 @@ class CreativeAgentRegistry:
                     raise AdCPServiceUnavailableError(
                         f"Creative agent unavailable (HTTP {exc.response.status_code}): {mcp_url}"
                     ) from exc
-                raise AdCPAdapterError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
+                # 4xx non-429 from an external agent is a buyer-side error
+                # (bad request, unauthorized, not found, etc.); retrying the
+                # same request won't help, so override the class default
+                # ``transient`` with ``terminal``.
+                raise AdCPAdapterError(
+                    f"Creative agent HTTP error: {exc.response.status_code}",
+                    recovery="terminal",
+                ) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < max_retries - 1:
@@ -575,7 +594,10 @@ class CreativeAgentRegistry:
             if "result" in data:
                 return self._parse_mcp_tool_result(data["result"], logger)
 
-        raise AdCPAdapterError(f"No parseable result in MCP response from {agent.agent_url}")
+        raise AdCPAdapterError(
+            f"No parseable result in MCP response from {agent.agent_url}",
+            recovery="terminal",
+        )
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
         """Parse formats from an MCP tools/call result."""
@@ -589,7 +611,10 @@ class CreativeAgentRegistry:
                 formats = _validate_formats_tolerant(formats_list, logger)
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
-        raise AdCPAdapterError("No text content in MCP tool result")
+        raise AdCPAdapterError(
+            "No text content in MCP tool result",
+            recovery="terminal",
+        )
 
     async def get_formats_for_agent(
         self,
