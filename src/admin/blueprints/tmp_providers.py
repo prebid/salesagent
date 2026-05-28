@@ -266,9 +266,12 @@ def edit_tmp_provider(tenant_id, provider_id):
             provider_dict["countries"] = ",".join(provider.countries or [])
             provider_dict["uid_types"] = ",".join(provider.uid_types or [])
             provider_dict["properties"] = ",".join(provider.properties or [])
-            # Auth fields are not in to_dict() (sensitive / not part of TMP Router contract)
+            # Auth fields are not in to_dict() (sensitive / not part of TMP Router contract).
+            # Render a placeholder instead of the plaintext credential so it is never
+            # echoed back to the browser — the POST side preserves the existing value
+            # when the field is left empty.
             provider_dict["auth_type"] = provider.auth_type
-            provider_dict["auth_credentials"] = provider.auth_credentials
+            provider_dict["auth_credentials"] = "••••••••" if provider.auth_credentials else ""
 
             return render_template(
                 "tmp_provider_form.html",
@@ -295,24 +298,25 @@ def edit_tmp_provider(tenant_id, provider_id):
                     url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
                 )
 
-            uow.tmp_providers.update_fields(
-                provider_id,
-                name=data["name"],
-                endpoint=data["endpoint"],
-                context_match=data["context_match"],
-                identity_match=data["identity_match"],
-                countries=data["countries"],
-                uid_types=data["uid_types"],
-                properties=data["properties"],
-                timeout_ms=data["timeout_ms"],
-                priority=data["priority"],
-                status=data["status"],
-                auth_type=data["auth_type"],
-            )
-
-            # Only update credentials if a new non-empty value was provided
+            # Build kwargs — only include auth_credentials when a new non-empty
+            # value was submitted (preserves existing encrypted value otherwise).
+            update_kwargs: dict = {
+                "name": data["name"],
+                "endpoint": data["endpoint"],
+                "context_match": data["context_match"],
+                "identity_match": data["identity_match"],
+                "countries": data["countries"],
+                "uid_types": data["uid_types"],
+                "properties": data["properties"],
+                "timeout_ms": data["timeout_ms"],
+                "priority": data["priority"],
+                "status": data["status"],
+                "auth_type": data["auth_type"],
+            }
             if data["auth_credentials"]:
-                provider.auth_credentials = data["auth_credentials"]
+                update_kwargs["auth_credentials"] = data["auth_credentials"]
+
+            uow.tmp_providers.update_fields(provider_id, **update_kwargs)
 
             flash(f"TMP provider '{data['name']}' updated successfully", "success")
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))

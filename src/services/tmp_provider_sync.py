@@ -121,6 +121,31 @@ def _build_package_payload(
     }
 
 
+def _provider_url(endpoint: str, path: str) -> str:
+    """Build a full URL for a TMP Provider path.
+
+    Strips any trailing slash from *endpoint* before joining so callers
+    don't need to remember to normalise the stored value.
+
+    Args:
+        endpoint: Base endpoint URL as stored in the DB (e.g. ``"http://tmp:3000/"``).
+        path: Path to append (e.g. ``"/packages/sync"``).
+    """
+    return endpoint.rstrip("/") + path
+
+
+def _bearer_headers(auth_credentials: str) -> dict[str, str]:
+    """Build HTTP headers for a TMP Provider request.
+
+    Returns an ``Authorization: Bearer`` header when *auth_credentials* is
+    non-empty, otherwise an empty dict.  Centralising this ensures every
+    outbound call inherits the same auth shape — no per-call copy-paste.
+    """
+    if auth_credentials:
+        return {"Authorization": f"Bearer {auth_credentials}"}
+    return {}
+
+
 def _post_packages_sync(endpoint: str, payloads: list[dict[str, Any]], auth_credentials: str = "") -> None:
     """POST /packages/sync to a single TMP Provider endpoint.
 
@@ -131,14 +156,15 @@ def _post_packages_sync(endpoint: str, payloads: list[dict[str, Any]], auth_cred
     ``Authorization: Bearer <credentials>``.  The TMP Provider resolves
     the tenant server-side from the credential.
 
+    ``follow_redirects=False`` prevents SSRF via open-redirect on the POST
+    side (matching the GET-side guard in the health probe).
+
     Raises httpx.HTTPError on non-2xx responses so the caller can log and
     continue to the next provider.
     """
-    url = endpoint.rstrip("/") + "/packages/sync"
-    headers: dict[str, str] = {}
-    if auth_credentials:
-        headers["Authorization"] = f"Bearer {auth_credentials}"
-    with httpx.Client(timeout=_SYNC_TIMEOUT_S) as client:
+    url = _provider_url(endpoint, "/packages/sync")
+    headers = _bearer_headers(auth_credentials)
+    with httpx.Client(timeout=_SYNC_TIMEOUT_S, follow_redirects=False) as client:
         resp = client.post(url, json=payloads, headers=headers)
         resp.raise_for_status()
     logger.info(

@@ -166,7 +166,8 @@ class TestDiscoveryTenantNotFound:
                 response = client.get("/tenant/nonexistent/tmp-providers/discovery")
 
         assert response.status_code == 404
-        assert "not found" in response.json()["detail"]["message"].lower()
+        error = response.json()["detail"]["errors"][0]
+        assert "not found" in error["message"].lower()
 
 
 class TestDiscoveryEmptyProviders:
@@ -292,8 +293,8 @@ class TestDiscoveryApiKeyAuth:
             response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 503
-        detail = response.json()["detail"]
-        assert detail["code"] == "ENDPOINT_NOT_CONFIGURED"
+        error = response.json()["detail"]["errors"][0]
+        assert error["code"] == "SERVICE_UNAVAILABLE"
 
     def test_returns_503_when_tmp_discovery_api_keys_is_empty_string(self, client):
         """When TMP_DISCOVERY_API_KEYS is set to empty string the endpoint returns 503 (fail-closed)."""
@@ -301,8 +302,8 @@ class TestDiscoveryApiKeyAuth:
             response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 503
-        detail = response.json()["detail"]
-        assert detail["code"] == "ENDPOINT_NOT_CONFIGURED"
+        error = response.json()["detail"]["errors"][0]
+        assert error["code"] == "SERVICE_UNAVAILABLE"
 
     def test_open_when_tmp_discovery_api_keys_is_open(self, client):
         """When TMP_DISCOVERY_API_KEYS=OPEN the endpoint is accessible without a key."""
@@ -433,8 +434,8 @@ class TestDiscoveryTenantConfigUnavailable:
                 response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 500
-        detail = response.json()["detail"]
-        assert detail["code"] == "INTERNAL_ERROR"
+        error = response.json()["detail"]["errors"][0]
+        assert error["code"] == "SERVICE_UNAVAILABLE"
 
 
 # ---------------------------------------------------------------------------

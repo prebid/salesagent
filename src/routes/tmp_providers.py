@@ -47,6 +47,7 @@ from __future__ import annotations
 import logging
 import os
 
+from adcp.server.helpers import adcp_error
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -84,14 +85,15 @@ async def require_api_key(request: Request) -> None:
     if not allowed:
         raise HTTPException(
             status_code=503,
-            detail={
-                "code": "ENDPOINT_NOT_CONFIGURED",
-                "message": (
+            detail=adcp_error(
+                "SERVICE_UNAVAILABLE",
+                (
                     "TMP_DISCOVERY_API_KEYS is not configured. "
                     "Set it to a comma-separated list of API keys, "
                     "or to 'OPEN' to disable authentication."
                 ),
-            },
+                recovery="terminal",
+            ),
         )
 
     api_key = (
@@ -102,7 +104,7 @@ async def require_api_key(request: Request) -> None:
     if api_key not in allowed:
         raise HTTPException(
             status_code=401,
-            detail={"code": "AUTH_REQUIRED", "message": "Authentication required"},
+            detail=adcp_error("AUTH_REQUIRED", "Authentication required", recovery="correctable"),
         )
 
 
@@ -122,12 +124,12 @@ async def tmp_providers_discovery(tenant_id: str, _: None = Depends(require_api_
         if uow.tenant_config is None:
             raise HTTPException(
                 status_code=500,
-                detail={"code": "INTERNAL_ERROR", "message": "Tenant config repository unavailable"},
+                detail=adcp_error("SERVICE_UNAVAILABLE", "Tenant config repository unavailable", recovery="transient"),
             )
         if uow.tenant_config.get_tenant() is None:
             raise HTTPException(
                 status_code=404,
-                detail={"code": "TENANT_NOT_FOUND", "message": f"Tenant '{tenant_id}' not found"},
+                detail=adcp_error("PACKAGE_NOT_FOUND", f"Tenant '{tenant_id}' not found", recovery="terminal"),
             )
 
     with TMPProviderUoW(tenant_id) as uow:

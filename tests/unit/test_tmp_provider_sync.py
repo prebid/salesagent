@@ -4,7 +4,7 @@ Covers:
 - _build_package_payload: field mapping from MediaPackage to TMP Provider format
 - sync_packages_for_media_buy: fan-out logic, error isolation, logging
 - _resolve_seller_agent_url: env override, tenant virtual_host, fallback
-- _post_packages_sync: auth header selection (bearer only)
+- _post_packages_sync: auth header selection (bearer only), SSRF guard, 5xx raises
 
 beads: salesagent-tmp-sync
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from src.services.tmp_provider_sync import (
     _build_package_payload,
@@ -136,6 +137,55 @@ class TestBuildPackagePayload:
         result = _build_package_payload("mb-700", pkg, "http://agent/mcp")
 
         assert result["summary"] == "Campaign Alpha"
+
+
+# ---------------------------------------------------------------------------
+# sync_packages_for_media_buy session-closed invariant
+# ---------------------------------------------------------------------------
+
+
+class TestSyncSessionClosedBeforeHTTP:
+    """sync_packages_for_media_buy closes the DB session before making HTTP calls."""
+
+    @patch("src.services.tmp_provider_sync._post_packages_sync")
+    @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
+    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
+    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
+    def test_session_closed_before_http_calls(self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post):
+        """The TMPProviderUoW session is closed before _post_packages_sync is called."""
+        call_order: list[str] = []
+
+        pkg = MagicMock()
+        pkg.package_id = "pkg-1"
+        pkg.package_config = {"product_id": "prod-1"}
+
+        # Track when the media buy UoW exits (session closed)
+        mb_uow_ctx = MagicMock()
+        mb_uow_ctx.media_buys = MagicMock()
+        mb_uow_ctx.media_buys.get_packages.return_value = [pkg]
+        mock_mb_uow_cls.return_value.__enter__ = MagicMock(return_value=mb_uow_ctx)
+        mock_mb_uow_cls.return_value.__exit__ = MagicMock(side_effect=lambda *_: call_order.append("mb_session_closed"))
+
+        # Track when the TMP provider UoW exits (session closed)
+        provider = MagicMock()
+        provider.name = "Provider A"
+        provider.endpoint = "http://provider-a:3000"
+        provider.auth_credentials = None
+        tp_uow_ctx = MagicMock()
+        tp_uow_ctx.tmp_providers = MagicMock()
+        tp_uow_ctx.tmp_providers.list_syncable.return_value = [provider]
+        mock_tp_uow_cls.return_value.__enter__ = MagicMock(return_value=tp_uow_ctx)
+        mock_tp_uow_cls.return_value.__exit__ = MagicMock(side_effect=lambda *_: call_order.append("tp_session_closed"))
+
+        # Track when HTTP call happens
+        mock_post.side_effect = lambda *_: call_order.append("http_called")
+
+        sync_packages_for_media_buy("tenant-1", "mb-1")
+
+        # Both sessions must be closed before the HTTP fan-out
+        assert "tp_session_closed" in call_order
+        assert "http_called" in call_order
+        assert call_order.index("tp_session_closed") < call_order.index("http_called")
 
 
 # ---------------------------------------------------------------------------
@@ -334,19 +384,31 @@ class TestResolveSellAgentUrl:
 class TestPostPackagesSyncAuth:
     """_post_packages_sync sends Bearer auth when credentials are provided."""
 
+    def _make_mock_client(self, status_code: int = 200) -> tuple[MagicMock, MagicMock]:
+        """Return (mock_client_cls, mock_client) with a response of the given status."""
+        mock_response = MagicMock()
+        mock_response.status_code = status_code
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                f"Server error {status_code}",
+                request=MagicMock(),
+                response=MagicMock(status_code=status_code),
+            )
+            if status_code >= 400
+            else None
+        )
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_response
+        return mock_client, mock_response
+
     def test_sends_bearer_token_when_auth_credentials_set(self):
         """When auth_credentials is non-empty, Authorization: Bearer header is sent."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
+        mock_client, _ = self._make_mock_client(200)
 
-        with patch("src.services.tmp_provider_sync.httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client.__enter__ = MagicMock(return_value=mock_client)
-            mock_client.__exit__ = MagicMock(return_value=False)
-            mock_client.post.return_value = mock_response
-            mock_client_cls.return_value = mock_client
-
+        with patch("src.services.tmp_provider_sync.httpx.Client", return_value=mock_client):
             _post_packages_sync(
                 "http://provider:3000",
                 [{"package_id": "pkg-1"}],
@@ -361,17 +423,9 @@ class TestPostPackagesSyncAuth:
 
     def test_sends_no_auth_headers_when_no_credentials(self):
         """When auth_credentials is empty, no auth headers are sent."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
+        mock_client, _ = self._make_mock_client(200)
 
-        with patch("src.services.tmp_provider_sync.httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client.__enter__ = MagicMock(return_value=mock_client)
-            mock_client.__exit__ = MagicMock(return_value=False)
-            mock_client.post.return_value = mock_response
-            mock_client_cls.return_value = mock_client
-
+        with patch("src.services.tmp_provider_sync.httpx.Client", return_value=mock_client):
             _post_packages_sync(
                 "http://provider:3000",
                 [{"package_id": "pkg-1"}],
@@ -383,6 +437,28 @@ class TestPostPackagesSyncAuth:
             json=[{"package_id": "pkg-1"}],
             headers={},
         )
+
+    def test_follow_redirects_false_prevents_ssrf(self):
+        """follow_redirects=False is always passed to prevent SSRF via open-redirect."""
+        mock_client, _ = self._make_mock_client(200)
+
+        with patch("src.services.tmp_provider_sync.httpx.Client", return_value=mock_client) as mock_cls:
+            _post_packages_sync("http://provider:3000", [{"package_id": "pkg-1"}])
+
+        _, kwargs = mock_cls.call_args
+        assert kwargs.get("follow_redirects") is False
+
+    def test_5xx_response_raises_http_status_error(self):
+        """A 5xx response from the TMP Provider raises httpx.HTTPStatusError.
+
+        This ensures a silent success is impossible — the caller's except block
+        will log the failure and continue to the next provider.
+        """
+        mock_client, _ = self._make_mock_client(500)
+
+        with patch("src.services.tmp_provider_sync.httpx.Client", return_value=mock_client):
+            with pytest.raises(httpx.HTTPStatusError):
+                _post_packages_sync("http://provider:3000", [{"package_id": "pkg-1"}])
 
     def test_fan_out_uses_provider_auth_credentials(self):
         """sync_packages_for_media_buy passes provider.auth_credentials to _post_packages_sync."""

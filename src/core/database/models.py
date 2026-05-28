@@ -1334,7 +1334,9 @@ class TMPProvider(Base):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     auth_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    auth_credentials: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Stored encrypted via Fernet (same helper as Tenant._gemini_api_key).
+    # Use the auth_credentials property to read/write — never access the column directly.
+    _auth_credentials: Mapped[str | None] = mapped_column("auth_credentials", Text, nullable=True)
     # Background health-check results (written by TMP health scheduler, read by admin UI).
     health_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     last_health_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1350,6 +1352,29 @@ class TMPProvider(Base):
         Index("idx_tmp_providers_tenant", "tenant_id"),
         Index("idx_tmp_providers_status", "status"),
     )
+
+    @property
+    def auth_credentials(self) -> str | None:
+        """Get decrypted auth credentials."""
+        if not self._auth_credentials:
+            return None
+        from src.core.utils.encryption import decrypt_api_key
+
+        try:
+            return decrypt_api_key(self._auth_credentials)
+        except ValueError:
+            # Value may be plaintext from before encryption was added — return as-is.
+            return self._auth_credentials
+
+    @auth_credentials.setter
+    def auth_credentials(self, value: str | None) -> None:
+        """Encrypt and store auth credentials."""
+        if not value:
+            self._auth_credentials = None
+            return
+        from src.core.utils.encryption import encrypt_api_key
+
+        self._auth_credentials = encrypt_api_key(value)
 
     def to_dict(self, *, include_conditional: bool = True) -> dict:
         """Serialize provider to a dict matching the TMP Router contract.

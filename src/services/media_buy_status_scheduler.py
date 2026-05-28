@@ -10,7 +10,6 @@ This ensures media buys don't get stuck in transitional states when approved
 before their start date.
 """
 
-import asyncio
 import logging
 import os
 from datetime import UTC, datetime
@@ -20,59 +19,27 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
+from src.services._scheduler_base import IntervalScheduler
 
 logger = logging.getLogger(__name__)
 
 # Configurable via env var - default 60 seconds
-STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
+try:
+    STATUS_CHECK_INTERVAL_SECONDS: int = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
+except (ValueError, TypeError):
+    logger.warning("MEDIA_BUY_STATUS_CHECK_INTERVAL is not a valid integer — defaulting to 60s")
+    STATUS_CHECK_INTERVAL_SECONDS = 60
 
 
-class MediaBuyStatusScheduler:
+class MediaBuyStatusScheduler(IntervalScheduler):
     """Scheduler for updating media buy statuses based on flight dates."""
 
     def __init__(self) -> None:
-        self.is_running = False
-        self._task: asyncio.Task | None = None
-        self._lock = asyncio.Lock()
+        super().__init__(interval_seconds=STATUS_CHECK_INTERVAL_SECONDS, name="media buy status")
 
-    async def start(self) -> None:
-        """Start the scheduler background task."""
-        async with self._lock:
-            if self.is_running:
-                logger.warning("Media buy status scheduler is already running")
-                return
-
-            self.is_running = True
-            self._task = asyncio.create_task(self._run_scheduler())
-            logger.info(f"Media buy status scheduler started (checking every {STATUS_CHECK_INTERVAL_SECONDS}s)")
-
-    async def stop(self) -> None:
-        """Stop the scheduler background task."""
-        async with self._lock:
-            if not self.is_running:
-                return
-
-            self.is_running = False
-            if self._task:
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
-            logger.info("Media buy status scheduler stopped")
-
-    async def _run_scheduler(self) -> None:
-        """Main scheduler loop - runs on a fixed cadence."""
-        while self.is_running:
-            try:
-                await self._update_statuses()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in media buy status scheduler: {e}", exc_info=True)
-            finally:
-                # Wait before next check
-                await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
+    async def tick(self) -> None:
+        """Check and update media buy statuses based on flight dates."""
+        await self._update_statuses()
 
     async def _update_statuses(self) -> None:
         """Check and update media buy statuses based on flight dates."""

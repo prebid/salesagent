@@ -616,6 +616,21 @@ class TestTMPProviderAuthFields:
         existing_provider = _make_mock_provider()
         existing_provider.auth_type = "bearer"
         existing_provider.auth_credentials = "stored-token"
+        # Production calls provider.to_dict(include_conditional=False) which must
+        # return a real dict — wire the mock accordingly.
+        existing_provider.to_dict.return_value = {
+            "provider_id": existing_provider.provider_id,
+            "name": existing_provider.name,
+            "endpoint": existing_provider.endpoint,
+            "context_match": existing_provider.context_match,
+            "identity_match": existing_provider.identity_match,
+            "countries": ["US", "GB"],
+            "uid_types": ["uid2", "id5"],
+            "properties": None,
+            "timeout_ms": existing_provider.timeout_ms,
+            "priority": existing_provider.priority,
+            "status": existing_provider.status,
+        }
 
         mock_tenant = MagicMock()
         mock_tenant.tenant_id = "default"
@@ -637,6 +652,10 @@ class TestTMPProviderAuthFields:
                     )
 
         assert response.status_code == 200
+        # Production calls to_dict(include_conditional=False) then overwrites
+        # list fields with comma-separated strings and adds auth fields with
+        # placeholder masking (credentials are never echoed back to the browser).
+        existing_provider.to_dict.assert_called_once_with(include_conditional=False)
         mock_render.assert_called_once_with(
             "tmp_provider_form.html",
             tenant=mock_tenant,
@@ -648,14 +667,14 @@ class TestTMPProviderAuthFields:
                 "endpoint": existing_provider.endpoint,
                 "context_match": existing_provider.context_match,
                 "identity_match": existing_provider.identity_match,
-                "countries": ",".join(existing_provider.countries or []),
-                "uid_types": ",".join(existing_provider.uid_types or []),
-                "properties": ",".join(existing_provider.properties or []),
+                "countries": "US,GB",
+                "uid_types": "uid2,id5",
+                "properties": "",
                 "timeout_ms": existing_provider.timeout_ms,
                 "priority": existing_provider.priority,
                 "status": existing_provider.status,
                 "auth_type": "bearer",
-                "auth_credentials": "stored-token",
+                "auth_credentials": "••••••••",
             },
             script_name="",
         )
@@ -694,8 +713,13 @@ class TestTMPProviderAuthFields:
                     )
 
         assert response.status_code == 302
-        # auth_credentials must NOT have been overwritten on the provider object
-        assert existing_provider.auth_credentials == "existing-secret"
+        # Production uses update_fields() — verify auth_credentials was NOT
+        # included in the kwargs (empty submission preserves existing value).
+        mock_uow.tmp_providers.update_fields.assert_called_once()
+        call_kwargs = mock_uow.tmp_providers.update_fields.call_args
+        assert "auth_credentials" not in call_kwargs.kwargs, (
+            "Empty auth_credentials should not be passed to update_fields"
+        )
 
     def test_edit_post_updates_credentials_when_new_value_submitted(self):
         """POST /tmp-providers/<id>/edit with non-empty auth_credentials updates the value."""
@@ -731,7 +755,23 @@ class TestTMPProviderAuthFields:
                     )
 
         assert response.status_code == 302
-        assert existing_provider.auth_credentials == "new-secret"
+        # Production uses update_fields() — verify auth_credentials IS included
+        # with the new value when a non-empty credential is submitted.
+        mock_uow.tmp_providers.update_fields.assert_called_once_with(
+            "test-uuid-1234",
+            name="Existing Provider",
+            endpoint="https://provider.example.com/tmp",
+            context_match=True,
+            identity_match=True,
+            countries=["US"],
+            uid_types=["uid2"],
+            properties=None,
+            timeout_ms=50,
+            priority=0,
+            status="active",
+            auth_type="bearer",
+            auth_credentials="new-secret",
+        )
 
 
 class TestTMPProviderToDict:

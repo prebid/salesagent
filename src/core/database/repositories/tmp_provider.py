@@ -180,10 +180,12 @@ class TMPProviderRepository:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_all_active(session: Session) -> list[TMPProvider]:
+    def get_all_syncable(session: Session) -> list[TMPProvider]:
         """List all active/draining providers across all tenants.
 
-        This is a system-level query for the health-check scheduler.
+        Includes both 'active' and 'draining' providers — matches the
+        per-tenant ``list_syncable()`` semantics but scoped to all tenants.
+        Used by the health-check scheduler which runs cross-tenant.
         Not tenant-scoped — callers must handle tenant context themselves.
         """
         return list(
