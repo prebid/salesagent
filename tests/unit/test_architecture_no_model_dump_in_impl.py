@@ -28,8 +28,9 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # 1 retired in PR #1276 round-5 by switching property_targeting validation
 # to `raise AdCPValidationError` — boundary now handles the audit write).
 # Line numbers reflect merged state after the property_targeting validation
-# refactor (raise instead of return-envelope) + the
-# _property_list_unsupported_advisories helper hoist above _update_media_buy_impl.
+# refactor (raise instead of return-envelope) and the property_list capability
+# collapse (enforcement moved to raise_if_property_list_unsupported at the _impl
+# boundary; the per-adapter advisory helper was deleted).
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 22 violations (workflow step response_data).
     # Line numbers regenerated from the AST after merge with origin/main.
