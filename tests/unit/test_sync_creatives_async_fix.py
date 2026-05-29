@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import FormatId
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import CreativeAction
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl

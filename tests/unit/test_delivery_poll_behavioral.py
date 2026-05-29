@@ -24,7 +24,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import MediaBuyStatus
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.schemas import GetMediaBuyDeliveryRequest
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import (
@@ -364,10 +364,10 @@ class TestUC004EXTA02AuthenticationFailure:
             # Call _impl directly with identity=None (bypassing env.call_impl which provides identity)
             req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _get_media_buy_delivery_impl(req, identity=None)
 
-            assert exc_info.value.message == "Context is required"
+            assert exc_info.value.message == "Identity is required"
 
 
 # ---------------------------------------------------------------------------

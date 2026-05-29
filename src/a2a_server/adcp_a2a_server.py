@@ -48,9 +48,7 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
-from adcp.types import GeneratedTaskStatus
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
 from sqlalchemy import select
 
@@ -1775,17 +1773,17 @@ class AdCPRequestHandler(RequestHandler):
         try:
             # Identity already resolved at transport boundary (on_message_send)
 
-            # Build request from parameters (all optional)
-            # Use local schema (extends library type) for proper type compatibility
-            from src.core.schemas import ListCreativeFormatsRequest
+            # Build request from parameters (all optional).
+            from src.core.tools.creative_formats import build_list_creative_formats_request
 
-            req = ListCreativeFormatsRequest(
+            req = build_list_creative_formats_request(
                 format_ids=parameters.get("format_ids"),
                 output_format_ids=parameters.get("output_format_ids"),
                 input_format_ids=parameters.get("input_format_ids"),
                 is_responsive=parameters.get("is_responsive"),
                 name_search=parameters.get("name_search"),
                 asset_types=parameters.get("asset_types"),
+                wcag_level=parameters.get("wcag_level"),
                 min_width=parameters.get("min_width"),
                 max_width=parameters.get("max_width"),
                 min_height=parameters.get("min_height"),

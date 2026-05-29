@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
-from adcp.types.generated_poc.core.brand_ref import BrandReference
+from adcp.types import BrandReference
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
@@ -130,10 +130,25 @@ class UpdatePerformanceIndexBody(BaseModel):
 
 
 class ListCreativeFormatsBody(BaseModel):
+    format_ids: list[dict[str, Any]] | None = None
+    name_search: str | None = None
+    is_responsive: bool | None = None
+    asset_types: list[str] | None = None
+    min_width: int | None = None
+    max_width: int | None = None
+    min_height: int | None = None
+    max_height: int | None = None
+    wcag_level: str | None = None
+    disclosure_positions: list[str] | None = None
+    disclosure_persistence: list[str] | None = None
+    output_format_ids: list[dict[str, Any]] | None = None
+    input_format_ids: list[dict[str, Any]] | None = None
     adcp_version: str = "1.0.0"
 
 
 class ListAuthorizedPropertiesBody(BaseModel):
+    property_tags: list[str] | None = None
+    publisher_domains: list[str] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -192,9 +207,13 @@ async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
 @router.post("/creative-formats")
 async def list_creative_formats(body: ListCreativeFormatsBody, identity: ResolvedIdentity | None = resolve_auth):
     """List available creative formats (auth-optional discovery skill)."""
+    from src.core.schemas import ListCreativeFormatsRequest
+
+    body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
+    req = ListCreativeFormatsRequest(**body_fields) if body_fields else None
 
     try:
-        response = creative_formats_module.list_creative_formats_raw(identity=identity)
+        response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
     except ToolError as e:
         return _handle_tool_error(e)
 
@@ -206,9 +225,13 @@ async def list_authorized_properties(
     body: ListAuthorizedPropertiesBody, identity: ResolvedIdentity | None = resolve_auth
 ):
     """List authorized properties (auth-optional discovery skill)."""
+    from src.core.schemas import ListAuthorizedPropertiesRequest
+
+    body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
+    req = ListAuthorizedPropertiesRequest(**body_fields) if body_fields else None
 
     try:
-        response = properties_module.list_authorized_properties_raw(identity=identity)
+        response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
     except ToolError as e:
         return _handle_tool_error(e)
 

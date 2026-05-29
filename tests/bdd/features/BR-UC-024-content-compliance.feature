@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
+# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-024 Content Compliance

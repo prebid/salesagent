@@ -35,15 +35,14 @@ from adcp.types import (
 from adcp.types import (
     SyncCreativesRequest as LibrarySyncCreativesRequest,
 )
-from adcp.types.generated_poc.core.pagination_response import PaginationResponse as LibraryResponsePagination
-from adcp.types.generated_poc.core.provenance import AiTool
+from adcp.types import CreativeAction, PaginationResponse as LibraryResponsePagination
+from adcp.types.generated_poc.core.provenance import AiTool  # TODO: no stable alias in adcp.types
 from adcp.types.generated_poc.creative.list_creatives_response import (
     Creative as LibraryCreative,
 )
 from adcp.types.generated_poc.creative.sync_creatives_response import (
     SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
 )
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from pydantic import (
     ConfigDict,
     Field,

@@ -26,7 +26,7 @@ MEDIUM_RISK tests (M1-M7):
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import ContextObject
 
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity

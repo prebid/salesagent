@@ -12,7 +12,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.core.brand_ref import BrandReference
+from adcp.types import BrandReference
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
 from src.core.resolved_identity import ResolvedIdentity

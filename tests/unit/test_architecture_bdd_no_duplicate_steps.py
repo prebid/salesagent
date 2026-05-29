@@ -30,6 +30,21 @@ _ALLOWED_DUPLICATES: set[str] = {
     "given_registry_format_no_disclosure",
     "given_registry_format_no_output_ids",
     "given_registry_format_no_input_ids",
+    # FIXME(salesagent-ebb5): identical buyer_ref assertions across uc003/uc019/uc026
+    "then_response_has_buyer_ref",
+    "then_response_buyer_ref",
+    "then_buyer_refs_for_correlation",
+    "then_package_buyer_ref",
+    # FIXME(salesagent-ebb5): pass-body stubs in uc019/uc026 pending implementation
+    "when_query_by_refs",
+    "given_request_with_buyer_ref",
+    "given_resubmit_buyer_ref",
+    "given_buyer_owns_mb_with_ref_and_id",
+    "given_buyer_owns_mb_with_buyer_ref",
+    "given_cross_buy_request",
+    "given_buyer_owns_pkg_by_buyer_ref",
+    "given_partition_buyer_ref",
+    "given_boundary_buyer_ref",
 }
 
 

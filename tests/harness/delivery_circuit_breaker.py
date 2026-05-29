@@ -28,6 +28,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
+
+from src.core.database.models import PushNotificationConfig
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import CircuitBreakerMixin
@@ -44,6 +47,8 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
         set_http_response(status_code)   -- configure httpx Client mock response
         call_send(...)                   -- call service.send_delivery_webhook
+        make_webhook_config(...)         -- create a PushNotificationConfig in DB
+        set_db_webhooks(configs)         -- replace webhook configs in DB
     """
 
     MODULE = "src.services.webhook_delivery_service"
@@ -67,3 +72,51 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
 
         # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
         self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
+
+    def make_webhook_config(
+        self,
+        url: str = "https://example.com/webhook",
+        auth_type: str | None = None,
+        auth_token: str | None = None,
+        secret: str | None = None,
+    ) -> PushNotificationConfig:
+        """Create a PushNotificationConfig via factory and return the ORM instance."""
+        from tests.factories import PushNotificationConfigFactory
+
+        # Reuse existing tenant/principal from setup_default_data
+        session = self._session
+        from src.core.database.models import Principal, Tenant
+
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+        principal = session.scalars(
+            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
+        ).first()
+
+        return PushNotificationConfigFactory(
+            tenant=tenant,
+            principal=principal,
+            url=url,
+            authentication_type=auth_type,
+            authentication_token=auth_token,
+            webhook_secret=secret,
+            is_active=True,
+        )
+
+    def set_db_webhooks(self, webhook_list: list[PushNotificationConfig]) -> None:
+        """Replace active webhook configs in DB with the given list.
+
+        Deactivates all existing configs for this tenant/principal, then
+        persists the new ones (already created by make_webhook_config).
+        """
+        session = self._session
+        existing = session.scalars(
+            select(PushNotificationConfig).filter_by(
+                tenant_id=self._tenant_id,
+                principal_id=self._principal_id,
+                is_active=True,
+            )
+        ).all()
+        for cfg in existing:
+            if cfg not in webhook_list:
+                cfg.is_active = False
+        session.commit()
