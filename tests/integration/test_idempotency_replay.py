@@ -4,9 +4,9 @@ Verifies the AdCP idempotency contract item 7: retrying a tool call with the
 same idempotency_key returns the cached rejection envelope verbatim, not a
 fresh evaluation.
 
-Without these tests the replay path is dead code — Konstantine's review of
-PR #1312 explicitly called this out: "If the replay lookup at lines 1477-1487
-were deleted, every test still passes green."
+Without these tests the replay path is effectively dead code: if the replay
+lookup were deleted, the _impl-only tests would still pass green. These tests
+pin it so a regression there fails.
 
 Three layers tested:
 1. _build_idempotency_rejection_replay — pure re-hydration of cached dict
@@ -19,6 +19,9 @@ import uuid
 import pytest
 
 from tests.harness._base import IntegrationEnv
+from tests.harness.assertions import assert_replayed_rejection
+from tests.harness.media_buy_create import MediaBuyCreateEnv
+from tests.harness.transport import Transport
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -186,8 +189,8 @@ class TestCacheRejectionEnvelopeWritesRow:
 class TestImplReplaysCachedRejection:
     """_create_media_buy_impl replays cached rejection envelope on key match.
 
-    This is the test Konstantine asked for: a wire-path proof that the
-    replay lookup at lines 1721-1731 actually serves the cached envelope.
+    Pins that the replay lookup actually serves the cached envelope through
+    _create_media_buy_impl (not just the lower-level helpers).
     """
 
     async def test_cached_rejection_returned_on_replay(self, integration_db):
@@ -321,279 +324,197 @@ class TestImplReplaysCachedRejection:
 class TestWirePathReplay:
     """Wire-path proof: ``idempotency_key`` survives MCP / A2A / REST wrappers.
 
-    Konstantine review on PR #1312 (2026-05-24): the existing 21 idempotency
-    tests stayed green when the wrappers silently dropped ``idempotency_key``
-    via ``TypeAdapter`` because they exercise only the ``_impl`` layer. These
-    three tests close that gap: each seeds a cached rejection envelope,
-    sends an ``idempotency_key`` *through the wrapper*, and asserts the
-    cached envelope comes back on the wire. If a future change drops
-    ``idempotency_key`` from any wrapper signature, the matching test
-    breaks immediately.
+    The _impl-only tests stayed green when the wrappers silently dropped
+    ``idempotency_key`` via ``TypeAdapter``, because they never crossed the
+    transport boundary. These three tests close that gap by dispatching through
+    the real transport pipelines via the ``MediaBuyCreateEnv`` harness:
+
+    - MCP: in-memory FastMCP ``Client`` → middleware → TypeAdapter → wrapper
+    - A2A: ``AdCPRequestHandler.on_message_send`` → skill router → ``_serialize_for_a2a``
+    - REST: FastAPI ``TestClient`` → route → ``create_media_buy_raw``
+
+    Each seeds a cached rejection envelope, sends an ``idempotency_key`` *through
+    the transport*, and asserts the cached envelope comes back on the wire. If a
+    future change drops ``idempotency_key`` from a wrapper signature (FastMCP's
+    TypeAdapter strips undeclared fields; the A2A skill / REST body forward it
+    explicitly), the matching transport's replay is bypassed and the test fails.
+
+    A replayed rejection is a *successful* transport response carrying a
+    failed-status ``CreateMediaBuyResult`` (REST 200; MCP/A2A no raise), so the
+    payload — not the error path — is asserted via ``assert_replayed_rejection``.
     """
 
-    def _seed_rejection(
-        self,
-        tenant_id: str,
-        principal_id: str,
-        idempotency_key: str,
-        message: str,
-    ) -> None:
-        """Seed a cached rejection envelope for (tenant, principal, key).
+    # Valid create_media_buy params shared by all three transports. The replay
+    # short-circuits before the adapter, so packages can be empty.
+    _CREATE_KWARGS = {
+        "brand": {"domain": "wire-replay.example.com"},
+        "packages": [],
+        "start_time": "2026-06-01T00:00:00Z",
+        "end_time": "2026-06-30T00:00:00Z",
+        "po_number": "WIRE-REPLAY-1",
+    }
 
-        Mirrors the seeding pattern at line 221-228 of
-        ``TestImplReplaysCachedRejection.test_cached_rejection_returned_on_replay``.
+    def _run_wire_replay(self, transport: Transport) -> None:
+        """Seed a cached rejection, dispatch through *transport*, assert the replay.
+
+        Single body for all three transports — the only variable is the
+        ``Transport`` enum, which ``MediaBuyCreateEnv.call_via`` routes to the
+        matching real pipeline.
         """
-        from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import CreateMediaBuyError, Error
+        idem_key = f"wire-{transport.value}-{uuid.uuid4().hex[:8]}"
+        cached_message = f"wire-{transport.value} cached rejection — must round-trip"
 
-        rejection = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message=message, details=None)],
-            context=None,
-        )
-        with MediaBuyUoW(tenant_id) as seed_uow:
-            assert seed_uow.idempotency_attempts is not None
-            seed_uow.idempotency_attempts.record_rejection(
-                principal_id=principal_id,
-                tool_name="create_media_buy",
-                idempotency_key=idempotency_key,
-                response_envelope=rejection.model_dump(mode="json"),
-            )
+        with MediaBuyCreateEnv() as env:
+            env.setup_default_data()  # tenant + principal (real auth token) in DB
+            env.seed_rejection(idem_key, cached_message)
 
-    def _build_identity(self, tenant_id: str, principal_id: str, protocol: str):
-        """Build an identity that bypasses setup validation (test_session_id set)."""
-        from src.core.testing_hooks import AdCPTestContext
-        from tests.factories import PrincipalFactory
+            result = env.call_via(transport, idempotency_key=idem_key, **self._CREATE_KWARGS)
 
-        return PrincipalFactory.make_identity(
-            principal_id=principal_id,
-            tenant_id=tenant_id,
-            protocol=protocol,
-            testing_context=AdCPTestContext(test_session_id="wire_path_replay"),
-        )
-
-    def _bootstrap_tenant(self, tenant_id: str, principal_id: str) -> None:
-        from tests.factories import PrincipalFactory, TenantFactory
-
-        with _RepoEnv() as env:
-            tenant = TenantFactory(tenant_id=tenant_id)
-            PrincipalFactory(tenant=tenant, principal_id=principal_id)
-            env.get_session()
+        assert_replayed_rejection(result, code="VALIDATION_ERROR", message_contains=cached_message)
 
     def test_mcp_wire_replays_cached_rejection(self, integration_db):
         """MCP wrapper forwards idempotency_key → impl replays cached envelope on wire.
 
-        Regression guard: if ``create_media_buy`` MCP wrapper at
-        ``src/core/tools/media_buy_create.py:4018`` stops declaring
-        ``idempotency_key``, FastMCP's TypeAdapter strips the field before
-        the wrapper runs, the impl never sees the key, the rejection
-        replay is bypassed, and this test fails.
+        Regression guard: if the ``create_media_buy`` MCP wrapper stops declaring
+        ``idempotency_key``, FastMCP's TypeAdapter strips the field before the
+        wrapper runs, the impl never sees the key, the rejection replay is
+        bypassed, and this test fails.
         """
-        import asyncio
-        import json
-        from unittest.mock import patch
+        self._run_wire_replay(Transport.MCP)
 
-        from fastmcp import Client
-
-        from src.core.main import mcp
-
-        idem_key = f"wire-mcp-{uuid.uuid4().hex[:8]}"
-        tenant_id = f"wire_mcp_t_{uuid.uuid4().hex[:6]}"
-        principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        cached_message = "wire-MCP cached rejection — must round-trip"
-
-        self._bootstrap_tenant(tenant_id, principal_id)
-        self._seed_rejection(tenant_id, principal_id, idem_key, cached_message)
-
-        identity = self._build_identity(tenant_id, principal_id, "mcp")
-
-        async def _call() -> tuple[bool, dict | None, str | None]:
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=identity,
-            ):
-                async with Client(mcp) as client:
-                    result = await client.call_tool(
-                        "create_media_buy",
-                        {
-                            "brand": {"domain": "wire-mcp.example.com"},
-                            "packages": [],
-                            "start_time": "2026-06-01T00:00:00Z",
-                            "end_time": "2026-06-30T00:00:00Z",
-                            "po_number": "WIRE-MCP-1",
-                            "idempotency_key": idem_key,
-                        },
-                        raise_on_error=False,
-                    )
-                    text = None
-                    if result.content:
-                        for c in result.content:
-                            if hasattr(c, "text"):
-                                text = c.text
-                                break
-                    return result.is_error, result.structured_content, text
-
-        is_error, structured, text = asyncio.run(_call())
-
-        # Replay returns a failed CreateMediaBuyResult, which is a *successful*
-        # tool call carrying a domain error — NOT an MCP tool error.
-        assert not is_error, (
-            f"Replay should surface as successful tool call with domain errors, "
-            f"not as ToolError. Got is_error=True, text={text!r}"
-        )
-        assert structured is not None, "MCP wire must include structured_content"
-
-        # Pull the envelope from structured_content (preferred) or content text.
-        envelope = structured if structured else json.loads(text or "{}")
-
-        # Cached envelope shape: status=failed, response.errors=[VALIDATION_ERROR]
-        assert envelope.get("status") == "failed", (
-            f"Cached rejection must surface as status=failed. Got status={envelope.get('status')!r}, "
-            f"keys={sorted(envelope.keys())}"
-        )
-        errors = envelope.get("errors")
-        assert errors, f"Wire envelope must carry errors[]. Got envelope={envelope!r}"
-        assert (
-            errors[0]["code"] == "VALIDATION_ERROR"
-        ), f"errors[0].code must match cached envelope. Got {errors[0].get('code')!r}"
-        assert errors[0]["message"] == cached_message, (
-            f"errors[0].message must be byte-identical to cached envelope. "
-            f"Got {errors[0].get('message')!r}, expected {cached_message!r}"
-        )
-
-    async def test_a2a_wire_replays_cached_rejection(self, integration_db):
+    def test_a2a_wire_replays_cached_rejection(self, integration_db):
         """A2A wrapper forwards idempotency_key → impl replays cached envelope on wire.
 
-        Regression guard: if ``adcp_a2a_server.py:1543`` (the
-        ``idempotency_key=params.get("idempotency_key")`` forwarding line)
-        is changed to ``idempotency_key=None``, the impl never sees the
-        key, the rejection replay is bypassed, and this test fails.
+        Regression guard: if ``_handle_create_media_buy_skill`` stops forwarding
+        ``idempotency_key=params.get("idempotency_key")`` to ``create_media_buy_raw``,
+        the impl never sees the key, the rejection replay is bypassed, and this
+        test fails. Dispatch drives the real ``on_message_send`` boundary.
         """
-        from unittest.mock import MagicMock
-
-        from a2a.server.routes.common import ServerCallContext
-        from a2a.types import SendMessageRequest, Task
-
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.config_loader import set_current_tenant
-        from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
-
-        idem_key = f"wire-a2a-{uuid.uuid4().hex[:8]}"
-        tenant_id = f"wire_a2a_t_{uuid.uuid4().hex[:6]}"
-        principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        cached_message = "wire-A2A cached rejection — must round-trip"
-        auth_token = f"tok-{uuid.uuid4().hex[:8]}"
-
-        self._bootstrap_tenant(tenant_id, principal_id)
-        self._seed_rejection(tenant_id, principal_id, idem_key, cached_message)
-
-        identity = self._build_identity(tenant_id, principal_id, "a2a")
-        # auth_token is needed for the resolved identity in A2A path
-        identity = identity.__class__(
-            principal_id=identity.principal_id,
-            tenant_id=identity.tenant_id,
-            tenant=identity.tenant,
-            auth_token=auth_token,
-            protocol="a2a",
-            testing_context=identity.testing_context,
-        )
-
-        handler = AdCPRequestHandler()
-        handler._get_auth_token = MagicMock(return_value=auth_token)
-        handler._resolve_a2a_identity = MagicMock(return_value=identity)
-
-        set_current_tenant(identity.tenant)
-
-        skill_params = {
-            "brand": {"domain": "wire-a2a.example.com"},
-            "packages": [],
-            "start_time": "2026-06-01T00:00:00Z",
-            "end_time": "2026-06-30T00:00:00Z",
-            "po_number": "WIRE-A2A-1",
-            "idempotency_key": idem_key,
-        }
-        message = create_a2a_message_with_skill("create_media_buy", skill_params)
-        params = SendMessageRequest(message=message)
-
-        result = await handler.on_message_send(params, ServerCallContext())
-
-        assert isinstance(result, Task), f"on_message_send must return Task, got {type(result).__name__}"
-        assert result.artifacts, f"Wire response must include artifacts. Task={result!r}"
-
-        artifact_data = extract_data_from_artifact(result.artifacts[0])
-
-        # Cached rejection: success=False, errors[0] matches seeded envelope
-        assert artifact_data.get("success") is False, (
-            f"Cached rejection must surface as success=False on A2A wire. "
-            f"Got success={artifact_data.get('success')!r}, keys={sorted(artifact_data.keys())}"
-        )
-        errors = artifact_data.get("errors")
-        assert errors, f"A2A wire envelope must carry errors[]. Got artifact={artifact_data!r}"
-        assert (
-            errors[0]["code"] == "VALIDATION_ERROR"
-        ), f"errors[0].code must match cached envelope. Got {errors[0].get('code')!r}"
-        assert errors[0]["message"] == cached_message, (
-            f"errors[0].message must be byte-identical to cached envelope. "
-            f"Got {errors[0].get('message')!r}, expected {cached_message!r}"
-        )
+        self._run_wire_replay(Transport.A2A)
 
     def test_rest_wire_replays_cached_rejection(self, integration_db):
         """REST wrapper forwards idempotency_key → impl replays cached envelope on wire.
 
-        Regression guard: if ``CreateMediaBuyBody`` at ``src/routes/api_v1.py:81``
-        drops ``idempotency_key`` (or the route at L237 stops passing it through),
-        the impl never sees the key, the rejection replay is bypassed, and
-        this test fails.
+        Regression guard: if ``CreateMediaBuyBody`` drops ``idempotency_key`` (or
+        the ``/api/v1/media-buys`` route stops passing it through), the impl never
+        sees the key, the rejection replay is bypassed, and this test fails.
         """
-        from starlette.testclient import TestClient
+        self._run_wire_replay(Transport.REST)
 
-        from src.app import app
-        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
 
-        idem_key = f"wire-rest-{uuid.uuid4().hex[:8]}"
-        tenant_id = f"wire_rest_t_{uuid.uuid4().hex[:6]}"
-        principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        cached_message = "wire-REST cached rejection — must round-trip"
+class TestTransientRejectionNotCached:
+    """Transient-skip regression: transient adapter rejections are NOT cached.
 
-        self._bootstrap_tenant(tenant_id, principal_id)
-        self._seed_rejection(tenant_id, principal_id, idem_key, cached_message)
+    Production fix at ``media_buy_create.py`` (the adapter-rejection branch):
 
-        identity = self._build_identity(tenant_id, principal_id, "rest")
+        recovery = response.errors[0].recovery if response.errors else None
+        if getattr(recovery, "value", recovery) != "transient":
+            _cache_rejection_envelope(...)
 
-        # Inject identity via FastAPI dep overrides (bypasses middleware/header parsing).
-        app.dependency_overrides[_require_auth_dep] = lambda: identity
-        app.dependency_overrides[_resolve_auth_dep] = lambda: identity
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-            response = client.post(
-                "/api/v1/media-buys",
-                json={
-                    "brand": {"domain": "wire-rest.example.com"},
-                    "packages": [],
-                    "start_time": "2026-06-01T00:00:00Z",
-                    "end_time": "2026-06-30T00:00:00Z",
-                    "po_number": "WIRE-REST-1",
-                    "idempotency_key": idem_key,
-                },
+    A transient adapter failure (rate-limit, service-unavailable, timeout) is
+    one the buyer's retry is *meant* to succeed on — caching it would replay the
+    failure forever and defeat the retry. Non-transient rejections (terminal /
+    correctable) MUST be cached so a retry with the same key replays the same
+    answer. ``recovery`` arrives as a ``Recovery`` enum, so the guard compares
+    ``getattr(recovery, "value", recovery)`` — without ``.value`` the comparison
+    is always True and transient errors would be cached, defeating the skip.
+
+    These tests drive the FULL non-dry-run create flow (real DB, real
+    IdempotencyAttemptRepository) so the adapter returns a ``CreateMediaBuyError``
+    and reaches the ``isinstance(response, CreateMediaBuyError)`` branch, then
+    assert the cache state directly via the repository.
+    """
+
+    @staticmethod
+    def _drive_adapter_rejection(env, *, recovery: str, idempotency_key: str, product_id: str):
+        """Make the mock adapter RETURN a CreateMediaBuyError with the given recovery.
+
+        The harness installs a happy-path ``side_effect`` on
+        ``create_media_buy``; ``side_effect`` takes precedence over
+        ``return_value``, so it must be cleared before the error
+        ``return_value`` takes effect. Returns the CreateMediaBuyResult.
+        """
+        from src.core.schemas import CreateMediaBuyError, Error
+
+        adapter = env.mock["adapter"].return_value
+        adapter.create_media_buy.side_effect = None
+        adapter.create_media_buy.return_value = CreateMediaBuyError(
+            errors=[Error(code="ADAPTER_ERROR", message=f"adapter {recovery} failure", recovery=recovery)],
+            context=None,
+        )
+        return env.call_impl(
+            brand={"domain": "transient-test.example.com"},
+            packages=[{"product_id": product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+            start_time="2026-06-01T00:00:00Z",
+            end_time="2026-06-30T00:00:00Z",
+            po_number="TRANSIENT-1",
+            idempotency_key=idempotency_key,
+        )
+
+    def test_transient_adapter_rejection_is_not_cached(self, integration_db):
+        """recovery='transient' adapter rejection → NO IdempotencyAttempt row written."""
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.schemas import CreateMediaBuyError, CreateMediaBuyResult
+
+        idem_key = f"transient-{uuid.uuid4().hex[:8]}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            result = self._drive_adapter_rejection(
+                env, recovery="transient", idempotency_key=idem_key, product_id=product.product_id
             )
-        finally:
-            app.dependency_overrides.pop(_require_auth_dep, None)
-            app.dependency_overrides.pop(_resolve_auth_dep, None)
+            tenant_id = env._tenant_id
+            principal_id = env._principal_id
 
-        assert response.status_code == 200, (
-            f"Replay must return 200 (successful response with domain errors), "
-            f"got {response.status_code}. Body: {response.text!r}"
-        )
-        body = response.json()
-        assert body.get("status") == "failed", (
-            f"Cached rejection must surface as status=failed. Got status={body.get('status')!r}, "
-            f"keys={sorted(body.keys())}"
-        )
-        errors = body.get("errors")
-        assert errors, f"REST wire envelope must carry errors[]. Got body={body!r}"
-        assert (
-            errors[0]["code"] == "VALIDATION_ERROR"
-        ), f"errors[0].code must match cached envelope. Got {errors[0].get('code')!r}"
-        assert errors[0]["message"] == cached_message, (
-            f"errors[0].message must be byte-identical to cached envelope. "
-            f"Got {errors[0].get('message')!r}, expected {cached_message!r}"
-        )
+        # The flow reached the adapter-rejection branch (failed CreateMediaBuyError).
+        assert isinstance(result, CreateMediaBuyResult)
+        assert result.status == "failed"
+        assert isinstance(result.response, CreateMediaBuyError)
+
+        # Transient rejection must NOT be cached — a retry should re-evaluate.
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            cached = uow.idempotency_attempts.find_by_key(
+                principal_id=principal_id,
+                tool_name="create_media_buy",
+                idempotency_key=idem_key,
+            )
+            assert cached is None, "Transient adapter rejection must not be cached (retry must re-evaluate)"
+
+    def test_non_transient_adapter_rejection_is_cached(self, integration_db):
+        """recovery='terminal' adapter rejection → IdempotencyAttempt row IS written.
+
+        Same setup as the transient case; only the recovery hint differs. This
+        is the control that proves the skip is recovery-specific, not a blanket
+        "adapter rejections are never cached".
+        """
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.schemas import CreateMediaBuyError, CreateMediaBuyResult
+
+        idem_key = f"terminal-{uuid.uuid4().hex[:8]}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            result = self._drive_adapter_rejection(
+                env, recovery="terminal", idempotency_key=idem_key, product_id=product.product_id
+            )
+            tenant_id = env._tenant_id
+            principal_id = env._principal_id
+
+        assert isinstance(result, CreateMediaBuyResult)
+        assert result.status == "failed"
+        assert isinstance(result.response, CreateMediaBuyError)
+
+        # Non-transient rejection IS cached so a retry replays the same answer.
+        # Read the envelope inside the UoW block — the ORM row is detached after exit.
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            cached = uow.idempotency_attempts.find_by_key(
+                principal_id=principal_id,
+                tool_name="create_media_buy",
+                idempotency_key=idem_key,
+            )
+            assert cached is not None, "Non-transient adapter rejection must be cached for replay"
+            cached_errors = cached.response_envelope.get("errors")
+            assert cached_errors, f"Cached envelope must carry errors[]. Got {cached.response_envelope!r}"
+            assert cached_errors[0]["code"] == "ADAPTER_ERROR"
