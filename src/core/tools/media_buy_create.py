@@ -3349,7 +3349,10 @@ async def _create_media_buy_impl(
             # transient errors (rate limit, service unavailable, timeout), where the
             # buyer's retry is meant to succeed and a cached failure would defeat that.
             recovery = response.errors[0].recovery if response.errors else None
-            if recovery != "transient":
+            # ``recovery`` is a Recovery enum member, not a plain str, so compare on
+            # its value — otherwise ``Recovery.transient != "transient"`` is always
+            # True and transient adapter errors get cached, defeating the skip above.
+            if getattr(recovery, "value", recovery) != "transient":
                 _cache_rejection_envelope(
                     tenant_id=tenant["tenant_id"],
                     principal_id=principal_id,
