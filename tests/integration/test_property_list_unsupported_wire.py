@@ -13,14 +13,11 @@ Covers: UC-003 honest-declaration property_list reject — wire shape
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 from a2a.types import SendMessageRequest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.database.database_session import get_db_session
-from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import TEST_PROPERTY_LIST_TARGETING_OVERLAY, create_test_package_request_dict
 from tests.utils.a2a_helpers import create_a2a_message_with_skill
 from tests.utils.database_helpers import future_iso_date_range, seed_property_list_capability_tenant
@@ -146,44 +143,21 @@ def test_rest_create_media_buy_property_list_unsupported_envelope(wire_tenant):
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tenant):
-    """A2A propagates AdCPUnsupportedFeatureError as A2A InternalError carrying the wire envelope.
+    """A2A propagates AdCPUnsupportedFeatureError through the real on_message_send boundary.
 
-    A2A's ``_handle_explicit_skill`` translates ``AdCPError`` subclasses into
-    A2A protocol errors via ``_adcp_to_a2a_error``. The resulting exception
-    carries the AdCP envelope so the JSON-RPC boundary serializes it onto
-    the wire with ``code=UNSUPPORTED_FEATURE``, ``recovery=correctable``,
-    ``field`` and ``suggestion`` — the same contract REST and MCP surface.
+    Drives the canonical ``on_message_send`` entry point (not
+    ``_handle_explicit_skill`` directly) with the real token -> DB -> identity
+    auth chain, populating the AuthContext the SDK call-context builder would
+    build from the wire. The error surfaces as an A2A error whose ``data``
+    carries the full envelope — ``code=UNSUPPORTED_FEATURE``,
+    ``recovery=correctable``, ``field``, and ``suggestion`` — the same
+    machine-actionable contract REST and MCP surface (``_adcp_to_a2a_error``
+    forwards field + suggestion).
     """
+    from a2a.server.context import ServerCallContext
     from a2a.utils.errors import A2AError, InternalError
 
-    from src.core.config_loader import set_current_tenant
-    from src.core.testing_hooks import AdCPTestContext
-
-    # test_session_id bypasses the production setup-checklist gate so the
-    # test can reach the boundary check on a minimal test tenant.
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_adv",
-        tenant_id=TENANT_ID,
-        auth_token=ACCESS_TOKEN,
-        protocol="a2a",
-        tenant={
-            "tenant_id": TENANT_ID,
-            "name": "Property List Wire Publisher",
-            "subdomain": "prop-list-wire",
-            "ad_server": "mock",
-        },
-        testing_context=AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id="prop-list-wire-a2a-session",
-        ),
-    )
-    set_current_tenant(identity.tenant)
-
-    handler = AdCPRequestHandler()
-    handler._get_auth_token = MagicMock(return_value=ACCESS_TOKEN)
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
+    from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
     start, end = future_iso_date_range()
     skill_params = {
@@ -195,17 +169,22 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
     message = create_a2a_message_with_skill("create_media_buy", skill_params)
     params = SendMessageRequest(message=message)
 
-    # AdCPUnsupportedFeatureError surfaces via _adcp_to_a2a_error as an
-    # InternalError whose ``data`` field carries the AdCP envelope. The outer
-    # ``on_message_send`` wrapper rewraps that into an InternalError carrying
-    # only the message string — so the test exercises the handler at the
-    # skill-dispatch boundary where the envelope is preserved.
+    # Populate the AuthContext the SDK transport middleware would build from the
+    # wire, then drive the real on_message_send -> auth chain -> skill dispatch
+    # (no mocked identity seams). x-test-session-id bypasses the setup-checklist
+    # gate, same as the REST test.
+    headers = {
+        "x-adcp-auth": ACCESS_TOKEN,
+        "x-adcp-tenant": TENANT_ID,
+        "x-test-session-id": "prop-list-wire-a2a-session",
+    }
+    server_context = ServerCallContext(
+        state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=ACCESS_TOKEN, headers=headers)}
+    )
+
+    handler = AdCPRequestHandler()
     with pytest.raises((A2AError, InternalError)) as excinfo:
-        await handler._handle_explicit_skill(
-            skill_name="create_media_buy",
-            parameters=skill_params,
-            identity=identity,
-        )
+        await handler.on_message_send(params, server_context)
 
     raised = excinfo.value
     data = getattr(raised, "data", None) or {}
@@ -213,8 +192,12 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
         data.get("error_code") == "UNSUPPORTED_FEATURE"
     ), f"A2A error.data must surface error_code=UNSUPPORTED_FEATURE; got data={data!r}"
     assert data.get("recovery") == "correctable", f"A2A error.data must surface recovery=correctable; got data={data!r}"
-    msg = getattr(raised, "message", None) or str(raised)
-    assert "property_list" in msg, f"A2A error message must reference property_list; got: {msg!r}"
+    assert (
+        data.get("field") == "packages[0].targeting_overlay.property_list"
+    ), f"A2A error.data must forward the offending field; got data={data!r}"
+    assert (
+        data.get("suggestion") and "property_list_filtering" in data["suggestion"]
+    ), f"A2A error.data must forward a suggestion referencing the capability flag; got data={data!r}"
 
 
 @pytest.mark.requires_db

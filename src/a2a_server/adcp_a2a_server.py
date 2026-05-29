@@ -140,14 +140,20 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
     """Translate AdCPError to an A2A SDK error type preserving semantics.
 
-    The recovery classification, error_code, and details are forwarded in the
-    ``data`` field so that buyer agents (and test harness unwrapping) can
-    reconstruct the original AdCPError. Non-standard codes are translated
-    to STANDARD_ERROR_CODES at this transport boundary.
+    The recovery classification, error_code, details, field, and suggestion are
+    forwarded in the ``data`` field so that buyer agents (and test harness
+    unwrapping) can reconstruct the original AdCPError — and so A2A buyers get
+    the same machine-actionable ``field`` + ``suggestion`` that REST and MCP
+    already deliver. Non-standard codes are translated to STANDARD_ERROR_CODES
+    at this transport boundary.
     """
     data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.wire_error_code}
     if exc.details:
         data["details"] = exc.details
+    if exc.field is not None:
+        data["field"] = exc.field
+    if exc.suggestion is not None:
+        data["suggestion"] = exc.suggestion
     if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
         return InvalidParamsError(message=str(exc.message), data=data)
     elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
