@@ -1558,15 +1558,20 @@ def _cache_rejection_envelope(
 def _validation_error_to_adcp_error(exc: Exception) -> Error:
     """Map a caught validation error to a wire ``Error``, preserving structured metadata.
 
-    ``_StructuredValidationError`` carries an AdCP-standard code + optional
-    suggestion; a plain ``ValueError`` / ``PermissionError`` maps to a generic
-    VALIDATION_ERROR. Keeping this in one place means the rejection-cache path
-    and the synchronous return path emit the same wire shape.
+    ``_StructuredValidationError`` carries an AdCP-standard code, a ``recovery``
+    hint, and optional ``field`` / ``suggestion``; a plain ``ValueError`` /
+    ``PermissionError`` maps to a generic VALIDATION_ERROR. Keeping this in one
+    place means the rejection-cache path and the synchronous return path emit
+    the same wire shape — and that ``field`` (which input was rejected) and
+    ``recovery`` (whether a retry can fix it) reach the buyer rather than being
+    dropped on the floor.
     """
     if isinstance(exc, _StructuredValidationError):
         return Error(
             code=exc.code,
             message=str(exc),
+            field=exc.field,
+            recovery=exc.recovery,
             details={"suggestion": exc.suggestion} if exc.suggestion else None,
         )
     return Error(code="VALIDATION_ERROR", message=str(exc), details=None)
