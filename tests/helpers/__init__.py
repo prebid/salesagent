@@ -42,8 +42,11 @@ from tests.helpers.adcp_factories import (
     create_test_property,
     create_test_property_dict,
 )
+from tests.helpers.envelope_assertions import assert_envelope_shape
 
 __all__ = [
+    # Envelope assertions
+    "assert_envelope_shape",
     # Product factories
     "create_test_product",
     "create_minimal_product",

@@ -20,13 +20,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.a2a_response_validator import assert_valid_skill_response
 from tests.helpers.external_service import is_external_service_exception
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test_principal",
     tenant_id="test_tenant",
     tenant={"tenant_id": "test_tenant"},
@@ -57,7 +57,7 @@ class TestA2AMessageFieldValidation:
         """
         from src.core.tenant_context import LazyTenantContext
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=sample_principal["principal_id"],
             tenant_id=sample_tenant["tenant_id"],
             tenant=LazyTenantContext(sample_tenant["tenant_id"]),
@@ -87,6 +87,10 @@ class TestA2AMessageFieldValidation:
             start_date = datetime.now(UTC) + timedelta(days=1)
             end_date = start_date + timedelta(days=30)
 
+            # Per AdCP v2.2.0 spec, budget is at the PACKAGE level, not top level.
+            # The previous top-level ``budget`` field was tolerated by an older code
+            # path that swallowed Pydantic ValidationError into a dict-return; now
+            # CreateMediaBuyRequest validates strictly.
             params = {
                 "brand": {"domain": "testbrand.com"},
                 "packages": [
@@ -96,7 +100,6 @@ class TestA2AMessageFieldValidation:
                         "budget": 10000.0,
                     }
                 ],
-                "budget": {"total": 10000.0, "currency": "USD"},
                 "start_time": start_date.isoformat(),
                 "end_time": end_date.isoformat(),
             }

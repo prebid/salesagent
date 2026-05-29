@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -77,18 +78,20 @@ class TestDuplicateProductValidation:
             start_time = datetime.now(UTC) + timedelta(hours=1)  # 1 hour in the future
             end_time = start_time + timedelta(days=7)
 
-            # Should return error response about duplicate products
+            # Should raise typed AdCPValidationError about duplicate products
+            # (propagates past _impl boundary catch since 572b55b4f).
             req = CreateMediaBuyRequest(
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
             )
-            result, _ = await _create_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=identity)
 
-            # Verify response contains error about duplicate products
-            assert result.errors is not None and len(result.errors) > 0, f"Expected errors in response, got: {result}"
-            error_msg = result.errors[0].message
+            exc = excinfo.value
+            assert exc.error_code == "VALIDATION_ERROR"
+            error_msg = exc.message
             assert "duplicate" in error_msg.lower(), f"Error should mention 'duplicate': {error_msg}"
             assert "prod_test_1" in error_msg, f"Error should mention 'prod_test_1': {error_msg}"
             assert "each product can only be used once" in error_msg.lower(), (
@@ -156,18 +159,20 @@ class TestDuplicateProductValidation:
             start_time = datetime.now(UTC) + timedelta(hours=1)  # 1 hour in the future
             end_time = start_time + timedelta(days=7)
 
-            # Should return error response listing both duplicate products
+            # Should raise typed AdCPValidationError listing both duplicate products
+            # (propagates past _impl boundary catch since 572b55b4f).
             req = CreateMediaBuyRequest(
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
             )
-            result, _ = await _create_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=identity)
 
-            # Verify both duplicate products are mentioned
-            assert result.errors is not None and len(result.errors) > 0, f"Expected errors in response, got: {result}"
-            error_msg = result.errors[0].message
+            exc = excinfo.value
+            assert exc.error_code == "VALIDATION_ERROR"
+            error_msg = exc.message
             assert "prod_test_1" in error_msg
             assert "prod_test_2" in error_msg
 

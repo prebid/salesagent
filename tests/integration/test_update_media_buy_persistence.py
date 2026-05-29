@@ -20,10 +20,9 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
-from src.core.exceptions import AdCPNotFoundError
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
-from src.core.exceptions import AdCPAuthenticationError
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 # Note: _verify_principal is now internal to _update_media_buy_impl

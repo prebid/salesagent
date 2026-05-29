@@ -274,8 +274,8 @@ class TestSyncCreativesResponseShape:
 
     def test_sync_response_failed_creative_has_errors(self):
         """Failed creative includes errors list."""
-        from adcp.types import Error as AdCPErrorDetail
         from adcp.types import CreativeAction
+        from adcp.types import Error as AdCPErrorDetail
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
@@ -872,8 +872,8 @@ class TestSerializationConsistency:
         """SyncCreativesResponse is JSON-serializable."""
         import json
 
-        from adcp.types import Error as AdCPErrorDetail
         from adcp.types import CreativeAction
+        from adcp.types import Error as AdCPErrorDetail
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 

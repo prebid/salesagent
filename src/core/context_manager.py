@@ -3,6 +3,8 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,7 +19,7 @@ from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -335,60 +337,48 @@ class ContextManager(DatabaseManager):
             session.close()
 
     def fail_workflow_step_for_exception(self, step_id: str, exc: Exception) -> None:
-        """Mark a workflow step failed with BOTH ``error_message`` AND structured ``response_data``.
+        """Mark a workflow step failed with the spec two-layer envelope as ``response_data``.
 
         The webhook delivery path at ``_send_push_notifications`` emits
-        ``step.response_data`` (not ``error_message``) to push notification
-        subscribers. Without structured payload, async subscribers receive
-        ``status=failed`` with an empty body — they don't see the error
-        code, field path, or recovery classification the synchronous caller
-        gets via the spec-compliant payload. This helper builds a one-element
-        ``errors[]`` payload (same shape as the SDK's ``adcp_error()`` helper)
-        from the exception so async and sync paths are at parity.
+        ``step.response_data`` to push notification subscribers. Without
+        structured payload, async subscribers receive ``status=failed`` with
+        an empty body. This helper builds the full two-layer envelope
+        (``adcp_error`` + ``errors[]``) via ``build_two_layer_error_envelope``
+        so async and sync paths see the same wire shape.
 
-        Uses ``wire_error_code`` so internal-only codes (``NOT_FOUND``,
-        ``INTERNAL_ERROR``, etc.) get translated to ``STANDARD_ERROR_CODES``
-        before reaching the webhook subscriber — same translation the
-        synchronous transport boundaries apply.
+        Untyped exceptions are normalized to ``AdCPError`` via
+        ``normalize_to_adcp_error``. Wire-code enforcement ensures webhook
+        subscribers only see codes in ``STANDARD_ERROR_CODES``.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
         hiccup during audit doesn't replace the original exception that the
-        caller is about to re-raise. Python's bare ``raise`` would otherwise
-        pick up the new exception fired here and the buyer would see an
-        unrelated DB error instead of the actual ``AdCPError``.
+        caller is about to re-raise.
         """
         from adcp.server.helpers import STANDARD_ERROR_CODES
-        from adcp.server.helpers import adcp_error as _sdk_adcp_error
 
         try:
-            if isinstance(exc, AdCPError):
-                source: AdCPError = exc
-            else:
-                # Untyped exception — base ``AdCPError`` defaults to
-                # ``INTERNAL_ERROR`` which is in ``INTERNAL_CODES`` (never
-                # leaves the server).
-                source = AdCPError(str(exc) or type(exc).__name__)
+            source = normalize_to_adcp_error(exc)
 
             # Defensive wire-code enforcement: webhook subscribers must only
-            # see codes in ``STANDARD_ERROR_CODES``. ``wire_error_code``
-            # applies the explicit ``ERROR_CODE_MAPPING`` translation; if any
-            # source code still falls outside the standard set after that,
-            # fall back to ``SERVICE_UNAVAILABLE`` so async subscribers never
-            # receive an internal-only code that the synchronous boundary
-            # would have rejected.
+            # see codes in ``STANDARD_ERROR_CODES``. If the wire code falls
+            # outside the standard set, override with SERVICE_UNAVAILABLE
+            # so async subscribers never receive an internal-only code.
+            # Structured fields (details/field/suggestion/context) carry
+            # forward so buyer agents and webhook subscribers retain
+            # machine-actionable correction context across the rewrite.
             wire_code = source.wire_error_code
             if wire_code not in STANDARD_ERROR_CODES:
-                wire_code = "SERVICE_UNAVAILABLE"
+                source = AdCPError.synthesize(
+                    source.message or str(source),
+                    error_code="SERVICE_UNAVAILABLE",
+                    recovery="terminal",
+                    details=source.details,
+                    field=source.field,
+                    suggestion=source.suggestion,
+                    context=source.context,
+                )
 
-            payload = _sdk_adcp_error(
-                wire_code,
-                source.message or str(source),
-                recovery=source.recovery,
-                field=source.field,
-                suggestion=source.suggestion,
-                details=source.details,
-            )
-            response_data = {"errors": payload["errors"]}
+            response_data = build_two_layer_error_envelope(source)
             error_message = source.message or str(source)
 
             self.update_workflow_step(
@@ -404,6 +394,48 @@ class ContextManager(DatabaseManager):
                 "Failed to audit workflow_step %s after exception — original exception will still re-raise",
                 step_id,
             )
+
+    def audit_step_failure_if_present(self, step: WorkflowStep | None, exc: Exception) -> None:
+        """Mark ``step`` as failed if it exists; do not re-raise.
+
+        Standalone variant of :py:meth:`audit_step_failure` for callers
+        that need to interleave additional observability (e.g., Slack
+        notification on the untyped branch in ``_create_media_buy_impl``)
+        between the workflow-step audit and the re-raise. The caller
+        re-raises explicitly.
+
+        ``fail_workflow_step_for_exception`` is internally wrapped in
+        try/except so a DB hiccup during audit cannot shadow the original
+        exception when the caller re-raises.
+        """
+        if step is not None:
+            self.fail_workflow_step_for_exception(step.step_id, exc)
+
+    @contextmanager
+    def audit_step_failure(self, get_step: "Callable[[], WorkflowStep | None]") -> Iterator[None]:
+        """Context manager: mark the workflow step as failed if any exception escapes the block.
+
+        Single source of truth for "what happens when an _impl owning a
+        workflow step fails". Wraps the try-body so the wire-shape envelope
+        is threaded into ``response_data`` and async webhook subscribers
+        see the same shape the synchronous caller receives.
+
+        Accepts a ``get_step`` callable (typically ``lambda: step``) rather
+        than the step directly. Workflow steps are constructed INSIDE the
+        guarded block (after early validation), so the callable closure
+        resolves the current step value at exception time — not at entry,
+        when it may still be ``None``.
+
+        Re-raises the original exception unchanged. Delegates the actual
+        audit work to :py:meth:`audit_step_failure_if_present` so the two
+        public APIs (context manager + standalone helper) share the same
+        underlying call.
+        """
+        try:
+            yield
+        except Exception as exc:
+            self.audit_step_failure_if_present(get_step(), exc)
+            raise
 
     def mark_human_needed(
         self,

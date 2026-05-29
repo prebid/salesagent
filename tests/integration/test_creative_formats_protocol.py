@@ -16,9 +16,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from adcp.types import ImageFormatAsset, VideoFormatAsset
+from adcp.types import AssetContentType, ImageFormatAsset, VideoFormatAsset
 from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
-from adcp.types import AssetContentType
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 

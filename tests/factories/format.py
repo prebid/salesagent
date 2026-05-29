@@ -31,10 +31,10 @@ from adcp.types import (
     HtmlFormatAsset,
     ImageFormatAsset,
     MarkdownFormatAsset,
+    Responsive,
     TextFormatAsset,
     VideoFormatAsset,
 )
-from adcp.types import Responsive
 from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 from src.core.schemas import Format, FormatId
@@ -77,7 +77,6 @@ def _find_inner_asset_class(asset_type: str):
     Inner assets within a repeatable_group use different classes than
     top-level assets. We find them dynamically to survive SDK regeneration.
     """
-    import adcp.types.generated_poc.core.format as fmt_mod
 
     _RepeatableGroupCls = _find_repeatable_group_class()
     # Get the union type from the 'assets' field annotation

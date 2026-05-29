@@ -13,7 +13,6 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, cast
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field, RootModel, ValidationError
@@ -62,7 +61,7 @@ from adcp.types import ContextObject, MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthRequiredError, AdCPValidationError
+from src.core.exceptions import AdCPAuthRequiredError, AdCPCapabilityNotSupportedError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -101,7 +100,10 @@ def _get_media_buys_impl(
         )
 
     if req.account is not None or req.account_id is not None:
-        raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
+        raise AdCPCapabilityNotSupportedError(
+            "account filtering is not yet supported",
+            suggestion="Omit account/account_id from the request; the seller infers the account from the auth token.",
+        )
 
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id
@@ -315,7 +317,10 @@ async def get_media_buys(
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
-        raise ToolError(format_validation_error(e, context="get_media_buys request"))
+        # Raise AdCPValidationError so the MCP boundary translator runs the
+        # envelope builder; the prior ToolError raise bypassed it and produced
+        # a tuple-stringified wire response with no adcp_error/errors layers.
+        raise AdCPValidationError(format_validation_error(e, context="get_media_buys request")) from e
 
 
 def get_media_buys_raw(

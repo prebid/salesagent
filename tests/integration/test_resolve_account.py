@@ -114,7 +114,9 @@ class TestResolveAccountByNaturalKey:
             from src.core.database.repositories.account import AccountRepository
             from src.core.helpers.account_helpers import resolve_account
 
-            ref = AccountReference(AccountReferenceByNaturalKey(brand={"domain": "unknown.com"}, operator="unknown.com"))
+            ref = AccountReference(
+                AccountReferenceByNaturalKey(brand={"domain": "unknown.com"}, operator="unknown.com")
+            )
             with get_db_session() as session:
                 repo = AccountRepository(session, "resolve_t5")
                 with pytest.raises(AdCPAccountNotFoundError):
