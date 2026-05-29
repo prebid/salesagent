@@ -451,14 +451,36 @@ class BaseTestEnv:
             parameters = dict(kwargs)
 
         handler = AdCPRequestHandler()
-        # Single mock point: identity resolution.
-        # _get_auth_token must return a non-None value when identity exists,
-        # otherwise the handler rejects the request before _resolve_a2a_identity
-        # is called. Use auth_token from identity, falling back to a sentinel.
-        handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
-        handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
-            (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
-        )
+
+        # Auth strategy mirrors _run_mcp_client. When the identity carries a real
+        # auth_token (integration mode), populate the AuthContext that the SDK
+        # call-context builder would have built from the wire and run the REAL
+        # _get_auth_token + _resolve_a2a_identity (header → token → DB lookup →
+        # ResolvedIdentity). Only the transport's state injection is supplied here
+        # (the in-process equivalent of MCP's get_http_headers seam) — the auth
+        # chain itself is real. When no real token exists (unit mode), inject the
+        # identity directly via the single mock point (unchanged behavior).
+        auth_token = a2a_identity.auth_token if a2a_identity else None
+
+        if auth_token:
+            from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+
+            headers = {
+                "x-adcp-auth": auth_token,
+                "x-adcp-tenant": a2a_identity.tenant_id or "",
+            }
+            server_context = ServerCallContext(
+                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
+            )
+        else:
+            # _get_auth_token must return a non-None value when identity exists,
+            # otherwise the handler rejects the request before _resolve_a2a_identity
+            # is called. Use auth_token from identity, falling back to a sentinel.
+            handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
+            handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
+                (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
+            )
+            server_context = ServerCallContext()
 
         # Set tenant ContextVar so production code can read it
         if a2a_identity and a2a_identity.tenant:
@@ -470,7 +492,7 @@ class BaseTestEnv:
         params = SendMessageRequest(message=message)
 
         async def _call():
-            return await handler.on_message_send(params, ServerCallContext())
+            return await handler.on_message_send(params, server_context)
 
         try:
             task_result = asyncio.run(_call())
@@ -566,10 +588,11 @@ class BaseTestEnv:
                         # If a third module imports get_http_headers without being
                         # patched, this won't catch it — but at least we verify
                         # the known auth paths were exercised.
-                        assert patched_th.called or patched_mw.called, (
-                            f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
-                        )
+                        assert (
+                            patched_th.called or patched_mw.called
+                        ), f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
                         return response_cls(**result.structured_content)
+
         else:
             # Unit mode: inject identity directly.
             async def _call():
