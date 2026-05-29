@@ -155,9 +155,9 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
     # checks, leaving the happy-path proof vacuous. If the response IS an
     # error variant, accept any failure cause that isn't the property_targeting
     # rule itself (test stays decoupled from unrelated downstream errors).
-    assert not isinstance(response, CreateMediaBuyError), (
-        f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
-    )
+    assert not isinstance(
+        response, CreateMediaBuyError
+    ), f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
     assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
@@ -191,9 +191,9 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
     # happy-path proof vacuous. Separate ``not isinstance`` gates the success
     # branch with a real check; the follow-up ``all(...)`` ensures the
     # property_list rule still doesn't fire if an unrelated error did appear.
-    assert not isinstance(response, CreateMediaBuyError), (
-        f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
-    )
+    assert not isinstance(
+        response, CreateMediaBuyError
+    ), f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
     assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
