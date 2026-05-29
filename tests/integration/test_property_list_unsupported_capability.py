@@ -73,8 +73,8 @@ def capability_tenant(integration_db):
     (default), so the boundary check fires for any package whose
     ``targeting_overlay.property_list`` is non-None. Tests that need the
     True path monkeypatch the ClassVar. ``property_targeting_allowed=True``
-    on the product ensures the #1276 product gate doesn't fire first and
-    mask the #1313 adapter-capability rejection.
+    on the product ensures the product-flag gate doesn't fire first and
+    mask the adapter-capability rejection.
     """
     with get_db_session() as session:
         seed_property_list_capability_tenant(
@@ -98,7 +98,7 @@ def _build_property_list_create_request() -> CreateMediaBuyRequest:
     contract assertions (error code, recovery, field, suggestion, envelope
     round-trip) and removes the structural overlap with
     ``test_property_targeting_allowed_enforcement.py`` whose tests build a
-    nearly identical request to exercise the #1276 product gate.
+    nearly identical request to exercise the product-flag gate.
     """
     start, end = future_iso_date_range()
     return CreateMediaBuyRequest(
@@ -148,8 +148,8 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
 
     # Wire envelope round-trip: spec-compliant ``{"errors": [...]}`` shape
     # carries all five fields through to the response body. The dedicated
-    # 3-transport wire tests below assert on the actual wire envelopes via
-    # ``assert_envelope_shape``; this _impl-level check asserts on the
+    # 3-transport wire tests (test_property_list_unsupported_wire.py) assert on
+    # the actual wire shapes; this _impl-level check asserts on the
     # reconstructed envelope from the raised exception.
     envelope = exc.to_adcp_error()
     assert envelope["errors"][0]["code"] == "UNSUPPORTED_FEATURE"

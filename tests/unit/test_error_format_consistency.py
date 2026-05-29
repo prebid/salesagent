@@ -741,7 +741,7 @@ class TestErrorCodeVocabularyConsistency:
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
         "CONFIGURATION_ERROR",  # Internal only: server config broken
-        "UNSUPPORTED_FEATURE",  # SDK standard: adapter can't compile a requested feature (#1313)
+        "UNSUPPORTED_FEATURE",  # SDK standard: adapter can't compile a requested feature
     }
 
     def test_all_exception_error_codes_are_canonical(self):

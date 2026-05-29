@@ -1759,10 +1759,9 @@ class TestUC003UpdateTargetingOverlay:
         """Update with property_list against a product where property_targeting_allowed=False
         raises AdCPValidationError before persistence — same wire shape as create-time rule.
 
-        PR #1276 round-5 switched this site from return-envelope to raise per
-        reviewer feedback (avoids growing the model_dump _impl allowlist). The
-        boundary translator turns the raise into the spec-compliant two-layer
-        envelope.
+        This site was switched from return-envelope to raise per review feedback
+        (avoids growing the model_dump _impl allowlist). The boundary translator
+        turns the raise into the spec-compliant two-layer envelope.
 
         Covers: UC-003-MAIN-14
         """
@@ -1881,8 +1880,8 @@ class TestUC003UpdateTargetingOverlay:
 
         Covers: UC-003-MAIN-13
         """
-        # Konstantine #1313 boundary check would reject this request because the
-        # MagicMock adapter doesn't declare property_list support. The test is
+        # The adapter-capability boundary check would reject this request because
+        # the MagicMock adapter doesn't declare property_list support. The test is
         # about the REPLACE semantic, not the adapter-capability gate, so pin
         # the capability True on the mock-adapter class for this test only.
         monkeypatch.setattr(

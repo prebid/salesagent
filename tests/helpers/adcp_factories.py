@@ -420,8 +420,8 @@ def create_test_package(
 
 # Canonical ``targeting_overlay.property_list`` shape used across property_list
 # integration tests. Extracted to avoid the 14-line builder block duplicating
-# between ``test_property_targeting_allowed_enforcement.py`` (the #1276 product
-# gate) and ``test_property_list_unsupported_capability.py`` (the #1313 adapter
+# between ``test_property_targeting_allowed_enforcement.py`` (the product-flag
+# gate) and ``test_property_list_unsupported_capability.py`` (the adapter-
 # capability gate) — the same on-the-wire targeting body exercises both gates,
 # only the tenant/product configuration differs.
 TEST_PROPERTY_LIST_TARGETING_OVERLAY: dict[str, dict[str, str]] = {

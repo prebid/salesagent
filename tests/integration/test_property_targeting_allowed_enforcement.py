@@ -121,15 +121,15 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
 
 @pytest.mark.requires_db
 async def test_create_accepts_property_list_when_product_allows(property_targeting_tenant, monkeypatch):
-    """Product with property_targeting_allowed=True passes the #1276 product-flag validation.
+    """Product with property_targeting_allowed=True passes the product-flag validation.
 
-    This test isolates the #1276 product-flag gate from the #1313 adapter-capability
-    gate. The mock adapter default declares ``supports_property_list_targeting=False``
-    so post-#1313 it would reject any property_list request. Monkeypatching to True
-    keeps the test focused on what it actually asserts: that
-    ``validate_property_targeting_allowed`` doesn't false-positive when the product
-    permits property targeting. The #1313 reject is covered separately in
-    ``test_property_list_unsupported_capability.py``.
+    This test isolates the product-flag gate from the adapter-capability gate.
+    The mock adapter default declares ``supports_property_list_targeting=False``
+    so the adapter-capability gate would reject any property_list request.
+    Monkeypatching to True keeps the test focused on what it actually asserts:
+    that ``validate_property_targeting_allowed`` doesn't false-positive when the
+    product permits property targeting. The adapter-capability reject is covered
+    separately in ``test_property_list_unsupported_capability.py``.
     """
     from src.adapters.mock_ad_server import MockAdServer
 
@@ -240,9 +240,9 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
         ],
     )
 
-    # PR #1276 round-5: validation site raises AdCPValidationError (matches
-    # create-time path exactly). Boundary translator turns it into the
-    # spec-compliant two-layer envelope at the transport edge.
+    # The validation site raises AdCPValidationError (matches the create-time
+    # path exactly). Boundary translator turns it into the spec-compliant
+    # two-layer envelope at the transport edge.
     with pytest.raises(AdCPValidationError) as excinfo:
         _update_media_buy_impl(req=request, identity=_make_identity())
 

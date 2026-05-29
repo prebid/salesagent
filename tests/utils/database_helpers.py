@@ -310,12 +310,12 @@ def seed_property_list_capability_tenant(
 ) -> None:
     """Shared seeder for property_list-capability integration tests.
 
-    Both ``test_property_targeting_allowed_enforcement.py`` (the #1276
-    product-flag gate) and ``test_property_list_unsupported_capability.py``
-    (the #1313 adapter-capability gate) seed essentially the same shape:
+    Both ``test_property_targeting_allowed_enforcement.py`` (the product-flag
+    gate) and ``test_property_list_unsupported_capability.py``
+    (the adapter-capability gate) seed essentially the same shape:
     a tenant + one (or more) targeting-test products whose
-    ``property_targeting_allowed`` setting controls whether the #1276 gate
-    fires before the #1313 gate. Extracting the call pair here keeps both
+    ``property_targeting_allowed`` setting controls whether the product-flag gate
+    fires before the adapter-capability gate. Extracting the call pair here keeps both
     test files from carrying the same boilerplate and breaks the
     R0801 duplicate-block match window.
 
