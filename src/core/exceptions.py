@@ -207,6 +207,45 @@ class AdCPError(Exception):
         """
         return translate_error_code(self.error_code)
 
+    @classmethod
+    def synthesize(
+        cls,
+        message: str,
+        *,
+        error_code: str,
+        status_code: int | None = None,
+        recovery: RecoveryHint | None = None,
+        details: dict[str, Any] | None = None,
+        field: str | None = None,
+        suggestion: str | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> AdCPError:
+        """Sanctioned entry point for synthesizing an AdCPError with overridden code/status.
+
+        Typed subclasses (``AdCPValidationError``, etc.) carry
+        ``error_code``/``status_code`` as class attributes. Two boundary
+        callers — ``handle_tool_error``'s plain-``ToolError`` fallback and
+        ``ContextManager.fail_workflow_step_for_exception``'s wire-code
+        sanitization — need to construct an ``AdCPError`` with a code/status
+        the typed class hierarchy doesn't model.
+
+        Prefer this classmethod over passing ``error_code=``/``status_code=``
+        kwargs to ``__init__`` directly. Constructor kwargs that mutate class
+        attributes are a footgun the public API should not invite; this method
+        documents the synthesis intent explicitly so reviewers can audit
+        every site that bypasses the typed class hierarchy.
+        """
+        return cls(
+            message,
+            error_code=error_code,
+            status_code=status_code,
+            recovery=recovery,
+            details=details,
+            field=field,
+            suggestion=suggestion,
+            context=context,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to flat response body dict (legacy format).
 

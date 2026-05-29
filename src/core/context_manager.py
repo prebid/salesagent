@@ -368,7 +368,7 @@ class ContextManager(DatabaseManager):
             # machine-actionable correction context across the rewrite.
             wire_code = source.wire_error_code
             if wire_code not in STANDARD_ERROR_CODES:
-                source = AdCPError(
+                source = AdCPError.synthesize(
                     source.message or str(source),
                     error_code="SERVICE_UNAVAILABLE",
                     recovery="terminal",

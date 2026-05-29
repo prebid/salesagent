@@ -159,6 +159,33 @@ DISCOVERY_SKILLS = frozenset(
 )
 
 
+def _internal_error_for(operation: str, exc: Exception) -> InternalError:
+    """Canonical InternalError shape for non-skill A2A boundary failures.
+
+    The ``@_a2a_skill`` decorator standardised the wire-error prefix for the
+    14 skill handlers via the ``AdCPError`` ladder. Non-skill paths
+    (``on_message_send`` fallthrough, NL handlers) historically picked their
+    own prefixes (``"Message processing failed: "``, ``"Error in ..."``)
+    for semantically identical untyped failures — divergence on the buyer-
+    facing wire message for the same condition.
+
+    Use this helper at every non-skill ``InternalError(...)`` raise site that
+    is NOT a deliberate protocol-level convention (see push-notif handlers
+    below). The canonical prefix is ``"{operation} failed: {exc}"`` so
+    storyboard runners can parse the failure uniformly.
+
+    Protocol-level RPC handlers (``on_get_task_push_notification_config``,
+    ``on_create_task_push_notification_config``,
+    ``on_list_task_push_notification_config``,
+    ``on_delete_task_push_notification_config``) deliberately use a
+    ``"Failed to {verb} push notification config: {exc}"`` shape — they are
+    JSON-RPC protocol methods, not async-task skill handlers, and follow
+    the JSON-RPC error convention rather than the skill-error convention.
+    Do not migrate those sites through this helper.
+    """
+    return InternalError(message=f"{operation} failed: {exc}")
+
+
 def _a2a_skill(skill_name: str):
     """Decorator: wrap a skill handler in the canonical AdCPError-passthrough +
     untyped-Exception → AdCPError ladder.
@@ -981,7 +1008,7 @@ class AdCPRequestHandler(RequestHandler):
             await self._send_protocol_webhook(task, status="failed")
 
             # Raise A2A error instead of creating failed task
-            raise InternalError(message=f"Message processing failed: {str(e)}")
+            raise _internal_error_for("Message processing", e)
 
         self.tasks[task_id] = task
         return task

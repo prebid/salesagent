@@ -12,14 +12,43 @@ import os
 import re
 from contextlib import asynccontextmanager
 
+from a2a.server.request_handlers.response_helpers import agent_card_to_dict
+from a2a.server.routes import create_jsonrpc_routes
+from a2a.server.routes.agent_card_routes import create_agent_card_routes
+from a2a.types import AgentCard as A2AAgentCard
+from a2wsgi import WSGIMiddleware
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.lifespan import combine_lifespans
+from starlette.routing import Route
 
+from src.a2a_server.adcp_a2a_server import (
+    AdCPRequestHandler,
+    create_agent_card,
+)
+from src.a2a_server.context_builder import AdCPCallContextBuilder
+from src.admin.app import create_app
+from src.core.auth_middleware import UnifiedAuthMiddleware
+from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
+from src.core.domain_routing import route_landing_page
+from src.core.exceptions import (
+    AdCPError,
+    build_two_layer_error_envelope,
+    normalize_to_adcp_error,
+)
+from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
+from src.core.resolved_identity import resolve_identity
+from src.core.tool_error_logging import handle_tool_error, record_boundary_error
+from src.landing import generate_tenant_landing_page
+from src.landing.landing_page import generate_fallback_landing_page
+from src.routes.api_v1 import router as api_v1_router
+from src.routes.health import debug_router as health_debug_router
+from src.routes.health import router as health_router
+from src.routes.rest_compat_middleware import RestCompatMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -93,14 +122,6 @@ app.mount("/mcp", mcp_app)
 # ---------------------------------------------------------------------------
 # AdCP exception handlers — translate typed exceptions to HTTP responses.
 # ---------------------------------------------------------------------------
-
-from src.core.exceptions import (  # noqa: E402
-    AdCPError,
-    build_two_layer_error_envelope,
-    normalize_to_adcp_error,
-)
-from src.core.resolved_identity import resolve_identity  # noqa: E402
-from src.core.tool_error_logging import handle_tool_error, record_boundary_error  # noqa: E402
 
 
 def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
@@ -220,18 +241,6 @@ async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
 # so middleware and scope["state"] propagate correctly within the same ASGI app.
 # ---------------------------------------------------------------------------
 
-from a2a.server.request_handlers.response_helpers import agent_card_to_dict  # noqa: E402
-from a2a.server.routes import create_jsonrpc_routes  # noqa: E402
-from a2a.server.routes.agent_card_routes import create_agent_card_routes  # noqa: E402
-from a2a.types import AgentCard as A2AAgentCard  # noqa: E402
-from starlette.routing import Route  # noqa: E402
-
-from src.a2a_server.adcp_a2a_server import (  # noqa: E402
-    AdCPRequestHandler,
-    create_agent_card,
-)
-from src.a2a_server.context_builder import AdCPCallContextBuilder  # noqa: E402
-from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain  # noqa: E402
 
 # Create the A2A application and add routes
 _agent_card = create_agent_card()
@@ -271,8 +280,6 @@ async def a2a_trailing_slash_redirect():
 # tenant-specific URLs based on request headers.
 # ---------------------------------------------------------------------------
 
-
-from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 _VALID_HOSTNAME_RE = re.compile(
     r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*(\:\d{1,5})?$"
@@ -396,10 +403,6 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 # Health and debug routes
 # ---------------------------------------------------------------------------
 
-from src.routes.api_v1 import router as api_v1_router  # noqa: E402
-from src.routes.health import debug_router as health_debug_router  # noqa: E402
-from src.routes.health import router as health_router  # noqa: E402
-
 app.include_router(api_v1_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
@@ -409,9 +412,6 @@ app.include_router(health_debug_router)
 #   1. CORSMiddleware (outermost — adds CORS headers to all responses)
 #   2. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
 # ---------------------------------------------------------------------------
-
-from src.core.auth_middleware import UnifiedAuthMiddleware  # noqa: E402
-from src.routes.rest_compat_middleware import RestCompatMiddleware  # noqa: E402
 
 app.add_middleware(UnifiedAuthMiddleware)
 app.add_middleware(RestCompatMiddleware)
@@ -430,10 +430,6 @@ app.add_middleware(
 # Admin UI — mount Flask admin via WSGIMiddleware
 # ---------------------------------------------------------------------------
 
-from a2wsgi import WSGIMiddleware  # noqa: E402
-
-from src.admin.app import create_app  # noqa: E402
-
 flask_admin_app = create_app()
 admin_wsgi = WSGIMiddleware(flask_admin_app)
 
@@ -441,12 +437,6 @@ admin_wsgi = WSGIMiddleware(flask_admin_app)
 # ---------------------------------------------------------------------------
 # Landing page routes
 # ---------------------------------------------------------------------------
-
-from fastapi.responses import HTMLResponse  # noqa: E402
-
-from src.core.domain_routing import route_landing_page  # noqa: E402
-from src.landing import generate_tenant_landing_page  # noqa: E402
-from src.landing.landing_page import generate_fallback_landing_page  # noqa: E402
 
 
 async def _handle_landing_page(request: Request):

@@ -449,7 +449,7 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
         return JSONResponse(status_code=e.status_code, content=dict(e.envelope))
 
     error_code, error_message, recovery = extract_error_info(e)
-    synthetic = AdCPError(
+    synthetic = AdCPError.synthesize(
         error_message,
         error_code=error_code,
         status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
