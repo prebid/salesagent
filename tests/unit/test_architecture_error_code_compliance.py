@@ -113,7 +113,12 @@ class TestErrorCodeCompliance:
             )
 
     def test_adcp_error_subclass_codes_are_compliant(self):
-        """Every AdCPError subclass error_code must be standard or internal."""
+        """Every AdCPError subclass _default_error_code must be standard or internal.
+
+        Reads ``_default_error_code`` (the ClassVar slot per option-A refactor
+        salesagent-fnk9). The public ``error_code`` is an instance attribute
+        set in ``__init__`` and is not present on the class object.
+        """
         from src.core.exceptions import AdCPError
 
         violations = []
@@ -121,9 +126,9 @@ class TestErrorCodeCompliance:
         while queue:
             cls = queue.pop()
             for sub in cls.__subclasses__():
-                code = sub.error_code
+                code = sub._default_error_code
                 if code not in _ALLOWED_CODES:
-                    violations.append(f"{sub.__name__}.error_code = {code!r}")
+                    violations.append(f"{sub.__name__}._default_error_code = {code!r}")
                 queue.append(sub)
 
         assert not violations, "AdCPError subclasses with non-compliant codes:\n" + "\n".join(

@@ -68,8 +68,12 @@ def _adcp_error_from_code(
         AdCPValidationError,
     )
 
+    # Read class-level identity from the _default_error_code ClassVar slot
+    # (option-A refactor per salesagent-fnk9). error_code is an instance
+    # attribute set in __init__; reading it off the class would return the
+    # descriptor, not the wire code string.
     _CODE_TO_CLASS: dict[str, type[AdCPError]] = {
-        cls.error_code: cls
+        cls._default_error_code: cls
         for cls in (
             AdCPValidationError,
             AdCPAuthenticationError,
@@ -101,7 +105,7 @@ def _adcp_error_from_code(
     # the wire, and Authentication (missing token/tenant) is the more common
     # buyer-facing case. Pin Authentication explicitly here so the mapping
     # doesn't depend on dict-comprehension insertion order.
-    _CODE_TO_CLASS[AdCPAuthenticationError.error_code] = AdCPAuthenticationError
+    _CODE_TO_CLASS[AdCPAuthenticationError._default_error_code] = AdCPAuthenticationError
     from src.core.exceptions import INTERNAL_CODES
 
     assert error_code not in INTERNAL_CODES, (

@@ -404,8 +404,12 @@ def _build_error_code_to_status() -> dict[str, int]:
     while stack:
         cls = stack.pop()
         stack.extend(cls.__subclasses__())
-        code = getattr(cls, "error_code", None)
-        status = getattr(cls, "status_code", None)
+        # Class-level identity lives on the _default_* ClassVar slots — option-A
+        # refactor (salesagent-fnk9). error_code/status_code are instance attrs
+        # set in __init__; reading them off the class would return descriptor
+        # objects, not strings/ints.
+        code = getattr(cls, "_default_error_code", None)
+        status = getattr(cls, "_default_status_code", None)
         if not code or not status:
             continue
         # Index the raw class code so plain-ToolError("CODE") fallbacks resolve.

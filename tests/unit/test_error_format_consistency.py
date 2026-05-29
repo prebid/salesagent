@@ -798,9 +798,11 @@ class TestErrorCodeVocabularyConsistency:
         ]
 
         for exc_class in exception_classes:
-            code = exc_class.error_code
+            # _default_error_code is the class-level identity slot per
+            # salesagent-fnk9 option A. error_code is an instance attribute.
+            code = exc_class._default_error_code
             assert code in self.CANONICAL_ERROR_CODES, (
-                f"{exc_class.__name__}.error_code = {code!r} is not in the canonical vocabulary. "
+                f"{exc_class.__name__}._default_error_code = {code!r} is not in the canonical vocabulary. "
                 f"If this is a new code, add it to CANONICAL_ERROR_CODES with a comment. "
                 f"If this is a renamed code, update the exception class."
             )
@@ -812,20 +814,27 @@ class TestErrorCodeVocabularyConsistency:
         """
         from src.core.exceptions import AdCPRateLimitError
 
-        assert AdCPRateLimitError.error_code == "RATE_LIMITED", (
-            f"AdCPRateLimitError.error_code = {AdCPRateLimitError.error_code!r}, "
+        # Class-level identity lives on _default_error_code (option A,
+        # salesagent-fnk9). The public error_code is an instance attribute set
+        # in __init__ from this default unless overridden via synthesize().
+        assert AdCPRateLimitError._default_error_code == "RATE_LIMITED", (
+            f"AdCPRateLimitError._default_error_code = {AdCPRateLimitError._default_error_code!r}, "
             f"expected 'RATE_LIMITED' per SDK STANDARD_ERROR_CODES"
         )
+        # Also pin via instance — proves the class-level default propagates
+        # into the instance attribute on construction.
+        assert AdCPRateLimitError("test").error_code == "RATE_LIMITED"
 
     def test_canonical_vocabulary_covers_all_subclasses(self):
         """CANONICAL_ERROR_CODES must have exactly one entry per exception subclass."""
         from src.core.exceptions import AdCPError
 
-        # Discover all concrete subclasses (recursively)
+        # Discover all concrete subclasses (recursively). Reads
+        # _default_error_code per option-A refactor (salesagent-fnk9).
         subclass_codes = set()
 
         def _collect(cls: type) -> None:
-            subclass_codes.add(cls.error_code)
+            subclass_codes.add(cls._default_error_code)
             for sub in cls.__subclasses__():
                 _collect(sub)
 

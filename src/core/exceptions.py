@@ -10,7 +10,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel
@@ -147,11 +147,23 @@ def _serialize_context(
 class AdCPError(Exception):
     """Base exception for all AdCP errors.
 
+    Class-level identity (``_default_error_code``, ``_default_status_code``,
+    ``_default_recovery``) is declared with ``ClassVar`` per PEP 526 — each
+    typed subclass overrides the ``_default_*`` slot, not the public name.
+    The public ``error_code``/``status_code``/``recovery`` are instance
+    attributes set in ``__init__`` from the class-level default unless the
+    caller overrides via kwargs (only ``synthesize()`` is sanctioned).
+
+    Code that needs class-level identity (e.g. ``_build_error_code_to_status``
+    walking ``__subclasses__()`` to build the wire-code → HTTP-status table)
+    reads ``cls._default_error_code`` / ``cls._default_status_code`` directly.
+    Instance code reads ``self.error_code`` etc. as before.
+
     Attributes:
         message: Human-readable error description.
-        status_code: HTTP status code for REST/FastAPI responses.
-        error_code: Machine-readable error code string.
-        recovery: Recovery classification for buyer agents.
+        status_code: HTTP status code for REST/FastAPI responses (instance).
+        error_code: Machine-readable error code string (instance).
+        recovery: Recovery classification for buyer agents (instance).
         details: Optional structured error details.
         field: Optional field name that caused the error.
         suggestion: Optional correction hint for buyer agents.
@@ -160,9 +172,15 @@ class AdCPError(Exception):
             request that produced them (spec 3.0.0 normative).
     """
 
-    status_code: int = 500
-    error_code: str = "INTERNAL_ERROR"
-    recovery: RecoveryHint = "terminal"
+    # Class-level identity defaults. Subclasses override these.
+    _default_status_code: ClassVar[int] = 500
+    _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+
+    # Instance attributes — set in __init__ from _default_* unless overridden.
+    error_code: str
+    status_code: int
+    recovery: RecoveryHint
 
     def __init__(
         self,
@@ -176,24 +194,19 @@ class AdCPError(Exception):
         suggestion: str | None = None,
         context: ContextObject | dict[str, Any] | None = None,
     ) -> None:
-        # ``error_code`` and ``status_code`` are class attributes on typed
-        # subclasses (AdCPValidationError.error_code = "VALIDATION_ERROR" etc.)
-        # but the base class accepts them as keyword overrides so the REST
-        # boundary handler can synthesize an AdCPError from a plain ToolError
-        # without mutating attributes after construction (was: instance-attr
-        # mutation hiding an undocumented API).
+        # ``error_code`` and ``status_code`` kwargs are only used by the
+        # sanctioned ``synthesize()`` classmethod for boundary fallback paths
+        # that need a wire code the typed class hierarchy doesn't model.
+        # Direct raises use a typed subclass and inherit its ``_default_*``.
         super().__init__(message)
         self.message = message
         self.details = details
         self.field = field
         self.suggestion = suggestion
         self.context = context
-        if recovery is not None:
-            self.recovery = recovery
-        if error_code is not None:
-            self.error_code = error_code
-        if status_code is not None:
-            self.status_code = status_code
+        self.error_code = error_code if error_code is not None else type(self)._default_error_code
+        self.status_code = status_code if status_code is not None else type(self)._default_status_code
+        self.recovery = recovery if recovery is not None else type(self)._default_recovery
 
     @property
     def wire_error_code(self) -> str:
@@ -310,9 +323,9 @@ class AdCPError(Exception):
 class AdCPValidationError(AdCPError):
     """Invalid parameters or request data (400)."""
 
-    status_code = 400
-    error_code = "VALIDATION_ERROR"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 400
+    _default_error_code: ClassVar[str] = "VALIDATION_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAuthenticationError(AdCPError):
@@ -328,8 +341,8 @@ class AdCPAuthenticationError(AdCPError):
     ``terminal`` so wire output matches the installed SDK's validator.
     """
 
-    status_code = 401
-    error_code = "AUTH_TOKEN_INVALID"
+    _default_status_code: ClassVar[int] = 401
+    _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
@@ -339,7 +352,7 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     Uses same error_code as parent (AUTH_TOKEN_INVALID) per spec.
     """
 
-    error_code = "AUTH_TOKEN_INVALID"
+    _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthorizationError(AdCPError):
@@ -349,36 +362,36 @@ class AdCPAuthorizationError(AdCPError):
     SDK-vs-spec mismatch reason — see that class's docstring.
     """
 
-    status_code = 403
-    error_code = "AUTH_REQUIRED"
+    _default_status_code: ClassVar[int] = 403
+    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
 
 
 class AdCPNotFoundError(AdCPError):
     """Requested resource does not exist (404)."""
 
-    status_code = 404
-    error_code = "NOT_FOUND"
+    _default_status_code: ClassVar[int] = 404
+    _default_error_code: ClassVar[str] = "NOT_FOUND"
 
 
 class AdCPAccountNotFoundError(AdCPNotFoundError):
     """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND)."""
 
-    error_code = "ACCOUNT_NOT_FOUND"
+    _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"
 
 
 class AdCPAccountSetupRequiredError(AdCPError):
     """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
 
-    status_code = 422
-    error_code = "ACCOUNT_SETUP_REQUIRED"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "ACCOUNT_SETUP_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAccountSuspendedError(AdCPError):
     """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED)."""
 
-    status_code = 403
-    error_code = "ACCOUNT_SUSPENDED"
+    _default_status_code: ClassVar[int] = 403
+    _default_error_code: ClassVar[str] = "ACCOUNT_SUSPENDED"
 
 
 class AdCPAccountPaymentRequiredError(AdCPError):
@@ -390,22 +403,22 @@ class AdCPAccountPaymentRequiredError(AdCPError):
     UC-002 account-reference partition/boundary rows.
     """
 
-    status_code = 402
-    error_code = "ACCOUNT_PAYMENT_REQUIRED"
+    _default_status_code: ClassVar[int] = 402
+    _default_error_code: ClassVar[str] = "ACCOUNT_PAYMENT_REQUIRED"
 
 
 class AdCPConflictError(AdCPError):
     """Resource conflict, e.g. duplicate idempotency key (409)."""
 
-    status_code = 409
-    error_code = "CONFLICT"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 409
+    _default_error_code: ClassVar[str] = "CONFLICT"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAccountAmbiguousError(AdCPConflictError):
     """Natural key matches multiple accounts (409, ACCOUNT_AMBIGUOUS)."""
 
-    error_code = "ACCOUNT_AMBIGUOUS"
+    _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
 
 
 class AdCPGoneError(AdCPError):
@@ -416,33 +429,33 @@ class AdCPGoneError(AdCPError):
     media buy) and re-issuing the request.
     """
 
-    status_code = 410
-    error_code = "INVALID_STATE"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 410
+    _default_error_code: ClassVar[str] = "INVALID_STATE"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPBudgetExhaustedError(AdCPError):
     """Budget or spend limit has been reached (422)."""
 
-    status_code = 422
-    error_code = "BUDGET_EXHAUSTED"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "BUDGET_EXHAUSTED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPRateLimitError(AdCPError):
     """Too many requests (429)."""
 
-    status_code = 429
-    error_code = "RATE_LIMITED"
-    recovery: RecoveryHint = "transient"
+    _default_status_code: ClassVar[int] = 429
+    _default_error_code: ClassVar[str] = "RATE_LIMITED"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPAdapterError(AdCPError):
     """External adapter (GAM, etc.) failure (502)."""
 
-    status_code = 502
-    error_code = "SERVICE_UNAVAILABLE"
-    recovery: RecoveryHint = "transient"
+    _default_status_code: ClassVar[int] = 502
+    _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPConfigurationError(AdCPError):
@@ -453,17 +466,22 @@ class AdCPConfigurationError(AdCPError):
     fall back — the configuration needs admin intervention.
     """
 
-    status_code = 500
-    error_code = "CONFIGURATION_ERROR"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 500
+    _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPServiceUnavailableError(AdCPError):
-    """Service or product temporarily unavailable (503)."""
+    """Service or product temporarily unavailable (503).
 
-    status_code = 503
-    error_code = "SERVICE_UNAVAILABLE"
-    recovery: RecoveryHint = "transient"
+    503 indicates a temporary outage in a downstream service the sales
+    agent depends on. Recovery=transient so buyer agents retry rather
+    than mutate the request.
+    """
+
+    _default_status_code: ClassVar[int] = 503
+    _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 # ---------------------------------------------------------------------------
@@ -484,8 +502,8 @@ class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
     case the buyer's own request is the lever for recovery.
     """
 
-    error_code = "MEDIA_BUY_NOT_FOUND"
-    recovery: RecoveryHint = "correctable"
+    _default_error_code: ClassVar[str] = "MEDIA_BUY_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPPackageNotFoundError(AdCPNotFoundError):
@@ -496,16 +514,16 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     the same reason as ``AdCPMediaBuyNotFoundError``.
     """
 
-    error_code = "PACKAGE_NOT_FOUND"
-    recovery: RecoveryHint = "correctable"
+    _default_error_code: ClassVar[str] = "PACKAGE_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPBudgetTooLowError(AdCPError):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
-    status_code = 422
-    error_code = "BUDGET_TOO_LOW"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "BUDGET_TOO_LOW"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPCapabilityNotSupportedError(AdCPError):
@@ -532,9 +550,9 @@ class AdCPCapabilityNotSupportedError(AdCPError):
         revisit condition above. Remove when the SDK enforces terminal.
     """
 
-    status_code = 422
-    error_code = "UNSUPPORTED_FEATURE"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "UNSUPPORTED_FEATURE"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 # ---------------------------------------------------------------------------

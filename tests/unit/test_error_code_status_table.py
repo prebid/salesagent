@@ -36,28 +36,36 @@ class TestErrorCodeStatusTableDerivation:
     """The status table is derived from class attributes, not hand-edited."""
 
     def test_every_adcp_error_subclass_present_in_status_table(self):
-        """Pin: any ``AdCPError`` subclass with ``error_code``+``status_code`` is in the table.
+        """Pin: any ``AdCPError`` subclass with ``_default_error_code``+``_default_status_code`` is in the table.
 
         Mutation test: removing either attribute from a subclass breaks this assertion
         and forces a re-evaluation of why that subclass exists. The "derived from
         class attributes" invariant is the structural contract here — if a subclass
         is missing from the table, the boundary translator's plain-``ToolError``
         fallback will mis-classify its HTTP status.
+
+        Reads the ``_default_*`` ClassVar slots directly (option-A refactor per
+        salesagent-fnk9) — the public ``error_code``/``status_code`` are instance
+        attributes set in ``__init__`` and would not resolve on the class object.
+        Structural guards intentionally break encapsulation to assert how the code
+        is written, not just its runtime behavior.
         """
         table = _build_error_code_to_status()
         missing: list[str] = []
         for cls in _walk_subclasses(AdCPError):
             if cls is AdCPError:
                 continue
-            code = getattr(cls, "error_code", None)
-            status = getattr(cls, "status_code", None)
+            code = getattr(cls, "_default_error_code", None)
+            status = getattr(cls, "_default_status_code", None)
             if not code or not status:
                 continue
             if code not in table:
-                missing.append(f"  {cls.__name__}: error_code={code!r} status_code={status} not in table")
+                missing.append(
+                    f"  {cls.__name__}: _default_error_code={code!r} _default_status_code={status} not in table"
+                )
         assert not missing, (
             "AdCPError subclasses are not represented in _ERROR_CODE_TO_STATUS — "
-            "drift between class attributes and the derived table:\n" + "\n".join(missing)
+            "drift between class _default_* attributes and the derived table:\n" + "\n".join(missing)
         )
 
     def test_auth_required_resolves_to_403(self):
