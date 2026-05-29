@@ -110,9 +110,9 @@ class TestMcpWireErrorEnvelope:
             message_substr="mb_does_not_exist_mcp_wire",
         )
         # Two-layer invariant: errors[0].message is byte-identical to adcp_error.message.
-        assert (
-            envelope["errors"][0]["message"] == envelope["adcp_error"]["message"]
-        ), "errors[0].message must be byte-identical to adcp_error.message in single-error case"
+        assert envelope["errors"][0]["message"] == envelope["adcp_error"]["message"], (
+            "errors[0].message must be byte-identical to adcp_error.message in single-error case"
+        )
 
     def _call_mcp_tool_capturing_envelope(self, tool_name: str, params: dict, identity) -> tuple[bool, dict | None]:
         """Shared helper: invoke an MCP tool and return (is_error, parsed_envelope).
@@ -222,9 +222,9 @@ class TestMcpWireErrorEnvelope:
         assert envelope is not None, "Error must include content text carrying the envelope"
         assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
         msg_lower = envelope["adcp_error"]["message"].lower()
-        assert (
-            "past" in msg_lower or "start" in msg_lower
-        ), f"Envelope message must explain the failure, got: {envelope['adcp_error']['message']}"
+        assert "past" in msg_lower or "start" in msg_lower, (
+            f"Envelope message must explain the failure, got: {envelope['adcp_error']['message']}"
+        )
 
     def test_get_media_buy_delivery_missing_identity_emits_auth_envelope_on_wire(self, integration_db):
         """Missing identity in get_media_buy_delivery surfaces AUTH_TOKEN_INVALID on the MCP wire.
@@ -287,5 +287,5 @@ class TestMcpWireErrorEnvelope:
         assert envelope is not None, "Error must include content text carrying the envelope"
         assert_envelope_shape(envelope, "UNSUPPORTED_FEATURE", recovery="correctable")
         assert "account" in envelope["adcp_error"]["message"].lower(), (
-            f"Envelope message must explain the unsupported parameter, " f"got: {envelope['adcp_error']['message']}"
+            f"Envelope message must explain the unsupported parameter, got: {envelope['adcp_error']['message']}"
         )

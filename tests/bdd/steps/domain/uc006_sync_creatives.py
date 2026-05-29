@@ -443,9 +443,9 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
             f"SPEC-PRODUCTION GAP: expected {error_code}, production raised "
             f"'{actual_code}' ({type(error).__name__}: {error})"
         )
-    assert (
-        actual_code == error_code
-    ), f"Expected error code '{error_code}', got '{actual_code}' ({type(error).__name__}: {error})"
+    assert actual_code == error_code, (
+        f"Expected error code '{error_code}', got '{actual_code}' ({type(error).__name__}: {error})"
+    )
     assert suggestion, f"Expected non-empty suggestion on {error_code} error, got {suggestion!r} ({error!r})"
 
 
@@ -569,9 +569,9 @@ def _get_creative_from_db(ctx: dict) -> object:
                 principal_id=principal.principal_id,
             )
         ).first()
-        assert (
-            creative is not None
-        ), f"No creative found in DB for tenant={tenant.tenant_id}, principal={principal.principal_id}"
+        assert creative is not None, (
+            f"No creative found in DB for tenant={tenant.tenant_id}, principal={principal.principal_id}"
+        )
         return creative
 
 
@@ -581,15 +581,15 @@ def _assert_workflow_steps(env: object, *, expect_present: bool) -> list:
     if expect_present:
         assert len(steps) > 0, "Expected workflow steps but none were created"
         for step in steps:
-            assert (
-                step.step_type == "creative_approval"
-            ), f"Expected step_type 'creative_approval', got '{step.step_type}'"
+            assert step.step_type == "creative_approval", (
+                f"Expected step_type 'creative_approval', got '{step.step_type}'"
+            )
             assert step.owner == "publisher", f"Expected owner 'publisher', got '{step.owner}'"
             assert step.status == "requires_approval", f"Expected status 'requires_approval', got '{step.status}'"
     else:
-        assert (
-            len(steps) == 0
-        ), f"Expected no workflow steps, but found {len(steps)}: {[(s.step_type, s.status) for s in steps]}"
+        assert len(steps) == 0, (
+            f"Expected no workflow steps, but found {len(steps)}: {[(s.step_type, s.status) for s in steps]}"
+        )
     return steps
 
 
@@ -624,9 +624,9 @@ def then_creative_use_require_human_default(ctx: dict) -> None:
     """Assert that when approval_mode is not configured, require-human is the default (INV-1)."""
     _assert_success_response(ctx)
     creative = _get_creative_from_db(ctx)
-    assert (
-        creative.status == "pending_review"
-    ), f"INV-1: Default approval mode should produce 'pending_review' status, got '{creative.status}'"
+    assert creative.status == "pending_review", (
+        f"INV-1: Default approval mode should produce 'pending_review' status, got '{creative.status}'"
+    )
     _assert_workflow_steps(ctx["env"], expect_present=True)
 
 
@@ -635,9 +635,9 @@ def then_creative_approved_immediately(ctx: dict) -> None:
     """Assert auto-approve sets status to approved with no workflow (INV-2)."""
     _assert_success_response(ctx)
     creative = _get_creative_from_db(ctx)
-    assert (
-        creative.status == "approved"
-    ), f"INV-2: auto-approve should set status to 'approved', got '{creative.status}'"
+    assert creative.status == "approved", (
+        f"INV-2: auto-approve should set status to 'approved', got '{creative.status}'"
+    )
     _assert_workflow_steps(ctx["env"], expect_present=False)
 
 
@@ -646,9 +646,9 @@ def then_review_workflow_with_slack(ctx: dict) -> None:
     """Assert require-human creates workflow + sends Slack notification (INV-3)."""
     _assert_success_response(ctx)
     creative = _get_creative_from_db(ctx)
-    assert (
-        creative.status == "pending_review"
-    ), f"INV-3: require-human should set status to 'pending_review', got '{creative.status}'"
+    assert creative.status == "pending_review", (
+        f"INV-3: require-human should set status to 'pending_review', got '{creative.status}'"
+    )
     _assert_workflow_steps(ctx["env"], expect_present=True)
     mock_notify = ctx["env"].mock.get("send_notifications")
     if mock_notify is not None:
@@ -660,9 +660,9 @@ def then_review_workflow_with_ai(ctx: dict) -> None:
     """Assert ai-powered creates workflow + submits AI review (INV-4)."""
     _assert_success_response(ctx)
     creative = _get_creative_from_db(ctx)
-    assert (
-        creative.status == "pending_review"
-    ), f"INV-4: ai-powered should set status to 'pending_review', got '{creative.status}'"
+    assert creative.status == "pending_review", (
+        f"INV-4: ai-powered should set status to 'pending_review', got '{creative.status}'"
+    )
     _assert_workflow_steps(ctx["env"], expect_present=True)
 
 
@@ -1449,9 +1449,9 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
         if not isinstance(err, AdCPError):
             raise AssertionError(f"Expected AdCPError for FORMAT_MISMATCH, got {type(err).__name__}: {err}")
         msg = str(err).lower()
-        assert "format" in msg and (
-            "not supported" in msg or "mismatch" in msg
-        ), f"Expected format-mismatch indication in error, got: {err}"
+        assert "format" in msg and ("not supported" in msg or "mismatch" in msg), (
+            f"Expected format-mismatch indication in error, got: {err}"
+        )
     elif outcome in ("success", "success (no agent validation)"):
         if err is not None:
             pytest.xfail(f"SPEC-PRODUCTION GAP: expected '{outcome}' but production raised {type(err).__name__}: {err}")
@@ -1472,9 +1472,9 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
             )
         assigned = _get_creative_assigned_to(ctx)
         expected_pkg_id = ctx["package"].package_id
-        assert (
-            expected_pkg_id in assigned
-        ), f"Expected package {expected_pkg_id!r} in assigned_to after update, got {assigned}"
+        assert expected_pkg_id in assigned, (
+            f"Expected package {expected_pkg_id!r} in assigned_to after update, got {assigned}"
+        )
     elif outcome == "standard processing":
         _assert_standard_processing(ctx)
     elif outcome == "generative build with prompt":
@@ -1873,9 +1873,9 @@ def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
             f"SPEC-PRODUCTION GAP: spec requires error_code '{expected_code}' but production "
             f"raises '{actual_code}' (AdCPAuthenticationError.error_code='AUTH_TOKEN_INVALID')"
         )
-    assert (
-        actual_code == expected_code
-    ), f"Expected error code '{expected_code}', got '{actual_code}' ({type(error).__name__}: {error})"
+    assert actual_code == expected_code, (
+        f"Expected error code '{expected_code}', got '{actual_code}' ({type(error).__name__}: {error})"
+    )
 
 
 @then("the creative should be processed successfully")
@@ -1885,14 +1885,14 @@ def then_creative_processed_successfully(ctx: dict) -> None:
 
     assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
     resp = ctx.get("response")
-    assert isinstance(
-        resp, SyncCreativesResponse
-    ), f"Expected SyncCreativesResponse, got {type(resp).__name__ if resp else None}"
+    assert isinstance(resp, SyncCreativesResponse), (
+        f"Expected SyncCreativesResponse, got {type(resp).__name__ if resp else None}"
+    )
     results = getattr(resp, "results", None) or getattr(resp, "creatives", None) or []
     actions_str = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(
-        a in ("created", "updated", "unchanged") for a in actions_str
-    ), f"Expected at least one action in (created, updated, unchanged), got {actions_str}"
+    assert any(a in ("created", "updated", "unchanged") for a in actions_str), (
+        f"Expected at least one action in (created, updated, unchanged), got {actions_str}"
+    )
 
 
 @then("the request should be rejected with AUTH_REQUIRED")
@@ -2000,9 +2000,9 @@ def then_creative_action_created(ctx: dict) -> None:
     first = results[0]
     action_val = getattr(first, "action", None)
     action_str = str(getattr(action_val, "value", action_val))
-    assert (
-        action_str == "created"
-    ), f"Expected creative action 'created', got '{action_str}' (errors={getattr(first, 'errors', None)})"
+    assert action_str == "created", (
+        f"Expected creative action 'created', got '{action_str}' (errors={getattr(first, 'errors', None)})"
+    )
 
 
 @then('the creative should have action "failed"')
@@ -2027,9 +2027,9 @@ def then_creative_action_failed(ctx: dict) -> None:
     first = results[0]
     action_val = getattr(first, "action", None)
     action_str = str(getattr(action_val, "value", action_val))
-    assert (
-        action_str == "failed"
-    ), f"Expected creative action 'failed', got '{action_str}' (errors={getattr(first, 'errors', None)})"
+    assert action_str == "failed", (
+        f"Expected creative action 'failed', got '{action_str}' (errors={getattr(first, 'errors', None)})"
+    )
 
     errs = getattr(first, "errors", None) or []
     ctx["failed_creative_result"] = first
@@ -2247,9 +2247,9 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
             f"Error: {type(error).__name__}: {error.message if hasattr(error, 'message') else error}"
         )
 
-    assert isinstance(
-        error, AdCPError
-    ), f"Expected an AdCPError from assignment processing, got {type(error).__name__}: {error}"
+    assert isinstance(error, AdCPError), (
+        f"Expected an AdCPError from assignment processing, got {type(error).__name__}: {error}"
+    )
 
     # SPEC-PRODUCTION GAP: production exception classes have generic codes
     # ("NOT_FOUND", "VALIDATION_ERROR") while the spec defines specific codes
@@ -2317,9 +2317,9 @@ def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
                 "SPEC-PRODUCTION GAP: strict mode with non-existent package should abort with error, "
                 "but production succeeded. The package-not-found check may not fire in this code path."
             )
-        assert isinstance(
-            error, (AdCPError, Exception)
-        ), f"Expected an error for strict mode, got {type(error).__name__}: {error}"
+        assert isinstance(error, (AdCPError, Exception)), (
+            f"Expected an error for strict mode, got {type(error).__name__}: {error}"
+        )
     elif outcome == "warning logged, processing continues":
         if error is not None:
             pytest.xfail(
@@ -2367,9 +2367,9 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
             "but production succeeded. The package-not-found check may not fire in this path. "
             f"Response: {ctx.get('response')}"
         )
-    assert isinstance(
-        error, (AdCPError, Exception)
-    ), f"Expected an error (strict abort), got {type(error).__name__}: {error}"
+    assert isinstance(error, (AdCPError, Exception)), (
+        f"Expected an error (strict abort), got {type(error).__name__}: {error}"
+    )
     # Pre-empt downstream suggestion-field assertion that will fail
     if isinstance(error, AdCPNotFoundError) and not getattr(error, "details", None):
         pytest.xfail(
@@ -2613,9 +2613,9 @@ def then_creative_has_approval_workflow_status(ctx: dict) -> None:
         _xfail_if_e2e(ctx)
         creative = _get_creative_from_db(ctx)
         status = creative.status
-    assert (
-        status in _APPROVAL_STATUSES
-    ), f"Expected approval-workflow status (one of {_APPROVAL_STATUSES}), got '{status}'"
+    assert status in _APPROVAL_STATUSES, (
+        f"Expected approval-workflow status (one of {_APPROVAL_STATUSES}), got '{status}'"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -3115,9 +3115,9 @@ def then_media_buy_status_should_not_change(ctx: dict) -> None:
         pytest.xfail(f"SPEC-PRODUCTION GAP: expected no status change but sync raised {type(error).__name__}: {error}")
     original_status = ctx["media_buy"].status
     actual = _get_media_buy_status_from_db(ctx)
-    assert (
-        actual == original_status
-    ), f"Expected media buy status to remain '{original_status}' (non-draft), got '{actual}'"
+    assert actual == original_status, (
+        f"Expected media buy status to remain '{original_status}' (non-draft), got '{actual}'"
+    )
 
 
 @then(parsers.parse('the media buy status should be "{status}"'))
@@ -3729,9 +3729,9 @@ def then_no_field_level_merging(ctx: dict) -> None:
         )
     creative_only_keys = set(creative_provenance.keys()) - set(asset_provenance.keys())
     leaked = {k: creative_provenance[k] for k in creative_only_keys if k in asset_provenance}
-    assert (
-        not leaked
-    ), f"INV-5: Field-level merge detected — creative-only provenance fields leaked into asset provenance: {leaked}"
+    assert not leaked, (
+        f"INV-5: Field-level merge detected — creative-only provenance fields leaked into asset provenance: {leaked}"
+    )
 
 
 # --- additional steps for related scenarios ---
@@ -3780,9 +3780,9 @@ def then_creative_flagged_for_review(ctx: dict) -> None:
     """Assert the creative status is 'pending_review' (flagged for review due to missing provenance)."""
     _assert_success_response(ctx)
     creative = _get_creative_from_db(ctx)
-    assert (
-        creative.status == "pending_review"
-    ), f"Expected creative flagged for review (status='pending_review'), got '{creative.status}'"
+    assert creative.status == "pending_review", (
+        f"Expected creative flagged for review (status='pending_review'), got '{creative.status}'"
+    )
 
 
 @then("the creative should be processed (not rejected)")
@@ -3853,9 +3853,9 @@ def then_workflow_step_created_with_type(ctx: dict, step_type: str) -> None:
     """Assert a workflow step was created with the specified type (INV-3)."""
     _assert_success_response(ctx)
     steps = _assert_workflow_steps(ctx["env"], expect_present=True)
-    assert any(
-        s.step_type == step_type for s in steps
-    ), f"Expected workflow step with type '{step_type}', got types: {[s.step_type for s in steps]}"
+    assert any(s.step_type == step_type for s in steps), (
+        f"Expected workflow step with type '{step_type}', got types: {[s.step_type for s in steps]}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -3887,9 +3887,9 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
             ctx["principal"] = principal
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    assert (
-        principal.principal_id == principal_id
-    ), f"Authenticated principal '{principal.principal_id}' != scenario principal '{principal_id}'"
+    assert principal.principal_id == principal_id, (
+        f"Authenticated principal '{principal.principal_id}' != scenario principal '{principal_id}'"
+    )
     creative = CreativeFactory(
         tenant=tenant,
         principal=principal,
@@ -4502,16 +4502,16 @@ def _assert_standard_processing(ctx: dict) -> None:
     assert resp is not None, "Expected a response for 'standard processing'"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(
-        a in ("created", "updated", "unchanged") for a in actions
-    ), f"Expected created/updated/unchanged for static processing, got {actions}"
+    assert any(a in ("created", "updated", "unchanged") for a in actions), (
+        f"Expected created/updated/unchanged for static processing, got {actions}"
+    )
     # Verify generative build was NOT invoked
     env = ctx["env"]
     registry = env.mock["registry"].return_value
     if hasattr(registry.build_creative, "called"):
-        assert (
-            not registry.build_creative.called
-        ), "build_creative should NOT be called for static (non-generative) creatives"
+        assert not registry.build_creative.called, (
+            "build_creative should NOT be called for static (non-generative) creatives"
+        )
 
 
 def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
@@ -4530,9 +4530,9 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
     assert resp is not None, "Expected a response for generative build"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(
-        a in ("created", "updated") for a in actions
-    ), f"Expected created/updated for generative build, got {actions}"
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected created/updated for generative build, got {actions}"
+    )
     # Verify build_creative WAS invoked
     env = ctx["env"]
     registry = env.mock["registry"].return_value
@@ -4548,13 +4548,13 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
                 break
     assert message_arg is not None, "build_creative must be called with a message/prompt"
     if prompt_source == "assets":
-        assert (
-            "Create a creative for:" not in message_arg
-        ), f"Expected prompt from assets, but got name fallback: {message_arg!r}"
+        assert "Create a creative for:" not in message_arg, (
+            f"Expected prompt from assets, but got name fallback: {message_arg!r}"
+        )
     elif prompt_source == "name_fallback":
-        assert (
-            "Create a creative for:" in message_arg
-        ), f"Expected name fallback prompt ('Create a creative for: ...'), got: {message_arg!r}"
+        assert "Create a creative for:" in message_arg, (
+            f"Expected name fallback prompt ('Create a creative for: ...'), got: {message_arg!r}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5049,15 +5049,15 @@ def then_processed_as_generative(ctx: dict) -> None:
     assert resp is not None, "Expected a response for generative processing"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(
-        a in ("created", "updated") for a in actions
-    ), f"Expected created/updated for generative processing, got {actions}"
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected created/updated for generative processing, got {actions}"
+    )
     # Verify build_creative WAS invoked (generative detection)
     env = ctx["env"]
     registry = env.mock["registry"].return_value
-    assert (
-        registry.build_creative.called
-    ), "build_creative should have been called for generative format (output_format_ids present)"
+    assert registry.build_creative.called, (
+        "build_creative should have been called for generative format (output_format_ids present)"
+    )
 
 
 @then("the creative should have generated content")
@@ -5089,9 +5089,9 @@ def then_creative_has_generated_content(ctx: dict) -> None:
     ).first()
     assert db_creative is not None, f"Creative {creative_id} not found in DB"
     creative_data = db_creative.data or {}
-    assert (
-        "generative_build_result" in creative_data
-    ), f"Expected 'generative_build_result' in creative data, got keys: {list(creative_data.keys())}"
+    assert "generative_build_result" in creative_data, (
+        f"Expected 'generative_build_result' in creative data, got keys: {list(creative_data.keys())}"
+    )
     env = ctx["env"]
     registry = env.mock["registry"].return_value
     assert registry.build_creative.called, "build_creative should have been called to generate content"
@@ -5128,9 +5128,9 @@ def then_generative_build_uses_prompt(ctx: dict, expected_prompt: str) -> None:
             message_arg = call_kwargs.kwargs.get(kw_name)
             if message_arg:
                 break
-    assert (
-        message_arg is not None
-    ), f"build_creative must be called with a message/prompt, got args={call_kwargs.args}, kwargs={call_kwargs.kwargs}"
+    assert message_arg is not None, (
+        f"build_creative must be called with a message/prompt, got args={call_kwargs.args}, kwargs={call_kwargs.kwargs}"
+    )
     assert message_arg == expected_prompt, f"Expected prompt '{expected_prompt}', got '{message_arg}'"
 
 
@@ -5149,9 +5149,9 @@ def then_generative_build_skipped(ctx: dict) -> None:
     assert resp is not None, "Expected a response when generative build is skipped"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(
-        a in ("updated", "unchanged") for a in actions
-    ), f"Expected updated/unchanged when build skipped, got {actions}"
+    assert any(a in ("updated", "unchanged") for a in actions), (
+        f"Expected updated/unchanged when build skipped, got {actions}"
+    )
     # build_creative should NOT have been called
     env = ctx["env"]
     registry = env.mock["registry"].return_value
@@ -5191,12 +5191,12 @@ def then_existing_data_preserved(ctx: dict) -> None:
     creative_data = db_creative.data or {}
     for key in ("generative_build_result", "generative_status", "generative_context_id"):
         if key in expected_data:
-            assert (
-                key in creative_data
-            ), f"Expected preserved key '{key}' in creative data, got keys: {list(creative_data.keys())}"
-            assert (
-                creative_data[key] == expected_data[key]
-            ), f"Expected preserved '{key}' = {expected_data[key]!r}, got {creative_data[key]!r}"
+            assert key in creative_data, (
+                f"Expected preserved key '{key}' in creative data, got keys: {list(creative_data.keys())}"
+            )
+            assert creative_data[key] == expected_data[key], (
+                f"Expected preserved '{key}' = {expected_data[key]!r}, got {creative_data[key]!r}"
+            )
 
 
 @then("the user-provided assets should be preserved")
@@ -5232,9 +5232,9 @@ def then_user_assets_preserved(ctx: dict) -> None:
     user_assets = ctx.get("user_provided_assets", {})
     # The user-provided "image" key must exist in stored assets
     for asset_key in user_assets:
-        assert (
-            asset_key in stored_assets
-        ), f"User-provided '{asset_key}' asset should be preserved, got assets keys: {list(stored_assets.keys())}"
+        assert asset_key in stored_assets, (
+            f"User-provided '{asset_key}' asset should be preserved, got assets keys: {list(stored_assets.keys())}"
+        )
 
 
 @then("user assets should take priority over any generated content")
@@ -5278,9 +5278,9 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
         )
         stored_image = stored_assets["image"]
         for key, value in user_assets["image"].items():
-            assert (
-                stored_image.get(key) == value
-            ), f"User-provided image['{key}'] should be preserved. Expected {value!r}, got {stored_image.get(key)!r}"
+            assert stored_image.get(key) == value, (
+                f"User-provided image['{key}'] should be preserved. Expected {value!r}, got {stored_image.get(key)!r}"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5529,9 +5529,9 @@ def then_creative_associated_with_principal(ctx: dict, principal_id: str) -> Non
             )
         ).first()
         assert creative is not None, f"Creative {creative_id} not found in DB after sync"
-        assert (
-            creative.principal_id == principal_id
-        ), f"Expected creative principal_id='{principal_id}', got '{creative.principal_id}'"
+        assert creative.principal_id == principal_id, (
+            f"Expected creative principal_id='{principal_id}', got '{creative.principal_id}'"
+        )
 
 
 # --- cswm: cross-principal creative isolation (BR-RULE-034 INV-2) ---
@@ -5605,9 +5605,9 @@ def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> Non
             )
         ).first()
         assert creative is not None, f"Creative {creative_id} not found in DB for principal '{principal_id}'"
-        assert (
-            creative.principal_id == principal_id
-        ), f"Expected principal_id='{principal_id}', got '{creative.principal_id}'"
+        assert creative.principal_id == principal_id, (
+            f"Expected principal_id='{principal_id}', got '{creative.principal_id}'"
+        )
 
 
 @then(parsers.parse('the existing creative for principal "{principal_id}" should remain unchanged'))
@@ -5672,9 +5672,9 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
     if get_format_mock is None or not isinstance(get_format_mock, AsyncMock):
         # Cannot verify — but the creative was processed successfully
         return
-    assert (
-        get_format_mock.call_count > 0
-    ), "Expected creative agent validation (registry.get_format called), but it was never called"
+    assert get_format_mock.call_count > 0, (
+        "Expected creative agent validation (registry.get_format called), but it was never called"
+    )
 
 
 @then(parsers.parse('the response should include one creative with action "{action}"'))
@@ -6173,9 +6173,9 @@ def then_assignment_errors_contain_package_id(ctx: dict) -> None:
     for pkg_list in assignments_dict.values():
         expected_pkg_ids.update(pkg_list)
 
-    assert isinstance(
-        assignment_errors, dict
-    ), f"Expected assignment_errors to be a dict, got {type(assignment_errors).__name__}"
+    assert isinstance(assignment_errors, dict), (
+        f"Expected assignment_errors to be a dict, got {type(assignment_errors).__name__}"
+    )
     matched = expected_pkg_ids & set(assignment_errors.keys())
     assert matched, (
         f"assignment_errors keys {list(assignment_errors.keys())} do not contain "
@@ -6290,14 +6290,14 @@ def then_compatible_package_assignment_created(ctx: dict) -> None:
     first = results[0]
     assigned = first.assigned_to or []
     compatible_pkg = ctx["compatible_package"]
-    assert (
-        compatible_pkg.package_id in assigned
-    ), f"Expected compatible package {compatible_pkg.package_id!r} in assigned_to, got {assigned}"
+    assert compatible_pkg.package_id in assigned, (
+        f"Expected compatible package {compatible_pkg.package_id!r} in assigned_to, got {assigned}"
+    )
     # Also verify the incompatible package is NOT in assigned_to
     incompatible_pkg = ctx["incompatible_package"]
-    assert (
-        incompatible_pkg.package_id not in assigned
-    ), f"Incompatible package {incompatible_pkg.package_id!r} should NOT be in assigned_to, but it is: {assigned}"
+    assert incompatible_pkg.package_id not in assigned, (
+        f"Incompatible package {incompatible_pkg.package_id!r} should NOT be in assigned_to, but it is: {assigned}"
+    )
 
 
 @then("the assignment should be skipped with a warning")
@@ -6326,9 +6326,9 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
     creative_id = ctx["creatives"][-1]["creative_id"]
     nonexistent_pkgs = ctx["assignments"][creative_id]
     for pkg_id in nonexistent_pkgs:
-        assert (
-            pkg_id not in assigned
-        ), f"Non-existent package {pkg_id!r} should NOT be in assigned_to, but it is: {assigned}"
+        assert pkg_id not in assigned, (
+            f"Non-existent package {pkg_id!r} should NOT be in assigned_to, but it is: {assigned}"
+        )
 
     # There should be a warning or assignment_error referencing the skipped package
     assignment_errors = first.assignment_errors or {}
@@ -6345,9 +6345,9 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
     if has_error_entry:
         for pkg_id in nonexistent_pkgs:
             if pkg_id in assignment_errors:
-                assert assignment_errors[
-                    pkg_id
-                ], f"assignment_errors[{pkg_id!r}] should have a non-empty message, got {assignment_errors[pkg_id]!r}"
+                assert assignment_errors[pkg_id], (
+                    f"assignment_errors[{pkg_id!r}] should have a non-empty message, got {assignment_errors[pkg_id]!r}"
+                )
 
 
 @then("the creative should receive equal rotation with other unweighted creatives")
@@ -6387,9 +6387,9 @@ def then_creative_equal_rotation_with_unweighted(ctx: dict) -> None:
         # All unweighted assignments should have the same weight value (equal rotation)
         weights = [a.weight for a in assignments]
         unique_weights = set(weights)
-        assert (
-            len(unique_weights) == 1
-        ), f"Equal rotation requires all assignments to have the same weight, but found varying weights: {weights}"
+        assert len(unique_weights) == 1, (
+            f"Equal rotation requires all assignments to have the same weight, but found varying weights: {weights}"
+        )
         # Production uses weight=100 as the default "equal" weight
         actual_weight = weights[0]
         if actual_weight is None:
@@ -6490,9 +6490,9 @@ def then_response_includes_assignment_errors_for_nonexistent(ctx: dict) -> None:
             f"but got assignment_errors={assignment_errors!r}"
         )
 
-    assert isinstance(
-        assignment_errors, dict
-    ), f"Expected assignment_errors to be a dict, got {type(assignment_errors).__name__}"
+    assert isinstance(assignment_errors, dict), (
+        f"Expected assignment_errors to be a dict, got {type(assignment_errors).__name__}"
+    )
     assert nonexistent_pkg_id in assignment_errors, (
         f"Expected non-existent package {nonexistent_pkg_id!r} in assignment_errors keys "
         f"{list(assignment_errors.keys())}"
@@ -6680,12 +6680,12 @@ def then_new_creative_created_for_principal_scope(ctx: dict, principal_id: str) 
                 creative_id=creative_id,
             )
         ).first()
-        assert (
-            creative is not None
-        ), f"No creative found in DB for tenant={env._tenant_id}, principal={principal_id}, creative_id={creative_id}"
-        assert (
-            creative.principal_id == principal_id
-        ), f"Expected creative stamped with principal_id '{principal_id}', got '{creative.principal_id}'"
+        assert creative is not None, (
+            f"No creative found in DB for tenant={env._tenant_id}, principal={principal_id}, creative_id={creative_id}"
+        )
+        assert creative.principal_id == principal_id, (
+            f"Expected creative stamped with principal_id '{principal_id}', got '{creative.principal_id}'"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════

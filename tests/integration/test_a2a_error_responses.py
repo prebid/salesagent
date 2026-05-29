@@ -248,9 +248,9 @@ class TestA2AErrorPropagation:
 
         # CRITICAL ASSERTIONS: Success response
         assert artifact_data["success"] is True, "success must be True for successful operation"
-        assert (
-            artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0
-        ), "errors field must be None or empty array for success"
+        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
+            "errors field must be None or empty array for success"
+        )
         assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
@@ -408,9 +408,9 @@ class TestA2AErrorPropagation:
         assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
         # Per-error message enumerates the missing required fields.
         msg = artifact_data["errors"][0]["message"]
-        assert (
-            "format_id" in msg and "content_uri" in msg and "name" in msg
-        ), f"Per-error message must name all missing required fields, got: {msg}"
+        assert "format_id" in msg and "content_uri" in msg and "name" in msg, (
+            f"Per-error message must name all missing required fields, got: {msg}"
+        )
 
     async def test_assign_creative_missing_required_params_wire_envelope(self, handler, test_tenant, test_principal):
         """assign_creative missing required params → two-layer envelope on the A2A wire.
@@ -643,9 +643,9 @@ class TestA2AErrorResponseStructure:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert (
-                error.recovery == "transient"
-            ), "Custom recovery='transient' override must be preserved, not default 'terminal'"
+            assert error.recovery == "transient", (
+                "Custom recovery='transient' override must be preserved, not default 'terminal'"
+            )
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
 
@@ -799,10 +799,10 @@ class TestA2AContextEcho:
             f"Got keys: {sorted(artifact_data.keys())}"
         )
         echoed = artifact_data["context"]
-        assert (
-            echoed.get("session_id") == "sess_a2a_context_echo"
-        ), f"session_id must round-trip unchanged, got: {echoed}"
-        assert (
-            echoed.get("workflow_step") == "echo_validation"
-        ), f"workflow_step must round-trip unchanged, got: {echoed}"
+        assert echoed.get("session_id") == "sess_a2a_context_echo", (
+            f"session_id must round-trip unchanged, got: {echoed}"
+        )
+        assert echoed.get("workflow_step") == "echo_validation", (
+            f"workflow_step must round-trip unchanged, got: {echoed}"
+        )
         assert echoed.get("request_id") == "req_abc_42", f"request_id must round-trip unchanged, got: {echoed}"

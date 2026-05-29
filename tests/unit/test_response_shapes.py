@@ -37,9 +37,9 @@ def assert_field_type(data: dict, field: str, expected_type: type, *, allow_none
     assert field in data, f"Missing field '{field}' in {sorted(data.keys())}"
     if allow_none and data[field] is None:
         return
-    assert isinstance(
-        data[field], expected_type
-    ), f"Field '{field}' expected {expected_type.__name__}, got {type(data[field]).__name__}: {data[field]!r}"
+    assert isinstance(data[field], expected_type), (
+        f"Field '{field}' expected {expected_type.__name__}, got {type(data[field]).__name__}: {data[field]!r}"
+    )
 
 
 def assert_fields_present(data: dict, required_fields: list[str]) -> None:

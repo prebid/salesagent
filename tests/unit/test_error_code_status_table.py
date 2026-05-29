@@ -70,9 +70,9 @@ class TestErrorCodeStatusTableDerivation:
         (authenticated but not authorized).
         """
         table = _build_error_code_to_status()
-        assert (
-            table["AUTH_REQUIRED"] == 403
-        ), f"AUTH_REQUIRED must resolve to 403 (AdCPAuthorizationError), got {table.get('AUTH_REQUIRED')}"
+        assert table["AUTH_REQUIRED"] == 403, (
+            f"AUTH_REQUIRED must resolve to 403 (AdCPAuthorizationError), got {table.get('AUTH_REQUIRED')}"
+        )
 
     def test_invalid_request_resolves_to_400(self):
         """Pin: ``INVALID_REQUEST`` resolves to 400.
@@ -84,9 +84,9 @@ class TestErrorCodeStatusTableDerivation:
         an inline ``_GENERIC_CATCHALLS`` set.
         """
         table = _build_error_code_to_status()
-        assert (
-            table["INVALID_REQUEST"] == 400
-        ), f"INVALID_REQUEST must resolve to 400 (generic 4xx catchall), got {table.get('INVALID_REQUEST')}"
+        assert table["INVALID_REQUEST"] == 400, (
+            f"INVALID_REQUEST must resolve to 400 (generic 4xx catchall), got {table.get('INVALID_REQUEST')}"
+        )
 
     def test_auth_token_invalid_resolves_to_401(self):
         """Pin: ``AUTH_TOKEN_INVALID`` resolves to 401 from ``AdCPAuthenticationError``.
@@ -96,9 +96,9 @@ class TestErrorCodeStatusTableDerivation:
         — passthrough, not in ERROR_CODE_MAPPING.
         """
         table = _build_error_code_to_status()
-        assert (
-            table["AUTH_TOKEN_INVALID"] == 401
-        ), f"AUTH_TOKEN_INVALID must resolve to 401 (AdCPAuthenticationError), got {table.get('AUTH_TOKEN_INVALID')}"
+        assert table["AUTH_TOKEN_INVALID"] == 401, (
+            f"AUTH_TOKEN_INVALID must resolve to 401 (AdCPAuthenticationError), got {table.get('AUTH_TOKEN_INVALID')}"
+        )
 
     def test_service_unavailable_resolves_via_highest_status(self):
         """Pin: ``SERVICE_UNAVAILABLE`` takes the highest status when codes overlap.
@@ -109,9 +109,9 @@ class TestErrorCodeStatusTableDerivation:
         used for a plain-ToolError fallback that has no carried context.
         """
         table = _build_error_code_to_status()
-        assert (
-            table["SERVICE_UNAVAILABLE"] == 503
-        ), f"SERVICE_UNAVAILABLE must resolve to 503 (highest status wins), got {table.get('SERVICE_UNAVAILABLE')}"
+        assert table["SERVICE_UNAVAILABLE"] == 503, (
+            f"SERVICE_UNAVAILABLE must resolve to 503 (highest status wins), got {table.get('SERVICE_UNAVAILABLE')}"
+        )
 
     def test_table_is_built_from_function_not_module_const(self):
         """Pin: the function returns a fresh dict (no module-level mutation).

@@ -104,9 +104,9 @@ def _adcp_error_from_code(
     _CODE_TO_CLASS[AdCPAuthenticationError.error_code] = AdCPAuthenticationError
     from src.core.exceptions import INTERNAL_CODES
 
-    assert (
-        error_code not in INTERNAL_CODES
-    ), f"INTERNAL code {error_code!r} reached harness reconstruction — production wire leaked an internal-only code"
+    assert error_code not in INTERNAL_CODES, (
+        f"INTERNAL code {error_code!r} reached harness reconstruction — production wire leaked an internal-only code"
+    )
     exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
     reconstructed = exc_cls(
         message=message,
@@ -661,9 +661,9 @@ class BaseTestEnv:
                         # If a third module imports get_http_headers without being
                         # patched, this won't catch it — but at least we verify
                         # the known auth paths were exercised.
-                        assert (
-                            patched_th.called or patched_mw.called
-                        ), f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
+                        assert patched_th.called or patched_mw.called, (
+                            f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
+                        )
                         return response_cls(**result.structured_content)
 
         else:

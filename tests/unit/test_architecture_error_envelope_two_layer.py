@@ -133,9 +133,9 @@ class TestBoundaryTranslatorsUseEnvelope:
     def test_rest_boundary_uses_envelope(self):
         """``adcp_error_handler`` must call build_two_layer_error_envelope()."""
         path, fn = "src/app.py", "adcp_error_handler"
-        assert _function_calls_builder(
-            path, fn
-        ), f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so REST responses have the spec two-layer envelope shape."
+        assert _function_calls_builder(path, fn), (
+            f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so REST responses have the spec two-layer envelope shape."
+        )
 
     def test_envelope_builder_exported(self):
         """The envelope builder is the single source of truth — verify it exists and is callable."""

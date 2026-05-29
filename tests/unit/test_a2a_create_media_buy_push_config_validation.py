@@ -109,9 +109,9 @@ async def test_short_webhook_credentials_do_not_block_create_media_buy():
     # The handler must return the tool's result (manual-approval submitted),
     # not a VALIDATION_ERROR dict.
     if isinstance(result, dict):
-        assert (
-            result.get("status") == "submitted"
-        ), f"Expected submitted status to reach the webhook path, got dict {result!r}"
+        assert result.get("status") == "submitted", (
+            f"Expected submitted status to reach the webhook path, got dict {result!r}"
+        )
     else:
         assert result.status == "submitted", f"Expected submitted status, got {result!r}"
 

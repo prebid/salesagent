@@ -1831,22 +1831,22 @@ class TestUC003UpdateTargetingOverlay:
         #      ``update_workflow_step(..., error_message=...)`` shape that
         #      would silently lose response_data on the webhook path).
         audit_cm_calls = standard_mocks["ctx_mgr_instance"].audit_step_failure.call_args_list
-        assert (
-            len(audit_cm_calls) == 1
-        ), f"Expected exactly one audit_step_failure context manager entry on raise, got {len(audit_cm_calls)}"
+        assert len(audit_cm_calls) == 1, (
+            f"Expected exactly one audit_step_failure context manager entry on raise, got {len(audit_cm_calls)}"
+        )
         get_step = audit_cm_calls[0].args[0]
         assert get_step() is standard_mocks["step"]
 
         cm_return = standard_mocks["ctx_mgr_instance"].audit_step_failure.return_value
         exit_calls = cm_return.__exit__.call_args_list
-        assert (
-            len(exit_calls) == 1
-        ), f"Expected exactly one __exit__ on the audit_step_failure CM, got {len(exit_calls)}"
+        assert len(exit_calls) == 1, (
+            f"Expected exactly one __exit__ on the audit_step_failure CM, got {len(exit_calls)}"
+        )
         # __exit__(exc_type, exc_val, exc_tb) — pin both the class and the message.
         exit_args = exit_calls[0].args
-        assert (
-            exit_args[0] is AdCPValidationError
-        ), f"Expected AdCPValidationError to escape the audit_step_failure CM, got {exit_args[0]}"
+        assert exit_args[0] is AdCPValidationError, (
+            f"Expected AdCPValidationError to escape the audit_step_failure CM, got {exit_args[0]}"
+        )
         assert isinstance(exit_args[1], AdCPValidationError)
         assert "property_targeting_allowed" in exit_args[1].message
 
@@ -1950,9 +1950,9 @@ class TestUC003UpdateTargetingOverlay:
             persisted_list_id = persisted_pl.list_id if persisted_pl is not None else None
         else:
             persisted_list_id = persisted["property_list"]["list_id"]
-        assert (
-            persisted_list_id == "B"
-        ), f"replacement semantic broken — persisted list_id={persisted_list_id!r}, expected 'B'"
+        assert persisted_list_id == "B", (
+            f"replacement semantic broken — persisted list_id={persisted_list_id!r}, expected 'B'"
+        )
         # The original "A" must not survive on list_id specifically (don't
         # substring-match the whole overlay repr — 'AnyUrl' contains 'A' too).
         assert persisted_list_id != "A", "original list_id was not replaced"

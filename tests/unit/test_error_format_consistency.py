@@ -79,9 +79,9 @@ class TestMCPErrorShapes:
         # missing brand.domain field. We don't pin on a specific code because
         # Pydantic v2's error codes vary by union/discriminator path.
         error_msg = str(exc_info.value)
-        assert (
-            "packages" in error_msg or "domain" in error_msg
-        ), f"Pydantic error should reference the malformed field, got: {error_msg}"
+        assert "packages" in error_msg or "domain" in error_msg, (
+            f"Pydantic error should reference the malformed field, got: {error_msg}"
+        )
 
     @pytest.mark.asyncio
     async def test_auth_error_raises_validation_error(self):

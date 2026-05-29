@@ -313,9 +313,9 @@ class TestTypedSubclasses:
         for class_name, expected_code in substrate.items():
             cls = getattr(exc_mod, class_name, None)
             assert cls is not None, f"{class_name} missing from src.core.exceptions"
-            assert (
-                cls.error_code == expected_code
-            ), f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
+            assert cls.error_code == expected_code, (
+                f"{class_name}.error_code={cls.error_code!r}, expected {expected_code!r}"
+            )
             assert expected_code in STANDARD_ERROR_CODES, f"{expected_code!r} missing from STANDARD_ERROR_CODES"
 
 
@@ -372,14 +372,14 @@ class TestWireBytesIdenticalAcrossTransports:
         exc = AdCPValidationError("budget must be positive", field="budget")
         rest_bytes = self._rest_envelope_bytes(exc)
         a2a_bytes = self._a2a_envelope_bytes(exc)
-        assert (
-            rest_bytes == a2a_bytes
-        ), f"REST and A2A envelopes drifted apart for AdCPValidationError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
+        assert rest_bytes == a2a_bytes, (
+            f"REST and A2A envelopes drifted apart for AdCPValidationError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
+        )
 
     def test_not_found_error_envelope_matches_across_transports(self):
         exc = AdCPNotFoundError("media buy missing")
         rest_bytes = self._rest_envelope_bytes(exc)
         a2a_bytes = self._a2a_envelope_bytes(exc)
-        assert (
-            rest_bytes == a2a_bytes
-        ), f"REST and A2A envelopes drifted apart for AdCPNotFoundError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
+        assert rest_bytes == a2a_bytes, (
+            f"REST and A2A envelopes drifted apart for AdCPNotFoundError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
+        )
