@@ -78,6 +78,7 @@ class CreateMediaBuyBody(BaseModel):
     start_time: str | None = None
     end_time: str | None = None
     po_number: str | None = None
+    account: dict[str, Any] | None = None  # AccountReference; coerced by CreateMediaBuyRequest
     idempotency_key: str | None = None
     adcp_version: str = "1.0.0"
 
@@ -251,12 +252,16 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
     try:
+        from adcp.types import AccountReference as LibraryAccountReference
+
+        account_ref = LibraryAccountReference.model_validate(body.account) if body.account is not None else None
         response = await media_buy_create_module.create_media_buy_raw(
             brand=body.brand,
             packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
             start_time=body.start_time,
             end_time=body.end_time,
             po_number=body.po_number,
+            account=account_ref,
             idempotency_key=body.idempotency_key,
             identity=identity,
         )

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
-from adcp.types import BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
+from adcp.types import AccountReference, BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
@@ -4081,6 +4081,15 @@ async def create_media_buy(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
     ext: dict[str, Any] | None = None,
+    account: Annotated[
+        AccountReference | None,
+        Field(
+            description=(
+                "Optional account reference (by id or natural key) scoping this buy to a sub-account "
+                "the authenticated agent manages. Resolved against the tenant's accounts at the boundary."
+            ),
+        ),
+    ] = None,
     idempotency_key: Annotated[
         str | None,
         Field(
@@ -4114,6 +4123,7 @@ async def create_media_buy(
         push_notification_config: Push notification config for async notifications (AdCP spec)
         context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
+        account: Optional AccountReference scoping the buy to a managed sub-account
         idempotency_key: Optional client-supplied key for replay-after-rejection
         ctx: FastMCP context (automatically provided)
 
@@ -4136,6 +4146,7 @@ async def create_media_buy(
             reporting_webhook=reporting_webhook,
             context=context,
             ext=ext,
+            account=account,
             idempotency_key=idempotency_key,
         )
     except ValidationError as e:
@@ -4171,6 +4182,7 @@ async def create_media_buy_raw(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    account: AccountReference | None = None,  # A2A/REST send dicts; coerced by CreateMediaBuyRequest
     idempotency_key: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -4192,6 +4204,7 @@ async def create_media_buy_raw(
         push_notification_config: Push notification config for status updates
         context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
+        account: Optional AccountReference scoping the buy to a managed sub-account
         idempotency_key: Optional client-supplied key for replay-after-rejection
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
@@ -4215,6 +4228,7 @@ async def create_media_buy_raw(
             reporting_webhook=to_reporting_webhook(reporting_webhook),
             context=to_context_object(context),
             ext=ext,
+            account=account,
             idempotency_key=idempotency_key,
         )
     except ValidationError as e:
