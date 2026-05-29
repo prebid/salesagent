@@ -25,12 +25,12 @@ def _assert_unsupported_feature_for_action(response, action: str) -> None:
     forces re-evaluation of that test's contract. Helper is private to
     this module — DRY per CLAUDE.md, intentionally not exported.
     """
-    assert response.errors is not None and len(response.errors) > 0, (
-        f"Expected Error response for action={action!r}; GAM currently rejects with UNSUPPORTED_FEATURE"
-    )
-    assert response.errors[0].code == "UNSUPPORTED_FEATURE", (
-        f"Expected UNSUPPORTED_FEATURE for action={action!r}, got {response.errors[0].code}"
-    )
+    assert (
+        response.errors is not None and len(response.errors) > 0
+    ), f"Expected Error response for action={action!r}; GAM currently rejects with UNSUPPORTED_FEATURE"
+    assert (
+        response.errors[0].code == "UNSUPPORTED_FEATURE"
+    ), f"Expected UNSUPPORTED_FEATURE for action={action!r}, got {response.errors[0].code}"
 
 
 class TestGAMOrderLifecycleIntegration:

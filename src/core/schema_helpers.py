@@ -13,7 +13,8 @@ Philosophy:
 from typing import Any
 
 from adcp import GetProductsResponse, Product
-from adcp.types import BrandReference, ContextObject, ProductFilters, PropertyListReference, ReportingWebhook
+from adcp.types import PropertyListReference
+from adcp.types import BrandReference, ContextObject, ProductFilters, ReportingWebhook
 
 from src.core.schemas.product import GetProductsRequest
 

@@ -7,7 +7,8 @@ snippet, snippet_type, template_variables), and context.
 Beads: salesagent-55b
 """
 
-from adcp.types import CreativeAsset, FormatId
+from adcp.types import FormatId
+from adcp.types import CreativeAsset
 
 from src.core.tools.creatives import _build_creative_data
 

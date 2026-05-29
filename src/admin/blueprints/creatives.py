@@ -11,13 +11,8 @@ from typing import Any
 
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
-from adcp.types import (
-    ContextObject,
-    CreativeAction,
-    McpWebhookPayload,
-    SyncCreativeResult,
-    SyncCreativesSuccessResponse,
-)
+from adcp.types import CreativeAction, McpWebhookPayload, SyncCreativeResult, SyncCreativesSuccessResponse
+from adcp.types import ContextObject
 from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.models import (
@@ -661,7 +656,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         # Use the status snapshot from the first loop — no need for a second UoW
         buys_to_push = [
-            buy_id for buy_id in assignment_buy_ids if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
+            buy_id
+            for buy_id in assignment_buy_ids
+            if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
         ]
 
         for buy_id in buys_to_push:

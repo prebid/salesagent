@@ -5,7 +5,7 @@ from ``src.core.schemas`` for backward compatibility.
 """
 
 from datetime import date
-from enum import StrEnum
+from enum import Enum
 from typing import Any, Literal
 
 from adcp.types import AggregatedTotals as LibraryAggregatedTotals
@@ -20,9 +20,7 @@ from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryR
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import ReportingFrequency as LibraryReportingFrequency
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
-    ByGeoItem as LibraryByGeoItem,  # TODO: no stable alias in adcp.types
-)
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import ByGeoItem as LibraryByGeoItem  # TODO: no stable alias in adcp.types
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
@@ -43,7 +41,7 @@ class DeliveryMeasurement(LibraryDeliveryMeasurement):
     pass  # All fields inherited from library
 
 
-class DeliveryType(StrEnum):
+class DeliveryType(str, Enum):
     """Valid delivery types per AdCP spec."""
 
     GUARANTEED = "guaranteed"

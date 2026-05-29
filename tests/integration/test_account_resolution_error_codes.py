@@ -11,8 +11,8 @@ from adcp.types import (
     AccountReference,
     AccountReferenceById,
     AccountReferenceByNaturalKey,
-    BrandReference,
 )
+from adcp.types import BrandReference
 
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPAccountNotFoundError, AdCPNotFoundError

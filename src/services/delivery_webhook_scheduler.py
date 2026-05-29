@@ -14,9 +14,7 @@ from typing import Any
 from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import McpWebhookPayload
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
-    NotificationType,  # TODO: no stable alias — response-level NotificationType differs from top-level
-)
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import NotificationType  # TODO: no stable alias — response-level NotificationType differs from top-level
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session

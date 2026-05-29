@@ -12,8 +12,9 @@ from __future__ import annotations
 from datetime import UTC
 
 import pytest
-from adcp.types import CreativeAction, CreativeAsset
+from adcp.types import CreativeAction
 from adcp.types import FormatId as AdcpFormatId
+from adcp.types import CreativeAsset
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory

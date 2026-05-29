@@ -45,6 +45,7 @@ class TestProductPreconditions:
 
         Identity is required to determine tenant and principal.
         """
+        from src.core.exceptions import AdCPValidationError
 
         with ProductEnv() as env:
             # Bypass the harness identity by calling impl directly

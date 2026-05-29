@@ -6,12 +6,11 @@ assignments, and admin approval workflows.
 """
 
 from datetime import UTC, datetime
-from enum import Enum, StrEnum
+from enum import Enum
 from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
-    CreativeAction,
     CreativeStatus,
 )
 from adcp.types import FormatId as LibraryFormatId
@@ -27,7 +26,6 @@ from adcp.types import (
 from adcp.types import (
     ListCreativesResponse as LibraryListCreativesResponse,
 )
-from adcp.types import PaginationResponse as LibraryResponsePagination
 from adcp.types import (
     QuerySummary as LibraryQuerySummary,
 )
@@ -37,6 +35,7 @@ from adcp.types import (
 from adcp.types import (
     SyncCreativesRequest as LibrarySyncCreativesRequest,
 )
+from adcp.types import CreativeAction, PaginationResponse as LibraryResponsePagination
 from adcp.types.generated_poc.core.provenance import AiTool  # TODO: no stable alias in adcp.types
 from adcp.types.generated_poc.creative.list_creatives_response import (
     Creative as LibraryCreative,
@@ -62,7 +61,7 @@ from src.core.schemas._base import (
 )
 
 
-class DigitalSourceType(StrEnum):
+class DigitalSourceType(str, Enum):
     """IPTC Digital Source Type enumeration for AI provenance tracking.
 
     Values from IPTC NewsCodes vocabulary for Digital Source Type,
