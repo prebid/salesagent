@@ -35,6 +35,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
+from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -876,8 +877,6 @@ async def get_products_raw(
     """
     # Resolve identity from transport context if not provided
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
 
     # Create request object - adcp library validates schema

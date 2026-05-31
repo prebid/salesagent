@@ -46,6 +46,7 @@ from src.core.schemas.account import (
     SyncAccountsResponse,
 )
 from src.core.tool_context import ToolContext
+from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
 
@@ -228,8 +229,6 @@ def list_accounts_raw(
         ListAccountsResponse with accessible accounts.
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return _list_accounts_impl(req, identity)
 
@@ -735,7 +734,5 @@ async def sync_accounts_raw(
         SyncAccountsResponse with per-account action results.
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
     return await _sync_accounts_impl(req, identity)

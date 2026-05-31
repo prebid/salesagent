@@ -152,10 +152,10 @@ class BroadstreetAdapter(AdServerAdapter):
             The extracted campaign ID
 
         Raises:
-            ValueError: If media_buy_id format is invalid
+            AdCPValidationError: If media_buy_id is empty.
         """
         if not media_buy_id:
-            raise ValueError("media_buy_id cannot be empty")
+            raise AdCPValidationError("media_buy_id cannot be empty")
 
         if media_buy_id.startswith("bs_"):
             return media_buy_id[3:]  # Remove "bs_" prefix

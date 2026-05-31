@@ -4,6 +4,8 @@ This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
 """
 
+import asyncio
+import concurrent.futures
 import logging
 import time
 from collections.abc import Sequence
@@ -56,6 +58,7 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
 from src.core.audit_logger import get_audit_logger
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
+from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error
 
 
@@ -164,8 +167,6 @@ def _list_creative_formats_impl(
         raise AdCPAuthenticationError("No tenant context available")
 
     # Get formats from all registered creative agents via registry
-    import asyncio
-
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
 
     try:
@@ -180,8 +181,6 @@ def _list_creative_formats_impl(
     # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
     try:
         loop = asyncio.get_running_loop()
-        import concurrent.futures
-
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(
                 lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
@@ -556,7 +555,5 @@ def list_creative_formats_raw(
         ListCreativeFormatsResponse with all available formats
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return _list_creative_formats_impl(req, identity)

@@ -86,6 +86,7 @@ from src.core.tools.financial_validation import (
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
+from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
@@ -1534,8 +1535,6 @@ def update_media_buy_raw(
         idempotency_key=idempotency_key,
     )
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
     # A2A/REST callers pass identity directly without a FastMCP Context, so there
     # is no workflow context_id to forward — _impl creates one if needed.

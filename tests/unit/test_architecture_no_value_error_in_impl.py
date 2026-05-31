@@ -37,7 +37,6 @@ from pathlib import Path
 VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/__init__.py": 2,
     "src/adapters/base.py": 1,
-    "src/adapters/broadstreet/adapter.py": 1,  # _extract_campaign_id empty-id guard (internal contract)
     "src/adapters/broadstreet/config_schema.py": 4,
     "src/adapters/gam/auth.py": 5,
     "src/adapters/gam/client.py": 1,
