@@ -122,6 +122,7 @@ async def test_get_task_authenticated_proceeds_past_auth_check(
     mocker: pytest.FixtureRequest,
 ) -> None:
     """Authenticated identity must pass the auth check and proceed to DB access."""
+
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
     mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id.return_value = None
 
@@ -134,6 +135,7 @@ async def test_complete_task_authenticated_proceeds_past_auth_check(
     mocker: pytest.FixtureRequest,
 ) -> None:
     """Authenticated identity must pass the auth check and proceed to DB access."""
+
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
     mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id.return_value = None
 

@@ -23,6 +23,15 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPBudgetExceededError,
+    AdCPCapabilityNotSupportedError,
+    AdCPCreativeRejectedError,
+    AdCPPackageNotFoundError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     Budget,
@@ -117,17 +126,14 @@ def test_principal_not_found_returns_error(standard_mocks):
 
     identity = _make_identity()
     req = UpdateMediaBuyRequest(media_buy_id="mb_001")
-    result = _update_media_buy_impl(req=req, identity=identity)
+    with pytest.raises(AdCPAuthenticationError, match="principal_test"):
+        _update_media_buy_impl(req=req, identity=identity)
 
-    assert isinstance(result, UpdateMediaBuyError)
-    assert len(result.errors) == 1
-    assert result.errors[0].code == "AUTH_REQUIRED"
-    assert "principal_test" in result.errors[0].message
-
-    # Workflow step should be marked failed
-    standard_mocks["ctx_mgr_instance"].update_workflow_step.assert_called_once_with(
-        ANY, status="failed", response_data=ANY, error_message=ANY
-    )
+    # _update_media_buy_impl wraps its body in the ``audit_step_failure`` context
+    # manager, so the raise propagates through it rather than via a per-site
+    # fail_step call; the exception type is asserted by ``pytest.raises`` above.
+    audit_calls = standard_mocks["ctx_mgr_instance"].audit_step_failure.call_args_list
+    assert len(audit_calls) == 1
 
 
 def test_workflow_step_receives_request_model_with_protocol_metadata(standard_mocks):
@@ -407,11 +413,8 @@ class TestFlightDateValidationAndPersistence:
             start_time=start,
             end_time=end,
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) == 1
-        assert result.errors[0].code == "VALIDATION_ERROR"
+        with pytest.raises(AdCPValidationError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_end_equals_start_returns_error(self, standard_mocks):
         """When end_time == start_time, returns code='invalid_date_range'."""
@@ -441,10 +444,8 @@ class TestFlightDateValidationAndPersistence:
             start_time=same_time,
             end_time=same_time,
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "VALIDATION_ERROR"
+        with pytest.raises(AdCPValidationError):
+            _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------
@@ -557,12 +558,8 @@ def test_package_not_found_returns_error(standard_mocks):
         media_buy_id="mb_pkg_nf",
         packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
     )
-    result = _update_media_buy_impl(req=req, identity=identity)
-
-    assert isinstance(result, UpdateMediaBuyError)
-    assert len(result.errors) == 1
-    assert result.errors[0].code == "PACKAGE_NOT_FOUND"
-    assert "pkg_nonexistent" in result.errors[0].message
+    with pytest.raises(AdCPPackageNotFoundError, match="pkg_nonexistent"):
+        _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------
@@ -852,10 +849,8 @@ class TestUC003MainObligations:
             media_buy_id="mb_cur_limit",
             packages=[{"package_id": "pkg_1", "budget": 50000.0}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "BUDGET_EXCEEDED"
+        with pytest.raises(AdCPBudgetExceededError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_currency_limit_passes_when_no_max(self, standard_mocks):
         """Daily spend check skipped when max_daily_package_spend not configured.
@@ -1105,10 +1100,8 @@ class TestUC003CampaignLevelBudget:
             media_buy_id="mb_recalc",
             packages=[{"package_id": "pkg_1", "budget": 10000.0}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "BUDGET_EXCEEDED"
+        with pytest.raises(AdCPBudgetExceededError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_campaign_budget_no_adapter_call(self, standard_mocks):
         """Campaign budget update is database-only; no adapter call (gap G35).
@@ -1202,11 +1195,8 @@ class TestUC003UpdateCreativeIds:
             media_buy_id="mb_creative",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C999"]}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "CREATIVE_REJECTED"
-        assert "C999" in result.errors[0].message
+        with pytest.raises(AdCPCreativeRejectedError, match="C999"):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_creative_error_state_rejected(self, standard_mocks):
         """Creative in error state cannot be assigned.
@@ -1529,10 +1519,8 @@ class TestUC003UploadInlineCreatives:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "SERVICE_UNAVAILABLE"
+            with pytest.raises(AdCPAdapterError):
+                _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------
@@ -1631,10 +1619,8 @@ class TestUC003UpdateCreativeAssignments:
                 }
             ],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_creative_existence_validated_for_assignments(self, standard_mocks):
         """Creative not found when using creative_assignments path.
@@ -2052,7 +2038,7 @@ class TestUC003ExtA:
             _update_media_buy_impl(req=req, identity=identity)
 
     def test_principal_not_found_in_database(self, standard_mocks):
-        """Principal ID exists but no DB record returns principal_not_found.
+        """Principal ID exists but no DB record raises AdCPAuthenticationError.
 
         Covers: UC-003-EXT-A-02
         """
@@ -2060,10 +2046,8 @@ class TestUC003ExtA:
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(media_buy_id="mb_no_principal")
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "AUTH_REQUIRED"
+        with pytest.raises(AdCPAuthenticationError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_state_unchanged_on_auth_failure(self, standard_mocks):
         """No records modified when authentication fails.
@@ -2074,9 +2058,8 @@ class TestUC003ExtA:
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(media_buy_id="mb_auth_fail")
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
+        with pytest.raises(AdCPAuthenticationError):
+            _update_media_buy_impl(req=req, identity=identity)
         # No adapter call
         standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
         # No DB writes through UoW
@@ -2144,10 +2127,8 @@ class TestUC003ExtE:
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(media_buy_id="mb_eq", start_time=same_time, end_time=same_time)
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "VALIDATION_ERROR"
+        with pytest.raises(AdCPValidationError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_end_before_existing_start(self, standard_mocks):
         """end_time before existing start_time (only end_time updated).
@@ -2176,10 +2157,8 @@ class TestUC003ExtE:
             media_buy_id="mb_end_before",
             end_time=datetime(2025, 3, 10, tzinfo=UTC),
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "VALIDATION_ERROR"
+        with pytest.raises(AdCPValidationError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_start_after_existing_end(self, standard_mocks):
         """start_time after existing end_time (only start_time updated).
@@ -2208,10 +2187,8 @@ class TestUC003ExtE:
             media_buy_id="mb_start_after",
             start_time=datetime(2025, 4, 15, tzinfo=UTC),
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "VALIDATION_ERROR"
+        with pytest.raises(AdCPValidationError):
+            _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------
@@ -2241,10 +2218,8 @@ class TestUC003ExtF:
             media_buy_id="mb_gbp",
             packages=[{"package_id": "pkg_1", "budget": 5000.0}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------
@@ -2276,10 +2251,8 @@ class TestUC003ExtG:
             media_buy_id="mb_daily",
             packages=[{"package_id": "pkg_1", "budget": 10000.0}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "BUDGET_EXCEEDED"
+        with pytest.raises(AdCPBudgetExceededError):
+            _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------
@@ -2347,12 +2320,10 @@ class TestUC003ExtI:
             media_buy_id="mb_all_missing",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C999", "C998"]}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "CREATIVE_REJECTED"
-        assert "C999" in result.errors[0].message
-        assert "C998" in result.errors[0].message
+        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            _update_media_buy_impl(req=req, identity=identity)
+        assert "C999" in str(exc_info.value)
+        assert "C998" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -2507,10 +2478,8 @@ class TestUC003ExtK:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "SERVICE_UNAVAILABLE"
+            with pytest.raises(AdCPAdapterError):
+                _update_media_buy_impl(req=req, identity=identity)
 
     def test_media_buy_unmodified_on_sync_failure(self, standard_mocks):
         """Media buy unchanged when creative sync fails.
@@ -2548,9 +2517,9 @@ class TestUC003ExtK:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPAdapterError):
+                _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuyError)
         # No adapter call
         standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
         # No DB writes through UoW
@@ -2580,10 +2549,8 @@ class TestUC003ExtL:
             media_buy_id="mb_wrong_pkg",
             packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "PACKAGE_NOT_FOUND"
+        with pytest.raises(AdCPPackageNotFoundError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_package_id_does_not_exist(self, standard_mocks):
         """Non-existent package_id returns package_not_found.
@@ -2599,11 +2566,8 @@ class TestUC003ExtL:
             media_buy_id="mb_no_pkg_exist",
             packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "PACKAGE_NOT_FOUND"
-        assert "pkg_nonexistent" in result.errors[0].message
+        with pytest.raises(AdCPPackageNotFoundError, match="pkg_nonexistent"):
+            _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------
@@ -2651,10 +2615,8 @@ class TestUC003ExtM:
                 }
             ],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "VALIDATION_ERROR"
+        with pytest.raises(AdCPValidationError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_placement_targeting_on_unsupported_product(self, standard_mocks):
         """Placement targeting on product without placements rejected.
@@ -2691,10 +2653,8 @@ class TestUC003ExtM:
                 }
             ],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "UNSUPPORTED_FEATURE"
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------

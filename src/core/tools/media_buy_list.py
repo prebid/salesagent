@@ -61,7 +61,11 @@ from adcp.types import ContextObject, MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthRequiredError, AdCPCapabilityNotSupportedError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthRequiredError,
+    AdCPCapabilityNotSupportedError,
+    AdCPValidationError,
+)
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -110,14 +114,22 @@ def _get_media_buys_impl(
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
+            errors=[
+                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                    code="AUTH_REQUIRED", message="Principal ID not found in context"
+                )
+            ],
         )
 
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[Error(code="AUTH_REQUIRED", message=f"Principal {principal_id} not found")],
+            errors=[
+                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                    code="AUTH_REQUIRED", message=f"Principal {principal_id} not found"
+                )
+            ],
         )
 
     tenant = identity.tenant
@@ -227,7 +239,7 @@ def _get_media_buys_impl(
                     # so callers can grep/route on it without us adding a
                     # non-standard wire code.
                     hydration_errors.append(
-                        Error(
+                        Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
                             code="INTERNAL_ERROR",
                             message=(
                                 f"TARGETING_REHYDRATION_FAILED: targeting overlay for "

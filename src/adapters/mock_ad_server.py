@@ -20,7 +20,9 @@ from src.adapters.base import (
 )
 from src.core.exceptions import (
     AdCPBudgetExhaustedError,
+    AdCPCapabilityNotSupportedError,
     AdCPError,
+    AdCPMediaBuyNotFoundError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
@@ -562,31 +564,31 @@ class MockAdServer(AdServerAdapter):
             if targeting:
                 # Mock adapter mirrors GAM behavior - these targeting types are not supported
                 if getattr(targeting, "device_type_any_of", None):
-                    raise ValueError(
+                    raise AdCPCapabilityNotSupportedError(
                         f"Device targeting requested but not supported. "
                         f"Cannot fulfill buyer contract for device types: {targeting.device_type_any_of}."
                     )
 
                 if getattr(targeting, "os_any_of", None):
-                    raise ValueError(
+                    raise AdCPCapabilityNotSupportedError(
                         f"OS targeting requested but not supported. "
                         f"Cannot fulfill buyer contract for OS types: {targeting.os_any_of}."
                     )
 
                 if getattr(targeting, "browser_any_of", None):
-                    raise ValueError(
+                    raise AdCPCapabilityNotSupportedError(
                         f"Browser targeting requested but not supported. "
                         f"Cannot fulfill buyer contract for browsers: {targeting.browser_any_of}."
                     )
 
                 if getattr(targeting, "content_cat_any_of", None):
-                    raise ValueError(
+                    raise AdCPCapabilityNotSupportedError(
                         f"Content category targeting requested but not supported. "
                         f"Cannot fulfill buyer contract for categories: {targeting.content_cat_any_of}."
                     )
 
                 if getattr(targeting, "keywords_any_of", None):
-                    raise ValueError(
+                    raise AdCPCapabilityNotSupportedError(
                         f"Keyword targeting requested but not supported. "
                         f"Cannot fulfill buyer contract for keywords: {targeting.keywords_any_of}."
                     )
@@ -1041,7 +1043,7 @@ class MockAdServer(AdServerAdapter):
             self.log(f"Would return: All {len(assets)} creatives with status 'approved'")
         else:
             if media_buy_id not in self._media_buys:
-                raise ValueError(f"Media buy {media_buy_id} not found.")
+                raise AdCPMediaBuyNotFoundError(f"Media buy {media_buy_id} not found.")
 
             self._media_buys[media_buy_id]["creatives"].extend(assets)
             self.log(f"✓ Successfully uploaded {len(assets)} creatives")
@@ -1086,7 +1088,7 @@ class MockAdServer(AdServerAdapter):
     def check_media_buy_status(self, media_buy_id: str, today: datetime) -> CheckMediaBuyStatusResponse:
         """Simulates checking the status of a media buy."""
         if media_buy_id not in self._media_buys:
-            raise ValueError(f"Media buy {media_buy_id} not found.")
+            raise AdCPMediaBuyNotFoundError(f"Media buy {media_buy_id} not found.")
 
         buy = self._media_buys[media_buy_id]
         start_date = buy["start_time"]

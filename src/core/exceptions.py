@@ -555,6 +555,30 @@ class AdCPCapabilityNotSupportedError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+class AdCPCreativeRejectedError(AdCPError):
+    """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "CREATIVE_REJECTED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPBudgetExceededError(AdCPError):
+    """Requested budget exceeds tenant or product ceiling (422, BUDGET_EXCEEDED)."""
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "BUDGET_EXCEEDED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPProductUnavailableError(AdCPError):
+    """Product is offline, deactivated, or otherwise unavailable (422, PRODUCT_UNAVAILABLE)."""
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "PRODUCT_UNAVAILABLE"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
 # ---------------------------------------------------------------------------
 # Two-layer envelope serializer — single source of truth for wire shape.
 # ---------------------------------------------------------------------------

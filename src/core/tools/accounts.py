@@ -130,8 +130,6 @@ def _list_accounts_impl(
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        from src.core.exceptions import AdCPAuthenticationError
-
         raise AdCPAuthenticationError("Authentication required for list_accounts")
 
     tenant_id = identity.tenant_id
@@ -382,7 +380,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
     for tld in reserved_tlds:
         if brand_domain.endswith(tld):
             return [
-                Error(
+                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
                     code="VALIDATION_ERROR",
                     message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
                     f"and cannot be used for account provisioning.",
@@ -413,7 +411,7 @@ def _check_billing_policy(
 
     if billing_val not in supported:
         return [
-            Error(
+            Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
                 code="BILLING_NOT_SUPPORTED",
                 message=f"Billing model '{billing_val}' is not supported by this seller. "
                 f"Supported models: {', '.join(supported)}.",

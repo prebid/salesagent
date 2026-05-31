@@ -38,6 +38,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
+    AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPError,
     AdCPNotFoundError,
@@ -56,17 +57,22 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
-def _raise_if_validation_failed(message: str | None) -> None:
-    """Raise ``AdCPValidationError`` when the validator returned a non-empty message.
+def _raise_if_validation_failed(
+    message: str | None,
+    exc_type: type[AdCPError] = AdCPValidationError,
+    *,
+    context: ContextObject | None = None,
+) -> None:
+    """Raise ``exc_type(message, context=context)`` when the validator returned a non-empty message.
 
-    Shared one-liner so the four ``validate_*`` call sites in
-    ``_create_media_buy_impl`` express their failure path uniformly without
-    each one repeating ``if x: raise AdCPValidationError(x)``. The update
-    path keeps its own return-envelope flow (different wire codes:
-    ``BUDGET_EXCEEDED``, ``BUDGET_TOO_LOW``) and does not use this helper.
+    Shared one-liner so the budget ``validate_*`` call sites in
+    ``_create_media_buy_impl`` express their failure path uniformly. Each site
+    selects the spec-specific subclass — ``AdCPBudgetTooLowError`` for
+    minimum-spend shortfalls, ``AdCPBudgetExceededError`` for daily-spend
+    ceilings — so the wire code reflects the failure kind.
     """
     if message:
-        raise AdCPValidationError(message)
+        raise exc_type(message, context=context)
 
 
 def validate_agent_url(url: str | None) -> bool:
@@ -122,7 +128,6 @@ from src.core.schemas import (
     CreateMediaBuyResult,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
-    Error,
     FormatId,
     MediaPackage,
     Package,
@@ -1603,15 +1608,8 @@ async def _create_media_buy_impl(
     # Validate principal exists BEFORE creating context (foreign key constraint)
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
-        error_msg = f"Principal {principal_id} not found"
         # Cannot create context or workflow step without valid principal
-        return CreateMediaBuyResult(
-            response=CreateMediaBuyError(
-                errors=[Error(code="AUTH_REQUIRED", message=error_msg, details=None)],
-                context=req.context,
-            ),
-            status=AdcpTaskStatus.failed.value,
-        )
+        raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=req.context)
 
     # Idempotency check: if request carries an idempotency_key, look up an existing
     # media buy for the same (tenant, principal, key) triple.  Per adcp 3.12 spec,
@@ -2109,7 +2107,9 @@ async def _create_media_buy_impl(
                                             min_package_budget=package_min_spend,
                                             currency=package_currency,
                                             context="for products in this package",
-                                        )
+                                        ),
+                                        AdCPBudgetTooLowError,
+                                        context=req.context,
                                     )
                     else:
                         # Legacy mode: single total_budget for all products
@@ -2125,7 +2125,9 @@ async def _create_media_buy_impl(
                                     currency=request_currency,
                                     subject="Total",
                                     context="for the selected products",
-                                )
+                                ),
+                                AdCPBudgetTooLowError,
+                                context=req.context,
                             )
 
             # Validate maximum daily spend per package (if set)
@@ -2156,7 +2158,9 @@ async def _create_media_buy_impl(
                                     "This protects against accidental large budgets "
                                     "and prevents GAM line item proliferation."
                                 ),
-                            )
+                            ),
+                            AdCPBudgetExceededError,
+                            context=req.context,
                         )
                 else:
                     # Legacy mode: validate total budget
@@ -2169,7 +2173,9 @@ async def _create_media_buy_impl(
                             subject="Daily",
                             limit_label="maximum daily spend",
                             context="This protects against accidental large budgets.",
-                        )
+                        ),
+                        AdCPBudgetExceededError,
+                        context=req.context,
                     )
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
@@ -2763,14 +2769,10 @@ async def _create_media_buy_impl(
                 error_detail = "GAM configuration validation failed:\n" + "\n".join(
                     f"  • {err}" for err in config_errors
                 )
-                if step:
-                    ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
-                return CreateMediaBuyResult(
-                    response=CreateMediaBuyError(
-                        errors=[Error(code="VALIDATION_ERROR", message=err, details=None) for err in config_errors],
-                        context=req.context,
-                    ),
-                    status=AdcpTaskStatus.failed.value,
+                raise AdCPValidationError(
+                    error_detail,
+                    details={"config_errors": config_errors},
+                    context=req.context,
                 )
 
         product_auto_create = all(
@@ -3141,15 +3143,9 @@ async def _create_media_buy_impl(
         # Create the media buy using the adapter (SYNCHRONOUS operation)
         # Defensive null check: ensure start_time and end_time are set
         if not req.start_time or not req.end_time:
-            error_msg = "start_time and end_time are required but were not properly set"
-            if step:
-                ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-            return CreateMediaBuyResult(
-                response=CreateMediaBuyError(
-                    errors=[Error(code="VALIDATION_ERROR", message=error_msg, details=None)],
-                    context=req.context,
-                ),
-                status=AdcpTaskStatus.failed.value,
+            raise AdCPValidationError(
+                "start_time and end_time are required but were not properly set",
+                context=req.context,
             )
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter

@@ -18,7 +18,13 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import Field, RootModel, ValidationError
 from rich.console import Console
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPAuthRequiredError,
+    AdCPError,
+    AdCPValidationError,
+)
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -103,44 +109,12 @@ def _get_media_buy_delivery_impl(
 
     principal_id = identity.principal_id if identity else None
     if not principal_id:
-        # Return AdCP-compliant error response
-        # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
-        context_val = req.context
-        return GetMediaBuyDeliveryResponse(
-            reporting_period={"start": datetime.now(UTC), "end": datetime.now(UTC)},
-            currency="USD",
-            aggregated_totals=AggregatedTotals(
-                impressions=0.0,
-                spend=0.0,
-                clicks=None,
-                video_completions=None,
-                media_buy_count=0,
-            ),
-            media_buy_deliveries=[],
-            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
-            context=context_val,
-        )
+        raise AdCPAuthenticationError("Principal ID not found in context", context=req.context)
 
     # Get the Principal object
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
-        # Return AdCP-compliant error response
-        # TODO: @yusuf - Should this return only error field and not the other fields? Haven't we updated adcp spec to only return error field on errors??
-        context_val = req.context
-        return GetMediaBuyDeliveryResponse(
-            reporting_period={"start": datetime.now(UTC), "end": datetime.now(UTC)},
-            currency="USD",
-            aggregated_totals=AggregatedTotals(
-                impressions=0.0,
-                spend=0.0,
-                clicks=None,
-                video_completions=None,
-                media_buy_count=0,
-            ),
-            media_buy_deliveries=[],
-            errors=[Error(code="AUTH_REQUIRED", message=f"Principal {principal_id} not found")],
-            context=context_val,
-        )
+        raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = identity.tenant
@@ -160,21 +134,7 @@ def _get_media_buy_delivery_impl(
         end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
         if start_dt >= end_dt:
-            context_val = req.context
-            return GetMediaBuyDeliveryResponse(
-                reporting_period={"start": datetime.now(UTC), "end": datetime.now(UTC)},
-                currency="USD",
-                aggregated_totals=AggregatedTotals(
-                    impressions=0.0,
-                    spend=0.0,
-                    clicks=None,
-                    video_completions=None,
-                    media_buy_count=0,
-                ),
-                media_buy_deliveries=[],
-                errors=[Error(code="VALIDATION_ERROR", message="Start date must be before end date")],
-                context=context_val,
-            )
+            raise AdCPValidationError("Start date must be before end date", context=req.context)
     else:
         # Default to last 30 days
         end_dt = datetime.now(UTC)
@@ -202,7 +162,10 @@ def _get_media_buy_delivery_impl(
             for requested_id in req.media_buy_ids:
                 if requested_id not in found_ids:
                     not_found_errors.append(
-                        Error(code="MEDIA_BUY_NOT_FOUND", message=f"Media buy {requested_id} not found")
+                        Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                            code="MEDIA_BUY_NOT_FOUND",
+                            message=f"Media buy {requested_id} not found",
+                        )
                     )
 
         pricing_option_ids: list[Any] = []
@@ -317,23 +280,10 @@ def _get_media_buy_delivery_impl(
                                 uow.session.add(audit_log)
                         except Exception as audit_err:
                             logger.error(f"Failed to write adapter failure audit log: {audit_err}")
-                        context_val = req.context
-                        return GetMediaBuyDeliveryResponse(
-                            reporting_period={"start": reporting_period.start, "end": reporting_period.end},
-                            currency=buy.currency,
-                            aggregated_totals=AggregatedTotals(
-                                impressions=0.0,
-                                spend=0.0,
-                                clicks=None,
-                                video_completions=None,
-                                media_buy_count=0,
-                            ),
-                            media_buy_deliveries=[],
-                            errors=[
-                                Error(code="SERVICE_UNAVAILABLE", message=f"Error getting delivery for {media_buy_id}")
-                            ],
-                            context=context_val,
-                        )
+                        raise AdCPAdapterError(
+                            f"Error getting delivery for {media_buy_id}",
+                            context=req.context,
+                        ) from e
                 else:
                     # Use simulation for testing
                     # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
@@ -482,6 +432,10 @@ def _get_media_buy_delivery_impl(
                 media_buy_count += 1
                 total_clicks += clicks if clicks is not None else 0
 
+            except AdCPError:
+                # Typed AdCPError (e.g., AdCPAdapterError from inner block) propagates
+                # to the boundary translator for a spec-compliant envelope.
+                raise
             except Exception as e:
                 logger.error(f"Error getting delivery for {media_buy_id}: {e}")
                 # Skip this media buy and continue with others

@@ -204,18 +204,15 @@ class TestBroadstreetAdapterCreateMediaBuy:
         package.impressions = 100000
         package.implementation_config = {}  # No zones
 
-        result = adapter.create_media_buy(
-            request=request,
-            packages=[package],
-            start_time=start_time,
-            end_time=end_time,
-        )
+        from src.core.exceptions import AdCPValidationError
 
-        # Should fail with error
-        from src.core.schemas import CreateMediaBuyError
-
-        assert isinstance(result, CreateMediaBuyError)
-        assert any(err.code == "VALIDATION_ERROR" for err in result.errors)
+        with pytest.raises(AdCPValidationError):
+            adapter.create_media_buy(
+                request=request,
+                packages=[package],
+                start_time=start_time,
+                end_time=end_time,
+            )
 
 
 class TestBroadstreetAdapterCreatives:
@@ -357,19 +354,17 @@ class TestBroadstreetAdapterUpdates:
             tenant_id="test_tenant",
         )
 
+        from src.core.exceptions import AdCPPackageNotFoundError
+
         with _mock_db_session([]):
-            result = adapter.update_media_buy(
-                media_buy_id="bs_12345",
-                action="pause_media_buy",
-                package_id=None,
-                budget=None,
-                today=datetime.now(UTC),
-            )
-
-        from src.core.schemas import UpdateMediaBuyError
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert any(err.code == "PACKAGE_NOT_FOUND" for err in result.errors)
+            with pytest.raises(AdCPPackageNotFoundError):
+                adapter.update_media_buy(
+                    media_buy_id="bs_12345",
+                    action="pause_media_buy",
+                    package_id=None,
+                    budget=None,
+                    today=datetime.now(UTC),
+                )
 
     def test_update_media_buy_pause_package_dry_run(self, mock_principal, mock_config):
         """Test pausing a single package in dry-run mode."""
@@ -406,18 +401,16 @@ class TestBroadstreetAdapterUpdates:
             tenant_id="test_tenant",
         )
 
-        result = adapter.update_media_buy(
-            media_buy_id="bs_12345",
-            action="UNSUPPORTED_ACTION",
-            package_id=None,
-            budget=None,
-            today=datetime.now(UTC),
-        )
+        from src.core.exceptions import AdCPCapabilityNotSupportedError
 
-        from src.core.schemas import UpdateMediaBuyError
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert any(err.code == "UNSUPPORTED_FEATURE" for err in result.errors)
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            adapter.update_media_buy(
+                media_buy_id="bs_12345",
+                action="UNSUPPORTED_ACTION",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+            )
 
     def test_check_media_buy_status_dry_run(self, mock_principal, mock_config):
         """Test checking media buy status in dry-run mode."""

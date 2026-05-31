@@ -136,7 +136,7 @@ class TestA2AErrorPropagation:
         )
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
-        """Test that authentication errors include errors field in A2A response."""
+        """Principal-not-found surfaces AUTH_TOKEN_INVALID as a two-layer envelope on the A2A wire."""
         # Mock identity with non-existent principal — simulates resolved but invalid principal
         identity = PrincipalFactory.make_identity(
             principal_id="nonexistent_principal",
@@ -178,30 +178,15 @@ class TestA2AErrorPropagation:
         artifact = result.artifacts[0]
         artifact_data = self.extract_data_from_artifact(artifact)
 
-        # "Principal not found" is an established Pattern A site — the
-        # impl returns a CreateMediaBuyError variant carrying the
-        # Error(code=AUTH_REQUIRED) inside its ``errors`` list, NOT a raised
-        # AdCPAuthorizationError producing the two-layer envelope. The
-        # advisory pattern is documented in
-        # test_media_buy.py::test_principal_not_found_returns_error_response
-        # and is allowlist-permanent per the error-emission design decisions.
-        assert "errors" in artifact_data, "Response must include 'errors' field for auth errors"
-        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
-
-        # Verify error is about authentication
-        error = artifact_data["errors"][0]
-        assert "code" in error, "Error must include code"
-        assert error["code"] == "AUTH_REQUIRED"
-
-        # Pin the envelope-level side: Pattern A advisory-on-success
-        # responses do NOT carry the ``adcp_error`` envelope key (no
-        # AdCPError was raised — the impl returned errors[] directly).
-        # Asserting absence guards against a future regression that
-        # accidentally wraps this advisory in a two-layer envelope (which
-        # would change the wire shape for an allowlist-permanent site).
-        assert "adcp_error" not in artifact_data, (
-            "Pattern A advisory site emits errors[] only; the envelope-level "
-            "adcp_error key is reserved for raised-AdCPError two-layer envelopes"
+        # Principal-not-found raises AdCPAuthenticationError from _impl; the A2A
+        # dispatcher catches the typed error and builds the two-layer envelope on
+        # a failed Task. AUTH_TOKEN_INVALID is a STANDARD_ERROR_CODES entry
+        # (passthrough — not rewritten by ERROR_CODE_MAPPING); recovery=terminal.
+        assert_envelope_shape(
+            artifact_data,
+            "AUTH_TOKEN_INVALID",
+            recovery="terminal",
+            message_substr="not found",
         )
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):

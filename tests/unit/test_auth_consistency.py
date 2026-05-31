@@ -87,8 +87,8 @@ class TestMissingTokenConsistency:
         with pytest.raises(AdCPAuthenticationError, match="[Mm]issing x-adcp-auth"):
             _list_creatives_impl(identity=identity)
 
-    def test_get_media_buy_delivery_missing_auth_returns_error_response(self):
-        """get_media_buy_delivery returns an error response (not raise) when no auth token is provided."""
+    def test_get_media_buy_delivery_missing_auth_raises(self):
+        """get_media_buy_delivery raises AdCPAuthenticationError when no auth token is provided."""
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
         # Pass identity with no principal_id
@@ -96,17 +96,8 @@ class TestMissingTokenConsistency:
 
         req = MagicMock()
         req.context = None
-        result = _get_media_buy_delivery_impl(req, identity)
-
-        # Should return response with errors, not raise
-        assert result is not None
-        assert hasattr(result, "errors")
-        assert len(result.errors) > 0
-        # Check that the error message mentions the missing principal
-        error_messages = [str(e.message).lower() for e in result.errors]
-        assert any("principal" in msg for msg in error_messages), (
-            f"Expected error about missing principal, got: {error_messages}"
-        )
+        with pytest.raises(AdCPAuthenticationError, match="[Pp]rincipal"):
+            _get_media_buy_delivery_impl(req, identity)
 
     @pytest.mark.asyncio
     async def test_all_authenticated_tools_reject_none_identity(self):
@@ -179,19 +170,15 @@ class TestInvalidTokenConsistency:
             _list_creatives_impl(identity=identity)
 
     def test_get_media_buy_delivery_invalid_token(self):
-        """get_media_buy_delivery should return error response for identity with no principal."""
+        """get_media_buy_delivery should raise AdCPAuthenticationError for identity with no principal."""
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
         identity = _make_identity(principal_id=None)
 
         req = MagicMock()
         req.context = None
-        result = _get_media_buy_delivery_impl(req, identity)
-
-        # Should return response with errors, not raise
-        assert result is not None
-        assert hasattr(result, "errors")
-        assert len(result.errors) > 0
+        with pytest.raises(AdCPAuthenticationError):
+            _get_media_buy_delivery_impl(req, identity)
 
 
 class TestDiscoveryEndpointsAnonymousAccess:

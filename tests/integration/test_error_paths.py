@@ -32,8 +32,7 @@ from src.core.database.models import CurrencyLimit
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
-from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
-from src.core.schemas import CreateMediaBuyError, Error
+from src.core.exceptions import AdCPAuthenticationError, AdCPBudgetTooLowError, AdCPValidationError
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
 from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request_dict
@@ -144,10 +143,10 @@ class TestCreateMediaBuyErrorPaths:
             session.commit()
 
     async def test_missing_principal_returns_authentication_error(self, test_tenant_minimal):
-        """Test that missing principal returns Error response with authentication_error code.
+        """Test that missing principal raises AdCPAuthenticationError.
 
-        This tests line 3159 in main.py where Error(code="AUTH_REQUIRED") is used.
-        Previously this would cause NameError because Error wasn't imported.
+        After the error-emission architecture migration, _impl functions raise
+        typed AdCPError subclasses; the boundary translator builds the spec-compliant envelope.
         """
         identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
@@ -158,45 +157,26 @@ class TestCreateMediaBuyErrorPaths:
         future_start = datetime.now(UTC) + timedelta(days=1)
         future_end = future_start + timedelta(days=7)
 
-        # This should return error response, not raise NameError
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            context={"trace_id": "auth-missing-principal"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=future_start.isoformat(),
-            end_time=future_end.isoformat(),
-            identity=identity,
-        )
-
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        # Verify error details
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "AUTH_REQUIRED"
-        assert "principal" in error.message.lower() or "not found" in error.message.lower()
-        # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
-        assert response.context.trace_id == "auth-missing-principal"
+        # _impl raises typed exception; boundary translator builds envelope.
+        with pytest.raises(AdCPAuthenticationError, match="Principal.*not found"):
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                context={"trace_id": "auth-missing-principal"},
+                packages=[
+                    create_test_package_request_dict(
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                start_time=future_start.isoformat(),
+                end_time=future_end.isoformat(),
+                identity=identity,
+            )
 
     async def test_start_time_in_past_returns_validation_error(self, test_tenant_with_principal):
-        """Test that start_time in past returns Error response with validation_error code.
-
-        This tests line 3147 in main.py where Error(code="VALIDATION_ERROR") is used
-        in the ValueError exception handler.
-        """
+        """Test that start_time in past raises AdCPValidationError."""
         identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
@@ -231,7 +211,7 @@ class TestCreateMediaBuyErrorPaths:
         assert "past" in exc.message.lower() or "start" in exc.message.lower()
 
     async def test_end_time_before_start_returns_validation_error(self, test_tenant_with_principal):
-        """Test that end_time before start_time returns Error response."""
+        """Test that end_time before start_time raises AdCPValidationError."""
         identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",
@@ -300,7 +280,10 @@ class TestCreateMediaBuyErrorPaths:
         assert "greater than or equal to 0" in error_message.lower()
 
     async def test_missing_packages_returns_validation_error(self, test_tenant_with_principal):
-        """Test that missing packages returns Error response."""
+        """Test that empty packages raises AdCPValidationError.
+
+        Empty packages → budget=0 path → validation error.
+        """
         identity = PrincipalFactory.make_identity(
             tenant_id="error_test_tenant",
             principal_id="error_test_principal",

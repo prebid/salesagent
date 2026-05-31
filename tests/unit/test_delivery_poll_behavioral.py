@@ -738,12 +738,13 @@ class TestNextExpectedAtSerialization:
 
 
 class TestMissingPrincipalIdReturnsError:
-    """_get_media_buy_delivery_impl returns error when principal_id is missing.
+    """_get_media_buy_delivery_impl raises AdCPAuthenticationError when principal_id is missing.
 
     Covers lines 91-93 of media_buy_delivery.py.
     """
 
-    def test_none_principal_id_returns_error_response(self):
+    def test_none_principal_id_raises_auth_error(self):
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.resolved_identity import ResolvedIdentity
 
         identity = ResolvedIdentity(
@@ -753,11 +754,11 @@ class TestMissingPrincipalIdReturnsError:
         )
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
 
-        response = _get_media_buy_delivery_impl(req, identity)
-        assert response.errors is not None
-        assert any(e.code == "AUTH_REQUIRED" for e in response.errors)
+        with pytest.raises(AdCPAuthenticationError):
+            _get_media_buy_delivery_impl(req, identity)
 
-    def test_empty_string_principal_id_returns_error_response(self):
+    def test_empty_string_principal_id_raises_auth_error(self):
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.resolved_identity import ResolvedIdentity
 
         identity = ResolvedIdentity(
@@ -767,9 +768,8 @@ class TestMissingPrincipalIdReturnsError:
         )
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
 
-        response = _get_media_buy_delivery_impl(req, identity)
-        assert response.errors is not None
-        assert any(e.code == "AUTH_REQUIRED" for e in response.errors)
+        with pytest.raises(AdCPAuthenticationError):
+            _get_media_buy_delivery_impl(req, identity)
 
 
 class TestMissingTenantRaisesAuthError:

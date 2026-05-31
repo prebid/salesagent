@@ -38,7 +38,13 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError, AdCPBudgetTooLowError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPBudgetExceededError,
+    AdCPBudgetTooLowError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -301,12 +307,8 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with pytest.raises(AdCPValidationError) as excinfo:
+            with pytest.raises(AdCPBudgetExceededError, match="(?i)daily"):
                 await _create_media_buy_impl(req=req, identity=pc.identity)
-
-        exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
-        assert "daily" in exc.message.lower()
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_within_cap_passes_validation(self):
@@ -378,12 +380,8 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with pytest.raises(AdCPValidationError) as excinfo:
+            with pytest.raises(AdCPBudgetExceededError, match="(?i)daily"):
                 await _create_media_buy_impl(req=req, identity=pc.identity)
-
-        exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
-        assert "daily" in exc.message.lower()
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_no_cap_configured(self):
