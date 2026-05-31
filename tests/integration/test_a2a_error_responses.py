@@ -21,7 +21,11 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.database.database_session import get_db_session
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
-from tests.helpers.adcp_factories import create_test_package_request_dict, setup_error_test_tenant_chain
+from tests.helpers.adcp_factories import (
+    create_active_media_buy,
+    create_test_package_request_dict,
+    setup_error_test_tenant_chain,
+)
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -490,6 +494,103 @@ class TestA2AErrorPropagation:
             recovery="correctable",
             message_substr="mb_does_not_exist_a2a_wire",
         )
+
+    @pytest.fixture
+    def active_media_buy(self, test_tenant, test_principal):
+        """Persist an active media buy for the chain tenant/principal.
+
+        The financial validators in ``_update_media_buy_impl`` run only after the
+        media-buy lookup succeeds; an active (non-terminal) buy lets the
+        budget-update path reach them rather than short-circuiting on
+        MEDIA_BUY_NOT_FOUND. Delegates persistence to ``create_active_media_buy``.
+        Returns the media_buy_id.
+        """
+        with get_db_session() as session:
+            return create_active_media_buy(
+                session,
+                tenant_id=test_tenant["tenant_id"],
+                principal_id=test_principal["principal_id"],
+                media_buy_id="mb_a2a_budget_wire",
+            )
+
+    async def test_update_media_buy_campaign_budget_exceeded_wire_envelope(
+        self, handler, test_tenant, test_principal, active_media_buy
+    ):
+        """An over-ceiling campaign budget surfaces BUDGET_EXCEEDED on the A2A wire.
+
+        Drives ``AdCPBudgetExceededError`` (campaign budget > MAX_CAMPAIGN_BUDGET)
+        through the real ``on_message_send`` pipeline and asserts the two-layer
+        DataPart envelope, not just the raised exception. BUDGET_EXCEEDED is a
+        STANDARD_ERROR_CODES entry (passthrough); recovery=correctable.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        skill_params = {"media_buy_id": active_media_buy, "budget": 888_888_888.0, "currency": "USD"}
+        message = self.create_message_with_skill("update_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "BUDGET_EXCEEDED", recovery="correctable")
+
+    async def test_update_media_buy_package_budget_below_minimum_wire_envelope(
+        self, handler, test_tenant, test_principal, active_media_buy
+    ):
+        """An under-minimum package budget surfaces BUDGET_TOO_LOW on the A2A wire.
+
+        Drives ``AdCPBudgetTooLowError`` (package budget below the currency's
+        ``min_package_budget``) through the real ``on_message_send`` pipeline and
+        asserts the two-layer DataPart envelope. The chain's USD currency limit
+        sets min_package_budget=1.00, so a 0.50 package budget is below the
+        floor. BUDGET_TOO_LOW is a STANDARD_ERROR_CODES entry (passthrough);
+        recovery=correctable.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        skill_params = {
+            "media_buy_id": active_media_buy,
+            "packages": [{"package_id": "pkg-1", "budget": 0.50}],
+        }
+        message = self.create_message_with_skill("update_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "BUDGET_TOO_LOW", recovery="correctable")
 
 
 @pytest.mark.integration

@@ -6,7 +6,12 @@ import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
-from src.core.exceptions import AdCPAdapterError, AdCPCapabilityNotSupportedError, AdCPPackageNotFoundError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
+    AdCPPackageNotFoundError,
+)
 from src.core.schemas import *
 
 
@@ -34,7 +39,7 @@ class TritonDigital(AdServerAdapter):
         # Get Triton-specific principal ID
         self.advertiser_id = self.principal.get_adapter_id("triton")
         if not self.advertiser_id:
-            raise ValueError(f"Principal {principal.principal_id} does not have a Triton advertiser ID")
+            raise AdCPConfigurationError(f"Principal {principal.principal_id} does not have a Triton advertiser ID")
 
         # Get Triton configuration
         self.base_url = self.config.get("base_url", "https://tap-api.tritondigital.com/v1")
@@ -43,7 +48,7 @@ class TritonDigital(AdServerAdapter):
         if self.dry_run:
             self.log("Running in dry-run mode - Triton API calls will be simulated", dry_run_prefix=False)
         elif not self.auth_token:
-            raise ValueError("Triton Digital config is missing 'auth_token'")
+            raise AdCPConfigurationError("Triton Digital config is missing 'auth_token'")
         else:
             self.headers = {"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"}
 

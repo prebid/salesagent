@@ -7,7 +7,12 @@ import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
-from src.core.exceptions import AdCPAdapterError, AdCPCapabilityNotSupportedError, AdCPPackageNotFoundError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
+    AdCPPackageNotFoundError,
+)
 from src.core.schemas import *
 
 
@@ -35,7 +40,7 @@ class Kevel(AdServerAdapter):
         # Get Kevel-specific principal ID
         self.advertiser_id = self.principal.get_adapter_id("kevel")
         if not self.advertiser_id:
-            raise ValueError(f"Principal {principal.principal_id} does not have a Kevel advertiser ID")
+            raise AdCPConfigurationError(f"Principal {principal.principal_id} does not have a Kevel advertiser ID")
 
         # Get Kevel configuration
         self.network_id = self.config.get("network_id")
@@ -49,7 +54,7 @@ class Kevel(AdServerAdapter):
         if self.dry_run:
             self.log("Running in dry-run mode - Kevel API calls will be simulated", dry_run_prefix=False)
         elif not self.network_id or not self.api_key:
-            raise ValueError("Kevel config is missing 'network_id' or 'api_key'")
+            raise AdCPConfigurationError("Kevel config is missing 'network_id' or 'api_key'")
         else:
             self.headers = {"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"}
 

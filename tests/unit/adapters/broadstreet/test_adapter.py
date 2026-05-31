@@ -83,9 +83,11 @@ class TestBroadstreetAdapterInit:
         principal.platform_mappings = {}
         principal.get_adapter_id = lambda adapter: None
 
+        from src.core.exceptions import AdCPConfigurationError
+
         config = {"network_id": "net_123", "api_key": "test_key"}
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(AdCPConfigurationError) as exc_info:
             BroadstreetAdapter(config=config, principal=principal, dry_run=False, tenant_id="test_tenant")
 
         assert "does not have a Broadstreet advertiser ID" in str(exc_info.value)

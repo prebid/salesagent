@@ -37,7 +37,7 @@ from pathlib import Path
 VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/__init__.py": 2,
     "src/adapters/base.py": 1,
-    "src/adapters/broadstreet/adapter.py": 3,
+    "src/adapters/broadstreet/adapter.py": 1,  # _extract_campaign_id empty-id guard (internal contract)
     "src/adapters/broadstreet/config_schema.py": 4,
     "src/adapters/gam/auth.py": 5,
     "src/adapters/gam/client.py": 1,
@@ -46,9 +46,7 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/gam/managers/targeting.py": 22,
     "src/adapters/gam/pricing_compatibility.py": 2,
     "src/adapters/gam_implementation_config_schema.py": 4,
-    "src/adapters/google_ad_manager.py": 7,
-    "src/adapters/kevel.py": 2,
-    "src/adapters/triton_digital.py": 2,
+    "src/adapters/google_ad_manager.py": 4,  # 4 manager-delegation guards (internal contracts); __init__ config → AdCPConfigurationError
     "src/adapters/xandr.py": 5,
     "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)
     "src/core/tools/performance.py": 1,

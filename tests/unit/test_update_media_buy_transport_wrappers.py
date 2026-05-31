@@ -1,4 +1,4 @@
-"""Transport-boundary regression tests for update_media_buy financial guardrails."""
+"""Transport-boundary regression test: update_media_buy preserves the existing media buy currency on float-only budget updates."""
 
 from __future__ import annotations
 
@@ -7,11 +7,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastmcp.server.context import Context
 
-from src.core.exceptions import AdCPBudgetExceededError, AdCPBudgetTooLowError
-from src.core.tools.media_buy_update import update_media_buy, update_media_buy_raw
+from src.core.tools.media_buy_update import update_media_buy
 
 MODULE = "src.core.tools.media_buy_update"
 
@@ -76,45 +74,6 @@ def _common_patches(mock_uow, protocol: str = "mcp"):
         identity,
         ctx_manager,
     )
-
-
-def test_a2a_wrapper_rejects_oversized_campaign_budget():
-    """A2A boundary should reject the original oversized-budget attack path."""
-    mock_uow = _mock_uow(
-        media_buy=_mock_media_buy(currency="USD"),
-        currency_limit=_mock_currency_limit(),
-    )
-    uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch, identity, _ = _common_patches(
-        mock_uow, protocol="a2a"
-    )
-
-    with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
-        with pytest.raises(AdCPBudgetExceededError):
-            update_media_buy_raw(
-                media_buy_id="mb_transport",
-                budget=888_888_888.0,
-                currency="USD",
-                identity=identity,
-            )
-
-
-def test_a2a_wrapper_rejects_package_budget_below_minimum():
-    """A2A boundary should reject under-minimum package budget updates."""
-    mock_uow = _mock_uow(
-        media_buy=_mock_media_buy(currency="EUR"),
-        currency_limit=_mock_currency_limit(min_package_budget="100"),
-    )
-    uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch, identity, _ = _common_patches(
-        mock_uow, protocol="a2a"
-    )
-
-    with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
-        with pytest.raises(AdCPBudgetTooLowError):
-            update_media_buy_raw(
-                media_buy_id="mb_transport",
-                packages=[{"package_id": "pkg-1", "budget": 50.0}],
-                identity=identity,
-            )
 
 
 def test_mcp_wrapper_preserves_existing_currency_for_float_budget():

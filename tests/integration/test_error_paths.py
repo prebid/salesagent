@@ -482,8 +482,35 @@ class TestRecoveryFieldInErrorResponses:
                 "SERVICE_UNAVAILABLE",
                 "transient",
             ),
+            (
+                "src.core.exceptions.AdCPBudgetExceededError",
+                "budget exceeds ceiling",
+                422,
+                "BUDGET_EXCEEDED",
+                "correctable",
+            ),
+            (
+                "src.core.exceptions.AdCPCreativeRejectedError",
+                "creative failed policy review",
+                422,
+                "CREATIVE_REJECTED",
+                "correctable",
+            ),
+            (
+                "src.core.exceptions.AdCPProductUnavailableError",
+                "product is offline",
+                422,
+                "PRODUCT_UNAVAILABLE",
+                "correctable",
+            ),
         ],
-        ids=["validation_error_correctable", "adapter_error_transient"],
+        ids=[
+            "validation_error_correctable",
+            "adapter_error_transient",
+            "budget_exceeded_correctable",
+            "creative_rejected_correctable",
+            "product_unavailable_correctable",
+        ],
     )
     def test_rest_recovery_field_propagates_from_typed_error(
         self, error_factory_path, exc_message, expected_status, expected_code, expected_recovery

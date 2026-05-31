@@ -135,7 +135,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Validate configuration
         if not self.network_code:
-            raise ValueError("GAM config requires 'network_code'")
+            raise AdCPConfigurationError("GAM config requires 'network_code'")
 
         # Validate advertiser_id is numeric if provided (GAM expects integer company IDs)
         if advertiser_id is not None and advertiser_id != "":
@@ -143,7 +143,7 @@ class GoogleAdManager(AdServerAdapter):
             try:
                 int(advertiser_id)
             except (ValueError, TypeError):
-                raise ValueError(
+                raise AdCPConfigurationError(
                     f"GAM advertiser_id must be numeric (got: '{advertiser_id}'). "
                     f"Check principal platform_mappings configuration."
                 )
@@ -159,7 +159,7 @@ class GoogleAdManager(AdServerAdapter):
         # Skip auth validation in dry_run mode (for testing)
         if not self.dry_run:
             if not self.key_file and not self.service_account_json and not self.refresh_token:
-                raise ValueError(
+                raise AdCPConfigurationError(
                     "GAM config requires either 'service_account_key_file', 'service_account_json', or 'refresh_token'"
                 )
 

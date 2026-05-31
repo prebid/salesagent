@@ -13,6 +13,8 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.helpers import assert_envelope_shape
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -159,8 +161,7 @@ class TestMCPToolRoundtripMinimal:
             await mcp_client.call_tool("get_media_buy_delivery", params)
 
         envelope = json.loads(str(exc_info.value))
-        assert envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
-        assert envelope["errors"][0]["code"] == "VALIDATION_ERROR"
+        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
 
     async def test_sync_creatives_minimal(self, mcp_client):
         """Test sync_creatives with minimal required parameters.

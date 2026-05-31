@@ -1036,6 +1036,46 @@ def setup_error_test_tenant_chain(
     }
 
 
+def create_active_media_buy(
+    session: Any,
+    *,
+    tenant_id: str,
+    principal_id: str,
+    media_buy_id: str,
+    currency: str = "USD",
+    budget: float = 1000.0,
+) -> str:
+    """Persist an active (non-terminal) media buy for the given tenant/principal.
+
+    Error-pipeline tests that update an existing buy (e.g. budget-guardrail wire
+    tests) need a buy in a non-terminal state so the impl reaches the financial
+    validators rather than short-circuiting on MEDIA_BUY_NOT_FOUND. Caller owns
+    the session lifecycle. Returns the media_buy_id.
+    """
+    from src.core.database.models import MediaBuy
+
+    now = datetime.now(UTC)
+    session.add(
+        MediaBuy(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=media_buy_id,
+            order_name=f"Order {media_buy_id}",
+            advertiser_name="Test Advertiser",
+            status="active",
+            start_date=now.date(),
+            end_date=(now + timedelta(days=30)).date(),
+            start_time=now,
+            end_time=now + timedelta(days=30),
+            budget=budget,
+            currency=currency,
+            raw_request={},
+        )
+    )
+    session.commit()
+    return media_buy_id
+
+
 def make_real_tenant_identity(
     *,
     tenant_id: str,

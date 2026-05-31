@@ -31,7 +31,8 @@ from pathlib import Path
 # (e.g., ``GetMediaBuysResponse.errors[]``) carry an inline
 # ``# structural-guard:`` marker and are skipped by ``_count_pattern_a_sites``
 # — legitimacy is recorded at the site, not in this dict. A plain comment
-# (not ``# noqa:``) is used so ruff does not parse it as a malformed directive.
+# (not a ruff suppression directive) is used so ruff does not parse it as a
+# malformed directive.
 PATTERN_A_PER_FILE_CAP: dict[str, int] = {}
 
 _SKIP_MARKER = "# structural-guard:"
