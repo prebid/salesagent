@@ -1,20 +1,28 @@
-"""Guard: BDD Then steps must not read ``ctx["response"]`` by subscript.
+"""Guard: BDD Then steps must not read diagnostic ctx keys by subscript.
 
 ``resp = ctx["response"]`` raises a bare ``KeyError`` when the When step failed
 to populate a response (e.g. production raised, so only ``ctx["error"]`` is set).
 A bare KeyError gives no diagnostic — the test output is just ``KeyError:
-'response'`` with no hint that the operation errored instead of returning.
+'response'`` with no hint that the operation errored instead of returning. The
+mirror image is ``ctx["error"]`` on a success path: ``KeyError: 'error'`` with
+no hint that the operation succeeded when an error was expected.
 
-Then steps must instead use the shared ``_require_response(ctx)`` helper (or
-``ctx.get("response")`` + an explicit ``assert resp is not None, ...``), which
-fails with a message naming the missing response and the recorded error.
+Then steps must instead use the shared ``_require_response(ctx)`` /
+``_require_error(ctx)`` helpers (or the generic ``_require(ctx, key)``), which
+fail with a message naming the missing key and surfacing the recorded outcome.
+Reading by ``ctx.get(key)`` is also fine — only the bare subscript is the
+antipattern.
+
+``env`` is intentionally NOT guarded here: the harness guarantees it and the
+``no-silent-env`` guard already requires ``ctx["env"]`` (a hard failure on a
+missing env is desired). Entity keys populated by Given steps (tenant, package,
+creatives, ...) are out of scope for this guard — see salesagent (qlsx-b).
 
 Writes (``ctx["response"] = ...`` in When steps) are fine — only reads are the
 antipattern. This guard is scoped to ``@then`` functions, matching where the
-diagnostic matters; When steps that set and immediately read the response know
-it is present.
+diagnostic matters; When steps that set and immediately read know it is present.
 
-beads: salesagent-o15b
+beads: salesagent-o15b (response), salesagent-qlsx (error + generalization)
 """
 
 from __future__ import annotations
@@ -23,18 +31,24 @@ import ast
 
 from tests.unit._bdd_guard_helpers import iter_then_functions
 
-# Then steps that still read ctx["response"] by subscript. MUST stay empty —
-# convert each to _require_response(ctx) rather than allowlisting it.
-_ALLOWED_RESPONSE_SUBSCRIPT: set[str] = set()
+# ctx keys whose bare-subscript read in a @then step loses diagnostic context.
+# Each maps to the helper that should replace it. To extend the guard to a new
+# key, add it here and convert every existing reader in the SAME change — this
+# guard has no per-key allowlist (allowlists only shrink, never grow).
+_GUARDED_KEYS: dict[str, str] = {
+    "response": "_require_response(ctx)",
+    "error": "_require_error(ctx)",
+}
 
 
-def _reads_response_subscript(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """True if the function reads ``ctx["response"]`` via subscript.
+def _subscript_read_keys(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Return the set of guarded ctx keys the function reads via subscript.
 
-    A subscript node ``ctx["response"]`` is a read everywhere except as the
-    direct target of an assignment (``ctx["response"] = ...``), which ast models
-    with ``ctx_store`` context on the Subscript.
+    A subscript node ``ctx["error"]`` is a read everywhere except as the direct
+    target of an assignment (``ctx["error"] = ...``), which ast models with a
+    ``Store`` context on the Subscript.
     """
+    found: set[str] = set()
     for node in ast.walk(func):
         if not isinstance(node, ast.Subscript):
             continue
@@ -46,29 +60,29 @@ def _reads_response_subscript(func: ast.FunctionDef | ast.AsyncFunctionDef) -> b
             isinstance(value, ast.Name)
             and value.id == "ctx"
             and isinstance(slice_, ast.Constant)
-            and slice_.value == "response"
+            and slice_.value in _GUARDED_KEYS
         ):
-            return True
-    return False
+            found.add(slice_.value)
+    return found
 
 
-def _scan_response_subscripts() -> list[str]:
-    """Return Then-step keys that read ctx["response"] by subscript."""
-    return [
-        key
-        for key, func in iter_then_functions()
-        if _reads_response_subscript(func) and key not in _ALLOWED_RESPONSE_SUBSCRIPT
-    ]
+def _scan_guarded_subscripts() -> list[str]:
+    """Return ``key — ctx["X"] should be helper`` lines for each violation."""
+    violations: list[str] = []
+    for key, func in iter_then_functions():
+        for ctx_key in sorted(_subscript_read_keys(func)):
+            violations.append(f'{key} — ctx["{ctx_key}"] should be {_GUARDED_KEYS[ctx_key]}')
+    return violations
 
 
 class TestBddNoResponseSubscript:
-    """Structural guard: Then steps must not subscript-read ctx["response"]."""
+    """Structural guard: Then steps must not subscript-read guarded ctx keys."""
 
-    def test_no_response_subscript_in_then(self):
-        """Then steps must use _require_response(ctx), not ctx["response"]."""
-        violations = _scan_response_subscripts()
+    def test_no_guarded_ctx_subscript_in_then(self):
+        """Then steps must use the _require_* helpers, not ctx[key] subscripts."""
+        violations = _scan_guarded_subscripts()
         assert not violations, (
-            f"Found {len(violations)} Then step(s) reading ctx[\"response\"] by subscript "
-            f"(use _require_response(ctx) for a diagnostic AssertionError instead of a bare "
-            f"KeyError):\n  " + "\n  ".join(violations)
+            f"Found {len(violations)} Then step(s) reading a guarded ctx key by subscript "
+            f"(use the matching _require_* helper for a diagnostic AssertionError instead of a "
+            f"bare KeyError):\n  " + "\n  ".join(violations)
         )

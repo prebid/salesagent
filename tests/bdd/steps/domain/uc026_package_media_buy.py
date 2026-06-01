@@ -13,6 +13,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require_error
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1689,7 +1690,6 @@ def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
     asserts everything production DOES provide (structural correctness,
     product/pricing fields) and xfails only the buyer_ref comparison.
     """
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
@@ -1721,9 +1721,7 @@ def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
     # response no longer echoes it. The package is identified by package_id.
     # Assert that a valid package was returned (package_id present) — the
     # buyer_ref→package_id resolution is the behavioral claim.
-    assert pkg_id, (
-        f"buyer_ref '{buyer_ref}' should resolve to a package with a seller-assigned package_id"
-    )
+    assert pkg_id, f"buyer_ref '{buyer_ref}' should resolve to a package with a seller-assigned package_id"
 
 
 @then(parsers.parse("the package should contain budget {budget:d}"))
@@ -2012,8 +2010,7 @@ def then_outcome(ctx: dict, outcome: str) -> None:
 
     outcome = outcome.strip()
     if outcome.startswith("error"):
-        assert "error" in ctx, f"Expected error outcome but no error recorded. Response: {ctx.get('response')}"
-        error = ctx["error"]
+        error = _require_error(ctx)
         is_adcp_error = isinstance(error, AdCPError) or (isinstance(error, dict) and "code" in error)
 
         # Extract expected error code from outcome string, e.g. 'error "CODE" ...'

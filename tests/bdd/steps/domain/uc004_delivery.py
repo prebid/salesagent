@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require_error
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
 
@@ -1565,13 +1566,8 @@ def then_log_auth_rejection(ctx: dict) -> None:
 
     # 2. Verify auth rejection was logged
     log_records = getattr(env, "captured_logs", None) or ctx.get("captured_logs")
-    assert log_records is not None, (
-        "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
-    )
-    found_auth_log = any(
-        "client error" in r.lower() or "401" in r or "unauthorized" in r.lower()
-        for r in log_records
-    )
+    assert log_records is not None, "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
+    found_auth_log = any("client error" in r.lower() or "401" in r or "unauthorized" in r.lower() for r in log_records)
     assert found_auth_log, (
         f"Expected a WARNING log record about auth rejection (401/client error/unauthorized), "
         f"but captured {len(log_records)} records: {log_records[:5]}"
@@ -1660,9 +1656,7 @@ def then_single_probe(ctx: dict) -> None:
             assert cb_can_attempt is True, (
                 f"Circuit breaker did not allow the probe attempt (can_attempt={cb_can_attempt!r})"
             )
-            pytest.xfail(
-                "HARNESS GAP: no webhook POST mock — cannot count probe dispatches"
-            )
+            pytest.xfail("HARNESS GAP: no webhook POST mock — cannot count probe dispatches")
 
 
 @then("normal scheduled deliveries should resume")
@@ -1715,8 +1709,7 @@ def then_circuit_healthy(ctx: dict) -> None:
 @then("the configuration should be rejected")
 def then_config_rejected(ctx: dict) -> None:
     """Assert configuration was rejected with a validation/rejection error message."""
-    assert "error" in ctx, "Expected config rejection error"
-    error = ctx["error"]
+    error = _require_error(ctx)
     msg = str(error).lower()
     rejection_keywords = {"reject", "invalid", "validation", "minimum", "too short", "credential", "length", "required"}
     assert any(kw in msg for kw in rejection_keywords), (
@@ -1731,7 +1724,7 @@ def then_error_min_credential_length(ctx: dict) -> None:
     Verifies both the minimum length value and that the error is a
     validation/credential rejection (not some unrelated error containing '32').
     """
-    error = ctx["error"]
+    error = _require_error(ctx)
     msg = str(error).lower()
     assert "32" in msg, f"Expected '32' (minimum length) in error message: {error}"
     credential_terms = {"credential", "secret", "length", "minimum", "characters", "short"}

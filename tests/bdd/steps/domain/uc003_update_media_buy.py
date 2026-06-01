@@ -929,7 +929,7 @@ def then_response_has_sandbox(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
-    assert "error" not in ctx, f"Update errored ({ctx['error']}) — cannot check sandbox flag on an error response"
+    assert "error" not in ctx, f"Update errored ({ctx.get('error')}) — cannot check sandbox flag on an error response"
     # Guard: response must be a Pydantic model (not a raw dict/string) — the
     # transport dispatch always yields a typed response on success.
     assert isinstance(resp, BaseModel), (

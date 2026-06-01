@@ -11,6 +11,24 @@ the repository owns the query, the helper owns the assertion.
 from __future__ import annotations
 
 
+def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
+    """Return ``ctx[key]``, failing with a diagnostic if it is absent.
+
+    Then steps read entities and outcomes a prior step was expected to put in
+    ``ctx``. Reading ``ctx[key]`` by subscript raises a bare ``KeyError`` when
+    that step did not populate it — giving no hint why. This helper raises an
+    ``AssertionError`` that names the missing key, includes an optional hint,
+    and surfaces any recorded error instead.
+
+    ``env`` is intentionally not routed through this helper: the harness
+    guarantees it and the ``no-silent-env`` guard requires ``ctx["env"]``.
+    """
+    val = ctx.get(key)
+    detail = f" {hint}" if hint else ""
+    assert val is not None, f"Expected ctx[{key!r}] in ctx but none found.{detail} Recorded error: {ctx.get('error')!r}"
+    return val
+
+
 def _require_response(ctx: dict) -> object:
     """Return ctx["response"], failing with a diagnostic if it is absent.
 
@@ -20,12 +38,24 @@ def _require_response(ctx: dict) -> object:
     This helper raises an ``AssertionError`` that names the missing response
     and surfaces any recorded error instead.
     """
-    resp = ctx.get("response")
-    assert resp is not None, (
-        "Expected a response in ctx but none found — the operation may have "
-        f"errored instead of returning. Recorded error: {ctx.get('error')!r}"
+    return _require(ctx, "response", hint="The operation may have errored instead of returning.")
+
+
+def _require_error(ctx: dict) -> object:
+    """Return ctx["error"], failing with a diagnostic if no error was recorded.
+
+    Then steps on an error path read ``ctx["error"]``. By subscript that raises
+    a bare ``KeyError`` when the operation actually succeeded — giving no hint
+    that the expected error never happened. This helper raises an
+    ``AssertionError`` that says an error was expected and surfaces the response
+    produced instead.
+    """
+    error = ctx.get("error")
+    assert error is not None, (
+        "Expected an error to be recorded in ctx but none found — the operation "
+        f"may have succeeded. Response: {ctx.get('response')!r}"
     )
-    return resp
+    return error
 
 
 def _get_response_field(resp: object, field: str) -> object:

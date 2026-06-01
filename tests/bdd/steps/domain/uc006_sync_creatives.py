@@ -2459,15 +2459,16 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
         f"Expected AdCPError for strict mode abort, got {type(error).__name__}: {error}"
     )
     # Verify the error is specifically a not-found error, not an incidental failure
-    assert isinstance(error, AdCPNotFoundError) or "not_found" in getattr(error, "error_code", "").lower() or "not found" in str(error).lower(), (
-        f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
-    )
+    assert (
+        isinstance(error, AdCPNotFoundError)
+        or "not_found" in getattr(error, "error_code", "").lower()
+        or "not found" in str(error).lower()
+    ), f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
     # Verify the error references the bad package from the Given step
     bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
     if bad_package:
         assert bad_package in str(error), (
-            f"Error should reference the missing package '{bad_package}', "
-            f"but message is: {error}"
+            f"Error should reference the missing package '{bad_package}', but message is: {error}"
         )
 
 
@@ -3175,7 +3176,7 @@ def then_media_buy_status_should_transition_to(ctx: dict, target_status: str) ->
     """Assert the media buy transitioned to the target status after sync."""
     assert "error" not in ctx, (
         f"Expected media buy transition to '{target_status}' but sync raised "
-        f"{type(ctx['error']).__name__}: {ctx['error']}"
+        f"{type(ctx.get('error')).__name__}: {ctx.get('error')}"
     )
     actual = _get_media_buy_status_from_db(ctx)
     assert actual == target_status, (
@@ -3213,7 +3214,7 @@ def then_media_buy_should_remain_in_draft(ctx: dict) -> None:
 def then_media_buy_status_should_not_change(ctx: dict) -> None:
     """Assert a non-draft media buy's status was unchanged (boundary)."""
     assert "error" not in ctx, (
-        f"Expected no status change but sync raised {type(ctx['error']).__name__}: {ctx['error']}"
+        f"Expected no status change but sync raised {type(ctx.get('error')).__name__}: {ctx.get('error')}"
     )
     original_status = ctx["media_buy"].status
     actual = _get_media_buy_status_from_db(ctx)
@@ -3231,7 +3232,7 @@ def then_media_buy_status_uc006(ctx: dict, status: str) -> None:
     buy was created by a UC-006 Given step.
     """
     assert "error" not in ctx, (
-        f"Expected media buy status '{status}' but sync raised {type(ctx['error']).__name__}: {ctx['error']}"
+        f"Expected media buy status '{status}' but sync raised {type(ctx.get('error')).__name__}: {ctx.get('error')}"
     )
     assert "media_buy" in ctx, "No media buy in ctx — cannot check status from DB"
     actual = _get_media_buy_status_from_db(ctx)
@@ -3377,9 +3378,7 @@ def then_format_check_skipped(ctx: dict) -> None:
     # Verify no format-related warnings on the result
     warnings = getattr(first, "warnings", None) or []
     format_warnings = [w for w in warnings if "format" in str(w).lower()]
-    assert not format_warnings, (
-        f"INV-6: format check should be skipped, but format warnings present: {format_warnings}"
-    )
+    assert not format_warnings, f"INV-6: format check should be skipped, but format warnings present: {format_warnings}"
 
 
 @then("the format compatibility check should pass")
