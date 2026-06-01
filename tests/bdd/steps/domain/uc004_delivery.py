@@ -1506,6 +1506,29 @@ def then_retry_3_times(ctx: dict) -> None:
     assert call_count <= 4, f"Expected at most 4 calls (1+3 retries), got {call_count}"
 
 
+def _assert_exponential_backoff(ctx: dict, *, expected_sleeps: int = 2) -> list[float]:
+    """Assert the mocked sleep calls follow an exponential backoff schedule.
+
+    Production WebhookDeliveryService sleeps between retries. This reads the
+    recorded sleep durations, asserts there were exactly ``expected_sleeps`` of
+    them (= ``expected_sleeps + 1`` total attempts), and that each duration is
+    at least 1.5x the previous one (exponential growth). Returns the durations
+    for any further per-step assertions.
+    """
+    sleep_calls = ctx["env"].mock["sleep"].call_args_list
+    assert sleep_calls, "Expected at least one sleep call for backoff"
+    durations = [float(c[0][0]) for c in sleep_calls]
+    assert len(durations) == expected_sleeps, (
+        f"Expected {expected_sleeps} backoff sleeps (for {expected_sleeps + 1} total attempts), got {len(durations)}"
+    )
+    for prev, nxt in zip(durations, durations[1:], strict=False):
+        assert nxt >= prev * 1.5, (
+            f"Backoff duration {nxt:.2f}s is not exponentially larger than prior {prev:.2f}s "
+            f"(expected at least {prev * 1.5:.2f}s). Full schedule: {[f'{d:.2f}' for d in durations]}"
+        )
+    return durations
+
+
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
 def then_exponential_backoff(ctx: dict) -> None:
     """Assert sleep durations follow exponential backoff schedule.
@@ -1514,16 +1537,7 @@ def then_exponential_backoff(ctx: dict) -> None:
     sleeping between each retry. So we expect exactly 2 sleep calls with
     exponentially growing durations.
     """
-    sleep_calls = ctx["env"].mock["sleep"].call_args_list
-    assert sleep_calls, "Expected at least one sleep call for backoff"
-    durations = [float(c[0][0]) for c in sleep_calls]
-    assert len(durations) == 2, f"Expected 2 backoff sleeps (for 3 total attempts), got {len(durations)}"
-    # Second duration must be at least 1.5x the first (exponential growth)
-    assert durations[1] >= durations[0] * 1.5, (
-        f"Backoff duration {durations[1]:.2f}s is not exponentially larger "
-        f"than first {durations[0]:.2f}s. Expected at least {durations[0] * 1.5:.2f}s. "
-        f"Full schedule: {[f'{d:.2f}' for d in durations]}"
-    )
+    _assert_exponential_backoff(ctx)
 
 
 @then("the system should retry up to 3 times with exponential backoff")
@@ -1536,13 +1550,7 @@ def then_retry_with_backoff(ctx: dict) -> None:
     assert env.mock["post"].call_count <= 4, (
         f"Expected at most 4 calls (1 + 3 retries), got {env.mock['post'].call_count}"
     )
-    sleep_calls = env.mock["sleep"].call_args_list
-    assert sleep_calls, "Expected at least one sleep call between retries"
-    durations = [float(c[0][0]) for c in sleep_calls]
-    assert len(durations) == 2, f"Expected 2 backoff sleeps (for 3 total attempts), got {len(durations)}"
-    assert durations[1] >= durations[0] * 1.5, (
-        f"Sleep durations are not growing exponentially: {[f'{d:.2f}' for d in durations]}"
-    )
+    _assert_exponential_backoff(ctx)
 
 
 @then("the system should not retry the delivery")
