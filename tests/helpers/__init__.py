@@ -13,13 +13,13 @@ def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token"
     from unittest.mock import patch
 
     from src.core.auth_context import AuthContext, _resolve_auth_dep
-    from src.core.resolved_identity import ResolvedIdentity
+    from tests.factories.principal import PrincipalFactory
 
     auth_ctx = AuthContext(
         auth_token=auth_token,
         headers={"authorization": f"Bearer {auth_token}"},
     )
-    mock_identity = ResolvedIdentity(
+    mock_identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="default",
         tenant={"tenant_id": "default"},
@@ -52,9 +52,9 @@ def assert_effective_properties_normalized(
         for key, value in orig.items():
             assert key in eff, f"[{i}] Missing key {key!r} from original"
             assert eff[key] == value, f"[{i}] {key!r}: {eff[key]!r} != {value!r}"
-        assert (
-            eff.get("selection_type") == expected_selection_type
-        ), f"[{i}] selection_type: {eff.get('selection_type')!r} != {expected_selection_type!r}"
+        assert eff.get("selection_type") == expected_selection_type, (
+            f"[{i}] selection_type: {eff.get('selection_type')!r} != {expected_selection_type!r}"
+        )
 
 
 from tests.helpers.adcp_factories import (

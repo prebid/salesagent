@@ -135,7 +135,7 @@ class TestGetPlatformDefaults:
         ):
             defaults = get_platform_defaults()
             assert defaults["api_key"] == "test-gemini-key", (
-                "provider='google' must map to GEMINI_API_KEY; " "api_key=None would make is_ai_enabled() return False"
+                "provider='google' must map to GEMINI_API_KEY; api_key=None would make is_ai_enabled() return False"
             )
 
     def test_google_gla_provider_resolves_gemini_api_key(self):

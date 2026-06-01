@@ -332,15 +332,17 @@ def exc_handler_test_app():
         AdCPNotFoundError,
         AdCPServiceUnavailableError,
         AdCPValidationError,
+        build_two_layer_error_envelope,
     )
 
     _app = FastAPI()
 
     @_app.exception_handler(AdCPError)
     async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
-        body = exc.to_dict()
-        body["error_code"] = exc.wire_error_code
-        return JSONResponse(status_code=exc.status_code, content=body)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=build_two_layer_error_envelope(exc),
+        )
 
     @_app.get("/test-exc/validation")
     def raise_validation():
@@ -377,6 +379,12 @@ def exc_handler_test_app():
     @_app.get("/test-exc/envelope")
     def raise_with_details():
         raise AdCPValidationError("bad", details={"field": "x"})
+
+    @_app.get("/test-exc/with-context")
+    def raise_with_context():
+        from adcp.types import ContextObject
+
+        raise AdCPValidationError("bad", context=ContextObject(correlation_id="trace-xyz"))
 
     return _app
 
@@ -547,18 +555,9 @@ class TestFastAPIExceptionHandlers:
         assert body["adcp_error"]["details"] == {"field": "x"}
         assert body["errors"][0]["details"] == {"field": "x"}
 
-    def test_error_response_echoes_context(self):
+    def test_error_response_echoes_context(self, exc_handler_test_app):
         """When raised with context, the envelope echoes it (spec 3.0.0)."""
-        from adcp.types import ContextObject
-
-        from src.app import app
-        from src.core.exceptions import AdCPValidationError
-
-        @app.get("/test-exc/with-context")
-        def raise_with_context():
-            raise AdCPValidationError("bad", context=ContextObject(correlation_id="trace-xyz"))
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/with-context")
         body = response.json()
         assert body["context"] == {"correlation_id": "trace-xyz"}
