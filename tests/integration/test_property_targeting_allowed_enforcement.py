@@ -1,7 +1,8 @@
 """Integration tests: property_targeting_allowed enforcement at create/update.
 
-AdCP 3.0.6 spec (core/targeting.json:191) — sellers SHOULD reject property_list
-targeting against products with property_targeting_allowed=false. Two paths:
+AdCP 3.0.0 spec (core/product.json ``property_targeting_allowed``) — sellers
+SHOULD reject property_list targeting against products with
+property_targeting_allowed=false. Two paths:
 - create_media_buy: validation block inside the UoW where product_map is built
 - update_media_buy: validation guards the targeting_overlay write
 
@@ -85,11 +86,10 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
     """Product with property_targeting_allowed=False rejects property_list targeting on create.
 
     The validation block raises AdCPValidationError so the transport boundary translates
-    to the spec-compliant two-layer envelope. The previous raw ValueError shape was caught
-    by an inner (ValueError, PermissionError) catchall and re-emitted via Pattern A
-    (Error(code=...) construction in _impl) — anti-pattern that the error-emission
-    architecture work eliminates. After PR #1306 / PR #1307 land, this raise propagates
-    cleanly through the narrowed except AdCPError boundary.
+    to the spec-compliant two-layer envelope. The raise propagates cleanly through the
+    narrowed except AdCPError boundary; the prior ValueError shape was caught by an inner
+    (ValueError, PermissionError) catchall and re-emitted via Pattern A, which is the
+    anti-pattern the typed-error substrate eliminates.
     """
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(

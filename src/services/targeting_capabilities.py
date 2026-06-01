@@ -213,7 +213,7 @@ def supports_property_list_filtering(adapter: object | None) -> bool:
 
 # ─── property_list targeting helpers ────────────────────────────────────
 #
-# Spec scope: these helpers only handle ``property_list``. The AdCP 3.0.7
+# Spec scope: these helpers only handle ``property_list``. The AdCP 3.0.0
 # spec governs ``property_list`` via a per-product flag
 # (``Product.property_targeting_allowed``) and a per-capability declaration
 # (``MediaBuyFeatures.property_list_filtering``). ``collection_list`` and
@@ -231,7 +231,7 @@ def build_property_list_unsupported_advisories(
 ) -> list[Error]:
     """Build per-package ``UNSUPPORTED_FEATURE`` advisories for property_list use.
 
-    AdCP spec 3.0.7 ``error-handling.mdx`` describes non-fatal errors as
+    AdCP spec 3.0.0 ``error-handling.mdx`` describes non-fatal errors as
     "populate only the payload... MUST NOT populate ``adcp_error``" — i.e.
     advisories ride on the success envelope. Buyers see the silent-drop
     window during the rollout of property_list round-trip and adapter
@@ -287,8 +287,9 @@ def property_list_unsupported_advisories(
 def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
-    AdCP 3.0.6 (core/targeting.json:191): "Sellers SHOULD return a validation
-    error if the product has property_targeting_allowed: false."
+    AdCP 3.0.0 (core/product.json ``property_targeting_allowed``): "Sellers
+    SHOULD return a validation error if the product has
+    property_targeting_allowed: false."
 
     Used at both create_media_buy and update_media_buy validation sites; pulled
     here so the rule lives in one place. Pair with

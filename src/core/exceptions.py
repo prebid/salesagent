@@ -10,9 +10,13 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from adcp.types import ContextObject
 
 RecoveryHint = Literal["transient", "correctable", "terminal"]
 
@@ -24,8 +28,17 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # transport boundary; codes in INTERNAL_CODES never leave the server.
 
 ERROR_CODE_MAPPING: dict[str, str] = {
+    # Internal-only codes that occasionally leak to the wire when a raise site
+    # uses a base class (AdCPError / AdCPNotFoundError / AdCPConfigurationError)
+    # instead of a specific subclass. Mapped to the closest STANDARD_ERROR_CODES
+    # entry so the wire stays spec-compliant. Raise sites can later migrate to
+    # specific subclasses; the mappings stay as a safety net.
+    "NOT_FOUND": "INVALID_REQUEST",
+    "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
+    "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
-    "AUTH_TOKEN_INVALID": "AUTH_REQUIRED",
+    # AUTH_TOKEN_INVALID is not mapped — it passes through directly as the
+    # spec error code for invalid/missing tokens (per AdCP BDD feature files).
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
     "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
     "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
@@ -62,6 +75,7 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "ADAPTER_ERROR": "SERVICE_UNAVAILABLE",
     "ACTIVATION_ERROR": "SERVICE_UNAVAILABLE",
     "ACTIVATION_FAILED": "SERVICE_UNAVAILABLE",
+    "WORKFLOW_CREATION_FAILED": "SERVICE_UNAVAILABLE",
     "CREATIVE_SYNC_FAILED": "SERVICE_UNAVAILABLE",
     "PARTIAL_FAILURE": "SERVICE_UNAVAILABLE",
     "PRODUCT_NOT_CONFIGURED": "PRODUCT_UNAVAILABLE",
@@ -102,39 +116,97 @@ def translate_error_code(code: str) -> str:
     return ERROR_CODE_MAPPING.get(code, code)
 
 
+def _serialize_context(
+    context: ContextObject | dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Serialize an AdCP ContextObject (or dict) into a JSON-safe dict.
+
+    Single source of truth for context serialization — used by ``to_dict``,
+    ``to_adcp_error``, and ``build_two_layer_error_envelope`` so all three
+    paths emit byte-identical context payloads.
+
+    Behavior:
+        - ``None`` → ``None`` (caller decides whether to omit the key).
+        - ``dict`` → shallow copy. Prevents aliasing footguns when one
+          serialization layer mutates its copy and accidentally mutates
+          the source context still held on the exception.
+        - ``ContextObject`` → ``model_dump(mode="json", exclude_none=True)``.
+          ``mode="json"`` coerces datetimes/UUIDs/etc. to JSON-serializable
+          primitives; ``exclude_none=True`` matches the spec's emit-only-
+          populated-fields norm.
+    """
+    if context is None:
+        return None
+    if isinstance(context, dict):
+        return dict(context)
+    if not isinstance(context, BaseModel):
+        raise TypeError(f"_serialize_context expected dict or BaseModel, got {type(context).__name__}")
+    return context.model_dump(mode="json", exclude_none=True)
+
+
 class AdCPError(Exception):
     """Base exception for all AdCP errors.
 
+    Class-level identity (``_default_error_code``, ``_default_status_code``,
+    ``_default_recovery``) is declared with ``ClassVar`` per PEP 526 — each
+    typed subclass overrides the ``_default_*`` slot, not the public name.
+    The public ``error_code``/``status_code``/``recovery`` are instance
+    attributes set in ``__init__`` from the class-level default unless the
+    caller overrides via kwargs (only ``synthesize()`` is sanctioned).
+
+    Code that needs class-level identity (e.g. ``_build_error_code_to_status``
+    walking ``__subclasses__()`` to build the wire-code → HTTP-status table)
+    reads ``cls._default_error_code`` / ``cls._default_status_code`` directly.
+    Instance code reads ``self.error_code`` etc. as before.
+
     Attributes:
         message: Human-readable error description.
-        status_code: HTTP status code for REST/FastAPI responses.
-        error_code: Machine-readable error code string.
-        recovery: Recovery classification for buyer agents.
+        status_code: HTTP status code for REST/FastAPI responses (instance).
+        error_code: Machine-readable error code string (instance).
+        recovery: Recovery classification for buyer agents (instance).
         details: Optional structured error details.
         field: Optional field name that caused the error.
         suggestion: Optional correction hint for buyer agents.
+        context: Optional AdCP ContextObject (or dict) echoed in the
+            envelope so buyer agents can correlate failures to the
+            request that produced them (spec 3.0.0 normative).
     """
 
-    status_code: int = 500
-    error_code: str = "INTERNAL_ERROR"
-    recovery: RecoveryHint = "terminal"
+    # Class-level identity defaults. Subclasses override these.
+    _default_status_code: ClassVar[int] = 500
+    _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+
+    # Instance attributes — set in __init__ from _default_* unless overridden.
+    error_code: str
+    status_code: int
+    recovery: RecoveryHint
 
     def __init__(
         self,
         message: str = "",
         *,
+        error_code: str | None = None,
+        status_code: int | None = None,
         details: dict[str, Any] | None = None,
         recovery: RecoveryHint | None = None,
         field: str | None = None,
         suggestion: str | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
     ) -> None:
+        # ``error_code`` and ``status_code`` kwargs are only used by the
+        # sanctioned ``synthesize()`` classmethod for boundary fallback paths
+        # that need a wire code the typed class hierarchy doesn't model.
+        # Direct raises use a typed subclass and inherit its ``_default_*``.
         super().__init__(message)
         self.message = message
         self.details = details
         self.field = field
         self.suggestion = suggestion
-        if recovery is not None:
-            self.recovery = recovery
+        self.context = context
+        self.error_code = error_code if error_code is not None else type(self)._default_error_code
+        self.status_code = status_code if status_code is not None else type(self)._default_status_code
+        self.recovery = recovery if recovery is not None else type(self)._default_recovery
 
     @property
     def wire_error_code(self) -> str:
@@ -148,6 +220,45 @@ class AdCPError(Exception):
         """
         return translate_error_code(self.error_code)
 
+    @classmethod
+    def synthesize(
+        cls,
+        message: str,
+        *,
+        error_code: str,
+        status_code: int | None = None,
+        recovery: RecoveryHint | None = None,
+        details: dict[str, Any] | None = None,
+        field: str | None = None,
+        suggestion: str | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> AdCPError:
+        """Sanctioned entry point for synthesizing an AdCPError with overridden code/status.
+
+        Typed subclasses (``AdCPValidationError``, etc.) carry
+        ``error_code``/``status_code`` as class attributes. Two boundary
+        callers — ``handle_tool_error``'s plain-``ToolError`` fallback and
+        ``ContextManager.fail_workflow_step_for_exception``'s wire-code
+        sanitization — need to construct an ``AdCPError`` with a code/status
+        the typed class hierarchy doesn't model.
+
+        Prefer this classmethod over passing ``error_code=``/``status_code=``
+        kwargs to ``__init__`` directly. Constructor kwargs that mutate class
+        attributes are a footgun the public API should not invite; this method
+        documents the synthesis intent explicitly so reviewers can audit
+        every site that bypasses the typed class hierarchy.
+        """
+        return cls(
+            message,
+            error_code=error_code,
+            status_code=status_code,
+            recovery=recovery,
+            details=details,
+            field=field,
+            suggestion=suggestion,
+            context=context,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to flat response body dict (legacy format).
 
@@ -155,6 +266,10 @@ class AdCPError(Exception):
         handlers (FastAPI exception handler, MCP wrapper, A2A wrapper) are
         responsible for translating to wire-compliant codes via
         ``translate_error_code()`` or ``wire_error_code``.
+
+        Includes ``context`` when present so callers building advisory
+        payloads (audit logging, retry-loop diagnostics) have the same
+        request-correlation envelope key the two-layer wire shape exposes.
         """
         result: dict[str, Any] = {
             "error_code": self.error_code,
@@ -166,6 +281,9 @@ class AdCPError(Exception):
             result["field"] = self.field
         if self.suggestion is not None:
             result["suggestion"] = self.suggestion
+        serialized_context = _serialize_context(self.context)
+        if serialized_context is not None:
+            result["context"] = serialized_context
         return result
 
     def to_adcp_error(self) -> dict[str, Any]:
@@ -175,117 +293,169 @@ class AdCPError(Exception):
         envelope. Translation to ``STANDARD_ERROR_CODES`` happens at transport
         boundaries via ``translate_error_code()`` — this method preserves the
         raw ``error_code`` so internal callers retain the source classification.
+
+        ``context`` flows into ``details["context"]`` so the SDK helper
+        doesn't drop request-correlation data on the floor.
+
+        .. deprecated::
+            Effectively legacy now that ``build_two_layer_error_envelope()``
+            is the single source of truth for the wire envelope. Prefer the
+            envelope builder for any new code path. This method intentionally
+            differs in shape — ``context`` is nested under ``details`` here
+            but appears at the top level in the two-layer envelope — and is
+            retained only for non-envelope callers (audit logging, SDK
+            interop) that still want the flat ``{"errors": [...]}`` payload.
         """
+        merged_details = dict(self.details) if self.details else {}
+        serialized_context = _serialize_context(self.context)
+        if serialized_context is not None:
+            merged_details.setdefault("context", serialized_context)
         return adcp_error(
             self.error_code,
             self.message,
             recovery=self.recovery,
             field=self.field,
             suggestion=self.suggestion,
-            details=self.details,
+            details=merged_details or None,
         )
 
 
 class AdCPValidationError(AdCPError):
     """Invalid parameters or request data (400)."""
 
-    status_code = 400
-    error_code = "VALIDATION_ERROR"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 400
+    _default_error_code: ClassVar[str] = "VALIDATION_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAuthenticationError(AdCPError):
-    """Missing or invalid authentication credentials (401)."""
+    """Missing or invalid authentication credentials (401).
 
-    status_code = 401
-    error_code = "AUTH_REQUIRED"
+    Default error_code is AUTH_TOKEN_INVALID per AdCP spec; the wire passes
+    it through unchanged (AUTH_TOKEN_INVALID is a standard SDK code).
+
+    Recovery defaults to ``terminal`` to match
+    ``STANDARD_ERROR_CODES["AUTH_REQUIRED"]["recovery"]`` in adcp 4.3 (the SDK
+    we run). That SDK table diverges from the spec's ``error-code.json``, which
+    classifies AUTH_REQUIRED as ``correctable`` (re-auth recovers); we keep
+    ``terminal`` so wire output matches the installed SDK's validator.
+    """
+
+    _default_status_code: ClassVar[int] = 401
+    _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
+
+
+class AdCPAuthRequiredError(AdCPAuthenticationError):
+    """No authentication context present (401, AUTH_TOKEN_INVALID).
+
+    Raised when the request contains no auth token at all.
+    Uses same error_code as parent (AUTH_TOKEN_INVALID) per spec.
+    """
+
+    _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthorizationError(AdCPError):
-    """Authenticated but not authorized for this resource (403)."""
+    """Authenticated but not authorized for this resource (403).
 
-    status_code = 403
-    error_code = "AUTH_REQUIRED"
+    Same ``terminal`` default as ``AdCPAuthenticationError`` for the same
+    SDK-vs-spec mismatch reason — see that class's docstring.
+    """
+
+    _default_status_code: ClassVar[int] = 403
+    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
 
 
 class AdCPNotFoundError(AdCPError):
     """Requested resource does not exist (404)."""
 
-    status_code = 404
-    error_code = "NOT_FOUND"
+    _default_status_code: ClassVar[int] = 404
+    _default_error_code: ClassVar[str] = "NOT_FOUND"
 
 
 class AdCPAccountNotFoundError(AdCPNotFoundError):
     """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND)."""
 
-    error_code = "ACCOUNT_NOT_FOUND"
+    _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"
 
 
 class AdCPAccountSetupRequiredError(AdCPError):
     """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
 
-    status_code = 422
-    error_code = "ACCOUNT_SETUP_REQUIRED"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "ACCOUNT_SETUP_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAccountSuspendedError(AdCPError):
     """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED)."""
 
-    status_code = 403
-    error_code = "ACCOUNT_SUSPENDED"
+    _default_status_code: ClassVar[int] = 403
+    _default_error_code: ClassVar[str] = "ACCOUNT_SUSPENDED"
 
 
 class AdCPAccountPaymentRequiredError(AdCPError):
-    """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED)."""
+    """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED).
 
-    status_code = 402
-    error_code = "ACCOUNT_PAYMENT_REQUIRED"
+    Recovery=terminal (inherited): from the sales agent's perspective there is
+    no in-band remediation — the buyer must settle the outstanding balance
+    externally before resubmitting. Matches the BDD storyboard contract for
+    UC-002 account-reference partition/boundary rows.
+    """
+
+    _default_status_code: ClassVar[int] = 402
+    _default_error_code: ClassVar[str] = "ACCOUNT_PAYMENT_REQUIRED"
 
 
 class AdCPConflictError(AdCPError):
     """Resource conflict, e.g. duplicate idempotency key (409)."""
 
-    status_code = 409
-    error_code = "CONFLICT"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 409
+    _default_error_code: ClassVar[str] = "CONFLICT"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAccountAmbiguousError(AdCPConflictError):
     """Natural key matches multiple accounts (409, ACCOUNT_AMBIGUOUS)."""
 
-    error_code = "ACCOUNT_AMBIGUOUS"
+    _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
 
 
 class AdCPGoneError(AdCPError):
-    """Resource previously existed but is no longer available (410)."""
+    """Resource previously existed but is no longer available (410).
 
-    status_code = 410
-    error_code = "INVALID_STATE"
+    Recovery=correctable: the resource itself is gone, but the buyer can
+    recover by referencing a different resource (a fresh proposal, a new
+    media buy) and re-issuing the request.
+    """
+
+    _default_status_code: ClassVar[int] = 410
+    _default_error_code: ClassVar[str] = "INVALID_STATE"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPBudgetExhaustedError(AdCPError):
     """Budget or spend limit has been reached (422)."""
 
-    status_code = 422
-    error_code = "BUDGET_EXHAUSTED"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "BUDGET_EXHAUSTED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPRateLimitError(AdCPError):
     """Too many requests (429)."""
 
-    status_code = 429
-    error_code = "RATE_LIMITED"
-    recovery: RecoveryHint = "transient"
+    _default_status_code: ClassVar[int] = 429
+    _default_error_code: ClassVar[str] = "RATE_LIMITED"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPAdapterError(AdCPError):
     """External adapter (GAM, etc.) failure (502)."""
 
-    status_code = 502
-    error_code = "SERVICE_UNAVAILABLE"
-    recovery: RecoveryHint = "transient"
+    _default_status_code: ClassVar[int] = 502
+    _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPConfigurationError(AdCPError):
@@ -296,14 +466,164 @@ class AdCPConfigurationError(AdCPError):
     fall back — the configuration needs admin intervention.
     """
 
-    status_code = 500
-    error_code = "CONFIGURATION_ERROR"
-    recovery: RecoveryHint = "correctable"
+    _default_status_code: ClassVar[int] = 500
+    _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPServiceUnavailableError(AdCPError):
-    """Service or product temporarily unavailable (503)."""
+    """Service or product temporarily unavailable (503).
 
-    status_code = 503
-    error_code = "SERVICE_UNAVAILABLE"
-    recovery: RecoveryHint = "transient"
+    503 indicates a temporary outage in a downstream service the sales
+    agent depends on. Recovery=transient so buyer agents retry rather
+    than mutate the request.
+    """
+
+    _default_status_code: ClassVar[int] = 503
+    _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
+
+
+# ---------------------------------------------------------------------------
+# Typed subclasses for spec-compliant error codes.
+# ---------------------------------------------------------------------------
+# Each subclass pins its wire error_code to a STANDARD_ERROR_CODES entry, so
+# raise sites can use semantic names (AdCPMediaBuyNotFoundError) instead of
+# constructing Error(code="MEDIA_BUY_NOT_FOUND") inline. The boundary
+# translator runs build_two_layer_error_envelope() on the raised exception.
+
+
+class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
+    """Media buy lookup failed (404, MEDIA_BUY_NOT_FOUND).
+
+    Recovery=correctable: the buyer can correct by supplying the right
+    media_buy_id (typo, wrong tenant, stale reference). Overrides the
+    ``AdCPNotFoundError`` ``terminal`` default — for this specific not-found
+    case the buyer's own request is the lever for recovery.
+    """
+
+    _default_error_code: ClassVar[str] = "MEDIA_BUY_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPPackageNotFoundError(AdCPNotFoundError):
+    """Package lookup failed within a media buy (404, PACKAGE_NOT_FOUND).
+
+    Recovery=correctable: the buyer can correct by supplying the right
+    package_id. Overrides the ``AdCPNotFoundError`` ``terminal`` default for
+    the same reason as ``AdCPMediaBuyNotFoundError``.
+    """
+
+    _default_error_code: ClassVar[str] = "PACKAGE_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPBudgetTooLowError(AdCPError):
+    """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "BUDGET_TOO_LOW"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPCapabilityNotSupportedError(AdCPError):
+    """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
+
+    .. note::
+        **Intentional spec divergence.** The AdCP spec classifies
+        ``UNSUPPORTED_FEATURE`` as ``terminal``; we emit ``correctable``.
+        The salesagent raises this exception only when the buyer holds the
+        recovery lever — they can fix the request by dropping the
+        unsupported feature (e.g. removing ``property_list`` targeting
+        against an adapter that doesn't compile it). Classifying it
+        ``terminal`` would tell the buyer agent to give up on a recoverable
+        condition.
+
+        **Revisit condition:** if the SDK runtime starts enforcing the
+        spec's ``terminal`` classification at the wire (rejecting our
+        ``correctable`` recovery hint), drop this override and update
+        affected raise-site call sites to either select a different code or
+        accept the ``terminal`` retry semantics. Until then this is the
+        documented, expected behavior — not a TODO.
+
+        FIXME(salesagent-unsupported-feature-recovery): grep tag for the
+        revisit condition above. Remove when the SDK enforces terminal.
+    """
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "UNSUPPORTED_FEATURE"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+# ---------------------------------------------------------------------------
+# Two-layer envelope serializer — single source of truth for wire shape.
+# ---------------------------------------------------------------------------
+# All three boundary translators (MCP, A2A, REST) and
+# ContextManager.fail_workflow_step_for_exception call this so wire
+# responses and persisted workflow_step.response_data share the same
+# two-layer shape. _impl functions never build wire shape; they raise
+# AdCPError subclasses and the boundary translator runs this.
+#
+# Spec: two-layer model is normative since AdCP 3.0.0 (``error-handling.mdx``).
+# Storyboard runners (@adcp/sdk 6.11.0+) check errors[0].code (when
+# success===false) AND adcp_error.code; missing either layer causes the
+# runner to synthesize "MCP_ERROR" and erase the real code.
+
+
+def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
+    """Build the AdCP spec-compliant two-layer error envelope from an exception.
+
+    Wraps the stable ``adcp_error()`` SDK helper for the payload half
+    (``errors[]``), then mirrors the single error object at envelope level
+    as ``adcp_error`` so the storyboard runner can read either path. Echoes
+    ``exc.context`` when present.
+
+    Returns:
+        Plain dict with shape::
+
+            {
+                "adcp_error": {"code": "...", "message": "...", "recovery": "...", ...},
+                "errors": [{"code": "...", "message": "...", "recovery": "...", ...}],
+                "context": {...},     # only when exc.context is set
+            }
+
+    Both codes pass through ``ERROR_CODE_MAPPING`` via ``exc.wire_error_code``
+    so they always land in ``STANDARD_ERROR_CODES``.
+    """
+    payload = adcp_error(
+        exc.wire_error_code,
+        exc.message,
+        recovery=exc.recovery,
+        field=exc.field,
+        suggestion=exc.suggestion,
+        details=exc.details,
+    )
+    # Copy errors[0] for the envelope-level mirror so callers that mutate one
+    # layer don't accidentally mutate the other (aliasing footgun once both
+    # layers may be mutated independently).
+    envelope: dict[str, Any] = {
+        "adcp_error": dict(payload["errors"][0]),
+        "errors": payload["errors"],
+    }
+    serialized_context = _serialize_context(exc.context)
+    if serialized_context is not None:
+        envelope["context"] = serialized_context
+    return envelope
+
+
+def normalize_to_adcp_error(exc: Exception) -> AdCPError:
+    """Normalize untyped exceptions to typed AdCPError subclasses.
+
+    Single source of truth for the wrapping applied at all three transport
+    boundaries (MCP, A2A, REST).  Already-typed ``AdCPError`` passes through
+    unchanged.  ``ValueError`` maps to ``AdCPValidationError``,
+    ``PermissionError`` to ``AdCPAuthorizationError``, and anything else
+    wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    """
+    if isinstance(exc, AdCPError):
+        return exc
+    if isinstance(exc, ValueError):
+        return AdCPValidationError(str(exc))
+    if isinstance(exc, PermissionError):
+        return AdCPAuthorizationError(str(exc))
+    return AdCPError(str(exc) or type(exc).__name__)

@@ -155,7 +155,7 @@ class TestBuildPropertyListUnsupportedAdvisories:
 
 class TestSuccessEnvelopeErrorsField:
     """``CreateMediaBuySuccess`` and ``UpdateMediaBuySuccess`` carry the
-    optional ``errors`` field for AdCP 3.0.7 non-fatal-in-payload advisories."""
+    optional ``errors`` field for AdCP 3.0.0 non-fatal-in-payload advisories."""
 
     def test_create_success_round_trips_errors(self):
         """``errors`` is set, model_dump preserves it."""

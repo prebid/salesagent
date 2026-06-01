@@ -54,9 +54,8 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types import CreativeAction, CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError
 from src.core.schemas import (
@@ -159,7 +158,7 @@ class TestCreativeSchemaCompliance:
         library type at adcp-client-python media_buy/list_creatives_response.py.
         Existing: test_architecture_schema_inheritance.py (structural guard)
         """
-        from adcp.types.generated_poc.creative.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as ListingCreative,
         )
 
@@ -492,7 +491,9 @@ class TestSyncCreativesRequestSchema:
         assignments as optional list of Assignment objects (creative_id + package_id).
         Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
         """
-        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+        from adcp.types.generated_poc.creative.sync_creatives_request import (
+            Assignment,
+        )  # TODO: no stable alias in adcp.types
 
         creative = _make_creative()
         req = SyncCreativesRequest(
@@ -798,7 +799,7 @@ class TestCrossPrincipalIsolation:
             mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
-            from adcp.types.generated_poc.enums.creative_action import CreativeAction
+            from adcp.types import CreativeAction
 
             mock_create.return_value = (
                 SyncCreativeResult(creative_id="c_shared", action=CreativeAction.created),
@@ -2896,10 +2897,10 @@ class TestCreativeWrongBaseClass:
     def test_creative_extends_listing_base_not_delivery(self):
         """Creative base class should be the listing Creative (13 fields),
         not the delivery Creative (6 fields)."""
-        from adcp.types.generated_poc.creative.get_creative_delivery_response import (
+        from adcp.types.generated_poc.creative.get_creative_delivery_response import (  # TODO: no stable alias in adcp.types
             Creative as DeliveryCreative,
         )
-        from adcp.types.generated_poc.creative.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as ListingCreative,
         )
 
@@ -4669,7 +4670,7 @@ class TestAsyncLifecycle:
 
     def test_async_submitted_response(self):
         """Async submitted acknowledgment conforms to adcp 3.6.0 schema."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
             SyncCreativesSubmitted,
         )
 
@@ -4684,7 +4685,7 @@ class TestAsyncLifecycle:
 
     def test_async_working_response(self):
         """Async working response includes progress percentage and counts."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
             SyncCreativesWorking,
         )
 
@@ -4704,7 +4705,7 @@ class TestAsyncLifecycle:
 
     def test_async_input_required_response(self):
         """Async input-required response indicates what input is needed."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
             Reason,
             SyncCreativesInputRequired,
         )

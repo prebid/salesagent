@@ -147,7 +147,7 @@ Source: UC-003-main-mcp.md
 **Given** a media buy with persisted `targeting_overlay.property_list` and/or `targeting_overlay.collection_list` references
 **When** an update replaces the references with new `list_id` values and the buyer reads back via `get_media_buys`
 **Then** the response reflects the new `list_id` values (replacement, not merge)
-**Spec** AdCP 3.0.6 `core/targeting.json:189-200`; storyboard `inventory_list_targeting`
+**Spec** AdCP 3.0.0 `core/targeting.json` (`property_list`, `collection_list`); storyboard `inventory_list_targeting`
 **Priority** P1
 
 #### Scenario: property_targeting_allowed enforcement on update
@@ -156,7 +156,7 @@ Source: UC-003-main-mcp.md
 **Given** an update that adds `targeting_overlay.property_list` to a package whose product has `property_targeting_allowed=false`
 **When** the system processes the update
 **Then** it returns a validation error identifying the product and the constraint, and persisted state remains unchanged
-**Spec** AdCP 3.0.6 `core/targeting.json:191`
+**Spec** AdCP 3.0.0 `core/product.json` `property_targeting_allowed`
 **Priority** P1
 
 ---

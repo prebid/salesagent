@@ -32,35 +32,35 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # _property_list_unsupported_advisories helper hoist above _update_media_buy_impl.
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 22 violations (workflow step response_data).
-    # Line numbers regenerated from the AST after lazy-import hoists + boundary
-    # ValueError migrations. Regenerate from the current AST, don't hand-edit —
+    # Line numbers regenerated from the AST after merge with origin/main.
+    # Regenerate from the current AST, don't hand-edit —
     # see feedback_precommit_black_shifts_line_allowlists.
-    ("media_buy_update.py", 307),
-    ("media_buy_update.py", 411),
-    ("media_buy_update.py", 412),
-    ("media_buy_update.py", 469),
-    ("media_buy_update.py", 526),
-    ("media_buy_update.py", 549),
-    ("media_buy_update.py", 592),
-    ("media_buy_update.py", 621),
-    ("media_buy_update.py", 638),
-    ("media_buy_update.py", 694),
-    ("media_buy_update.py", 724),
-    ("media_buy_update.py", 741),
-    ("media_buy_update.py", 767),
-    ("media_buy_update.py", 945),
-    ("media_buy_update.py", 974),
-    ("media_buy_update.py", 1004),
-    ("media_buy_update.py", 1176),
-    ("media_buy_update.py", 1194),
-    ("media_buy_update.py", 1247),
-    ("media_buy_update.py", 1340),
-    ("media_buy_update.py", 1374),
-    ("media_buy_update.py", 1436),
+    ("media_buy_update.py", 309),
+    ("media_buy_update.py", 413),
+    ("media_buy_update.py", 414),
+    ("media_buy_update.py", 471),
+    ("media_buy_update.py", 528),
+    ("media_buy_update.py", 551),
+    ("media_buy_update.py", 594),
+    ("media_buy_update.py", 623),
+    ("media_buy_update.py", 640),
+    ("media_buy_update.py", 696),
+    ("media_buy_update.py", 726),
+    ("media_buy_update.py", 743),
+    ("media_buy_update.py", 769),
+    ("media_buy_update.py", 947),
+    ("media_buy_update.py", 976),
+    ("media_buy_update.py", 1006),
+    ("media_buy_update.py", 1178),
+    ("media_buy_update.py", 1196),
+    ("media_buy_update.py", 1249),
+    ("media_buy_update.py", 1342),
+    ("media_buy_update.py", 1376),
+    ("media_buy_update.py", 1438),
     # _get_products_impl: 1 violation (logging)
-    ("products.py", 629),
+    ("products.py", 630),
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 144),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 143),  # filters.model_dump(exclude_none=True)
 }
 
 

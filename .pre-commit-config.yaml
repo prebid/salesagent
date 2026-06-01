@@ -269,9 +269,11 @@ repos:
 
 
       # ast-grep BDD guards (structural AST pattern detection)
+      # Uses sgconfig.yml at repo root to discover all rules under .ast-grep/rules/
+      # (--rule takes a single file, not a directory).
       - id: ast-grep-bdd-guards
         name: ast-grep BDD step guards
-        entry: ast-grep scan --rule .ast-grep/rules/
+        entry: ast-grep scan
         language: system
         files: '^tests/bdd/steps/.*\.py$'
         pass_filenames: false

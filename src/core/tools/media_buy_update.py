@@ -26,12 +26,8 @@ from pydantic import Field
 #: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
 MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
 
-from adcp.types import Error
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
-from adcp.types.generated_poc.core.targeting import TargetingOverlay
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
-from adcp.types.generated_poc.media_buy.package_update import PackageUpdate as UpdatePackage
+from adcp.types import ContextObject, CreativeAction, Error, ReportingWebhook, TargetingOverlay
+from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
@@ -40,9 +36,10 @@ from sqlalchemy import select
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
     AdCPError,
     AdCPGoneError,
-    AdCPNotFoundError,
+    AdCPMediaBuyNotFoundError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -146,7 +143,7 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     media_buy = repo.get_by_id(media_buy_id)
 
     if not media_buy:
-        raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
+        raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
     if media_buy.principal_id != principal_id:
         # CRITICAL: Verify principal_id is set (security check, not assertion)
@@ -189,12 +186,14 @@ def _update_media_buy_impl(
     affected_packages_list: list[AffectedPackage] = []
 
     if identity is None:
-        raise ValueError("Identity is required for update_media_buy")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     # CRITICAL: Extract principal from identity
     principal_id = identity.principal_id
     if principal_id is None:
-        raise ValueError("principal_id is required but was None - authentication required")
+        raise AdCPAuthRequiredError("principal_id missing from authentication context")
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = identity.tenant
@@ -213,7 +212,7 @@ def _update_media_buy_impl(
     ctx_manager = get_context_manager()
     step = None
 
-    try:
+    with ctx_manager.audit_step_failure(lambda: step):
         # Single UoW for entire update operation — one session, one transaction
         with MediaBuyUoW(tenant["tenant_id"]) as uow:
             assert uow.media_buys is not None
@@ -280,7 +279,10 @@ def _update_media_buy_impl(
 
                 # Verify persistent_ctx is not None
                 if persistent_ctx is None:
-                    raise ValueError("Failed to create or get persistent context")
+                    raise AdCPError(
+                        "Failed to create or get persistent context",
+                        error_code="WORKFLOW_CREATION_FAILED",
+                    )
 
                 # Create workflow step for this tool call
                 step = ctx_manager.create_workflow_step(
@@ -312,7 +314,7 @@ def _update_media_buy_impl(
             adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
             today = req.today or date.today()
 
-            # AdCP 3.0.6 spec (core/targeting.json:191): reject property_list targeting
+            # AdCP 3.0.0 spec (core/product.json `property_targeting_allowed`): reject property_list targeting
             # on products with property_targeting_allowed=False. Runs before the dry_run
             # early return so dry_run requests are also rejected (parity with create).
             # Raise shape is shared with create via ``raise_if_property_targeting_violations``
@@ -1438,25 +1440,6 @@ def _update_media_buy_impl(
 
         return final_response
 
-    except AdCPError as adcp_err:
-        # Mark the workflow step failed so the push notification fires
-        # (context_manager.update_workflow_step → _send_push_notifications).
-        # fail_workflow_step_for_exception threads the two-layer envelope into
-        # response_data so async webhook subscribers see the same wire shape
-        # the synchronous caller receives, AND wraps in try/except so a DB
-        # hiccup during audit can't shadow the original AdCPError on re-raise.
-        if step is not None:
-            ctx_manager.fail_workflow_step_for_exception(step.step_id, adcp_err)
-        raise
-
-    except Exception as e:
-        # Same idea for non-AdCPError raises (ValueError, IntegrityError, etc.)
-        # — the buyer-facing webhook still needs to fire so polling clients
-        # don't hang. Mirror create's pattern (media_buy_create.py:3691-3700).
-        if step is not None:
-            ctx_manager.fail_workflow_step_for_exception(step.step_id, e)
-        raise
-
 
 def _build_update_request(
     media_buy_id: str | None = None,
@@ -1474,6 +1457,7 @@ def _build_update_request(
     context: Any = None,
     reporting_webhook: Any = None,
     ext: Any = None,
+    idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1527,6 +1511,8 @@ def _build_update_request(
         request_params["reporting_webhook"] = reporting_webhook
     if ext is not None:
         request_params["ext"] = ext
+    if idempotency_key is not None:
+        request_params["idempotency_key"] = idempotency_key
 
     try:
         req = UpdateMediaBuyRequest(**request_params)
@@ -1562,6 +1548,7 @@ async def update_media_buy(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1587,6 +1574,7 @@ async def update_media_buy(
         context: Application-level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
         ext: Extension object for custom fields (optional, per AdCP spec)
+        idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1610,6 +1598,7 @@ async def update_media_buy(
         context=context,
         reporting_webhook=reporting_webhook,
         ext=ext,
+        idempotency_key=idempotency_key,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1636,6 +1625,7 @@ def update_media_buy_raw(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1661,6 +1651,7 @@ def update_media_buy_raw(
         context: Application level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery
         ext: Extension object for custom fields (optional, per AdCP spec)
+        idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -1683,10 +1674,12 @@ def update_media_buy_raw(
         context=context,
         reporting_webhook=reporting_webhook,
         ext=ext,
+        idempotency_key=idempotency_key,
     )
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
-    return _update_media_buy_impl(req=req, identity=identity)
+    # A2A/REST callers pass identity directly without a FastMCP Context, so there
+    # is no workflow context_id to forward — _impl creates one if needed.
+    return _update_media_buy_impl(req=req, identity=identity, context_id=None)

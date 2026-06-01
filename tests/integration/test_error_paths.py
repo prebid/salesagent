@@ -32,7 +32,7 @@ from src.core.database.models import CurrencyLimit
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
 from src.core.schemas import CreateMediaBuyError, Error
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
 from tests.factories import PrincipalFactory
@@ -206,38 +206,29 @@ class TestCreateMediaBuyErrorPaths:
         past_start = datetime.now(UTC) - timedelta(days=1)  # In the past!
         past_end = past_start + timedelta(days=7)
 
-        # This should return error response for past start time
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            context={"trace_id": "past-start"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=past_start.isoformat(),
-            end_time=past_end.isoformat(),
-            identity=identity,
-        )
+        # Typed AdCPValidationError now propagates past the boundary catch.
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                context={"trace_id": "past-start"},
+                packages=[
+                    create_test_package_request_dict(
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                start_time=past_start.isoformat(),
+                end_time=past_end.isoformat(),
+                identity=identity,
+            )
 
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        # Verify error details
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "VALIDATION_ERROR"
-        # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
-        assert response.context.trace_id == "past-start"
-        assert "past" in error.message.lower() or "start" in error.message.lower()
+        # Typed AdCPValidationError raised directly from _impl with
+        # error_code="INVALID_REQUEST".
+        exc = excinfo.value
+        assert exc.error_code == "INVALID_REQUEST"
+        assert "past" in exc.message.lower() or "start" in exc.message.lower()
 
     async def test_end_time_before_start_returns_validation_error(self, test_tenant_with_principal):
         """Test that end_time before start_time returns Error response."""
@@ -250,33 +241,26 @@ class TestCreateMediaBuyErrorPaths:
         start = datetime.now(UTC) + timedelta(days=7)
         end = start - timedelta(days=1)  # Before start!
 
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=start.isoformat(),
-            end_time=end.isoformat(),
-            identity=identity,
-        )
+        # Typed AdCPValidationError now propagates past the boundary catch.
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                packages=[
+                    create_test_package_request_dict(
+                        product_id="error_test_product",
+                        pricing_option_id="cpm_usd_fixed",
+                        budget=5000.0,
+                    )
+                ],
+                start_time=start.isoformat(),
+                end_time=end.isoformat(),
+                identity=identity,
+            )
 
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "VALIDATION_ERROR"
-        assert "end" in error.message.lower() or "after" in error.message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "INVALID_REQUEST"
+        assert "end" in exc.message.lower() or "after" in exc.message.lower()
 
     async def test_negative_budget_raises_tool_error(self, test_tenant_with_principal):
         """Test that negative budget raises a validation error during Pydantic validation.
@@ -326,27 +310,23 @@ class TestCreateMediaBuyErrorPaths:
         future_start = datetime.now(UTC) + timedelta(days=1)
         future_end = future_start + timedelta(days=7)
 
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            packages=[],  # Empty packages!
-            start_time=future_start.isoformat(),
-            end_time=future_end.isoformat(),
-            identity=identity,
-        )
+        # Typed AdCPBudgetTooLowError now propagates past the boundary catch.
+        # Empty packages -> budget=0.0 -> "Budget must be positive" validator at
+        # media_buy_create.py:1758 raises AdCPBudgetTooLowError (typed subclass,
+        # typed AdCPValidationError raised directly).
+        with pytest.raises(AdCPBudgetTooLowError) as excinfo:
+            await create_media_buy_raw(
+                po_number="error_test_po",
+                brand={"domain": "testbrand.com"},
+                packages=[],  # Empty packages!
+                start_time=future_start.isoformat(),
+                end_time=future_end.isoformat(),
+                identity=identity,
+            )
 
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        # Should be validation error or similar
-        assert error.code in ["VALIDATION_ERROR", "invalid_request"]
+        exc = excinfo.value
+        assert exc.error_code == "BUDGET_TOO_LOW"
+        assert "budget" in exc.message.lower() or "package" in exc.message.lower()
 
 
 @pytest.mark.integration
@@ -383,20 +363,38 @@ class TestSyncCreativesErrorPaths:
             }
         ]
 
-        # Should handle gracefully, not crash
+        # The contract under test: sync_creatives_raw must surface a typed,
+        # buyer-visible validation error for a malformed creative. Either it
+        # returns a response carrying failed-creative entries, or it raises
+        # a typed AdCPError / Pydantic ValidationError / ValueError —
+        # anything else (e.g. RuntimeError, KeyError, NameError) is a bug,
+        # not an "ok" outcome the original ``except Exception: pass`` was
+        # silently accepting.
+        from pydantic import ValidationError
+
+        from src.core.exceptions import AdCPError
+
         try:
-            response = await sync_creatives_raw(
+            response = sync_creatives_raw(
                 creatives=invalid_creatives,
                 identity=identity,
             )
-            # If it returns, check for errors
-            assert response is not None
-        except NameError:
-            # ❌ FAIL: NameError means Error class wasn't imported
-            pytest.fail("sync_creatives_raw raised NameError - Error class not imported")
-        except Exception:
-            # ✅ Other exceptions are fine (validation errors, etc.)
-            pass
+        except (AdCPError, ValidationError, ValueError):
+            return  # typed validation surface — the contract is honored
+
+        # sync_creatives_raw returned a response: it must report the failure
+        # explicitly via a per-creative ``action == failed`` entry, not silently
+        # accept the malformed creative as a success.
+        from src.core.schemas import CreativeAction
+
+        assert response is not None, "sync_creatives_raw must not return None for invalid input"
+        failed = [c for c in response.creatives if c.action == CreativeAction.failed]
+        succeeded = [c for c in response.creatives if c.action in (CreativeAction.created, CreativeAction.updated)]
+        assert len(failed) >= 1, (
+            f"Invalid creative should land in creatives[] with action=failed, "
+            f"got {[c.action for c in response.creatives]}"
+        )
+        assert not succeeded, f"Invalid creative must not be reported as created/updated, got {succeeded!r}"
 
 
 @pytest.mark.integration
@@ -478,52 +476,58 @@ class TestImportValidation:
 class TestRecoveryFieldInErrorResponses:
     """Verify recovery field appears in REST error responses via the exception handler.
 
-    The REST boundary uses AdCPError.to_dict() which includes recovery.
-    These tests confirm the full chain: AdCPError raised -> exception handler -> JSON body.
+    The REST boundary now serializes the AdCP spec 3.0.0 two-layer envelope:
+    recovery lives inside ``adcp_error.recovery`` and ``errors[0].recovery``,
+    not at the top level. These tests confirm the full chain: AdCPError raised
+    -> exception handler -> envelope JSON body.
     """
 
-    def test_rest_validation_error_has_correctable_recovery(self):
-        """REST 400 from AdCPValidationError includes recovery='correctable'."""
+    @pytest.mark.parametrize(
+        ("error_factory_path", "exc_message", "expected_status", "expected_code", "expected_recovery"),
+        [
+            (
+                "src.core.exceptions.AdCPValidationError",
+                "bad input",
+                400,
+                "VALIDATION_ERROR",
+                "correctable",
+            ),
+            (
+                "src.core.exceptions.AdCPAdapterError",
+                "GAM unavailable",
+                502,
+                "SERVICE_UNAVAILABLE",
+                "transient",
+            ),
+        ],
+        ids=["validation_error_correctable", "adapter_error_transient"],
+    )
+    def test_rest_recovery_field_propagates_from_typed_error(
+        self, error_factory_path, exc_message, expected_status, expected_code, expected_recovery
+    ):
+        """REST exception handler propagates recovery hint from typed AdCPError to both envelope layers."""
+        import importlib
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
 
         from src.app import app
-        from src.core.exceptions import AdCPValidationError
+        from tests.helpers import assert_envelope_shape
+
+        module_path, _, class_name = error_factory_path.rpartition(".")
+        exc_class = getattr(importlib.import_module(module_path), class_name)
 
         with patch(
             "src.core.tools.capabilities.get_adcp_capabilities_raw",
-            side_effect=AdCPValidationError("bad input"),
+            side_effect=exc_class(exc_message),
         ):
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
-            assert response.status_code == 400
-            body = response.json()
-            assert "recovery" in body, "REST error response must include 'recovery' field"
-            assert body["recovery"] == "correctable"
-
-    def test_rest_adapter_error_has_transient_recovery(self):
-        """REST 502 from AdCPAdapterError includes recovery='transient'."""
-        from unittest.mock import patch
-
-        from starlette.testclient import TestClient
-
-        from src.app import app
-        from src.core.exceptions import AdCPAdapterError
-
-        with patch(
-            "src.core.tools.capabilities.get_adcp_capabilities_raw",
-            side_effect=AdCPAdapterError("GAM unavailable"),
-        ):
-            client = TestClient(app, raise_server_exceptions=False)
-            response = client.get("/api/v1/capabilities")
-            assert response.status_code == 502
-            body = response.json()
-            assert "recovery" in body, "REST error response must include 'recovery' field"
-            assert body["recovery"] == "transient"
+            assert response.status_code == expected_status
+            assert_envelope_shape(response.json(), expected_code, recovery=expected_recovery)
 
     def test_rest_custom_recovery_override_preserved(self):
-        """Custom recovery= override is preserved through REST boundary."""
+        """Custom recovery= override is preserved through REST boundary (both layers)."""
         from unittest.mock import patch
 
         from starlette.testclient import TestClient
@@ -539,9 +543,10 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             body = response.json()
-            assert body["recovery"] == "transient", (
-                "Custom recovery='transient' must be preserved, not default 'terminal'"
+            assert body["adcp_error"]["recovery"] == "transient", (
+                "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
             )
+            assert body["errors"][0]["recovery"] == "transient"
 
     def test_to_dict_serialization_roundtrip(self):
         """AdCPError.to_dict() -> JSON -> verify recovery is present and correct."""
@@ -567,3 +572,48 @@ class TestRecoveryFieldInErrorResponses:
             assert deserialized["recovery"] == expected_recovery, (
                 f"{type(exc).__name__}: recovery lost in JSON roundtrip"
             )
+
+
+class TestRestBoundaryAuditObservability:
+    """A REST boundary error leaves an audit row when identity is resolvable.
+
+    The MCP and A2A boundaries already write a tenant-scoped audit row on
+    error; REST previously emitted only a WARNING log line because identity
+    is not resolved on ``request.state`` at the exception-handler boundary.
+    ``_envelope_response`` now resolves identity best-effort from the request's
+    ``x-adcp-auth`` token and forwards it to ``record_boundary_error`` so all
+    three transports leave the same persistent trail.
+    """
+
+    def test_rest_error_with_valid_token_writes_audit_row(self, sample_principal):
+        """REST 4xx with a valid token writes an audit row scoped to the resolved principal."""
+        from unittest.mock import patch
+
+        from sqlalchemy import select
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AuditLog
+        from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=AdCPMediaBuyNotFoundError("buy_x missing"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get(
+                "/api/v1/capabilities",
+                headers={"x-adcp-auth": sample_principal["access_token"]},
+            )
+
+        assert response.status_code == 404
+
+        with get_db_session() as session:
+            stmt = select(AuditLog).filter_by(tenant_id="test_tenant", adapter_id="rest_boundary")
+            audit_log = session.scalars(stmt).first()
+
+        assert audit_log is not None, "REST boundary error must write an audit row when identity resolves"
+        assert audit_log.success is False
+        assert audit_log.principal_id == "test_principal"
+        assert "buy_x missing" in (audit_log.error_message or "")

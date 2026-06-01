@@ -287,7 +287,18 @@ class TestA2AWebhookPayloadTypes:
         a2a_url = f"{live_server['a2a']}/a2a"
         context_id = str(uuid.uuid4())
 
-        # Send A2A create_media_buy message with push notification config
+        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+        media_buy_params = build_adcp_media_buy_request(
+            product_ids=[product_id],
+            total_budget=5000.0,
+            start_time=start_time,
+            end_time=end_time,
+            brand={"domain": "testbrand.com"},
+            pricing_option_id=pricing_option_id,
+            context={"e2e": "webhook_completed_test"},
+        )
+
         message = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -301,14 +312,7 @@ class TestA2AWebhookPayloadTypes:
                         {
                             "data": {
                                 "skill": "create_media_buy",
-                                "parameters": {
-                                    "product_ids": ["video_premium"],
-                                    "total_budget": 5000.0,
-                                    "start_time": "2025-03-01T00:00:00Z",
-                                    "end_time": "2025-03-31T23:59:59Z",
-                                    "brand": {"domain": "testbrand.com"},
-                                    "context": {"e2e": "webhook_completed_test"},
-                                },
+                                "parameters": media_buy_params,
                             }
                         }
                     ],
@@ -525,7 +529,18 @@ class TestA2AWebhookPayloadTypes:
         a2a_url = f"{live_server['a2a']}/a2a"
         context_id = str(uuid.uuid4())
 
-        # Send create_media_buy request
+        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+        media_buy_params = build_adcp_media_buy_request(
+            product_ids=[product_id],
+            total_budget=8000.0,
+            start_time=start_time,
+            end_time=end_time,
+            brand={"domain": "testbrand.com"},
+            pricing_option_id=pricing_option_id,
+            context={"e2e": "webhook_payload_type_match_test"},
+        )
+
         message = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -539,13 +554,7 @@ class TestA2AWebhookPayloadTypes:
                         {
                             "data": {
                                 "skill": "create_media_buy",
-                                "parameters": {
-                                    "product_ids": ["video_premium"],
-                                    "total_budget": 8000.0,
-                                    "start_time": "2025-05-01T00:00:00Z",
-                                    "end_time": "2025-05-31T23:59:59Z",
-                                    "brand": {"domain": "testbrand.com"},
-                                },
+                                "parameters": media_buy_params,
                             }
                         }
                     ],
@@ -652,6 +661,18 @@ class TestWebhookPayloadStructure:
 
         a2a_url = f"{live_server['a2a']}/a2a"
 
+        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+        media_buy_params = build_adcp_media_buy_request(
+            product_ids=[product_id],
+            total_budget=3000.0,
+            start_time=start_time,
+            end_time=end_time,
+            brand={"domain": "testbrand.com"},
+            pricing_option_id=pricing_option_id,
+            context={"e2e": "webhook_task_required_fields_test"},
+        )
+
         message = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -665,12 +686,7 @@ class TestWebhookPayloadStructure:
                         {
                             "data": {
                                 "skill": "create_media_buy",
-                                "parameters": {
-                                    "product_ids": ["video_premium"],
-                                    "total_budget": 3000.0,
-                                    "start_time": "2025-06-01T00:00:00Z",
-                                    "end_time": "2025-06-30T23:59:59Z",
-                                },
+                                "parameters": media_buy_params,
                             }
                         }
                     ],

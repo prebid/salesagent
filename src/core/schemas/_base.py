@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 if TYPE_CHECKING:
@@ -11,12 +11,14 @@ if TYPE_CHECKING:
 
 from adcp import Error
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 from adcp.types import (
+    ContextObject,
     DeliveryStatus,  # noqa: F401 — used by Snapshot below
+    MediaBuyStatus,
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
+from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 
 # Import main request/response types from stable API
 from adcp.types import Format as LibraryFormat
@@ -43,9 +45,9 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
-from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
+from adcp.types.generated_poc.enums.media_buy_valid_action import (
+    MediaBuyValidAction,
+)  # TODO: no stable alias in adcp.types
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPNotFoundError
@@ -199,7 +201,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
 
-    AdCP spec 3.0.7 ``error-handling.mdx`` allows non-fatal errors on the
+    AdCP spec 3.0.0 ``error-handling.mdx`` allows non-fatal errors on the
     success envelope ("populate only the payload... MUST NOT populate
     ``adcp_error``"). The ``errors`` field below carries per-package
     advisories like ``UNSUPPORTED_FEATURE`` for fields the seller persists but
@@ -293,7 +295,7 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
-        result = self.response.model_dump(mode=info.mode)
+        result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
         return result
 
@@ -339,7 +341,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
 
     Carries an optional ``errors`` field for non-fatal advisories on the
-    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.7 error-handling
+    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.0 error-handling
     "non-fatal in payload" rule). Used today for per-package
     ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
     not yet compiled by the adapter.
@@ -425,7 +427,7 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):
 UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Standardized task status enum per AdCP MCP Status specification.
 
     Provides crystal clear guidance on when operations need clarification,
@@ -2165,7 +2167,9 @@ PROPERTY_ERROR_MESSAGES = {
 # --- Authorized Properties (AdCP Spec) ---
 # Use library types directly - all fields inherited from AdCP spec
 # V3: Property uses property-specific Identifier, not generic Identifier
-from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
+from adcp.types.generated_poc.core.property import (
+    Identifier as PropertySpecificIdentifier,
+)  # TODO: no stable alias in adcp.types (different from adcp.types.Identifier)
 
 PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific identifier
 Property: TypeAlias = LibraryProperty
@@ -2257,14 +2261,14 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 # DeliveryStatus: imported from adcp library at top of file (all 6 values).
 
 
-class SnapshotUnavailableReason(str, Enum):
+class SnapshotUnavailableReason(StrEnum):
     """Reason why a delivery snapshot is not available."""
 
     SNAPSHOT_UNSUPPORTED = "SNAPSHOT_UNSUPPORTED"
     SNAPSHOT_TEMPORARILY_UNAVAILABLE = "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
 
 
-class ApprovalStatus(str, Enum):
+class ApprovalStatus(StrEnum):
     """Approval status value for a creative assignment in a get_media_buys response."""
 
     pending_review = "pending_review"

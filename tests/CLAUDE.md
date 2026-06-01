@@ -307,6 +307,95 @@ def then_response_has_formats(ctx, count):
     assert len(result.payload.get("formats", [])) == count
 ```
 
+## Error Verification Policy
+
+### Principle: Assert on the Wire Envelope, Not Reconstructed Exceptions
+
+The test harness reconstructs `AdCPError` subclasses from wire responses so tests can
+use `isinstance()` and `.error_code`. This reconstruction is **lossy** — e.g.,
+`AdCPAuthenticationError` and `AdCPAuthorizationError` both map to `AUTH_REQUIRED` on
+the wire, so reconstruction always produces `AdCPAuthenticationError`. Tests that assert
+on reconstructed exceptions verify the reconstruction layer, not the actual wire shape.
+
+**New error-path tests MUST assert on the wire error envelope** as the primary authority.
+The wire envelope is the buyer-facing contract — it is what the AdCP spec defines and
+what storyboard runners parse.
+
+### How to assert on the wire envelope
+
+Use `assert_envelope_shape()` from `tests/helpers/envelope_assertions.py`:
+
+```python
+from tests.helpers import assert_envelope_shape
+
+# On a TransportResult:
+result = env.call_via(transport, **kwargs)
+assert result.is_error
+assert_envelope_shape(
+    result.wire_error_envelope,
+    "VALIDATION_ERROR",
+    recovery="correctable",
+    message_substr="budget must be positive",
+)
+```
+
+### What to assert
+
+| Layer | What to check | How |
+|-------|--------------|-----|
+| Wire shape | Two-layer envelope structure | `assert_envelope_shape(envelope, code, recovery=...)` |
+| HTTP status | REST status code | `assert result.envelope["status_code"] == 400` |
+| Error code | Machine-readable wire code | `assert_envelope_shape(envelope, "VALIDATION_ERROR")` |
+| Message | Human-readable content | `assert_envelope_shape(envelope, code, message_substr="...")` |
+| Recovery | Buyer retry semantics | `assert_envelope_shape(envelope, code, recovery="correctable")` |
+
+### What NOT to assert on (in new error tests)
+
+- `isinstance(error, AdCPValidationError)` — verifies reconstruction, not wire
+- `error.error_code == "VALIDATION_ERROR"` — verifies reconstructed attribute, not wire
+- `error.recovery == "correctable"` — same issue
+
+These patterns are acceptable ONLY in `_impl`-level tests (no wire involved) and in
+existing tests that predate this policy.
+
+### Migration path
+
+Existing tests (~660 call sites, ~80 BDD steps) use `ctx["error"]` or `result.error`
+(reconstructed exceptions). These are NOT broken — they continue to work. Migration is
+incremental:
+
+1. **New error tests**: MUST use `result.wire_error_envelope` + `assert_envelope_shape()`
+2. **Existing tests**: Migrate when touched for other reasons (boy-scout rule)
+3. **BDD Then steps**: Add wire-envelope variants alongside existing exception-based steps
+
+### TransportResult.wire_error_envelope
+
+`TransportResult` exposes `wire_error_envelope: dict | None` — the two-layer
+error envelope captured at the transport boundary. Populated by all
+dispatchers on error; `None` on success. This is the canonical field for
+error verification.
+
+**Authenticity per transport (matters for what regressions the field catches):**
+
+| Transport | `wire_error_envelope` source                                          | `synthesized_error_envelope`                                          | Catches a regression in...                                |
+|-----------|-----------------------------------------------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------|
+| REST      | HTTP response body (real wire)                                        | `None`                                                                | exception handler + envelope serialization + HTTP framing |
+| MCP       | JSON string in `ToolError` (real wire)                                | `None`                                                                | `_handle_tool_exception` + `build_two_layer_error_envelope` |
+| A2A       | Failed Task's artifact DataPart, stashed by `_envelope_to_adcp_error` | `None`                                                                | `on_message_send` + `_serialize_for_a2a` + envelope build |
+| IMPL      | `None` (no wire by definition)                                        | Built via `build_two_layer_error_envelope` against the caught error   | `build_two_layer_error_envelope` only                     |
+
+IMPL has no wire. Use `result.synthesized_error_envelope` to see what
+production WOULD emit at the boundary for the same exception, but be aware
+that field cannot catch a regression in the production boundary translator
+— both IMPL and production call the same envelope builder, so the
+synthesized value moves in lockstep with whatever the builder produces.
+Tests that need to catch real wire-shape regressions must run on REST,
+MCP, or A2A — only those transports observe actual wire bytes.
+
+`result.error` (reconstructed exception) remains available for backward
+compatibility. Reconstruction is lossy — assert on `wire_error_envelope`
+(or `synthesized_error_envelope` for IMPL).
+
 ## Infrastructure
 
 | What you need | Command |
