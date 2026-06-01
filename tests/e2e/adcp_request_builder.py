@@ -188,10 +188,10 @@ def build_sync_creatives_request(
         request["creative_ids"] = creative_ids
 
     if webhook_url:
-        request["push_notification_config"] = {
-            "url": webhook_url,
-            "authentication": {"type": "none"},
-        }
+        # AdCP push_notification_config: omitting `authentication` selects the
+        # default RFC 9421 webhook-signing profile. The legacy {schemes,
+        # credentials} block is only needed when opting into Bearer/HMAC.
+        request["push_notification_config"] = {"url": webhook_url}
 
     return request
 
@@ -276,10 +276,10 @@ def build_update_media_buy_request(
     if packages is not None:
         request["packages"] = packages
     if webhook_url:
-        request["push_notification_config"] = {
-            "url": webhook_url,
-            "authentication": {"type": "none"},
-        }
+        # AdCP push_notification_config: omitting `authentication` selects the
+        # default RFC 9421 webhook-signing profile. The legacy {schemes,
+        # credentials} block is only needed when opting into Bearer/HMAC.
+        request["push_notification_config"] = {"url": webhook_url}
 
     return request
 

@@ -67,9 +67,9 @@ class TestFindMostRecentActiveForPrincipal:
             config = repo.find_most_recent_active_for_principal("p1")
 
         assert config is not None
-        assert (
-            config.url == "https://buyer.example/newer"
-        ), f"Expected most recent active webhook URL, got {config.url!r}"
+        assert config.url == "https://buyer.example/newer", (
+            f"Expected most recent active webhook URL, got {config.url!r}"
+        )
 
     def test_skips_inactive_rows(self, integration_db):
         """Inactive configs are excluded even if they are the most recent."""

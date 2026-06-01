@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
+# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-019 Query Media Buys
@@ -23,25 +23,11 @@ Feature: BR-UC-019 Query Media Buys
     And the principal "buyer-001" exists in the tenant database
 
 
-  @T-UC-019-main-rest @main-flow @rest
-  Scenario: Query media buys via REST with default filters
+  @T-UC-019-main @main-flow
+  Scenario: Query media buys with default filters
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
-    When the Buyer Agent sends a get_media_buys request via A2A with no filters
-    Then the response should include media buy "mb-001" with status "active"
-    And each media buy should include package-level details with budget, bid_price, product_id, flight dates, and paused state
-    And each package should include creative approval state when creatives are assigned
-    And each media buy should include buyer_ref and buyer_campaign_ref for correlation
-    # POST-S1: Status computed from flight dates
-    # POST-S2: Package-level details present
-    # POST-S3: Creative approval state present
-    # POST-S6: Buyer refs present for correlation
-
-  @T-UC-019-main-mcp @main-flow @mcp
-  Scenario: Query media buys via MCP with default filters
-    Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
-    And today is "2026-03-15"
-    When the Buyer Agent invokes the get_media_buys MCP tool with no filters
+    When the Buyer Agent sends a get_media_buys request with no filters
     Then the response should include media buy "mb-001" with status "active"
     And each media buy should include package-level details with budget, bid_price, product_id, flight dates, and paused state
     And each package should include creative approval state when creatives are assigned
@@ -104,7 +90,7 @@ Feature: BR-UC-019 Query Media Buys
     Given an authenticated identity with no principal_id
     When the Buyer Agent sends a get_media_buys request
     Then the response should include an empty media_buys array
-    And the response errors array should include error code "AUTH_REQUIRED"
+    And the response errors array should include error code "principal_id_missing"
     And the error message should contain "Principal ID not found"
     And the error should include a "suggestion" field
     And the suggestion should contain "re-authenticate" or "credentials"
@@ -118,7 +104,7 @@ Feature: BR-UC-019 Query Media Buys
     And the principal "buyer-unknown" does not exist in the tenant database
     When the Buyer Agent sends a get_media_buys request
     Then the response should include an empty media_buys array
-    And the response errors array should include error code "AUTH_REQUIRED"
+    And the response errors array should include error code "principal_not_found"
     And the error message should contain "not found"
     And the error should include a "suggestion" field
     And the suggestion should contain "register" or "verify"
@@ -384,8 +370,8 @@ Feature: BR-UC-019 Query Media Buys
 
     Examples: Invalid partitions
       | partition              | principal_setup                                       | expected_outcome                                                                 | suggestion_fragment       |
-      | missing_principal_id   | an authenticated identity with no principal_id        | the response should include an empty media_buys array with error "AUTH_REQUIRED" | re-authenticate           |
-      | principal_not_found    | an authenticated principal "buyer-unknown" not in registry | the response should include an empty media_buys array with error "AUTH_REQUIRED"  | register                  |
+      | missing_principal_id   | an authenticated identity with no principal_id        | the response should include an empty media_buys array with error "principal_id_missing" | re-authenticate           |
+      | principal_not_found    | an authenticated principal "buyer-unknown" not in registry | the response should include an empty media_buys array with error "principal_not_found"  | register                  |
       | identity_missing       | no authentication context                             | the operation should fail with error code "AUTH_REQUIRED"                         | authentication            |
 
   @T-UC-019-boundary-principal @boundary @principal_id
@@ -399,9 +385,9 @@ Feature: BR-UC-019 Query Media Buys
       | boundary_point                          | principal_setup                                                       | expected_outcome                                                                 |
       | valid principal with multiple media buys | an authenticated principal "buyer-001" who owns 5 media buys         | the response should include 5 media buys scoped to buyer-001                     |
       | valid principal with zero media buys    | an authenticated principal "buyer-002" who owns no media buys         | the response should include an empty media_buys array                            |
-      | principal_id is null                    | an authenticated identity with principal_id null                      | empty media_buys with error "AUTH_REQUIRED"                               |
-      | principal_id is empty string            | an authenticated identity with principal_id ""                        | empty media_buys with error "AUTH_REQUIRED"                               |
-      | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with error "AUTH_REQUIRED"                                |
+      | principal_id is null                    | an authenticated identity with principal_id null                      | empty media_buys with error "principal_id_missing"                               |
+      | principal_id is empty string            | an authenticated identity with principal_id ""                        | empty media_buys with error "principal_id_missing"                               |
+      | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with error "principal_not_found"                                |
       | identity not resolved (no auth)         | no authentication context                                             | error "AUTH_REQUIRED" with suggestion                                            |
 
   @T-UC-019-inv-154-tenant @invariant @BR-RULE-154
@@ -532,7 +518,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid request returns real validation error
-    And the request targets a sandbox account
+    Given the request targets a sandbox account
     When the Buyer Agent sends a get_media_buys request with invalid status filter
     Then the response should indicate a validation error
     And the error should be a real validation error, not simulated

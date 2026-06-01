@@ -24,13 +24,10 @@ if TYPE_CHECKING:
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
+from adcp.types import BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import MediaBuyStatus
+from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
-from adcp.types.generated_poc.core.brand_ref import BrandReference
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
-from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
@@ -40,6 +37,8 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
+    AdCPBudgetTooLowError,
     AdCPError,
     AdCPNotFoundError,
     AdCPValidationError,
@@ -55,6 +54,19 @@ class PackageAssignmentDict(TypedDict):
 
 logger = logging.getLogger(__name__)
 console = Console()
+
+
+def _raise_if_validation_failed(message: str | None) -> None:
+    """Raise ``AdCPValidationError`` when the validator returned a non-empty message.
+
+    Shared one-liner so the four ``validate_*`` call sites in
+    ``_create_media_buy_impl`` express their failure path uniformly without
+    each one repeating ``if x: raise AdCPValidationError(x)``. The update
+    path keeps its own return-envelope flow (different wire codes:
+    ``BUDGET_EXCEEDED``, ``BUDGET_TOO_LOW``) and does not use this helper.
+    """
+    if message:
+        raise AdCPValidationError(message)
 
 
 def validate_agent_url(url: str | None) -> bool:
@@ -871,7 +883,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # Get the Principal object (needed for adapter)
             from src.core.auth import get_principal_object
 
-            principal = get_principal_object(media_buy.principal_id)
+            principal = get_principal_object(media_buy.principal_id, tenant_id=tenant_id)
             if not principal:
                 error_msg = f"Principal {media_buy.principal_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
@@ -1589,7 +1601,9 @@ async def _create_media_buy_impl(
 
     # Extract testing context first
     if identity is None:
-        raise AdCPValidationError("Identity is required")
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
@@ -1760,7 +1774,11 @@ async def _create_media_buy_impl(
         total_budget = req.get_total_budget()
         if total_budget <= 0:
             error_msg = f"Invalid budget: {total_budget}. Budget must be positive."
-            raise ValueError(error_msg)
+            raise AdCPBudgetTooLowError(
+                error_msg,
+                suggestion="Set each package budget to a positive amount.",
+                field="packages[].budget",
+            )
 
         # 2. DateTime validation
         now = datetime.now(UTC)
@@ -1768,7 +1786,7 @@ async def _create_media_buy_impl(
         # Validate start_time
         if req.start_time is None:
             error_msg = "start_time is required"
-            raise ValueError(error_msg)
+            raise AdCPValidationError(error_msg)
 
         # Handle 'asap' start_time (AdCP v1.7.0)
         # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
@@ -1784,19 +1802,26 @@ async def _create_media_buy_impl(
                 computed_start_time = raw_start_time
             else:
                 # StartTiming that wasn't unwrapped - this shouldn't happen but handle gracefully
-                error_msg = f"Unexpected start_time type: {type(raw_start_time)}"
-                raise ValueError(error_msg)
+                raise AdCPValidationError(
+                    f"Unexpected start_time type: {type(raw_start_time).__name__}",
+                    field="start_time",
+                )
             if computed_start_time.tzinfo is None:
                 computed_start_time = computed_start_time.replace(tzinfo=UTC)
 
             if computed_start_time < now:
                 error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
-                raise ValueError(error_msg)
+                raise AdCPValidationError(
+                    error_msg,
+                    error_code="INVALID_REQUEST",
+                    suggestion="Use a future datetime or 'asap' for immediate start.",
+                    field="start_time",
+                )
 
         # Validate end_time
         if req.end_time is None:
             error_msg = "end_time is required"
-            raise ValueError(error_msg)
+            raise AdCPValidationError(error_msg)
 
         # Ensure end_time is timezone-aware for comparison
         computed_end_time: datetime = req.end_time
@@ -1805,7 +1830,12 @@ async def _create_media_buy_impl(
 
         if computed_end_time <= computed_start_time:
             error_msg = f"Invalid time range: end time ({req.end_time}) must be after start time ({req.start_time})."
-            raise ValueError(error_msg)
+            raise AdCPValidationError(
+                error_msg,
+                error_code="INVALID_REQUEST",
+                suggestion="Set end_time to a datetime after start_time.",
+                field="end_time",
+            )
 
         # Assign computed times to local variables for use throughout the function
         start_time_val = computed_start_time
@@ -1824,14 +1854,14 @@ async def _create_media_buy_impl(
         )
         if not product_ids:
             error_msg = "At least one product is required."
-            raise ValueError(error_msg)
+            raise AdCPValidationError(error_msg)
 
         if req.packages:
             for package in req.packages:
                 # Check product_id field per AdCP spec
                 if not package.product_id:
                     error_msg = "Package must specify product_id."
-                    raise ValueError(error_msg)
+                    raise AdCPValidationError(error_msg)
 
             # Check for duplicate product_ids across packages
             product_id_counts: dict[str, int] = {}
@@ -1842,7 +1872,7 @@ async def _create_media_buy_impl(
             duplicate_products = [pid for pid, count in product_id_counts.items() if count > 1]
             if duplicate_products:
                 error_msg = f"Duplicate product_id(s) found in packages: {', '.join(duplicate_products)}. Each product can only be used once per media buy."
-                raise ValueError(error_msg)
+                raise AdCPValidationError(error_msg)
 
         # 4. Currency-specific budget validation
         from decimal import Decimal
@@ -1875,7 +1905,12 @@ async def _create_media_buy_impl(
             missing_product_ids = set(product_ids) - set(product_map.keys())
             if missing_product_ids:
                 error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
-                raise ValueError(error_msg)
+                raise AdCPValidationError(
+                    error_msg,
+                    error_code="PRODUCT_NOT_FOUND",
+                    suggestion="Check available products with get_products.",
+                    field="packages[].product_id",
+                )
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
             # error if the product has property_targeting_allowed: false."
@@ -1981,7 +2016,7 @@ async def _create_media_buy_impl(
                     f"Currency {request_currency} is not supported by this publisher. "
                     f"Contact the publisher to add support for this currency."
                 )
-                raise ValueError(error_msg)
+                raise AdCPValidationError(error_msg)
 
             # Check if currency is supported by GAM network (if GAM is configured)
             # GAM only accepts: primary currency OR enabled secondary currencies
@@ -2001,7 +2036,7 @@ async def _create_media_buy_impl(
                         f"Supported currencies: {', '.join(sorted(supported_currencies))}. "
                         f"Contact the publisher to enable this currency in GAM."
                     )
-                    raise ValueError(error_msg)
+                    raise AdCPValidationError(error_msg)
 
             # NEW: Validate pricing_model selections (AdCP PR #88)
             # Store validated pricing info for later use in adapter
@@ -2025,9 +2060,11 @@ async def _create_media_buy_impl(
                                 )
                                 # Store by index (package IDs aren't generated yet)
                                 package_pricing_info_by_index[idx] = pricing_info
-                            except AdCPError as e:
-                                # Re-raise pricing validation errors
-                                raise ValueError(str(e))
+                            except AdCPError:
+                                # Re-raise pricing validation errors as-is, preserving
+                                # the typed AdCPError code/details/recovery hints rather
+                                # than stripping to a string-only ValueError.
+                                raise
 
             # Validate minimum product spend (legacy + new pricing_options)
             if currency_limit.min_package_budget:
@@ -2095,18 +2132,15 @@ async def _create_media_buy_impl(
                                         package_min_spend = Decimal(str(currency_limit.min_package_budget))
 
                                 # Validate if minimum spend is set
-                                min_budget_error: str | None = (
-                                    validate_min_package_budget(
-                                        package_budget=package_budget,
-                                        min_package_budget=package_min_spend,
-                                        currency=package_currency,
-                                        context="for products in this package",
+                                if package_min_spend:
+                                    _raise_if_validation_failed(
+                                        validate_min_package_budget(
+                                            package_budget=package_budget,
+                                            min_package_budget=package_min_spend,
+                                            currency=package_currency,
+                                            context="for products in this package",
+                                        )
                                     )
-                                    if package_min_spend
-                                    else None
-                                )
-                                if min_budget_error:
-                                    raise ValueError(min_budget_error)
                     else:
                         # Legacy mode: single total_budget for all products
                         applicable_min_spends = list(product_min_spends.values())
@@ -2114,15 +2148,15 @@ async def _create_media_buy_impl(
                             required_min_spend = max(applicable_min_spends)
                             budget_decimal = Decimal(str(total_budget))
 
-                            legacy_min_budget_error: str | None = validate_min_package_budget(
-                                package_budget=budget_decimal,
-                                min_package_budget=required_min_spend,
-                                currency=request_currency,
-                                subject="Total",
-                                context="for the selected products",
+                            _raise_if_validation_failed(
+                                validate_min_package_budget(
+                                    package_budget=budget_decimal,
+                                    min_package_budget=required_min_spend,
+                                    currency=request_currency,
+                                    subject="Total",
+                                    context="for the selected products",
+                                )
                             )
-                            if legacy_min_budget_error:
-                                raise ValueError(legacy_min_budget_error)
 
             # Validate maximum daily spend per package (if set)
             # This is per-package to prevent buyers from splitting large budgets across many packages
@@ -2141,30 +2175,32 @@ async def _create_media_buy_impl(
                             continue
                         # Package.budget is now always float | None (per AdCP spec)
                         package_budget = Decimal(str(package.budget))
-                        daily_package_spend_error: str | None = validate_max_daily_package_spend(
-                            package_budget=package_budget,
+                        _raise_if_validation_failed(
+                            validate_max_daily_package_spend(
+                                package_budget=package_budget,
+                                flight_days=flight_days,
+                                max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
+                                currency=request_currency,
+                                limit_label="maximum daily spend per package",
+                                context=(
+                                    "This protects against accidental large budgets "
+                                    "and prevents GAM line item proliferation."
+                                ),
+                            )
+                        )
+                else:
+                    # Legacy mode: validate total budget
+                    _raise_if_validation_failed(
+                        validate_max_daily_package_spend(
+                            package_budget=Decimal(str(total_budget)),
                             flight_days=flight_days,
                             max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
                             currency=request_currency,
-                            limit_label="maximum daily spend per package",
-                            context="This protects against accidental large budgets and prevents GAM line item proliferation.",
+                            subject="Daily",
+                            limit_label="maximum daily spend",
+                            context="This protects against accidental large budgets.",
                         )
-                        if daily_package_spend_error:
-                            raise ValueError(daily_package_spend_error)
-                else:
-                    # Legacy mode: validate total budget
-                    legacy_daily_spend_error: str | None = validate_max_daily_package_spend(
-                        package_budget=Decimal(str(total_budget)),
-                        flight_days=flight_days,
-                        max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
-                        currency=request_currency,
-                        subject="Daily",
-                        limit_label="maximum daily spend",
-                        context="This protects against accidental large budgets.",
                     )
-
-                    if legacy_daily_spend_error:
-                        raise ValueError(legacy_daily_spend_error)
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
@@ -2182,21 +2218,27 @@ async def _create_media_buy_impl(
                     violations = unknown_violations + access_violations + geo_overlap_violations
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
-                        raise ValueError(error_msg)
+                        raise AdCPValidationError(
+                            error_msg,
+                            error_code="INVALID_REQUEST",
+                            suggestion="Check targeting constraints.",
+                            field="targeting_overlay",
+                        )
 
-    except (ValueError, PermissionError) as e:
-        # Update workflow step as failed (only if step exists - not created in dry_run mode)
-        if step:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
-
-        # Return error response with failed status
-        return CreateMediaBuyResult(
-            response=CreateMediaBuyError(
-                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
-                context=req.context,
-            ),
-            status=AdcpTaskStatus.failed.value,
-        )
+    except (AdCPError, ValueError, PermissionError) as e:
+        # Audit-update then re-raise via the shared helper so this early-validation
+        # exit threads the two-layer envelope into workflow_step.response_data the
+        # same way the post-adapter failure exits do — push-notification subscribers
+        # see the same wire shape the synchronous caller receives, and the audit
+        # write is try/except-wrapped so a DB hiccup can't shadow the original error.
+        # Typed AdCPError propagates to the transport boundary which translates to
+        # the spec two-layer wire envelope; ValueError/PermissionError propagate so
+        # the boundary wrappers translate them to AdCPValidationError /
+        # AdCPAuthorizationError with correct wire codes (the prior
+        # "return CreateMediaBuyResult(VALIDATION_ERROR)" path silently mis-tagged
+        # PermissionError as VALIDATION_ERROR).
+        ctx_manager.audit_step_failure_if_present(step, e)
+        raise
 
     # Type narrowing: in non-dry_run mode, step and persistent_ctx are guaranteed to exist
     # In dry_run mode, they may be None (database operations are skipped)
@@ -2874,7 +2916,7 @@ async def _create_media_buy_impl(
 
             if not pkg_product_id:
                 error_msg = f"Package {idx} has no product_id field set"
-                raise ValueError(error_msg)
+                raise AdCPValidationError(error_msg)
 
             pkg_product: Product | None = None
             for p in products_in_buy:
@@ -2884,7 +2926,7 @@ async def _create_media_buy_impl(
 
             if not pkg_product:
                 error_msg = f"Package {idx} references unknown product_id: {pkg_product_id}"
-                raise ValueError(error_msg)
+                raise AdCPNotFoundError(error_msg)
 
             # Determine format_ids to use
             format_ids_to_use: list[FormatId] = []
@@ -2964,14 +3006,14 @@ async def _create_media_buy_impl(
                             f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
                             f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
                         )
-                    raise ValueError(error_msg)
+                    raise AdCPValidationError(error_msg)
 
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
@@ -3316,7 +3358,7 @@ async def _create_media_buy_impl(
                             f"Adapter did not return package_id for package {i}. This is a critical bug in the adapter."
                         )
                         logger.error(error_msg)
-                        raise ValueError(error_msg)
+                        raise AdCPAdapterError(error_msg)
 
                     # Store full package config as JSON
                     # Get paused state from adapter response (adcp 2.12.0: replaced status enum with paused bool)
@@ -3507,7 +3549,7 @@ async def _create_media_buy_impl(
                         if not response_package_id:
                             error_msg = f"Cannot assign creatives: Adapter did not return package_id for package {i}"
                             logger.error(error_msg)
-                            raise ValueError(error_msg)
+                            raise AdCPAdapterError(error_msg)
 
                         # Get platform_line_item_id from response if available
                         platform_line_item_id = None
@@ -3670,7 +3712,7 @@ async def _create_media_buy_impl(
             if not adapter_package_id:
                 error_msg = f"Adapter did not return package_id for package {i}. Cannot build response."
                 logger.error(error_msg)
-                raise ValueError(error_msg)
+                raise AdCPAdapterError(error_msg)
 
             # Ensure paused is a boolean
             if not isinstance(adapter_paused, bool):
@@ -3832,19 +3874,17 @@ async def _create_media_buy_impl(
 
     except AdCPError as adcp_err:
         # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping.
-        # fail_workflow_step_for_exception threads the two-layer envelope into
+        # audit_step_failure_if_present threads the two-layer envelope into
         # response_data so push notification subscribers see the same wire shape
         # the synchronous caller receives, AND wraps in try/except so a DB hiccup
         # during audit can't shadow the original AdCPError on re-raise.
-        if step:
-            ctx_manager.fail_workflow_step_for_exception(step.step_id, adcp_err)
+        ctx_manager.audit_step_failure_if_present(step, adcp_err)
         raise
 
     except Exception as e:
-        # Untyped exception — same audit treatment (wire-shape response_data +
-        # original exception preserved on re-raise).
-        if step:
-            ctx_manager.fail_workflow_step_for_exception(step.step_id, e)
+        # Untyped exception — same workflow audit treatment, plus Slack
+        # notification + adapter audit log below before re-raising.
+        ctx_manager.audit_step_failure_if_present(step, e)
 
         # Send Slack notification for failed media buy creation
         try:
@@ -4065,6 +4105,10 @@ async def create_media_buy_raw(
 
     identity = enrich_identity_with_account(identity, req.account)
 
+    # Read context_id when available (FastMCP Context only — A2A callers typically
+    # pass identity directly without ctx, so this is best-effort)
+    _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
+
     # Serialize SDK model to dict for _impl (which uses dict-based config access)
     pnc_dict = (
         push_notification_config.model_dump()
@@ -4072,11 +4116,11 @@ async def create_media_buy_raw(
         else push_notification_config
     )
 
-    # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(
         req=req,
         push_notification_config=pnc_dict,
         identity=identity,
+        context_id=_ctx_id,
     )
 
 

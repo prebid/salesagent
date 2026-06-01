@@ -7,7 +7,7 @@ implementation pattern from CLAUDE.md.
 import logging
 from typing import Any
 
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError

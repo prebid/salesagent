@@ -12,7 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from adcp.types.generated_poc.core.account_ref import AccountReference
+    from adcp.types import AccountReference
 
 from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers

@@ -192,9 +192,9 @@ class TestAdminHandoffChainWritesWebhookUrl:
         # 1. Resolve the webhook URL from PushNotificationConfig
         # 2. Pass it into start_order_approval_background
         resolved = lookup_webhook_url("admin_chain_t1", "admin_chain_p1")
-        assert (
-            resolved == "https://buyer.example/admin-chain-webhook"
-        ), "lookup_webhook_url failed to find the active config — chain breaks here"
+        assert resolved == "https://buyer.example/admin-chain-webhook", (
+            "lookup_webhook_url failed to find the active config — chain breaks here"
+        )
 
         # Patch the thread runner so no real GAM polling fires after the SyncJob
         # row is committed. The registration lands in the registry first.
@@ -266,6 +266,6 @@ class TestAdminHandoffChainWritesWebhookUrl:
 
         assert row is not None
         assert row.progress is not None
-        assert (
-            row.progress["webhook_url"] is None
-        ), "webhook_url should be None when no PushNotificationConfig exists for the principal"
+        assert row.progress["webhook_url"] is None, (
+            "webhook_url should be None when no PushNotificationConfig exists for the principal"
+        )

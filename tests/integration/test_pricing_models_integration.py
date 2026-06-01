@@ -10,6 +10,7 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, GetProductsRequest, PricingModel
 from src.core.testing_hooks import AdCPTestContext
@@ -378,13 +379,17 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         protocol="mcp",
     )
 
-    # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    # Boundary-validation failures are now signaled via typed AdCPError that
+    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
+    # and is translated to the spec two-layer envelope at the transport
+    # boundary. Verify the typed raise at the layer above the transport.
+    with pytest.raises(AdCPValidationError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=identity)
 
-    # Check for errors in response (AdCP 2.4 compliant)
-    assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"
-    error_messages = " ".join(str(e) for e in response.errors)
-    assert "below floor price" in error_messages.lower() or "floor" in error_messages.lower()
+    exc = excinfo.value
+    assert exc.details == {"error_code": "PRICING_ERROR"}
+    msg = exc.message.lower()
+    assert "below floor price" in msg or "floor" in msg
 
 
 @pytest.mark.requires_db
@@ -447,13 +452,17 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         protocol="mcp",
     )
 
-    # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    # Boundary-validation failures are now signaled via typed AdCPError that
+    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
+    # and is translated to the spec two-layer envelope at the transport
+    # boundary. Verify the typed raise at the layer above the transport.
+    with pytest.raises(AdCPValidationError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=identity)
 
-    # Check for errors in response (AdCP 2.4 compliant)
-    assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"
-    error_messages = " ".join(str(e) for e in response.errors)
-    assert "below minimum spend" in error_messages.lower() or "minimum" in error_messages.lower()
+    exc = excinfo.value
+    assert exc.details == {"error_code": "PRICING_ERROR"}
+    msg = exc.message.lower()
+    assert "below minimum spend" in msg or "minimum" in msg
 
 
 @pytest.mark.requires_db
@@ -516,10 +525,14 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         protocol="mcp",
     )
 
-    # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    # Boundary-validation failures are now signaled via typed AdCPError that
+    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
+    # and is translated to the spec two-layer envelope at the transport
+    # boundary. Verify the typed raise at the layer above the transport.
+    with pytest.raises(AdCPValidationError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=identity)
 
-    # Check for errors in response (AdCP 2.4 compliant)
-    assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"
-    error_messages = " ".join(str(e) for e in response.errors)
-    assert "does not offer pricing model" in error_messages.lower() or "pricing" in error_messages.lower()
+    exc = excinfo.value
+    assert exc.details == {"error_code": "PRICING_ERROR"}
+    msg = exc.message.lower()
+    assert "does not offer" in msg or "pricing" in msg

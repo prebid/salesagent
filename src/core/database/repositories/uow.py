@@ -229,6 +229,27 @@ class AccountUoW(BaseUoW):
         self.accounts = None
 
 
+class PushNotificationConfigUoW(BaseUoW):
+    """Unit of Work for PushNotificationConfig operations.
+
+    Wraps a database session and provides a tenant-scoped
+    ``PushNotificationConfigRepository``. Auto-commits on clean exit,
+    rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    push_notification_configs: PushNotificationConfigRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.push_notification_configs = PushNotificationConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.push_notification_configs = None
+
+
 class CreativeUoW(BaseUoW):
     """Unit of Work for Creative operations.
 
@@ -274,32 +295,6 @@ class SyncJobUoW(BaseUoW):
 
     def _clear_repos(self) -> None:
         self.sync_jobs = None
-
-
-class PushNotificationConfigUoW(BaseUoW):
-    """Unit of Work for ``PushNotificationConfig`` operations.
-
-    Wraps a database session and provides a tenant-scoped
-    ``PushNotificationConfigRepository``. Auto-commits on clean exit,
-    rolls back on exception.
-
-    Used by buyer-webhook resolution paths (admin-handoff at
-    ``execute_approved_media_buy`` and the polling thread's outbound
-    notification site) to look up the buyer's registered webhook
-    configuration without opening a raw session.
-
-    Args:
-        tenant_id: Tenant scope for all repository queries.
-    """
-
-    push_notification_configs: PushNotificationConfigRepository | None
-
-    def _init_repos(self) -> None:
-        assert self._session is not None
-        self.push_notification_configs = PushNotificationConfigRepository(self._session, self._tenant_id)
-
-    def _clear_repos(self) -> None:
-        self.push_notification_configs = None
 
 
 class AdapterConfigUoW(BaseUoW):

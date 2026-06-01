@@ -118,9 +118,9 @@ class TestMergeProgress:
 
         with get_db_session() as verify:
             row_t2 = verify.scalars(select(SyncJob).where(SyncJob.sync_id == "iso_sync_b")).first()
-        assert (
-            row_t2 is not None and row_t2.progress["attempts"] == 0
-        ), "Tenant 2's SyncJob was modified by tenant 1 — isolation broken"
+        assert row_t2 is not None and row_t2.progress["attempts"] == 0, (
+            "Tenant 2's SyncJob was modified by tenant 1 — isolation broken"
+        )
 
 
 class TestMarkTerminal:
@@ -319,9 +319,9 @@ class TestReapStale:
 
         with get_db_session() as verify:
             row = verify.scalars(select(SyncJob).where(SyncJob.sync_id == "reap_other_tenant")).first()
-        assert (
-            row is not None and row.status == "running"
-        ), "reap_stale leaked across tenants — tenant 1 reaped tenant 2's stale row"
+        assert row is not None and row.status == "running", (
+            "reap_stale leaked across tenants — tenant 1 reaped tenant 2's stale row"
+        )
 
 
 class TestCreateForOrder:
