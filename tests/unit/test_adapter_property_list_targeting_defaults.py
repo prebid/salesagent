@@ -4,7 +4,7 @@ The base class default is False (see ``src/adapters/base.py:195``). Adapters tha
 flip this to True without first compiling ``targeting_overlay.property_list``
 into their ad-server payload would silently drop the field on every create —
 breaking the honest-declaration contract that ``_create_media_buy_impl`` /
-``_update_media_buy_impl`` enforce by raising ``AdCPUnsupportedFeatureError``.
+``_update_media_buy_impl`` enforce by raising ``AdCPCapabilityNotSupportedError``.
 
 Until an adapter implements the compile path, its ClassVar must remain False
 so the boundary check fires.

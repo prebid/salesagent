@@ -26,7 +26,7 @@ import pytest
 
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.database.database_session import get_db_session
-from src.core.exceptions import AdCPUnsupportedFeatureError
+from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, UpdateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -127,7 +127,7 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
     """
     request = _build_property_list_create_request()
 
-    with pytest.raises(AdCPUnsupportedFeatureError) as excinfo:
+    with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
         await _create_media_buy_impl(req=request, identity=_make_identity())
 
     exc = excinfo.value
@@ -138,9 +138,9 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
         "be correctable so the buyer agent can drop the field and retry. "
         "A terminal classification would dead-end the buyer."
     )
-    assert (
-        exc.field == "packages[0].targeting_overlay.property_list"
-    ), f"field must identify the exact offending package; got {exc.field!r}"
+    assert exc.field == "packages[0].targeting_overlay.property_list", (
+        f"field must identify the exact offending package; got {exc.field!r}"
+    )
     assert exc.suggestion is not None and "property_list_filtering" in exc.suggestion, (
         "suggestion must reference the canonical capability flag so the "
         "buyer agent can locate a capable seller via get_adcp_capabilities"
@@ -186,7 +186,7 @@ async def test_create_dry_run_false_path_also_rejects(capability_tenant):
         ),
     )
 
-    with pytest.raises(AdCPUnsupportedFeatureError) as excinfo:
+    with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
         await _create_media_buy_impl(req=request, identity=identity)
 
     exc = excinfo.value
@@ -216,7 +216,7 @@ async def test_create_accepts_property_list_when_adapter_supports(capability_ten
     # real media buy.
     try:
         await _create_media_buy_impl(req=request, identity=_make_identity())
-    except AdCPUnsupportedFeatureError as e:
+    except AdCPCapabilityNotSupportedError as e:
         pytest.fail(
             "Adapter declared supports_property_list_targeting=True but the "
             f"boundary check rejected anyway: field={e.field!r} suggestion={e.suggestion!r}. "
@@ -231,7 +231,7 @@ async def test_create_accepts_request_without_property_list_on_unsupported_adapt
 
     Negative-of-the-negative pin-test: if the check fired unconditionally
     on every package (regardless of whether property_list was set), this
-    would fail with ``AdCPUnsupportedFeatureError``. Default mock adapter
+    would fail with ``AdCPCapabilityNotSupportedError``. Default mock adapter
     has ``supports_property_list_targeting=False``; absent the field,
     nothing rejects.
     """
@@ -256,7 +256,7 @@ async def test_create_accepts_request_without_property_list_on_unsupported_adapt
     # contract.
     try:
         await _create_media_buy_impl(req=request, identity=_make_identity())
-    except AdCPUnsupportedFeatureError as e:
+    except AdCPCapabilityNotSupportedError as e:
         pytest.fail(f"Boundary check raised on a request without property_list — false positive. field={e.field!r}")
 
 
@@ -296,7 +296,7 @@ def test_update_rejects_property_list_when_adapter_unsupported(capability_tenant
         ],
     )
 
-    with pytest.raises(AdCPUnsupportedFeatureError) as excinfo:
+    with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
         _update_media_buy_impl(req=request, identity=_make_identity())
 
     exc = excinfo.value

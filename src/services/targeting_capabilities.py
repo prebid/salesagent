@@ -14,7 +14,7 @@ for upstream inclusion in AdCP.
 
 from typing import TYPE_CHECKING, Any
 
-from src.core.exceptions import AdCPUnsupportedFeatureError, AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
 from src.core.schemas import Targeting, TargetingCapability
 
 if TYPE_CHECKING:
@@ -232,7 +232,7 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
     """Honest-declaration boundary check: reject ``targeting_overlay.property_list``
     against adapters that do not compile it.
 
-    Raises ``AdCPUnsupportedFeatureError`` (wire code ``UNSUPPORTED_FEATURE``,
+    Raises ``AdCPCapabilityNotSupportedError`` (wire code ``UNSUPPORTED_FEATURE``,
     recovery ``correctable``) on the first offending package, carrying
     ``field=f"packages[{i}].targeting_overlay.property_list"`` and a
     machine-actionable ``suggestion`` so the buyer agent can drop the field
@@ -251,7 +251,7 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
             ``supports_property_list_targeting()``.
 
     Raises:
-        AdCPUnsupportedFeatureError: when the adapter has not declared
+        AdCPCapabilityNotSupportedError: when the adapter has not declared
             property_list-targeting support and any package requests it.
     """
     if supports_property_list_targeting(adapter) or not packages:
@@ -261,7 +261,7 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
         if overlay is None or getattr(overlay, "property_list", None) is None:
             continue
         adapter_label = getattr(adapter.__class__, "adapter_name", adapter.__class__.__name__) if adapter else "adapter"
-        raise AdCPUnsupportedFeatureError(
+        raise AdCPCapabilityNotSupportedError(
             message=(
                 f"{adapter_label} does not support property_list targeting. "
                 "This seller's adapter cannot compile targeting_overlay.property_list "

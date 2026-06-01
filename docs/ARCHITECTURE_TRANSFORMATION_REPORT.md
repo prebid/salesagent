@@ -207,7 +207,7 @@ AdCPError (500, INTERNAL_ERROR)
 - `_impl` functions raise these exclusively
 - Each transport boundary translates to its own format:
   - MCP: `AdCPError` → `ToolError` via `_translate_to_tool_error()`
-  - A2A: `AdCPError` → JSON-RPC error via `_adcp_to_a2a_error()`
+  - A2A: `AdCPError` → failed Task with two-layer envelope via `_build_error_envelope()`
   - REST: `AdCPError` → HTTP status code + JSON body
 
 **REST API added** (`src/routes/api_v1.py`, 183 lines):

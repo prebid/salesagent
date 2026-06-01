@@ -1,9 +1,9 @@
 # Placeholder ast-grep rule.
 #
-# The pre-commit hook `ast-grep scan` (which discovers rules under
-# .ast-grep/rules/ via the repo-root sgconfig.yml) requires at least one valid
-# rule file in the directory; without one the scan errors. This placeholder
-# matches a pattern that is impossible in Python source so it never fires.
+# The pre-commit hook `ast-grep scan --rule .ast-grep/rules/` requires at
+# least one valid rule file in the directory; without one the hook errors
+# with "Cannot read rule .ast-grep/rules/". This placeholder matches a
+# pattern that is impossible in Python source so it never fires.
 #
 # When real BDD-step structural guards are added, replace or augment this
 # file with concrete rules (the hook auto-discovers all .yml files).

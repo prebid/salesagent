@@ -30,35 +30,18 @@ _SPEC_CODES = {
 # All acceptable codes: SDK standard + justified internal + spec-required
 _ALLOWED_CODES = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | _SPEC_CODES
 
+# Anchor scan paths on the test file's location so they resolve correctly
+# regardless of pytest's working directory (CI runs from the repo root;
+# agents/IDEs may launch pytest from a subdir, which would make the relative
+# paths silently match nothing).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCAN_DIRS = [
-    Path("src/core/tools"),
-    Path("src/adapters"),
+    _REPO_ROOT / "src/core/tools",
+    _REPO_ROOT / "src/adapters",
 ]
 
 
-def _collect_error_aliases(tree: ast.AST) -> set[str]:
-    """Collect names that alias the adcp Error type.
-
-    Tracks both module-level and function-level imports of the form:
-
-        from adcp...error import Error
-        from adcp...error import Error as <alias>
-
-    Returns the set of local names that refer to the adcp Error class
-    (always includes "Error" itself, plus any aliases).
-    """
-    aliases: set[str] = {"Error"}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        # Only track imports whose module path mentions "error"
-        module = node.module or ""
-        if "error" not in module.split("."):
-            continue
-        for alias in node.names:
-            if alias.name == "Error":
-                aliases.add(alias.asname or alias.name)
-    return aliases
+from tests.unit._ast_helpers import collect_error_aliases as _collect_error_aliases  # noqa: E402
 
 
 def _collect_error_code_literals() -> list[tuple[str, int, str]]:
@@ -130,7 +113,12 @@ class TestErrorCodeCompliance:
             )
 
     def test_adcp_error_subclass_codes_are_compliant(self):
-        """Every AdCPError subclass error_code must be standard or internal."""
+        """Every AdCPError subclass _default_error_code must be standard or internal.
+
+        Reads ``_default_error_code`` (the ClassVar slot per option-A refactor
+        salesagent-fnk9). The public ``error_code`` is an instance attribute
+        set in ``__init__`` and is not present on the class object.
+        """
         from src.core.exceptions import AdCPError
 
         violations = []
@@ -138,9 +126,9 @@ class TestErrorCodeCompliance:
         while queue:
             cls = queue.pop()
             for sub in cls.__subclasses__():
-                code = sub.error_code
+                code = sub._default_error_code
                 if code not in _ALLOWED_CODES:
-                    violations.append(f"{sub.__name__}.error_code = {code!r}")
+                    violations.append(f"{sub.__name__}._default_error_code = {code!r}")
                 queue.append(sub)
 
         assert not violations, "AdCPError subclasses with non-compliant codes:\n" + "\n".join(

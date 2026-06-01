@@ -1,4 +1,4 @@
-"""3-transport wire envelope tests for ``AdCPUnsupportedFeatureError`` on property_list.
+"""3-transport wire envelope tests for ``AdCPCapabilityNotSupportedError`` on property_list.
 
 The ``_impl``-level tests in
 ``tests/integration/test_property_list_unsupported_capability.py`` prove the
@@ -95,9 +95,9 @@ def _assert_unsupported_feature_envelope(envelope: dict) -> None:
         code_key = "error_code"
     assert err.get(code_key) == "UNSUPPORTED_FEATURE", f"expected UNSUPPORTED_FEATURE; got {err.get(code_key)!r}"
     assert err.get("recovery") == "correctable", f"expected recovery=correctable; got {err.get('recovery')!r}"
-    assert (
-        err.get("field") == "packages[0].targeting_overlay.property_list"
-    ), f"field must identify the offending package; got {err.get('field')!r}"
+    assert err.get("field") == "packages[0].targeting_overlay.property_list", (
+        f"field must identify the offending package; got {err.get('field')!r}"
+    )
     assert err.get("suggestion"), "suggestion must be present so the buyer agent can act"
     assert "property_list_filtering" in err["suggestion"], (
         "suggestion must reference the canonical capability flag so the buyer "
@@ -134,7 +134,7 @@ def test_rest_create_media_buy_property_list_unsupported_envelope(wire_tenant):
     )
 
     assert response.status_code == 422, (
-        f"AdCPUnsupportedFeatureError must translate to HTTP 422 at the REST boundary; "
+        f"AdCPCapabilityNotSupportedError must translate to HTTP 422 at the REST boundary; "
         f"got {response.status_code} with body {response.text[:500]}"
     )
     _assert_unsupported_feature_envelope(response.json())
@@ -143,7 +143,7 @@ def test_rest_create_media_buy_property_list_unsupported_envelope(wire_tenant):
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tenant):
-    """A2A propagates AdCPUnsupportedFeatureError through the real on_message_send boundary.
+    """A2A propagates AdCPCapabilityNotSupportedError through the real on_message_send boundary.
 
     Drives the canonical ``on_message_send`` entry point (not
     ``_handle_explicit_skill`` directly) with the real token -> DB -> identity
@@ -188,16 +188,16 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
 
     raised = excinfo.value
     data = getattr(raised, "data", None) or {}
-    assert (
-        data.get("error_code") == "UNSUPPORTED_FEATURE"
-    ), f"A2A error.data must surface error_code=UNSUPPORTED_FEATURE; got data={data!r}"
+    assert data.get("error_code") == "UNSUPPORTED_FEATURE", (
+        f"A2A error.data must surface error_code=UNSUPPORTED_FEATURE; got data={data!r}"
+    )
     assert data.get("recovery") == "correctable", f"A2A error.data must surface recovery=correctable; got data={data!r}"
-    assert (
-        data.get("field") == "packages[0].targeting_overlay.property_list"
-    ), f"A2A error.data must forward the offending field; got data={data!r}"
-    assert (
-        data.get("suggestion") and "property_list_filtering" in data["suggestion"]
-    ), f"A2A error.data must forward a suggestion referencing the capability flag; got data={data!r}"
+    assert data.get("field") == "packages[0].targeting_overlay.property_list", (
+        f"A2A error.data must forward the offending field; got data={data!r}"
+    )
+    assert data.get("suggestion") and "property_list_filtering" in data["suggestion"], (
+        f"A2A error.data must forward a suggestion referencing the capability flag; got data={data!r}"
+    )
 
 
 @pytest.mark.requires_db
@@ -246,7 +246,7 @@ async def test_mcp_create_media_buy_property_list_unsupported_envelope(wire_tena
     msg = str(exc)
     assert "UNSUPPORTED_FEATURE" in msg, f"MCP ToolError must surface error_code=UNSUPPORTED_FEATURE; got: {msg!r}"
     assert "correctable" in msg, f"MCP ToolError must surface recovery=correctable; got: {msg!r}"
-    assert (
-        "packages[0].targeting_overlay.property_list" in msg
-    ), f"MCP ToolError must surface the offending field; got: {msg!r}"
+    assert "packages[0].targeting_overlay.property_list" in msg, (
+        f"MCP ToolError must surface the offending field; got: {msg!r}"
+    )
     assert "property_list_filtering" in msg, f"MCP ToolError must surface the capability-flag suggestion; got: {msg!r}"

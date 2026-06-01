@@ -5,6 +5,7 @@ AdCP schema requirements for formats, properties, and products.
 """
 
 import pytest
+from pydantic import ValidationError
 
 from src.core.database.models import InventoryProfile, Product
 from src.core.schemas import FormatId, Property
@@ -225,9 +226,14 @@ def test_profile_formats_validation_rejects_invalid_structure():
     ]
 
     for invalid_format in invalid_formats:
-        with pytest.raises((ValueError, TypeError)):
-            # Pydantic validation should reject invalid formats
+        with pytest.raises(ValidationError) as exc_info:
             FormatId(**invalid_format)
+        # Pydantic surfaces the offending field; assert the error names the
+        # field rather than just confirming the exception was raised.
+        error_text = str(exc_info.value)
+        assert "agent_url" in error_text or "id" in error_text, (
+            f"ValidationError should reference the malformed field, got: {error_text}"
+        )
 
 
 def test_profile_properties_validation_rejects_invalid_structure():
@@ -264,9 +270,11 @@ def test_profile_properties_validation_rejects_invalid_structure():
     ]
 
     for invalid_property in invalid_properties:
-        with pytest.raises((ValueError, TypeError)):
-            # Pydantic validation should reject invalid properties
+        with pytest.raises(ValidationError) as exc_info:
             Property(**invalid_property)
+        # Validation must point at a Property field — empty error bodies
+        # would pass the catch but indicate a bug in the schema.
+        assert exc_info.value.error_count() > 0
 
 
 def test_product_with_profile_has_no_internal_fields_in_serialization():

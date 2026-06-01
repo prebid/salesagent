@@ -338,8 +338,8 @@ class XandrAdapter(AdServerAdapter):
             from adcp.types import CpmPricingOption, DeliveryMeasurement, DeliveryType
             from adcp.types import PriceGuidance as AdCPPriceGuidance
             from adcp.types.generated_poc.core.publisher_property_selector import (
-                PublisherPropertySelector1,  # TODO: no stable alias in adcp.types
-            )
+                PublisherPropertySelector1,
+            )  # TODO: no stable alias in adcp.types
 
             from src.core.schemas import FormatId
 

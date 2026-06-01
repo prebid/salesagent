@@ -39,7 +39,7 @@ from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPError,
     AdCPGoneError,
-    AdCPNotFoundError,
+    AdCPMediaBuyNotFoundError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -143,7 +143,7 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     media_buy = repo.get_by_id(media_buy_id)
 
     if not media_buy:
-        raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
+        raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
     if media_buy.principal_id != principal_id:
         # CRITICAL: Verify principal_id is set (security check, not assertion)
@@ -193,7 +193,7 @@ def _update_media_buy_impl(
     # CRITICAL: Extract principal from identity
     principal_id = identity.principal_id
     if principal_id is None:
-        raise ValueError("principal_id is required but was None - authentication required")
+        raise AdCPAuthRequiredError("principal_id missing from authentication context")
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = identity.tenant
@@ -212,7 +212,7 @@ def _update_media_buy_impl(
     ctx_manager = get_context_manager()
     step = None
 
-    try:
+    with ctx_manager.audit_step_failure(lambda: step):
         # Single UoW for entire update operation — one session, one transaction
         with MediaBuyUoW(tenant["tenant_id"]) as uow:
             assert uow.media_buys is not None
@@ -279,7 +279,10 @@ def _update_media_buy_impl(
 
                 # Verify persistent_ctx is not None
                 if persistent_ctx is None:
-                    raise ValueError("Failed to create or get persistent context")
+                    raise AdCPError(
+                        "Failed to create or get persistent context",
+                        error_code="WORKFLOW_CREATION_FAILED",
+                    )
 
                 # Create workflow step for this tool call
                 step = ctx_manager.create_workflow_step(
@@ -1450,25 +1453,6 @@ def _update_media_buy_impl(
 
         return final_response
 
-    except AdCPError as adcp_err:
-        # Mark the workflow step failed so the push notification fires
-        # (context_manager.update_workflow_step → _send_push_notifications).
-        # fail_workflow_step_for_exception threads the two-layer envelope into
-        # response_data so async webhook subscribers see the same wire shape
-        # the synchronous caller receives, AND wraps in try/except so a DB
-        # hiccup during audit can't shadow the original AdCPError on re-raise.
-        if step is not None:
-            ctx_manager.fail_workflow_step_for_exception(step.step_id, adcp_err)
-        raise
-
-    except Exception as e:
-        # Same idea for non-AdCPError raises (ValueError, IntegrityError, etc.)
-        # — the buyer-facing webhook still needs to fire so polling clients
-        # don't hang. Mirror create's pattern (media_buy_create.py:3691-3700).
-        if step is not None:
-            ctx_manager.fail_workflow_step_for_exception(step.step_id, e)
-        raise
-
 
 def _build_update_request(
     media_buy_id: str | None = None,
@@ -1709,5 +1693,6 @@ def update_media_buy_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
-    return _update_media_buy_impl(req=req, identity=identity)
+    # A2A/REST callers pass identity directly without a FastMCP Context, so there
+    # is no workflow context_id to forward — _impl creates one if needed.
+    return _update_media_buy_impl(req=req, identity=identity, context_id=None)

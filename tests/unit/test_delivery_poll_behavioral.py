@@ -24,7 +24,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import MediaBuyStatus
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.schemas import GetMediaBuyDeliveryRequest
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import (

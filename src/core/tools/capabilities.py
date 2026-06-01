@@ -168,7 +168,7 @@ def _get_adcp_capabilities_impl(
         # remains False; create/update reject ``property_list`` requests
         # at the ``_impl`` boundary via
         # ``raise_if_property_list_unsupported`` with
-        # ``AdCPUnsupportedFeatureError``. The wire flag name is preserved
+        # ``AdCPCapabilityNotSupportedError``. The wire flag name is preserved
         # for spec compatibility (the spec-level rename of this flag to
         # ``property_list_targeting`` is tracked as a separate follow-up).
         property_list_filtering=supports_property_list_targeting(adapter),

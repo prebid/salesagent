@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 from adcp.types import ContextObject
 from adcp.types.generated_poc.core.signal_id import SignalId, SignalId18  # TODO: no stable alias in adcp.types
 from adcp.types.generated_poc.core.vendor_pricing_option import (
-    VendorPricingOption,  # TODO: no stable alias in adcp.types
-)
+    VendorPricingOption,
+)  # TODO: no stable alias in adcp.types
 
 from src.core.auth import get_principal_object
 from src.core.resolved_identity import ResolvedIdentity

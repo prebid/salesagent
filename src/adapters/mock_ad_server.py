@@ -18,6 +18,12 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
+from src.core.exceptions import (
+    AdCPBudgetExhaustedError,
+    AdCPError,
+    AdCPServiceUnavailableError,
+    AdCPValidationError,
+)
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -511,11 +517,14 @@ class MockAdServer(AdServerAdapter):
         if scenario:
             # Handle error simulation
             if scenario.error_message:
-                raise Exception(scenario.error_message)
+                raise AdCPError(scenario.error_message)
 
             # Handle rejection
             if scenario.should_reject:
-                raise Exception(f"Media buy rejected: {scenario.rejection_reason or 'Test rejection'}")
+                raise AdCPError(
+                    f"Media buy rejected: {scenario.rejection_reason or 'Test rejection'}",
+                    error_code="MEDIA_BUY_REJECTED",
+                )
 
             # Handle question asking (return pending with question)
             if scenario.should_ask_question:
@@ -593,7 +602,7 @@ class MockAdServer(AdServerAdapter):
         )
         if validation_errors:
             error_message = "[" + ", ".join(validation_errors) + "]"
-            raise Exception(error_message)
+            raise AdCPValidationError(error_message)
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
@@ -679,7 +688,10 @@ class MockAdServer(AdServerAdapter):
         approved, rejection_reason = self._simulate_approval()
         if not approved:
             self.log(f"❌ Simulated rejection: {rejection_reason}")
-            raise Exception(f"Media buy rejected: {rejection_reason}")
+            raise AdCPError(
+                f"Media buy rejected: {rejection_reason}",
+                error_code="MEDIA_BUY_REJECTED",
+            )
 
         # Continue with immediate processing
         self.log("✅ SYNC delay completed, proceeding with creation")
@@ -749,13 +761,19 @@ class MockAdServer(AdServerAdapter):
 
             # Check for forced errors
             if self._should_force_error("budget_exceeded"):
-                raise Exception("Simulated error: Campaign budget exceeds available funds")
+                raise AdCPBudgetExhaustedError("Simulated error: Campaign budget exceeds available funds")
 
             if self._should_force_error("targeting_invalid"):
-                raise Exception("Simulated error: Invalid targeting parameters")
+                raise AdCPValidationError(
+                    "Simulated error: Invalid targeting parameters",
+                    field="targeting",
+                )
 
             if self._should_force_error("inventory_unavailable"):
-                raise Exception("Simulated error: Requested inventory not available")
+                raise AdCPError(
+                    "Simulated error: Requested inventory not available",
+                    error_code="INVENTORY_UNAVAILABLE",
+                )
 
         # Default priority for campaigns (standard = 8, guaranteed = 4)
         priority = 4 if any(p.delivery_type == "guaranteed" for p in packages) else 8
@@ -981,7 +999,10 @@ class MockAdServer(AdServerAdapter):
         if rejected_assets and not approved_assets:
             # All rejected
             reasons = [reason if reason else "unknown" for _, reason in rejected_assets]
-            raise Exception(f"All creatives rejected: {', '.join(reasons)}")
+            raise AdCPError(
+                f"All creatives rejected: {', '.join(reasons)}",
+                error_code="CREATIVE_REJECTED",
+            )
         elif rejected_assets:
             # Some rejected - log warnings but continue with approved ones
             for asset, reason in rejected_assets:
@@ -1109,7 +1130,7 @@ class MockAdServer(AdServerAdapter):
         if self.strategy_context and hasattr(self.strategy_context, "force_error"):
             if self.strategy_context.force_error == "platform_error":
                 self.log("[red]Simulating platform error[/red]")
-                raise Exception("Platform connectivity error (simulated)")
+                raise AdCPServiceUnavailableError("Platform connectivity error (simulated)")
             elif self.strategy_context.force_error == "budget_exceeded":
                 self.log("[yellow]Simulating budget exceeded scenario[/yellow]")
             elif self.strategy_context.force_error == "low_delivery":
@@ -1161,7 +1182,7 @@ class MockAdServer(AdServerAdapter):
             # Check for test scenario outage simulation
             if test_scenario and test_scenario.simulate_outage:
                 self.log(f"🚨 Test Scenario: Simulating platform outage on day {current_day}")
-                raise Exception(f"Simulated platform outage on day {current_day} (test scenario)")
+                raise AdCPServiceUnavailableError(f"Simulated platform outage on day {current_day} (test scenario)")
 
             if elapsed_duration <= 0:
                 # Campaign hasn't started
