@@ -16,6 +16,8 @@ from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from adcp.types import ContextObject
 
 RecoveryHint = Literal["transient", "correctable", "terminal"]
@@ -259,6 +261,26 @@ class AdCPError(Exception):
             suggestion=suggestion,
             context=context,
         )
+
+    @classmethod
+    def iter_concrete_subclasses(cls) -> Iterator[type[AdCPError]]:
+        """Yield every transitive subclass of ``cls`` exactly once.
+
+        Single source of truth for the subclass walk that builds the
+        wire-code -> HTTP-status table (``_build_error_code_to_status``) and
+        backs the error-code compliance tests. Yields descendants only — not
+        ``cls`` itself — and deduplicates so a class reachable by more than
+        one path is visited once.
+        """
+        seen: set[type] = set()
+        stack: list[type] = list(cls.__subclasses__())
+        while stack:
+            sub = stack.pop()
+            if sub in seen:
+                continue
+            seen.add(sub)
+            yield sub
+            stack.extend(sub.__subclasses__())
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to flat response body dict (legacy format).
