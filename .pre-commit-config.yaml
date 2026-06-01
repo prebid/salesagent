@@ -304,11 +304,13 @@ repos:
         language: system
         types: [python]
         require_serial: true
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 0c7b6c989466a93942def1f84baf36ddfcd60c83  # frozen: v0.15.14
-    hooks:
-      - id: ruff
+      # Per ADR-001: lint runs via `uv run ruff check` from uv.lock — same
+      # command as `make quality`. Replaces astral-sh/ruff-pre-commit (PR 2 #1234).
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types: [python]
         args: [--fix, --exit-non-zero-on-fix]
 
   # Per ADR-001: mypy runs via `uv run` so it resolves from uv.lock.
