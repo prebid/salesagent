@@ -130,8 +130,11 @@ class TestSchemaMatchesLibrary:
         # GetMediaBuyDeliveryRequest - local extends library with spec fields
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        # adcp 3.9: all fields now in library — no local extensions remaining
-        local_extensions: set[str] = set()
+        # adcp library lags the spec: time_granularity + include_window_breakdown
+        # are defined in get-media-buy-delivery-request.json but not yet in the
+        # adcp library's GetMediaBuyDeliveryRequest (gh-#1299). Declared locally
+        # via Pattern #1 (extend library type) until the library catches up.
+        local_extensions: set[str] = {"time_granularity", "include_window_breakdown"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
         )
@@ -303,6 +306,14 @@ class TestAdCPContract:
                 "provider": "test_provider",
                 "notes": "Test measurement",
             },  # Required per AdCP spec
+            "reporting_capabilities": {
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": True,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": {"minimum_days": 1, "maximum_days": 90},
+            },  # Required per AdCP 4.3 spec
         }
 
         # Should be convertible to AdCP schema
@@ -897,6 +908,11 @@ class TestAdCPContract:
         )
 
         signal = Signal(
+            signal_id={
+                "source": "catalog",
+                "data_provider_domain": "acmedata.com",
+                "id": "signal_auto_intenders_q1_2025",
+            },
             signal_agent_segment_id="signal_auto_intenders_q1_2025",
             name="Auto Intenders Q1 2025",
             description="Consumers showing purchase intent for automotive products in Q1 2025",
@@ -1380,7 +1396,9 @@ class TestAdCPContract:
         )
 
         # Test with spec-compliant fields only (adcp 3.9)
-        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+        from adcp.types.generated_poc.creative.sync_creatives_request import (
+            Assignment,
+        )  # TODO: no stable alias in adcp.types  # TODO: no stable alias in adcp.types
 
         request = SyncCreativesRequest(
             creatives=[creative],
@@ -1465,13 +1483,13 @@ class TestAdCPContract:
                 SyncCreativeResult(
                     creative_id="creative_456",
                     action="updated",
-                    status="pending",
+                    status="pending_review",
                     changes=["url", "name"],
                 ),
                 SyncCreativeResult(
                     creative_id="creative_789",
                     action="failed",
-                    errors=["Invalid format"],
+                    errors=[{"code": "invalid_format", "message": "Invalid format"}],
                 ),
             ],
         )
@@ -1504,8 +1522,10 @@ class TestAdCPContract:
         from adcp.types import CreativeFilters as LibraryCreativeFilters
 
         # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
-        from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-        from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
+        from adcp.types import PaginationRequest
+        from adcp.types.generated_poc.creative.list_creatives_request import (
+            Sort as LibrarySort,
+        )  # TODO: different Sort from adcp.types.Sort
 
         from src.core.schemas import ListCreativesRequest
 
@@ -1564,14 +1584,17 @@ class TestAdCPContract:
         assert "include_assignments" in adcp_response, "Field with default should be present"
         assert adcp_response["include_assignments"] is True, "Default value should match"
 
-        # Verify all spec fields are present (per adcp 3.10 library schema)
+        # Verify all spec fields are present (per adcp 4.3 library schema)
         spec_fields = {
+            "account",
+            "adcp_major_version",
             "context",
             "ext",
             "fields",
             "filters",
             "include_assignments",
             "include_items",
+            "include_pricing",
             "include_snapshot",
             "include_variables",
             "pagination",
@@ -1975,8 +1998,17 @@ class TestAdCPContract:
 
         if adcp_request.get("status_filter") is not None:
             # Can be string or array according to AdCP spec
-            # AdCP MediaBuyStatus enum: pending_activation, active, paused, completed
-            valid_statuses = ["pending_activation", "active", "paused", "completed"]
+            # AdCP MediaBuyStatus enum: pending_creatives, pending_start, active,
+            # paused, completed, rejected, canceled
+            valid_statuses = [
+                "pending_creatives",
+                "pending_start",
+                "active",
+                "paused",
+                "completed",
+                "rejected",
+                "canceled",
+            ]
             if isinstance(adcp_request["status_filter"], str):
                 assert adcp_request["status_filter"] in valid_statuses, (
                     f"Invalid status: {adcp_request['status_filter']}"
@@ -2310,7 +2342,7 @@ class TestAdCPContract:
         # adcp 3.9: GetSignalsRequest is a regular model (not RootModel).
         # deliver_to replaced with top-level destinations + countries fields.
 
-        from adcp.types.generated_poc.core.destination import Destination1
+        from adcp.types.generated_poc.core.destination import Destination1  # TODO: no stable alias in adcp.types
 
         from src.core.schemas import GetSignalsRequest, SignalFilters
 
@@ -2526,8 +2558,8 @@ class TestAdCPContract:
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
         )
 
-        # Verify asap is accepted (library wraps in StartTiming)
-        if hasattr(request.start_time, "root"):
+        # Verify asap is accepted (library wraps in StartTiming on some SDK versions)
+        if hasattr(request.start_time, "root"):  # noqa: rootmodel — SDK-version polymorphism
             assert request.start_time.root == "asap"
         else:
             assert request.start_time == "asap"
@@ -2568,8 +2600,8 @@ class TestAdCPContract:
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
         )
 
-        # Verify datetime is still accepted (library wraps in StartTiming)
-        if hasattr(request.start_time, "root"):
+        # Verify datetime is still accepted (library wraps in StartTiming on some SDK versions)
+        if hasattr(request.start_time, "root"):  # noqa: rootmodel — SDK-version polymorphism
             assert isinstance(request.start_time.root, datetime)
             assert request.start_time.root == start_date
         else:
@@ -2670,9 +2702,11 @@ class TestAdCPContract:
 
         # Verify brand fields
         assert request.brand.domain == "nike.com"
-        # brand_id is wrapped in a BrandId RootModel
+        # brand_id is wrapped in a BrandId RootModel on some SDK versions
         brand_id = request.brand.brand_id
-        brand_id_val = brand_id.root if hasattr(brand_id, "root") else brand_id
+        # noqa applied on the hasattr line for the rootmodel guard.
+        has_root = hasattr(brand_id, "root")  # noqa: rootmodel — SDK-version polymorphism
+        brand_id_val = brand_id.root if has_root else brand_id
         assert brand_id_val == "brand_nike_001"
 
     def test_get_signals_response_adcp_compliance(self):
@@ -2701,6 +2735,7 @@ class TestAdCPContract:
         # Test with all fields
         signal_data = {
             "signal_agent_segment_id": "seg_123",
+            "signal_id": {"id": "seg_123", "source": "agent", "agent_url": "https://salesagent.adcontextprotocol.org"},
             "name": "Premium Audiences",
             "description": "High-value customer segment",
             "signal_type": "marketplace",
@@ -2944,13 +2979,13 @@ class TestProductV36FieldContract:
         assert dump["placements"][0]["name"] == "Top Banner"
         assert dump["placements"][1]["placement_id"] == "sidebar"
 
-    # --- reporting_capabilities (optional, default=None) ---
+    # --- reporting_capabilities (required in adcp 4.3) ---
 
-    def test_reporting_capabilities_absent_when_null(self):
-        """reporting_capabilities not in model_dump when not set."""
+    def test_reporting_capabilities_present_when_null(self):
+        """reporting_capabilities always in model_dump (required in adcp 4.3)."""
         product = self._make_base_product()
         dump = product.model_dump()
-        assert "reporting_capabilities" not in dump
+        assert "reporting_capabilities" in dump
 
     def test_reporting_capabilities_present_when_set(self):
         """reporting_capabilities appears in model_dump with correct structure."""
@@ -3229,12 +3264,12 @@ class TestProductV36FieldContract:
         dump = schema.model_dump()
 
         # None-valued optional fields should be omitted from dump
+        # reporting_capabilities is required in adcp 4.3 — always present with defaults
         absent_fields = [
             "channels",
             "product_card",
             "product_card_detailed",
             "placements",
-            "reporting_capabilities",
             "catalog_match",
             "catalog_types",
             "conversion_tracking",

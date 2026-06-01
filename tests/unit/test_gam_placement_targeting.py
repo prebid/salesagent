@@ -135,6 +135,10 @@ class TestPlacementIdsValidation:
         mock_uow = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
+        # State-machine precondition guard needs a non-terminal status
+        _stub_mb = MagicMock()
+        _stub_mb.status = "active"
+        mock_uow.media_buys.get_by_id.return_value = _stub_mb
         mock_uow.__enter__ = Mock(return_value=mock_uow)
         mock_uow.__exit__ = Mock(return_value=False)
 
@@ -207,7 +211,7 @@ class TestPlacementIdsValidation:
 
             assert isinstance(result, UpdateMediaBuyError)
             assert len(result.errors) == 1
-            assert result.errors[0].code == "invalid_placement_ids"
+            assert result.errors[0].code == "VALIDATION_ERROR"
             assert "invalid_placement" in result.errors[0].message
 
     def test_placement_targeting_not_supported_returns_error(self):
@@ -239,6 +243,10 @@ class TestPlacementIdsValidation:
         mock_uow = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
+        # State-machine precondition guard needs a non-terminal status
+        _stub_mb = MagicMock()
+        _stub_mb.status = "active"
+        mock_uow.media_buys.get_by_id.return_value = _stub_mb
         mock_uow.__enter__ = Mock(return_value=mock_uow)
         mock_uow.__exit__ = Mock(return_value=False)
 
@@ -303,7 +311,7 @@ class TestPlacementIdsValidation:
 
             assert isinstance(result, UpdateMediaBuyError)
             assert len(result.errors) == 1
-            assert result.errors[0].code == "placement_targeting_not_supported"
+            assert result.errors[0].code == "UNSUPPORTED_FEATURE"
             assert "prod_no_placements" in result.errors[0].message
 
     def test_adcp_package_update_accepts_placement_ids_in_creative_assignments(self):

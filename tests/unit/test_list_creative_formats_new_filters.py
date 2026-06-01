@@ -169,5 +169,8 @@ class TestListCreativeFormatsMCPToolSignature:
         format_ids_param = sig.parameters["format_ids"]
 
         # The annotation should be list[FormatId] | None for proper schema exposure
+        # adcp 4.3: FormatId is an alias for FormatReferenceStructuredObject
         annotation_str = str(format_ids_param.annotation)
-        assert "FormatId" in annotation_str, f"Expected list[FormatId], got {annotation_str}"
+        assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
+            f"Expected list[FormatId] or list[FormatReferenceStructuredObject], got {annotation_str}"
+        )

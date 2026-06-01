@@ -25,12 +25,12 @@ class TestAdCPCallContextBuilderExists:
         assert AdCPCallContextBuilder is not None
 
     def test_builder_inherits_call_context_builder(self):
-        """AdCPCallContextBuilder must inherit from SDK's CallContextBuilder."""
-        from a2a.server.apps.jsonrpc.jsonrpc_app import CallContextBuilder
+        """AdCPCallContextBuilder must inherit from SDK's ServerCallContextBuilder."""
+        from a2a.server.routes.common import ServerCallContextBuilder
 
         from src.a2a_server.context_builder import AdCPCallContextBuilder
 
-        assert issubclass(AdCPCallContextBuilder, CallContextBuilder)
+        assert issubclass(AdCPCallContextBuilder, ServerCallContextBuilder)
 
     def test_builder_has_build_method(self):
         """AdCPCallContextBuilder must implement build(request) -> ServerCallContext."""

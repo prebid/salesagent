@@ -15,11 +15,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 logger = logging.getLogger(__name__)
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test_principal", tenant_id="test_tenant", tenant={"tenant_id": "test_tenant"}, protocol="a2a"
 )
 
@@ -52,7 +52,12 @@ async def test_handle_get_products_skill_passes_brand():
 
 @pytest.mark.asyncio
 async def test_handle_get_products_skill_extracts_all_parameters():
-    """Test that _handle_get_products_skill extracts all optional parameters."""
+    """Test that _handle_get_products_skill extracts spec parameters and ignores non-spec ones.
+
+    Non-spec parameters (min_exposures, strategy_id, adcp_version) MUST NOT be forwarded
+    to the core tool — they are not in the AdCP GetProductsRequest schema. adcp_version is
+    used at the transport boundary for version compat, not forwarded to the wrapper.
+    """
     handler = AdCPRequestHandler()
 
     with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
@@ -77,9 +82,9 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         assert call_kwargs["brand"] == {"domain": "nike.com"}
         assert call_kwargs["brief"] == "Athletic footwear"
         assert call_kwargs["filters"] == {"delivery_type": "guaranteed"}
-        assert call_kwargs["min_exposures"] == 10000
-        assert call_kwargs["strategy_id"] == "test_strategy_123"
-        assert "adcp_version" not in call_kwargs
+        assert "min_exposures" not in call_kwargs, "min_exposures is not in AdCP spec — must not be forwarded"
+        assert "strategy_id" not in call_kwargs, "strategy_id is not in AdCP spec — must not be forwarded"
+        assert "adcp_version" not in call_kwargs, "adcp_version is a transport concern — must not be forwarded"
         assert "brand_manifest" not in call_kwargs
 
 

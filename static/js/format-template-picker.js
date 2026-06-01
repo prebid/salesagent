@@ -776,20 +776,20 @@ class FormatTemplatePicker {
                 for (const fmt of formats) {
                     const formatId = typeof fmt.format_id === 'object' ? fmt.format_id.id : fmt.format_id;
                     const dimsStr = fmt.dimensions ? ` (${fmt.dimensions})` : '';
-                    const typeStr = fmt.type ? ` [${fmt.type}]` : '';
+                    const categoryStr = fmt.category ? ` [${fmt.category}]` : '';
 
                     // Store full format info as data attribute (JSON encoded)
                     const formatData = JSON.stringify({
                         agent_url: agentUrl,
                         id: formatId,
                         name: fmt.name,
-                        type: fmt.type,
+                        category: fmt.category,
                         dimensions: fmt.dimensions
                     });
 
                     html += `
                         <option value="${formatId}" data-format='${formatData.replace(/'/g, "&#39;")}'>
-                            ${fmt.name || formatId}${dimsStr}${typeStr}
+                            ${fmt.name || formatId}${dimsStr}${categoryStr}
                         </option>
                     `;
                 }
@@ -1021,11 +1021,11 @@ class FormatTemplatePicker {
                     if (paramsSection) paramsSection.style.display = 'none';
                     return;
                 }
-                const formatType = formatData.type || '';
+                const formatCategory = formatData.category || '';
 
-                // Determine which params apply to this format type
-                const showDims = formatType === 'display' || formatType === 'video';
-                const showDuration = formatType === 'video' || formatType === 'audio';
+                // Determine which params apply to this format category
+                const showDims = formatCategory === 'display' || formatCategory === 'video';
+                const showDuration = formatCategory === 'video' || formatCategory === 'audio';
 
                 // Only show params section if at least one param type is relevant
                 if (paramsSection) {

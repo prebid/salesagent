@@ -1,7 +1,8 @@
 """Unit tests for AXE segment targeting (axe_include_segment, axe_exclude_segment).
 
-Tests that the AdCP 3.0.3 AXE segment fields are properly supported in
-targeting_overlay for create_media_buy and update_media_buy operations.
+Tests that the AXE segment fields (AdCP pre-3.0; deprecated in 3.0.x in
+favor of TMP provider fields) are properly supported in targeting_overlay
+for create_media_buy and update_media_buy operations.
 """
 
 from datetime import UTC

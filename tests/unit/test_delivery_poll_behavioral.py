@@ -24,7 +24,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import MediaBuyStatus
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.schemas import GetMediaBuyDeliveryRequest
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import (
@@ -141,7 +141,7 @@ class TestValidStatusValuesAccepted:
         "status_input",
         [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.paused,
             MediaBuyStatus.completed,
         ],
@@ -364,10 +364,10 @@ class TestUC004EXTA02AuthenticationFailure:
             # Call _impl directly with identity=None (bypassing env.call_impl which provides identity)
             req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _get_media_buy_delivery_impl(req, identity=None)
 
-            assert exc_info.value.message == "Context is required"
+            assert exc_info.value.message == "Identity is required"
 
 
 # ---------------------------------------------------------------------------
@@ -755,7 +755,7 @@ class TestMissingPrincipalIdReturnsError:
 
         response = _get_media_buy_delivery_impl(req, identity)
         assert response.errors is not None
-        assert any(e.code == "principal_id_missing" for e in response.errors)
+        assert any(e.code == "AUTH_REQUIRED" for e in response.errors)
 
     def test_empty_string_principal_id_returns_error_response(self):
         from src.core.resolved_identity import ResolvedIdentity
@@ -769,7 +769,7 @@ class TestMissingPrincipalIdReturnsError:
 
         response = _get_media_buy_delivery_impl(req, identity)
         assert response.errors is not None
-        assert any(e.code == "principal_id_missing" for e in response.errors)
+        assert any(e.code == "AUTH_REQUIRED" for e in response.errors)
 
 
 class TestMissingTenantRaisesAuthError:

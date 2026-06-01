@@ -19,9 +19,9 @@ def cleanup_approval_registry():
     # Import here to avoid issues with module loading
     import src.services.order_approval_service as service
 
-    # Clear the registry before the test
-    with service._approval_lock:
-        service._active_approvals.clear()
+    # Clear the registry before the test (ThreadRegistry API)
+    for key in list(service._active_approvals.list_active()):
+        service._active_approvals.remove(key)
 
     yield
 
@@ -119,22 +119,32 @@ def test_start_approval_rejects_duplicate(mock_db_session):
 
 
 def test_approval_thread_tracks_in_registry(mock_db_session):
-    """Test that approval thread is tracked in global registry."""
-    # Mock the thread execution to prevent it from actually running
-    # (which would cause it to fail and remove itself from registry)
-    with patch("src.services.order_approval_service._run_approval_thread"):
+    """Test that approval thread is tracked in global registry.
+
+    Uses a blocking mock so the worker stays alive while the test
+    inspects the registry — the dead-thread reaper added in the
+    production memory-leak fix drops dead-thread entries on read, so
+    a no-op mock that exits immediately would race the reaper.
+    """
+    import threading
+
+    keep_alive = threading.Event()
+    with patch(
+        "src.services.order_approval_service._run_approval_thread",
+        side_effect=lambda *args, **kwargs: keep_alive.wait(timeout=2.0),
+    ):
         approval_id = start_order_approval_background(
             order_id="12345",
             media_buy_id="mb_123",
             tenant_id="tenant_1",
             principal_id="principal_1",
         )
-
-        # Thread should be in registry immediately (added before thread.start())
-        # No sleep needed since we're checking the registry, not thread execution
-        active_approvals = get_active_approvals()
-        assert approval_id in active_approvals, f"Expected {approval_id} in {active_approvals}"
-        assert is_approval_running(approval_id)
+        try:
+            active_approvals = get_active_approvals()
+            assert approval_id in active_approvals, f"Expected {approval_id} in {active_approvals}"
+            assert is_approval_running(approval_id)
+        finally:
+            keep_alive.set()
 
 
 def test_get_approval_status(mock_db_session):

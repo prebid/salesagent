@@ -1,0 +1,53 @@
+# CODEOWNERS — auto-requests review from @chrishuie on PRs touching listed paths.
+# Bypass is configured at branch-protection level (see ADR-002), not here.
+#
+# Order matters: last matching pattern wins (GitHub semantics).
+# Globs use gitignore syntax; trailing slash matches directories recursively.
+
+# ---- Default fallback: maintainer owns everything not otherwise specified ----
+*                                       @chrishuie
+
+# ---- CI / build infrastructure (highest review concern) ----
+/.github/                               @chrishuie
+/.pre-commit-config.yaml                @chrishuie
+/.pre-commit-hooks/                     @chrishuie
+/scripts/hooks/                         @chrishuie
+/setup_hooks.sh                         @chrishuie
+
+# ---- Dependency / runtime pinning ----
+/pyproject.toml                         @chrishuie
+/uv.lock                                @chrishuie
+/.python-version                        @chrishuie
+/Dockerfile                             @chrishuie
+/docker-compose*.yml                    @chrishuie
+
+# ---- Database migrations (irreversible once merged) ----
+/alembic/                               @chrishuie
+/alembic.ini                            @chrishuie
+
+# ---- Auth + security surface ----
+/src/core/auth*                         @chrishuie
+/src/core/security/                     @chrishuie
+/SECURITY.md                            @chrishuie
+/IPR_POLICY.md                          @chrishuie
+
+# ---- Architecture guards (prevent regressions in invariants) ----
+/tests/unit/test_architecture_*.py      @chrishuie
+/tests/unit/architecture/               @chrishuie
+
+# ---- Test infrastructure & ratchet baselines (shrink-only contract per ADR-004) ----
+/Makefile                                @chrishuie
+/tox.ini                                 @chrishuie
+/mypy.ini                                @chrishuie
+/pytest.ini                              @chrishuie
+/tests/conftest.py                       @chrishuie
+/tests/integration/conftest.py           @chrishuie
+/tests/conftest_db.py                    @chrishuie
+/tests/factories/                        @chrishuie
+/.duplication-baseline                   @chrishuie
+/.type-ignore-baseline                   @chrishuie
+/.coverage-baseline                      @chrishuie
+/.guard-baselines/                       @chrishuie
+/tests/unit/.allowlist-*.json            @chrishuie
+/tests/unit/obligation_coverage_allowlist.json         @chrishuie
+/tests/unit/obligation_test_quality_allowlist.json     @chrishuie

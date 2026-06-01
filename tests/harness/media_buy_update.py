@@ -13,7 +13,7 @@ Usage::
             result = env.call_impl(packages=[{"package_id": "pkg-1", "budget": 50.0}])
             env.mock["uow"].return_value.currency_limits.get_for_currency.assert_called_with("EUR")
         assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "budget_below_minimum"
+        assert result.errors[0].code == "BUDGET_TOO_LOW"
 
 Available mocks via env.mock:
     "uow"       -- MediaBuyUoW class mock (env.mock["uow"].return_value is the UoW instance)
@@ -82,6 +82,12 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         self._uow_instance = MagicMock()
         self._uow_instance.session = mock_session
         self._uow_instance.media_buys = MagicMock()
+        # Default media buy with non-terminal status so the state-machine
+        # precondition guard in _update_media_buy_impl passes. Tests that
+        # need a specific status call ``set_media_buy(status=...)``.
+        _default_mb = MagicMock()
+        _default_mb.status = "active"
+        self._uow_instance.media_buys.get_by_id.return_value = _default_mb
         self._uow_instance.currency_limits = MagicMock()
         self._uow_instance.__enter__ = MagicMock(return_value=self._uow_instance)
         self._uow_instance.__exit__ = MagicMock(return_value=False)
@@ -132,17 +138,23 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         self,
         media_buy_id: str = "mb-001",
         currency: str = "USD",
+        status: str = "active",
         start_time: Any = None,
         end_time: Any = None,
         **extra: Any,
     ) -> MagicMock:
         """Configure what uow.media_buys.get_by_id returns.
 
+        Default status is "active" so the state-machine precondition guard
+        in _update_media_buy_impl lets the request through. Pass
+        ``status="paused"`` etc. to test other paths.
+
         Returns the mock MediaBuy for further customization.
         """
         mb = MagicMock()
         mb.media_buy_id = media_buy_id
         mb.currency = currency
+        mb.status = status
         mb.start_time = start_time
         mb.end_time = end_time
         for k, v in extra.items():

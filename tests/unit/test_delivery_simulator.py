@@ -26,7 +26,7 @@ class TestDeliverySimulator:
 
     def test_simulator_initialization(self, simulator):
         """Test simulator initializes correctly."""
-        assert simulator._active_simulations == {}
+        assert simulator._active_simulations.list_active() == []
         assert simulator._stop_signals == {}
 
     def test_start_simulation_creates_thread(self, simulator, mock_webhook_service):
@@ -47,13 +47,13 @@ class TestDeliverySimulator:
         )
 
         # Check thread was created
-        assert media_buy_id in simulator._active_simulations
+        assert simulator._active_simulations.contains(media_buy_id)
         assert media_buy_id in simulator._stop_signals
-        assert simulator._active_simulations[media_buy_id].is_alive()
+        assert simulator._active_simulations.get(media_buy_id).is_alive()
 
         # Cleanup - stop and wait for thread to finish
         simulator.stop_simulation(media_buy_id)
-        simulator._active_simulations.get(media_buy_id, MagicMock()).join(timeout=5)
+        (simulator._active_simulations.get(media_buy_id) or MagicMock()).join(timeout=5)
 
     def test_stop_simulation(self, simulator, mock_webhook_service):
         """Test that stopping simulation sets stop signal."""
@@ -73,7 +73,7 @@ class TestDeliverySimulator:
         )
 
         # Capture thread reference before stopping
-        thread = simulator._active_simulations[media_buy_id]
+        thread = simulator._active_simulations.get(media_buy_id)
 
         # Stop simulation
         simulator.stop_simulation(media_buy_id)
@@ -85,7 +85,7 @@ class TestDeliverySimulator:
         thread.join(timeout=5)
 
         # Thread should have cleaned up
-        assert media_buy_id not in simulator._active_simulations
+        assert not simulator._active_simulations.contains(media_buy_id)
 
     def test_duplicate_simulation_prevented(self, simulator, mock_webhook_service):
         """Test that duplicate simulations for same media buy are prevented."""
@@ -118,13 +118,12 @@ class TestDeliverySimulator:
         )
 
         # Should only have one thread
-        assert media_buy_id in simulator._active_simulations
-        active_count = sum(1 for t in simulator._active_simulations.values() if t.is_alive())
-        assert active_count == 1
+        assert simulator._active_simulations.contains(media_buy_id)
+        assert simulator._active_simulations.list_active() == [media_buy_id]
 
         # Cleanup
         simulator.stop_simulation(media_buy_id)
-        simulator._active_simulations.get(media_buy_id, MagicMock()).join(timeout=5)
+        (simulator._active_simulations.get(media_buy_id) or MagicMock()).join(timeout=5)
 
     def test_webhook_payload_structure(self, simulator, mock_webhook_service):
         """Test that webhook delivery service is called correctly."""
@@ -192,7 +191,7 @@ class TestDeliverySimulator:
             thread.join(timeout=5)
 
         # Should have completed
-        assert media_buy_id not in simulator._active_simulations
+        assert not simulator._active_simulations.contains(media_buy_id)
 
         # Check final webhook had is_final=True
         last_call = mock_webhook_service.send_delivery_webhook.call_args_list[-1]
@@ -268,5 +267,5 @@ class TestDeliverySimulator:
             thread.join(timeout=5)
 
         # Should have cleaned up
-        assert media_buy_id not in simulator._active_simulations
+        assert not simulator._active_simulations.contains(media_buy_id)
         assert media_buy_id not in simulator._stop_signals

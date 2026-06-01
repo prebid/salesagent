@@ -164,12 +164,8 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
                     webhook_delivery_total.labels(
                         tenant_id=delivery.tenant_id, event_type=delivery.event_type, status="success"
                     ).inc()
-                    webhook_delivery_duration.labels(
-                        tenant_id=delivery.tenant_id, event_type=delivery.event_type
-                    ).observe(total_duration)
-                    webhook_delivery_attempts.labels(
-                        tenant_id=delivery.tenant_id, event_type=delivery.event_type
-                    ).observe(attempts)
+                    webhook_delivery_duration.labels(event_type=delivery.event_type).observe(total_duration)
+                    webhook_delivery_attempts.labels(event_type=delivery.event_type).observe(attempts)
 
                 return True, {
                     "delivery_id": delivery_id,
@@ -259,10 +255,8 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
         webhook_delivery_total.labels(
             tenant_id=delivery.tenant_id, event_type=delivery.event_type, status="max_retries_exceeded"
         ).inc()
-        webhook_delivery_duration.labels(tenant_id=delivery.tenant_id, event_type=delivery.event_type).observe(
-            total_duration
-        )
-        webhook_delivery_attempts.labels(tenant_id=delivery.tenant_id, event_type=delivery.event_type).observe(attempts)
+        webhook_delivery_duration.labels(event_type=delivery.event_type).observe(total_duration)
+        webhook_delivery_attempts.labels(event_type=delivery.event_type).observe(attempts)
 
     return False, {
         "delivery_id": delivery_id,

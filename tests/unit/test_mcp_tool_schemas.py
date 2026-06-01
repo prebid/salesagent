@@ -80,6 +80,7 @@ class TestMCPToolTypedSchemas:
         """create_media_buy should use BrandReference (brand), PackageRequest, etc.
 
         adcp 3.6.0: brand_manifest renamed to brand (BrandReference with domain field).
+        adcp 4.3 (commit 3c604130): targeting_overlay and creatives moved to PackageRequest.
         """
         from src.core.tools.media_buy_create import create_media_buy
 
@@ -98,9 +99,13 @@ class TestMCPToolTypedSchemas:
             f"packages should use PackageRequest type, got {params['packages'].annotation}"
         )
 
-        # Check targeting_overlay uses TargetingOverlay type
-        assert "TargetingOverlay" in str(params["targeting_overlay"].annotation), (
-            f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
+        # adcp 4.3: targeting_overlay and creatives are package-level, not request-level
+        assert "targeting_overlay" not in params, (
+            "targeting_overlay was moved to PackageRequest in adcp 4.3 (commit 3c604130); "
+            "use packages[].targeting_overlay instead"
+        )
+        assert "creatives" not in params, (
+            "creatives was moved to PackageRequest in adcp 4.3 (commit 3c604130); use packages[].creatives instead"
         )
 
     def test_update_media_buy_uses_typed_parameters(self):
@@ -132,9 +137,10 @@ class TestMCPToolTypedSchemas:
 
         # type parameter removed in adcp 3.12
 
-        # Check format_ids uses FormatId type
-        assert "FormatId" in str(params["format_ids"].annotation), (
-            f"format_ids should use FormatId type, got {params['format_ids'].annotation}"
+        # Check format_ids uses FormatId type (alias for FormatReferenceStructuredObject in adcp 4.3)
+        annotation_str = str(params["format_ids"].annotation)
+        assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
+            f"format_ids should use FormatId type, got {annotation_str}"
         )
 
         # Check asset_types uses AssetContentType type (if still present)
