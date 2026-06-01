@@ -241,7 +241,7 @@ class AdCPError(Exception):
         Typed subclasses (``AdCPValidationError``, etc.) carry
         ``error_code``/``status_code`` as class attributes. Two boundary
         callers — ``handle_tool_error``'s plain-``ToolError`` fallback and
-        ``ContextManager.fail_workflow_step_for_exception``'s wire-code
+        ``ContextManager.audit_workflow_step_failure``'s wire-code
         sanitization — need to construct an ``AdCPError`` with a code/status
         the typed class hierarchy doesn't model.
 
@@ -668,7 +668,7 @@ class AdCPBulkUpdateError(AdCPAdapterError):
 # Two-layer envelope serializer — single source of truth for wire shape.
 # ---------------------------------------------------------------------------
 # All three boundary translators (MCP, A2A, REST) and
-# ContextManager.fail_workflow_step_for_exception call this so wire
+# ContextManager.audit_workflow_step_failure call this so wire
 # responses and persisted workflow_step.response_data share the same
 # two-layer shape. _impl functions never build wire shape; they raise
 # AdCPError subclasses and the boundary translator runs this.

@@ -336,7 +336,7 @@ class ContextManager(DatabaseManager):
         finally:
             session.close()
 
-    def fail_workflow_step_for_exception(self, step_id: str, exc: Exception) -> None:
+    def audit_workflow_step_failure(self, step_id: str, exc: Exception) -> None:
         """Mark a workflow step failed with the spec two-layer envelope as ``response_data``.
 
         The webhook delivery path at ``_send_push_notifications`` emits
@@ -395,24 +395,24 @@ class ContextManager(DatabaseManager):
                 step_id,
             )
 
-    def audit_step_failure_if_present(self, step: WorkflowStep | None, exc: Exception) -> None:
+    def audit_workflow_step_failure_if_present(self, step: WorkflowStep | None, exc: Exception) -> None:
         """Mark ``step`` as failed if it exists; do not re-raise.
 
-        Standalone variant of :py:meth:`audit_step_failure` for callers
+        Standalone variant of :py:meth:`audit_workflow_step_failure_ctx` for callers
         that need to interleave additional observability (e.g., Slack
         notification on the untyped branch in ``_create_media_buy_impl``)
         between the workflow-step audit and the re-raise. The caller
         re-raises explicitly.
 
-        ``fail_workflow_step_for_exception`` is internally wrapped in
+        ``audit_workflow_step_failure`` is internally wrapped in
         try/except so a DB hiccup during audit cannot shadow the original
         exception when the caller re-raises.
         """
         if step is not None:
-            self.fail_workflow_step_for_exception(step.step_id, exc)
+            self.audit_workflow_step_failure(step.step_id, exc)
 
     @contextmanager
-    def audit_step_failure(self, get_step: "Callable[[], WorkflowStep | None]") -> Iterator[None]:
+    def audit_workflow_step_failure_ctx(self, get_step: "Callable[[], WorkflowStep | None]") -> Iterator[None]:
         """Context manager: mark the workflow step as failed if any exception escapes the block.
 
         Single source of truth for "what happens when an _impl owning a
@@ -427,14 +427,14 @@ class ContextManager(DatabaseManager):
         when it may still be ``None``.
 
         Re-raises the original exception unchanged. Delegates the actual
-        audit work to :py:meth:`audit_step_failure_if_present` so the two
+        audit work to :py:meth:`audit_workflow_step_failure_if_present` so the two
         public APIs (context manager + standalone helper) share the same
         underlying call.
         """
         try:
             yield
         except Exception as exc:
-            self.audit_step_failure_if_present(get_step(), exc)
+            self.audit_workflow_step_failure_if_present(get_step(), exc)
             raise
 
     def mark_human_needed(

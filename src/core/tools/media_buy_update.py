@@ -220,7 +220,7 @@ def _update_media_buy_impl(
     ctx_manager = get_context_manager()
     step = None
 
-    with ctx_manager.audit_step_failure(lambda: step):
+    with ctx_manager.audit_workflow_step_failure_ctx(lambda: step):
         # Single UoW for entire update operation — one session, one transaction
         with MediaBuyUoW(tenant["tenant_id"]) as uow:
             assert uow.media_buys is not None

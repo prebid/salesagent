@@ -129,10 +129,10 @@ def test_principal_not_found_returns_error(standard_mocks):
     with pytest.raises(AdCPAuthenticationError, match="principal_test"):
         _update_media_buy_impl(req=req, identity=identity)
 
-    # _update_media_buy_impl wraps its body in the ``audit_step_failure`` context
+    # _update_media_buy_impl wraps its body in the ``audit_workflow_step_failure_ctx`` context
     # manager, so the raise propagates through it rather than via a per-site
     # fail_step call; the exception type is asserted by ``pytest.raises`` above.
-    audit_calls = standard_mocks["ctx_mgr_instance"].audit_step_failure.call_args_list
+    audit_calls = standard_mocks["ctx_mgr_instance"].audit_workflow_step_failure_ctx.call_args_list
     assert len(audit_calls) == 1
 
 
@@ -1797,13 +1797,13 @@ class TestUC003UpdateTargetingOverlay:
         assert exc.details is not None
         assert "violations" in exc.details
 
-        # The outer ``audit_step_failure(lambda: step)`` context manager
+        # The outer ``audit_workflow_step_failure_ctx(lambda: step)`` context manager
         # marks the workflow step failed BEFORE re-raising, which fires the
         # buyer-facing push notification at
         # context_manager.update_workflow_step:330-332. Without this fence,
         # the step would orphan in ``in_progress`` and the buyer's poller
         # would hang forever. The CM's __exit__ receives the propagating
-        # exception and calls ``audit_step_failure_if_present(step, exc)``
+        # exception and calls ``audit_workflow_step_failure_if_present(step, exc)``
         # internally — that helper threads a two-layer envelope into
         # response_data so async webhook subscribers see the same wire
         # shape as the synchronous caller.
@@ -1816,23 +1816,20 @@ class TestUC003UpdateTargetingOverlay:
         #      type-mismatch and message-content regressions, plus the
         #      ``update_workflow_step(..., error_message=...)`` shape that
         #      would silently lose response_data on the webhook path).
-        audit_cm_calls = standard_mocks["ctx_mgr_instance"].audit_step_failure.call_args_list
-        assert len(audit_cm_calls) == 1, (
-            f"Expected exactly one audit_step_failure context manager entry on raise, got {len(audit_cm_calls)}"
-        )
+        audit_cm_calls = standard_mocks["ctx_mgr_instance"].audit_workflow_step_failure_ctx.call_args_list
+        msg = f"Expected exactly one audit_workflow_step_failure_ctx context manager entry on raise, got {len(audit_cm_calls)}"
+        assert len(audit_cm_calls) == 1, msg
         get_step = audit_cm_calls[0].args[0]
         assert get_step() is standard_mocks["step"]
 
-        cm_return = standard_mocks["ctx_mgr_instance"].audit_step_failure.return_value
+        cm_return = standard_mocks["ctx_mgr_instance"].audit_workflow_step_failure_ctx.return_value
         exit_calls = cm_return.__exit__.call_args_list
-        assert len(exit_calls) == 1, (
-            f"Expected exactly one __exit__ on the audit_step_failure CM, got {len(exit_calls)}"
-        )
+        msg = f"Expected exactly one __exit__ on the audit_workflow_step_failure_ctx CM, got {len(exit_calls)}"
+        assert len(exit_calls) == 1, msg
         # __exit__(exc_type, exc_val, exc_tb) — pin both the class and the message.
         exit_args = exit_calls[0].args
-        assert exit_args[0] is AdCPValidationError, (
-            f"Expected AdCPValidationError to escape the audit_step_failure CM, got {exit_args[0]}"
-        )
+        msg = f"Expected AdCPValidationError to escape the audit_workflow_step_failure_ctx CM, got {exit_args[0]}"
+        assert exit_args[0] is AdCPValidationError, msg
         assert isinstance(exit_args[1], AdCPValidationError)
         assert "property_targeting_allowed" in exit_args[1].message
 
@@ -1936,9 +1933,8 @@ class TestUC003UpdateTargetingOverlay:
             persisted_list_id = persisted_pl.list_id if persisted_pl is not None else None
         else:
             persisted_list_id = persisted["property_list"]["list_id"]
-        assert persisted_list_id == "B", (
-            f"replacement semantic broken — persisted list_id={persisted_list_id!r}, expected 'B'"
-        )
+        msg = f"replacement semantic broken — persisted list_id={persisted_list_id!r}, expected 'B'"
+        assert persisted_list_id == "B", msg
         # The original "A" must not survive on list_id specifically (don't
         # substring-match the whole overlay repr — 'AnyUrl' contains 'A' too).
         assert persisted_list_id != "A", "original list_id was not replaced"

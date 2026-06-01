@@ -2198,7 +2198,7 @@ async def _create_media_buy_impl(
         # AdCPAuthorizationError with correct wire codes (the prior
         # "return CreateMediaBuyResult(VALIDATION_ERROR)" path silently mis-tagged
         # PermissionError as VALIDATION_ERROR).
-        ctx_manager.audit_step_failure_if_present(step, e)
+        ctx_manager.audit_workflow_step_failure_if_present(step, e)
         raise
 
     # Type narrowing: in non-dry_run mode, step and persistent_ctx are guaranteed to exist
@@ -3824,17 +3824,17 @@ async def _create_media_buy_impl(
 
     except AdCPError as adcp_err:
         # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping.
-        # audit_step_failure_if_present threads the two-layer envelope into
+        # audit_workflow_step_failure_if_present threads the two-layer envelope into
         # response_data so push notification subscribers see the same wire shape
         # the synchronous caller receives, AND wraps in try/except so a DB hiccup
         # during audit can't shadow the original AdCPError on re-raise.
-        ctx_manager.audit_step_failure_if_present(step, adcp_err)
+        ctx_manager.audit_workflow_step_failure_if_present(step, adcp_err)
         raise
 
     except Exception as e:
         # Untyped exception — same workflow audit treatment, plus Slack
         # notification + adapter audit log below before re-raising.
-        ctx_manager.audit_step_failure_if_present(step, e)
+        ctx_manager.audit_workflow_step_failure_if_present(step, e)
 
         # Send Slack notification for failed media buy creation
         try:
