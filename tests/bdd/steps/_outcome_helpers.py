@@ -11,6 +11,23 @@ the repository owns the query, the helper owns the assertion.
 from __future__ import annotations
 
 
+def _require_response(ctx: dict) -> object:
+    """Return ctx["response"], failing with a diagnostic if it is absent.
+
+    Then steps assert on the response produced by a prior When step. Reading
+    ``ctx["response"]`` by subscript raises a bare ``KeyError`` when the
+    operation errored (only ``ctx["error"]`` was set) — giving no hint why.
+    This helper raises an ``AssertionError`` that names the missing response
+    and surfaces any recorded error instead.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, (
+        "Expected a response in ctx but none found — the operation may have "
+        f"errored instead of returning. Recorded error: {ctx.get('error')!r}"
+    )
+    return resp
+
+
 def _get_response_field(resp: object, field: str) -> object:
     """Extract a field from a response, handling wrapper types."""
     if hasattr(resp, field):

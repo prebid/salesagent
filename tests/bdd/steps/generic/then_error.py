@@ -66,6 +66,41 @@ def _get_error_dict(error: Exception) -> dict:
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 
 
+# ── Shared validation ───────────────────────────────────────────────
+
+
+def _assert_meaningful_error(error: object) -> None:
+    """Assert the error object carries meaningful error information.
+
+    Validates that the error is either:
+    - An AdCPError with a non-empty error_code string, OR
+    - An adcp Error model with a non-empty string .code attribute, OR
+    - Another Exception with a non-empty string representation.
+
+    This rejects empty/placeholder errors that would make any
+    "operation should fail" assertion tautological.
+    """
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        assert isinstance(error.error_code, str) and error.error_code, (
+            f"AdCPError has empty or non-string error_code: {error.error_code!r}"
+        )
+        return
+
+    # adcp.types.Error model (from partial success response.errors)
+    code = getattr(error, "code", None)
+    if code is not None and not isinstance(error, Exception):
+        assert isinstance(code, str) and code, f"Error model has empty or non-string code: {code!r}"
+        return
+
+    if isinstance(error, (Exception, BaseException)):
+        assert str(error), f"Exception has no message: {type(error).__name__}"
+        return
+
+    raise AssertionError(f"ctx['error'] is not an Exception or Error model: {type(error).__name__} = {error!r}")
+
+
 # ── Operation failure ────────────────────────────────────────────────
 
 
@@ -76,16 +111,83 @@ def then_operation_fails(ctx: dict) -> None:
     Checks two patterns:
     1. Exception-based: ctx["error"] set by dispatch on exception
     2. Partial success: response.errors non-empty (UC-004 delivery pattern)
+
+    Both paths make a positive assertion that a real error object exists
+    with meaningful error information — not just that a ctx key is set.
     """
-    if "error" in ctx:
-        return  # Exception-based error — OK
+    error = ctx.get("error")
+    if error is not None:
+        _assert_meaningful_error(error)
+        return
     resp = ctx.get("response")
     if resp is not None and hasattr(resp, "errors") and resp.errors:
         # Promote the first response error to ctx["error"] so downstream
         # Then steps (error_code, error_message) can find it.
-        ctx["error"] = resp.errors[0]
+        first_error = resp.errors[0]
+        assert first_error is not None, "response.errors[0] is None — expected a concrete error object"
+        _assert_meaningful_error(first_error)
+        ctx["error"] = first_error
         return
-    raise AssertionError("Expected an error but none was recorded in ctx")
+    raise AssertionError(
+        "Expected the operation to fail but no error was recorded. "
+        f"ctx keys: {list(ctx.keys())}, response: {ctx.get('response')!r}"
+    )
+
+
+@then("the entire sync operation fails")
+def then_entire_sync_operation_fails(ctx: dict) -> None:
+    """Assert the sync operation failed entirely -- no partial successes.
+
+    Stronger than "the operation should fail": this step additionally verifies
+    that the failure is total.  When a sync runs in strict validation mode
+    (BR-RULE-172 INV-5), a single invalid catalog must cause the entire
+    operation to be rejected -- the response must NOT contain any successfully
+    processed items alongside the error.
+
+    Asserts:
+    1. An error was recorded with meaningful error information.
+    2. If a response exists with a results/catalogs collection, NONE of the
+       items were processed successfully (no partial success).
+    """
+    # ── Resolve the error object ────────────────────────────────────
+    error = ctx.get("error")
+    resp = ctx.get("response")
+
+    # Promote response.errors if no top-level error was captured
+    if error is None and resp is not None and hasattr(resp, "errors") and resp.errors:
+        first_error = resp.errors[0]
+        assert first_error is not None, "response.errors[0] is None -- expected a concrete error"
+        ctx["error"] = first_error
+        error = first_error
+
+    assert error is not None, (
+        "Expected the entire sync operation to fail but no error was recorded. "
+        f"ctx keys: {list(ctx.keys())}, response: {resp!r}"
+    )
+
+    # ── Verify it carries meaningful error information ──────────────
+    _assert_meaningful_error(error)
+
+    # ── Verify NO partial successes ─────────────────────────────────
+    # "Entire sync fails" means the operation was rejected wholesale.
+    # If a response exists with item-level results, none may have succeeded.
+    if resp is not None:
+        for attr in ("catalogs", "results", "items"):
+            items = getattr(resp, attr, None)
+            if items is None:
+                continue
+            successful = [
+                item
+                for item in items
+                if getattr(item, "action", None) not in (None, "failed", "error", "rejected")
+                or getattr(item, "status", None) == "success"
+            ]
+            assert not successful, (
+                f"Expected entire sync to fail but found {len(successful)} "
+                f"successfully processed item(s) in response.{attr} -- "
+                f"this indicates partial success, not total failure. "
+                f"BR-RULE-172 INV-5 requires the ENTIRE operation to fail."
+            )
 
 
 # ── Error code ───────────────────────────────────────────────────────
@@ -254,6 +356,21 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
+
+    # Pydantic ValidationErrors carry the fix guidance inline in each field
+    # error's ``msg`` (e.g. "Input should be 'operator', 'agent' or 'advertiser'")
+    # rather than a separate ``suggestion`` field. That inline message IS the
+    # actionable guidance, so accept it without the verb check below.
+    from pydantic import ValidationError
+
+    if isinstance(error, ValidationError):
+        details = error.errors()
+        assert details, "ValidationError has no field-level details to guide a fix"
+        for detail in details:
+            msg = detail.get("msg", "")
+            assert isinstance(msg, str) and msg.strip(), f"ValidationError detail lacks fix guidance: {detail}"
+        return
+
     d = _get_error_dict(error)
     assert "suggestion" in d, f"Expected 'suggestion' in error: {d}"
     suggestion = d["suggestion"]

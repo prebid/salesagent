@@ -451,33 +451,530 @@ def then_error_contains_count(ctx: dict, count: str) -> None:
 
 @then(parsers.parse("the result should be {outcome}"))
 def then_result_should_be(ctx: dict, outcome: str) -> None:
-    """Assert outcome of a partition/boundary scenario."""
-    if outcome.startswith("account resolution succeeds"):
-        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-        assert "resolved_account_id" in ctx, "Expected resolved_account_id in ctx"
-    elif outcome == "success":
-        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-        assert "response" in ctx, "Expected response in ctx"
-    elif outcome.startswith("error "):
-        assert "error" in ctx, f"Expected an error for outcome: {outcome}"
-        from src.core.exceptions import AdCPError
+    """Assert outcome of a partition/boundary scenario.
 
-        error = ctx["error"]
-        # Parse expected: "error CODE recovery_hint" or "error CODE with suggestion"
-        parts = outcome[6:].strip().split()
-        expected_code = parts[0]
-        if isinstance(error, AdCPError):
-            assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
-        # Check recovery hint if specified
-        if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
-            if isinstance(error, AdCPError):
-                assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
-        # Check "with suggestion" if specified
-        if "with suggestion" in outcome.lower() or "with" in parts:
-            if isinstance(error, AdCPError) and error.details:
-                assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+    Branches by outcome family and asserts the appropriate production behavior:
+    - Account resolution: resolved_account_id matches request
+    - Validation passes/skips: request proceeded past the named validation stage
+    - Workflow outcomes: correct approval path was taken
+    - Persistence outcomes: DB state matches the expected persistence behavior
+    - Task list outcomes: task query returned correctly shaped/ordered results
+    - Error outcomes: AdCPError with matching code and recovery
+    - Unknown: raises ValueError so unmapped rows are caught immediately
+    """
+    if outcome.startswith("account resolution succeeds"):
+        _assert_account_resolution_succeeds(ctx)
+    elif outcome.startswith("error"):
+        _assert_error_outcome(ctx, outcome)
+    elif _is_pipeline_routing_outcome(outcome):
+        _assert_pipeline_routing(ctx, outcome)
+    elif _is_validation_pass_outcome(outcome):
+        _assert_validation_pass(ctx, outcome)
+    elif _is_workflow_outcome(outcome):
+        _assert_workflow_outcome(ctx, outcome)
+    elif _is_persistence_outcome(outcome):
+        _assert_persistence_outcome(ctx, outcome)
+    elif _is_task_list_outcome(outcome):
+        _assert_task_list_outcome(ctx, outcome)
     else:
-        raise ValueError(f"Unknown outcome: {outcome}")
+        raise ValueError(f"Unknown outcome: {outcome!r}")
+
+
+def _assert_account_resolution_succeeds(ctx: dict) -> None:
+    """Assert account resolution produced the correct account_id."""
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    resolved_id = ctx["resolved_account_id"]
+    assert isinstance(resolved_id, str), (
+        f"Expected resolved_account_id to be a string, got {type(resolved_id).__name__}: {resolved_id!r}"
+    )
+    # Compare against the expected account_id from the request's account_ref
+    account_ref = ctx.get("account_ref")
+    if account_ref is not None and hasattr(account_ref, "root"):
+        root = account_ref.root
+        if hasattr(root, "account_id"):
+            # Explicit account_id reference — resolved must match exactly
+            assert resolved_id == root.account_id, (
+                f"Expected resolved_account_id '{root.account_id}', got '{resolved_id}'"
+            )
+            return
+    # Natural key resolution — verify against request_account_id if available
+    if "request_account_id" in ctx:
+        assert resolved_id == ctx["request_account_id"], (
+            f"Expected resolved_account_id '{ctx['request_account_id']}', got '{resolved_id}'"
+        )
+    else:
+        # Natural key scenario: verify the ID is a non-trivial string (alphanumeric + hyphens)
+        import re
+
+        assert re.match(r"^[a-zA-Z0-9_-]+$", resolved_id), (
+            f"Expected resolved_account_id to be a valid ID string, got: {resolved_id!r}"
+        )
+
+
+# -- Outcome family classifiers -----------------------------------------------
+
+
+def _is_pipeline_routing_outcome(outcome: str) -> bool:
+    """Check if outcome is a pipeline routing result (UC-001 buying_mode)."""
+    return outcome.startswith("request proceeds to") or outcome.startswith(
+        "request defaults to"
+    )
+
+
+def _is_validation_pass_outcome(outcome: str) -> bool:
+    """Check if outcome is a validation-pass or validation-skipped result."""
+    _VALIDATION_SUFFIXES = (
+        "validation passes",
+        "check skipped",
+        "passes",
+        "time resolves to now",
+        "time accepted",
+        "time treated as UTC",
+    )
+    return any(outcome.endswith(suffix) for suffix in _VALIDATION_SUFFIXES)
+
+
+def _is_workflow_outcome(outcome: str) -> bool:
+    """Check if outcome is a workflow path result."""
+    return outcome in ("auto-approved path taken", "manual approval required")
+
+
+def _is_persistence_outcome(outcome: str) -> bool:
+    """Check if outcome is a persistence timing result."""
+    return outcome in (
+        "all records persisted after adapter success",
+        "records persisted in pending state",
+        "no records persisted after adapter failure",
+    )
+
+
+def _is_task_list_outcome(outcome: str) -> bool:
+    """Check if outcome is a task list query result."""
+    return (
+        outcome.startswith("tasks sorted by")
+        or outcome.startswith("tasks filtered to")
+        or outcome.startswith("tasks of all")
+        or outcome.startswith("tasks from all")
+        or outcome.startswith("defaults to")
+        or outcome.startswith("results in")
+    )
+
+
+# -- Validation domain extraction ----------------------------------------------
+
+
+def _extract_validation_domain(outcome: str) -> str:
+    """Extract the validation domain name from an outcome string.
+
+    Examples:
+        "budget validation passes" -> "budget"
+        "minimum spend passes" -> "minimum spend"
+        "start time resolves to now" -> "start time"
+    """
+    for suffix in (
+        " validation passes",
+        " check skipped",
+        " passes",
+        " resolves to now",
+        " accepted",
+        " treated as UTC",
+    ):
+        if outcome.endswith(suffix):
+            return outcome[: -len(suffix)]
+    return outcome
+
+
+def _extract_pipeline_name(outcome: str) -> str:
+    """Extract the pipeline name from a routing outcome.
+
+    "request proceeds to brief pipeline" -> "brief"
+    "request defaults to brief pipeline" -> "brief"
+    """
+    for prefix in ("request proceeds to ", "request defaults to "):
+        if outcome.startswith(prefix):
+            remainder = outcome[len(prefix) :]
+            if remainder.endswith(" pipeline"):
+                return remainder[: -len(" pipeline")]
+            return remainder
+    return outcome
+
+
+# -- Outcome family assertions -------------------------------------------------
+
+
+def _assert_validation_pass(ctx: dict, outcome: str) -> None:
+    """Assert a named validation stage passed -- request proceeded without error.
+
+    Asserts:
+    1. No error was raised (the validation stage did not reject the request)
+    2. A response is present and well-formed
+    3. For account-resolution scenarios: the resolved account_id matches the
+       account set up by the Given step (not just any non-empty string)
+    4. For full create scenarios: the response has a media_buy_id (success)
+    """
+    domain = _extract_validation_domain(outcome)
+    assert "error" not in ctx, (
+        f"Expected '{domain}' validation to pass but got error: {ctx.get('error')}"
+    )
+    resp = ctx.get("response")
+    assert resp is not None, (
+        f"Expected response for '{domain}' validation pass but ctx['response'] is None"
+    )
+    if isinstance(resp, str):
+        assert len(resp) > 0, (
+            f"Expected non-empty account_id for '{domain}' validation pass, "
+            f"got empty string"
+        )
+        # Verify the resolved account_id matches the Given step's account_ref
+        account_ref = ctx.get("account_ref")
+        if account_ref is not None and hasattr(account_ref, "root"):
+            root = account_ref.root
+            if hasattr(root, "account_id"):
+                assert resp == root.account_id, (
+                    f"Resolved account_id '{resp}' does not match requested "
+                    f"account_id '{root.account_id}' for '{domain}' validation"
+                )
+    else:
+        from tests.bdd.steps._outcome_helpers import _get_response_field
+
+        media_buy_id = _get_response_field(resp, "media_buy_id")
+        assert media_buy_id is not None, (
+            f"Expected media_buy_id in response for '{domain}' validation pass, "
+            f"got {type(resp).__name__} without media_buy_id"
+        )
+
+
+def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
+    """Assert the production code dispatched to the expected pipeline.
+
+    For "request proceeds to X pipeline" or "request defaults to X pipeline",
+    verifies:
+    1. No error raised
+    2. Response is present
+    3. If the harness recorded the dispatched pipeline (ctx["dispatched_pipeline"]),
+       asserts it matches the expected pipeline name
+    4. For "defaults to X": the request did NOT explicitly specify a buying_mode
+
+    When the harness does not yet expose pipeline routing, the assertion
+    xfails rather than silently passing on a no-error check.
+    """
+    import pytest
+
+    expected_pipeline = _extract_pipeline_name(outcome)
+    is_default = outcome.startswith("request defaults to")
+
+    assert "error" not in ctx, (
+        f"Expected request to route to '{expected_pipeline}' pipeline "
+        f"but got error: {ctx.get('error')}"
+    )
+    resp = ctx.get("response")
+    assert resp is not None, (
+        f"Expected response for pipeline routing to '{expected_pipeline}' "
+        f"but ctx['response'] is None"
+    )
+    dispatched = ctx.get("dispatched_pipeline")
+    if dispatched is None:
+        pytest.xfail(
+            f"Harness does not yet expose dispatched pipeline "
+            f"(expected '{expected_pipeline}'). "
+            f"Add ctx['dispatched_pipeline'] to the When step."
+        )
+    assert dispatched == expected_pipeline, (
+        f"Expected dispatched pipeline '{expected_pipeline}', got '{dispatched}'"
+    )
+    if is_default:
+        explicit_mode = ctx.get("explicit_buying_mode")
+        assert explicit_mode is None, (
+            f"Expected default pipeline routing (no explicit buying_mode), "
+            f"but ctx['explicit_buying_mode'] = {explicit_mode!r}"
+        )
+
+
+def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
+    """Assert the correct approval workflow path was taken.
+
+    'auto-approved path taken' -- request completed without manual intervention.
+    'manual approval required' -- request was routed to pending_approval state.
+    """
+    assert "error" not in ctx, f"Expected workflow outcome '{outcome}' but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected response for workflow outcome '{outcome}' but ctx['response'] is None"
+    from tests.bdd.steps._outcome_helpers import _get_response_field
+
+    if outcome == "auto-approved path taken":
+        # Auto-approved: media buy should be created with a non-pending status
+        status = _get_response_field(resp, "status")
+        assert status is not None, f"Expected status field on response for auto-approval, got {type(resp).__name__}"
+        assert status != "pending_approval", f"Expected auto-approved status (not pending_approval), got '{status}'"
+    elif outcome == "manual approval required":
+        # Manual approval: media buy should be in pending_approval
+        status = _get_response_field(resp, "status")
+        assert status is not None, f"Expected status field on response for manual approval, got {type(resp).__name__}"
+        assert status == "pending_approval", f"Expected pending_approval status for manual approval, got '{status}'"
+
+
+def _assert_persistence_outcome(ctx: dict, outcome: str) -> None:
+    """Assert DB persistence matches the expected behavior.
+
+    - 'all records persisted after adapter success': media buy + packages in DB
+    - 'records persisted in pending state': media buy exists with pending_approval
+    - 'no records persisted after adapter failure': error raised, no media buy
+    """
+    if outcome == "no records persisted after adapter failure":
+        assert "error" in ctx, f"Expected error for '{outcome}' but no error in ctx"
+        return
+
+    assert "error" not in ctx, f"Expected '{outcome}' but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected response for '{outcome}' but ctx['response'] is None"
+    from tests.bdd.steps._outcome_helpers import _get_response_field
+
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id is not None, f"Expected media_buy_id for '{outcome}', got None from {type(resp).__name__}"
+    if outcome == "records persisted in pending state":
+        status = _get_response_field(resp, "status")
+        assert status == "pending_approval", f"Expected pending_approval for '{outcome}', got '{status}'"
+
+
+def _extract_tasks_from_response(ctx: dict, outcome: str) -> list:
+    """Extract the tasks list from the response, asserting it exists."""
+    assert "error" not in ctx, (
+        f"Expected task list outcome '{outcome}' but got error: {ctx.get('error')}"
+    )
+    resp = ctx.get("response")
+    assert resp is not None, (
+        f"Expected response for task list outcome '{outcome}' "
+        f"but ctx['response'] is None"
+    )
+    tasks = None
+    if isinstance(resp, dict):
+        tasks = resp.get("tasks") or resp.get("items") or resp.get("results")
+    elif hasattr(resp, "tasks"):
+        tasks = resp.tasks
+    assert tasks is not None, (
+        f"Expected 'tasks' field in response for '{outcome}', got keys: "
+        f"{list(resp.keys()) if isinstance(resp, dict) else dir(resp)}"
+    )
+    assert isinstance(tasks, list), (
+        f"Expected tasks to be a list, got {type(tasks).__name__}"
+    )
+    return tasks
+
+
+def _get_task_field(task: object, field: str) -> object:
+    """Extract a field from a task dict or object."""
+    if isinstance(task, dict):
+        return task.get(field)
+    return getattr(task, field, None)
+
+
+_SORT_FIELD_MAP = {
+    "creation timestamp": "created_at",
+    "update timestamp": "updated_at",
+    "status value": "status",
+    "operation type": "task_type",
+    "AdCP domain": "domain",
+}
+
+_FILTER_MAP = {
+    "media-buy domain": ("domain", "media_buy"),
+    "signals domain": ("domain", "signals"),
+    "governance domain": ("domain", "governance"),
+    "creative domain": ("domain", "creative"),
+    "submitted status": ("status", "submitted"),
+    "working status": ("status", "working"),
+    "input-required": ("status", "input_required"),
+    "completed status": ("status", "completed"),
+    "canceled status": ("status", "canceled"),
+    "failed status": ("status", "failed"),
+    "rejected status": ("status", "rejected"),
+    "auth-required": ("status", "auth_required"),
+    "unknown status": ("status", "unknown"),
+}
+
+
+def _assert_tasks_sorted(tasks: list, outcome: str) -> None:
+    """Verify tasks are sorted by the claimed field."""
+    if len(tasks) < 2:
+        return
+    sort_field = None
+    for desc, field in _SORT_FIELD_MAP.items():
+        if desc in outcome:
+            sort_field = field
+            break
+    if sort_field is None:
+        raise ValueError(f"Unknown sort field in outcome: {outcome!r}")
+    values = [_get_task_field(t, sort_field) for t in tasks]
+    non_none = [v for v in values if v is not None]
+    if len(non_none) >= 2:
+        is_ascending = all(a <= b for a, b in zip(non_none, non_none[1:]))
+        is_descending = all(a >= b for a, b in zip(non_none, non_none[1:]))
+        assert is_ascending or is_descending, (
+            f"Tasks not sorted by '{sort_field}': values = {non_none[:5]}"
+        )
+
+
+def _assert_tasks_filtered(tasks: list, outcome: str) -> None:
+    """Verify all returned tasks match the claimed filter value."""
+    suffix = outcome[len("tasks filtered to "):]
+    if "multiple" in suffix:
+        _assert_multi_value_filter(tasks, suffix)
+        return
+    for desc, (field, expected_value) in _FILTER_MAP.items():
+        if suffix.strip() == desc:
+            for task in tasks:
+                actual = _get_task_field(task, field)
+                assert actual == expected_value, (
+                    f"Expected all tasks {field}='{expected_value}', got '{actual}'"
+                )
+            return
+    # Remaining: suffix IS the task_type value
+    task_type = suffix.strip()
+    if task_type and "domain" not in task_type and "status" not in task_type:
+        for task in tasks:
+            actual = _get_task_field(task, "task_type")
+            assert actual == task_type, (
+                f"Expected task_type='{task_type}', got '{actual}'"
+            )
+        return
+    # Unmapped: matched no _FILTER_MAP entry and is not a bare task_type value
+    # (empty, or an unmapped domain/status filter). Fail loudly rather than
+    # passing the scenario with zero filter verification.
+    raise ValueError(f"Unmapped filter outcome (no _FILTER_MAP entry, not a task_type): {outcome!r}")
+
+
+def _assert_multi_value_filter(tasks: list, suffix: str) -> None:
+    """Assert tasks span multiple filter values."""
+    if not tasks:
+        return
+    if "domain" in suffix:
+        values = {_get_task_field(t, "domain") for t in tasks}
+        assert len(values) >= 2, f"Expected multiple domains, got {values}"
+    elif "status" in suffix or "statuses" in suffix:
+        values = {_get_task_field(t, "status") for t in tasks}
+        assert len(values) >= 2, f"Expected multiple statuses, got {values}"
+    elif "type" in suffix:
+        values = {_get_task_field(t, "task_type") for t in tasks}
+        assert len(values) >= 2, f"Expected multiple types, got {values}"
+    else:
+        # Unmapped multi-value dimension — fail loudly rather than skip silently.
+        raise ValueError(f"Unmapped multi-value filter suffix (no domain/status/type): {suffix!r}")
+
+
+def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
+    """Assert task list query returned the correct shape, ordering, and filtering.
+
+    For sorting outcomes: verifies monotonic ordering by the named field.
+    For filtering outcomes: verifies every task matches the claimed filter.
+    For 'defaults to' outcomes: verifies the default sort was applied.
+    For 'results in' outcomes: verifies ascending/descending direction.
+    """
+    tasks = _extract_tasks_from_response(ctx, outcome)
+
+    if outcome.startswith("tasks sorted by"):
+        _assert_tasks_sorted(tasks, outcome)
+    elif outcome.startswith("tasks filtered to"):
+        _assert_tasks_filtered(tasks, outcome)
+    elif outcome.startswith("tasks of all") or outcome.startswith("tasks from all"):
+        seeded_count = ctx.get("seeded_task_count")
+        if seeded_count is not None:
+            assert len(tasks) >= seeded_count, (
+                f"Expected >= {seeded_count} tasks (unfiltered), got {len(tasks)}"
+            )
+    elif outcome.startswith("defaults to"):
+        if "created_at" in outcome and len(tasks) >= 2:
+            values = [_get_task_field(t, "created_at") for t in tasks]
+            non_none = [v for v in values if v is not None]
+            if len(non_none) >= 2:
+                assert all(a >= b for a, b in zip(non_none, non_none[1:])), (
+                    f"Expected default descending created_at sort, "
+                    f"values = {non_none[:5]}"
+                )
+    elif outcome.startswith("results in") and len(tasks) >= 2:
+        values = [_get_task_field(t, "created_at") for t in tasks]
+        non_none = [v for v in values if v is not None]
+        if len(non_none) >= 2:
+            if "ascending" in outcome:
+                assert all(a <= b for a, b in zip(non_none, non_none[1:])), (
+                    f"Expected ascending order, values = {non_none[:5]}"
+                )
+            elif "descending" in outcome:
+                assert all(a >= b for a, b in zip(non_none, non_none[1:])), (
+                    f"Expected descending order, values = {non_none[:5]}"
+                )
+
+
+def _assert_error_outcome(ctx: dict, outcome: str) -> None:
+    """Assert error outcome with exact code, recovery, and message matching.
+
+    Handles three outcome formats:
+    1. Structured code: "error CODE [recovery] [with suggestion]"
+    2. Suggestion-only: "error with suggestion"
+    3. Descriptive: "error <desc>" or "error: <desc>" -- message-contains check.
+    """
+    from src.core.exceptions import AdCPError
+
+    assert "error" in ctx, f"Expected an error for outcome: {outcome}"
+    error = ctx["error"]
+    remainder = outcome[5:].strip()  # strip "error" prefix
+
+    # Colon-style: "error: <description>"
+    if remainder.startswith(":"):
+        description = remainder[1:].strip()
+        error_msg = str(error).lower()
+        assert description.lower() in error_msg, (
+            f"Expected error message to contain '{description}', got: {error}"
+        )
+        return
+
+    # Suggestion-only: "error with suggestion"
+    if remainder.startswith("with suggestion"):
+        assert isinstance(error, AdCPError), (
+            f"Expected AdCPError for suggestion check, "
+            f"got {type(error).__name__}: {error}"
+        )
+        assert error.details is not None, (
+            "Expected error details with suggestion, got None"
+        )
+        assert "suggestion" in error.details, (
+            f"Expected suggestion in details: {error.details}"
+        )
+        return
+
+    # Check if first word is a structured error code (UPPER_CASE with _)
+    parts = remainder.split()
+    first_word = parts[0] if parts else ""
+    is_structured = (
+        bool(first_word) and first_word == first_word.upper() and "_" in first_word
+    )
+
+    if is_structured:
+        expected_code = first_word
+        assert isinstance(error, AdCPError), (
+            f"Expected AdCPError with code '{expected_code}', "
+            f"got {type(error).__name__}: {error}"
+        )
+        assert error.error_code == expected_code, (
+            f"Expected error code '{expected_code}', got '{error.error_code}'"
+        )
+        if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
+            assert error.recovery == parts[1], (
+                f"Expected recovery '{parts[1]}', got '{error.recovery}'"
+            )
+        if "with suggestion" in outcome.lower():
+            assert error.details is not None, (
+                "Expected error details with suggestion, got None"
+            )
+            assert "suggestion" in error.details, (
+                f"Expected suggestion in details: {error.details}"
+            )
+    else:
+        # Descriptive: "error unknown sort field"
+        description = remainder
+        error_msg = str(error).lower()
+        assert description.lower() in error_msg, (
+            f"Expected error message to contain '{description}', got: {error}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════

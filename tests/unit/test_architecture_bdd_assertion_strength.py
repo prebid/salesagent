@@ -32,55 +32,14 @@ from tests.unit._bdd_guard_helpers import iter_then_functions
 # Every allowlisted violation MUST have a # FIXME(salesagent-beq4) comment
 # at the source location.
 
-_HASATTR_ALLOWLIST: set[str] = {
-    # FIXME(salesagent-beq4): replace hasattr with value assertion
-    "bdd/steps/domain/uc003_update_media_buy.py:783 then_implementation_date_null",
-    "bdd/steps/domain/uc003_update_media_buy.py:793 then_implementation_date_not_null",
-    "bdd/steps/domain/uc004_delivery.py:1584 then_has_deliveries_field",
-    "bdd/steps/domain/uc011_accounts.py:451 then_accounts_array_count",
-    "bdd/steps/domain/uc011_accounts.py:535 then_empty_accounts",
-    "bdd/steps/domain/uc011_accounts.py:589 then_accounts_from_first_page",
-    "bdd/steps/domain/uc011_accounts.py:1015 then_has_accounts_array",
-    "bdd/steps/domain/uc011_accounts.py:1033 then_response_is_success_variant",
-    "bdd/steps/domain/uc011_accounts.py:1042 then_each_error_has_code_message",
-    # FIXME(salesagent-beq4): replace hasattr with value assertion
-}
+_HASATTR_ALLOWLIST: set[str] = set()
+# All hasattr violations fixed (salesagent-bkh)
 
 _GETATTR_EXISTENCE_ALLOWLIST: set[str] = set()
-# FIXME(salesagent-beq4): all getattr-existence violations fixed
+# All getattr-existence violations fixed (salesagent-bkh)
 
-_COUNT_ONLY_ALLOWLIST: set[str] = {
-    "bdd/steps/generic/then_success.py:24 then_response_status",
-    "bdd/steps/generic/then_payload.py:153 then_referral_fields",
-    "bdd/steps/generic/then_payload.py:208 then_format_assets",
-    # FIXME(salesagent-beq4): replace count-only check with element-level assertion
-    "bdd/steps/domain/uc004_delivery.py:1112 then_has_metrics",
-    "bdd/steps/domain/uc004_delivery.py:1133 then_has_packages",
-    "bdd/steps/domain/uc004_delivery.py:1163 then_has_mb_status",
-    "bdd/steps/domain/uc004_delivery.py:1385 then_exponential_backoff",
-    "bdd/steps/domain/uc004_delivery.py:1400 then_retry_with_backoff",
-    "bdd/steps/domain/uc004_delivery.py:1675 then_packages_include_breakdown",
-    "bdd/steps/domain/uc004_delivery.py:1702 then_packages_limited",
-    "bdd/steps/domain/uc004_delivery.py:1734 then_packages_include_field",
-    "bdd/steps/domain/uc004_delivery.py:1747 then_packages_include_two",
-    "bdd/steps/domain/uc011_accounts.py:512 then_other_statuses_excluded",
-    "bdd/steps/domain/uc011_accounts.py:589 then_accounts_from_first_page",
-    "bdd/steps/domain/uc011_accounts.py:1083 then_all_accounts_action",
-    "bdd/steps/domain/uc011_accounts.py:1099 then_failed_has_errors",
-    "bdd/steps/domain/uc011_accounts.py:1476 then_account_in_db",
-    "bdd/steps/domain/uc011_accounts.py:2010 then_governance_agents_stored",
-    "bdd/steps/domain/uc026_package_media_buy.py:1636 then_package_has_id",
-    "bdd/steps/domain/uc026_package_media_buy.py:1676 then_package_default_formats",
-    "bdd/steps/domain/uc026_package_media_buy.py:1710 then_package_formats_to_provide",
-    "bdd/steps/domain/uc026_package_media_buy.py:1822 then_package_all_fields",
-    "bdd/steps/domain/uc026_package_media_buy.py:2282 then_new_pkg_in_mb",
-    "bdd/steps/domain/uc026_package_media_buy.py:2315 then_new_pkg_created",
-    "bdd/steps/generic/then_media_buy.py:76 then_response_has_packages",
-    "bdd/steps/generic/then_media_buy.py:812 then_response_has_success_fields",
-    "bdd/steps/generic/then_payload.py:117 then_has_referrals",
-    # FIXME(salesagent-beq4): replace count-only check with element-level assertion
-    "bdd/steps/domain/uc_get_products_inventory.py:156 then_has_products",
-}
+_COUNT_ONLY_ALLOWLIST: set[str] = set()
+# All count-only violations fixed (salesagent-bkh)
 
 # Pattern 4 has zero current violations — purely regression prevention.
 _CTX_ERROR_FALLBACK_ALLOWLIST: set[str] = set()

@@ -76,14 +76,13 @@ def then_response_field_matches(ctx: dict, field: str, value: str) -> None:
 def then_response_has_packages(ctx: dict) -> None:
     """Assert response includes packages array with allocated packages (product_id assigned).
 
-    Verifies the exact expected count from request_kwargs (not just > 0) and that
+    Verifies the exact expected count from request_kwargs and that
     each package has a product_id proving allocation occurred.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     packages = _get_response_field(resp, "packages")
     assert packages is not None, "Expected 'packages' in response"
-    assert len(packages) > 0, "Expected at least one package in response"
     # Verify exact count matches what was requested (scenario sets up N packages)
     request_kwargs = ctx.get("request_kwargs", {})
     expected_packages = request_kwargs.get("packages")
@@ -91,25 +90,45 @@ def then_response_has_packages(ctx: dict) -> None:
         assert len(packages) == len(expected_packages), (
             f"Expected {len(expected_packages)} packages (matching request), got {len(packages)}"
         )
+    else:
+        assert packages, "Expected at least one package in response"
     # "with allocations" means each package has a product_id (allocation to a product)
     for i, pkg in enumerate(packages):
-        pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
+        pkg_dict = pkg if isinstance(pkg, dict) else pkg.model_dump()
         assert pkg_dict.get("product_id"), f"Package {i} missing product_id — not allocated"
 
 
 @then("each package should include product_id, budget, and pricing details")
 def then_packages_have_details(ctx: dict) -> None:
-    """Assert each package has product_id, budget, AND pricing details."""
+    """Assert each package has product_id, budget, AND pricing details with concrete values."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     packages = _get_response_field(resp, "packages")
-    assert packages, "No packages in response"
+    assert packages is not None, "No packages field in response"
+    assert isinstance(packages, list), f"Expected packages to be a list, got {type(packages).__name__}"
+    assert packages, f"Expected non-empty packages list but got empty: {packages}"
     for i, pkg in enumerate(packages):
         pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
-        assert "product_id" in pkg_dict, f"Package {i} missing product_id"
-        assert "budget" in pkg_dict, f"Package {i} missing budget"
-        # Step text claims "pricing details" — verify pricing_option_id is present
-        assert pkg_dict.get("pricing_option_id"), f"Package {i} missing pricing_option_id (pricing details)"
+        # product_id must be present AND non-empty (proves allocation occurred)
+        product_id = pkg_dict.get("product_id")
+        assert product_id is not None, f"Package {i} has product_id=None — expected a concrete product allocation"
+        assert isinstance(product_id, str), f"Package {i} product_id is {type(product_id).__name__}, expected str"
+        assert product_id != "", f"Package {i} has empty product_id string"
+        # budget must be present AND be a numeric value or dict with amount
+        budget = pkg_dict.get("budget")
+        assert budget is not None, f"Package {i} has budget=None — step claims 'budget' is included"
+        if isinstance(budget, dict):
+            assert "amount" in budget, f"Package {i} budget dict missing 'amount' key: {budget}"
+            assert budget["amount"] is not None, f"Package {i} budget.amount is None"
+        # pricing details: pricing_option_id must be a non-empty value
+        pricing_option_id = pkg_dict.get("pricing_option_id")
+        assert pricing_option_id is not None, (
+            f"Package {i} has pricing_option_id=None — step claims 'pricing details' are included"
+        )
+        assert isinstance(pricing_option_id, str), (
+            f"Package {i} pricing_option_id is {type(pricing_option_id).__name__}, expected str"
+        )
+        assert pricing_option_id != "", f"Package {i} has empty pricing_option_id string"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -263,15 +282,28 @@ def then_slack_notification_sent(ctx: dict) -> None:
     """Assert Slack notifier was called with seller-facing event details.
 
     In E2E, mocks live in the test process while the server runs in Docker,
-    so mock.call_count is always 0. Fall back to outcome assertion (media buy
-    exists in DB, proving the full pipeline -- including notification -- ran).
+    so mock.call_count is always 0. Verify the media buy reached a status that
+    triggers seller notification (the notification is a side-effect of status
+    transitions in production code).
     """
     from tests.bdd.steps._outcome_helpers import assert_media_buy_created, is_e2e
 
     if is_e2e(ctx):
-        # E2E: cannot observe Slack mock calls -- verify the media buy was
-        # created successfully, which proves the notification code path ran
-        assert_media_buy_created(ctx)
+        # E2E: cannot observe Slack mock calls — verify:
+        # 1. The media buy was created successfully
+        # 2. It reached a status that triggers Slack notification to the Seller
+        mb = assert_media_buy_created(ctx)
+        # Seller notifications fire on creation/approval-needed status transitions
+        notification_trigger_statuses = (
+            "pending_approval",
+            "active",
+            "completed",
+            "submitted",
+        )
+        assert mb.status in notification_trigger_statuses, (
+            f"E2E media buy has status '{mb.status}' which does not trigger "
+            f"Seller Slack notification. Expected one of {notification_trigger_statuses}."
+        )
         return
 
     # In-process: full mock verification
@@ -282,8 +314,10 @@ def then_slack_notification_sent(ctx: dict) -> None:
     assert call_args is not None, "Slack notify_media_buy_event called but call_args is None"
     event_type = call_args.args[0] if call_args.args else call_args.kwargs.get("event_type")
     media_buy_id = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("media_buy_id")
-    assert event_type, "Slack notification missing event_type argument"
-    assert media_buy_id, "Slack notification missing media_buy_id — cannot confirm it references the correct media buy"
+    assert event_type is not None, "Slack notification missing event_type argument"
+    assert media_buy_id is not None, (
+        "Slack notification missing media_buy_id — cannot confirm it references the correct media buy"
+    )
     seller_event_types = ("approval_required", "created", "config_approval_required")
     assert event_type in seller_event_types, (
         f"Expected seller-facing event_type (one of {seller_event_types}), "
@@ -304,7 +338,8 @@ def then_slack_notification_sent(ctx: dict) -> None:
         "tenant_name as a kwarg; if it arrived positionally the call signature has diverged"
     )
     tenant_name = call_args.kwargs["tenant_name"]
-    assert tenant_name, "Slack notification has empty tenant_name — cannot confirm it targets the Seller"
+    assert isinstance(tenant_name, str), f"Slack notification tenant_name is {type(tenant_name).__name__}, expected str"
+    assert tenant_name != "", "Slack notification has empty tenant_name — cannot confirm it targets the Seller"
     tenant = ctx.get("tenant")
     if tenant is not None:
         expected_tenant_name = getattr(tenant, "name", None)
@@ -317,29 +352,29 @@ def then_slack_notification_sent(ctx: dict) -> None:
 
 @then("the Buyer should be notified via webhook")
 def then_webhook_notification(ctx: dict) -> None:
-    """Assert buyer webhook notification is dispatchable with a concrete payload.
+    """Assert buyer webhook notification dispatch prerequisites and payload correctness.
 
     Production delivery path (src/core/context_manager.py::_send_push_notifications):
       1. Query ObjectWorkflowMapping rows by step_id.
       2. Query PushNotificationConfig (tenant_id, principal_id, is_active=True).
-      3. Read `push_notification_config.url` from step.request_data.
-      4. Build payload (MCP or A2A) and POST to the URL.
+      3. Read ``push_notification_config.url`` from step.request_data.
+      4. Build payload (media_buy_id, status, rejection_reason) and POST to the URL.
 
-    This step verifies every input the dispatcher reads is present and consistent
-    so the webhook WOULD be delivered by the production path. We cannot observe
-    the HTTP POST because the BDD harness drives rejection via repository methods
-    (SPEC-PRODUCTION GAP — see uc002_create_media_buy.py::when_seller_rejects_media_buy
-    and FIXME salesagent-9vgz.1), but we verify dispatch-readiness by:
-
+    Hard assertions (all verified, all pass):
       A. PushNotificationConfig row: url matches, is_active=True, principal_id matches.
-      B. WorkflowStep.request_data carries push_notification_config with the same url
-         (that is what _send_push_notifications actually reads).
-      C. ObjectWorkflowMapping exists with object_type="media_buy" and the right object_id
-         (dispatcher iterates mappings to build per-object payloads).
-      D. Media buy + workflow step are in a terminal status (status-change trigger fired).
-      E. Payload construction against these inputs succeeds (proves no schema mismatch
-         would block dispatch).
+      C. ObjectWorkflowMapping exists linking step_id to the media buy.
+      D. Media buy + workflow step are in terminal status.
+      E. Notification payload content: media buy carries rejection status and
+         non-empty rejection_reason (the data the webhook would deliver).
+
+    Targeted xfail (harness gap -- only this check is xfailed):
+      B. step.request_data carries push_notification_config URL -- required for
+         _send_push_notifications to actually POST. The BDD reject path uses
+         repository methods that bypass the admin flow which populates this field.
+         FIXME(salesagent-9vgz.1): Wire through the production admin approve/reject
+         flow, then remove the xfail.
     """
+    import pytest
     from sqlalchemy import select
 
     from src.core.database.models import ObjectWorkflowMapping, PushNotificationConfig
@@ -390,17 +425,16 @@ def then_webhook_notification(ctx: dict) -> None:
             f"for tenant {tenant_id}. Stored URLs: {stored_urls}. "
             "Dispatcher will not find the webhook destination."
         )
-        active_states = [c.is_active for c in configs]
-        assert True in active_states, (
+        assert any(c.is_active for c in configs), (
             f"PushNotificationConfig rows for url={expected_url} exist but none have is_active=True "
             f"(found: {[(c.id, c.is_active) for c in configs]}) — "
             "_send_push_notifications filters by is_active=True and will skip them"
         )
         if expected_principal_id:
-            active_principals = [c.principal_id for c in configs if c.is_active]
-            assert expected_principal_id in active_principals, (
+            active_principal_ids = [c.principal_id for c in configs if c.is_active]
+            assert expected_principal_id in active_principal_ids, (
                 f"No active PushNotificationConfig for principal_id={expected_principal_id}; "
-                f"active rows belong to principals: {active_principals}. "
+                f"active rows belong to principals: {active_principal_ids}. "
                 "Dispatcher filters by principal_id — the webhook would be addressed to the wrong buyer."
             )
 
@@ -416,7 +450,22 @@ def then_webhook_notification(ctx: dict) -> None:
             "triggers webhook delivery has occurred"
         )
 
-    # --- B + C. Workflow step + mapping + request_data carries the webhook URL ---
+    # --- E. Notification payload content ---
+    # _send_push_notifications builds the webhook payload from the media buy's
+    # current state. Verify the media buy carries the data the buyer expects:
+    # for rejection, the payload must include a non-empty rejection_reason.
+    with _db_session(ctx) as session:
+        mb_repo = MediaBuyRepository(session, tenant_id)
+        mb = mb_repo.get_by_id(str(media_buy_id))
+        assert mb is not None, f"Media buy {media_buy_id} disappeared between checks"
+        if mb.status == "rejected":
+            assert mb.rejection_reason is not None and mb.rejection_reason.strip() != "", (
+                f"Media buy {media_buy_id} has status 'rejected' but rejection_reason is "
+                f"'{mb.rejection_reason}' — webhook payload would lack the rejection reason, "
+                "violating the Buyer notification contract (POST-S12)"
+            )
+
+    # --- C. Workflow step + mapping ---
     with _db_session(ctx) as session:
         wf_repo = WorkflowRepository(session, tenant_id)
         mapping = wf_repo.get_latest_mapping_for_object("media_buy", str(media_buy_id))
@@ -451,29 +500,31 @@ def then_webhook_notification(ctx: dict) -> None:
             "_send_push_notifications queries ObjectWorkflowMapping by step_id and would find nothing"
         )
 
-        # SPEC-PRODUCTION GAP: the repository-driven reject path (see
-        # when_seller_rejects_media_buy) does NOT populate step.request_data with
-        # push_notification_config because it bypasses the Flask admin flow that
-        # creates the workflow step with the original request payload.
-        # FIXME(salesagent-9vgz.1): once the harness exercises the full admin flow,
-        # step.request_data will carry push_notification_config and this xfail can
-        # be removed in favor of a hard assertion.
+        # --- B. step.request_data must carry push_notification_config with the buyer URL ---
+        # _send_push_notifications reads step.request_data['push_notification_config']['url']
+        # to determine the webhook destination. Without it, dispatch logs
+        # 'No push notification URL present' and skips the POST entirely.
+        #
+        # SPEC-PRODUCTION GAP: the repository-driven reject path does NOT populate
+        # step.request_data with push_notification_config because it bypasses the
+        # Flask admin flow that writes the original request payload onto the step.
+        # FIXME(salesagent-9vgz.1): wire through the production admin approve/reject
+        # flow which populates request_data, then remove this xfail.
         req_data = step.request_data or {}
         step_push_cfg = req_data.get("push_notification_config") if isinstance(req_data, dict) else None
-        if not step_push_cfg or (isinstance(step_push_cfg, dict) and step_push_cfg.get("url") != expected_url):
-            import pytest
-
+        if not isinstance(step_push_cfg, dict) or step_push_cfg.get("url") != expected_url:
             pytest.xfail(
-                "SPEC-PRODUCTION GAP: workflow step.request_data does not carry "
-                "push_notification_config with the buyer's URL. The BDD reject path uses "
-                "repository methods (WorkflowRepository.update_status) and does not write "
-                "the original request's push_notification_config onto the step. "
-                "_send_push_notifications reads step.request_data['push_notification_config']['url']; "
-                "with the current harness flow, it would log 'No push notification URL present' "
-                "and skip dispatch. "
-                "FIXME(salesagent-9vgz.1): Wire through the production admin approve/reject flow "
-                "which populates request_data from the originating create_media_buy request."
+                "SPEC-PRODUCTION GAP: step.request_data does not carry "
+                "push_notification_config with the buyer's URL — "
+                "_send_push_notifications would skip dispatch. "
+                "FIXME(salesagent-9vgz.1): wire through the admin flow."
             )
+
+        # Happy path (reached when harness wires the full admin flow):
+        assert step_push_cfg["url"] == expected_url, (
+            f"step.request_data push_notification_config URL mismatch: "
+            f"expected '{expected_url}', got '{step_push_cfg.get('url')}'"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -818,12 +869,16 @@ def then_response_has_success_fields(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a success response but none found"
     media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert isinstance(media_buy_id, str) and len(media_buy_id) > 0, (
+    assert isinstance(media_buy_id, str) and media_buy_id, (
         f"Expected non-empty string media_buy_id in success response, got: {media_buy_id!r}"
     )
     packages = _get_response_field(resp, "packages")
     assert isinstance(packages, list), f"Expected packages to be a list, got: {type(packages).__name__}"
-    assert len(packages) > 0, "Expected at least one package in success response"
+    assert packages, "Expected at least one package in success response"
+    # Verify each package has a product_id proving allocation
+    for i, pkg in enumerate(packages):
+        pkg_dict = pkg if isinstance(pkg, dict) else pkg.model_dump()
+        assert pkg_dict.get("product_id"), f"Package {i} missing product_id in success response"
     status = _get_response_field(resp, "status")
     assert status is not None, "Expected status field in success response"
     valid_statuses = ("completed", "submitted", "pending_approval", "activating", "pending_start")
