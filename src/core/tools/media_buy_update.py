@@ -82,6 +82,7 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.tools.financial_validation import (
+    raise_if_validation_failed,
     validate_max_campaign_budget,
     validate_max_daily_package_spend,
     validate_min_package_budget,
@@ -502,8 +503,11 @@ def _update_media_buy_impl(
                                     max_daily_spend=currency_limit.max_daily_package_spend,
                                     currency=request_currency,
                                 )
-                                if package_daily_spend_error:
-                                    raise AdCPBudgetExceededError(package_daily_spend_error, context=req.context)
+                                raise_if_validation_failed(
+                                    package_daily_spend_error,
+                                    AdCPBudgetExceededError,
+                                    context=req.context,
+                                )
 
             # Handle campaign-level updates
             if req.paused is not None:
@@ -631,8 +635,11 @@ def _update_media_buy_impl(
                                 min_package_budget=Decimal(str(_cl.min_package_budget)),
                                 currency=currency,
                             )
-                            if package_min_budget_error:
-                                raise AdCPBudgetTooLowError(package_min_budget_error, context=req.context)
+                            raise_if_validation_failed(
+                                package_min_budget_error,
+                                AdCPBudgetTooLowError,
+                                context=req.context,
+                            )
 
                         result = adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,
@@ -1139,8 +1146,7 @@ def _update_media_buy_impl(
                     max_campaign_budget=MAX_CAMPAIGN_BUDGET,
                     currency=budget_currency,
                 )
-                if budget_error:
-                    raise AdCPBudgetExceededError(budget_error, context=req.context)
+                raise_if_validation_failed(budget_error, AdCPBudgetExceededError, context=req.context)
 
                 # TODO: Sync budget change to GAM order
                 # Currently only updates database - does NOT sync to GAM API

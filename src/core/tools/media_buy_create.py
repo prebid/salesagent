@@ -57,24 +57,6 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
-def _raise_if_validation_failed(
-    message: str | None,
-    exc_type: type[AdCPError] = AdCPValidationError,
-    *,
-    context: ContextObject | None = None,
-) -> None:
-    """Raise ``exc_type(message, context=context)`` when the validator returned a non-empty message.
-
-    Shared one-liner so the budget ``validate_*`` call sites in
-    ``_create_media_buy_impl`` express their failure path uniformly. Each site
-    selects the spec-specific subclass — ``AdCPBudgetTooLowError`` for
-    minimum-spend shortfalls, ``AdCPBudgetExceededError`` for daily-spend
-    ceilings — so the wire code reflects the failure kind.
-    """
-    if message:
-        raise exc_type(message, context=context)
-
-
 def validate_agent_url(url: str | None) -> bool:
     """Validate agent_url is a well-formed HTTP(S) URL per AdCP spec.
 
@@ -142,7 +124,11 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
-from src.core.tools.financial_validation import validate_max_daily_package_spend, validate_min_package_budget
+from src.core.tools.financial_validation import (
+    raise_if_validation_failed,
+    validate_max_daily_package_spend,
+    validate_min_package_budget,
+)
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
@@ -2100,7 +2086,7 @@ async def _create_media_buy_impl(
 
                                 # Validate if minimum spend is set
                                 if package_min_spend:
-                                    _raise_if_validation_failed(
+                                    raise_if_validation_failed(
                                         validate_min_package_budget(
                                             package_budget=package_budget,
                                             min_package_budget=package_min_spend,
@@ -2117,7 +2103,7 @@ async def _create_media_buy_impl(
                             required_min_spend = max(applicable_min_spends)
                             budget_decimal = Decimal(str(total_budget))
 
-                            _raise_if_validation_failed(
+                            raise_if_validation_failed(
                                 validate_min_package_budget(
                                     package_budget=budget_decimal,
                                     min_package_budget=required_min_spend,
@@ -2146,7 +2132,7 @@ async def _create_media_buy_impl(
                             continue
                         # Package.budget is now always float | None (per AdCP spec)
                         package_budget = Decimal(str(package.budget))
-                        _raise_if_validation_failed(
+                        raise_if_validation_failed(
                             validate_max_daily_package_spend(
                                 package_budget=package_budget,
                                 flight_days=flight_days,
@@ -2163,7 +2149,7 @@ async def _create_media_buy_impl(
                         )
                 else:
                     # Legacy mode: validate total budget
-                    _raise_if_validation_failed(
+                    raise_if_validation_failed(
                         validate_max_daily_package_spend(
                             package_budget=Decimal(str(total_budget)),
                             flight_days=flight_days,

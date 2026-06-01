@@ -7,6 +7,28 @@ the same policy checks without duplicating comparison logic.
 
 from decimal import Decimal
 
+from adcp.types import ContextObject
+
+from src.core.exceptions import AdCPError, AdCPValidationError
+
+
+def raise_if_validation_failed(
+    message: str | None,
+    exc_type: type[AdCPError] = AdCPValidationError,
+    *,
+    context: ContextObject | None = None,
+) -> None:
+    """Raise ``exc_type(message, context=context)`` when ``message`` is non-empty.
+
+    Shared one-liner so the budget ``validate_*`` call sites in the create and
+    update media-buy paths express their failure path uniformly. Each site
+    selects the spec-specific subclass — ``AdCPBudgetTooLowError`` for
+    minimum-spend shortfalls, ``AdCPBudgetExceededError`` for daily-spend
+    ceilings — so the wire code reflects the failure kind.
+    """
+    if message:
+        raise exc_type(message, context=context)
+
 
 def validate_max_campaign_budget(
     *,

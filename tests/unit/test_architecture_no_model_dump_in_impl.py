@@ -29,13 +29,13 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # failure-path persistence goes through the two-layer envelope builder instead.
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 7 violations (success-shape persistence, not failure)
-    ("media_buy_update.py", 406),
     ("media_buy_update.py", 407),
-    ("media_buy_update.py", 526),
-    ("media_buy_update.py", 569),
-    ("media_buy_update.py", 598),
-    ("media_buy_update.py", 655),
-    ("media_buy_update.py", 1294),
+    ("media_buy_update.py", 408),
+    ("media_buy_update.py", 530),
+    ("media_buy_update.py", 573),
+    ("media_buy_update.py", 602),
+    ("media_buy_update.py", 662),
+    ("media_buy_update.py", 1300),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 622),
     # _list_creatives_impl: 1 violation (filter dict conversion)
