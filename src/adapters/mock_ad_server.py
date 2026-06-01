@@ -18,6 +18,12 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
+from src.core.exceptions import (
+    AdCPBudgetExhaustedError,
+    AdCPError,
+    AdCPServiceUnavailableError,
+    AdCPValidationError,
+)
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -256,6 +262,32 @@ class MockAdServer(AdServerAdapter):
             if self.hitl_mode == "mixed":
                 self.log(f"   Operation overrides: {self.operation_modes}")
 
+    def _read_test_behavior(self) -> dict:
+        """Read test_behavior from AdapterConfig for this tenant.
+
+        BDD Given steps write test_behavior via AdapterConfigFactory so the
+        Docker-hosted mock adapter can pick up error/failure injection that
+        was previously only possible via in-process mock patching.
+
+        Returns the test_behavior dict, or {} if not configured.
+        """
+        if not self.tenant_id:
+            return {}
+        try:
+            from src.core.database.database_session import get_db_session
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            with get_db_session() as session:
+                repo = AdapterConfigRepository(session, self.tenant_id)
+                row = repo.find_by_tenant()
+                if row and isinstance(row.config_json, dict):
+                    result = row.config_json.get("test_behavior", {})
+                    if isinstance(result, dict):
+                        return result
+        except Exception:
+            logger.debug("Failed to load test behavior from DB", exc_info=True)
+        return {}
+
     def _validate_targeting(self, targeting_overlay):
         """Mock adapter accepts all targeting."""
         return []  # No unsupported features
@@ -448,6 +480,19 @@ class MockAdServer(AdServerAdapter):
 
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
+        # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
+        test_behavior = self._read_test_behavior()
+        if test_behavior.get("fail_on_create"):
+            from src.core.exceptions import AdCPAdapterError
+
+            raise AdCPAdapterError(
+                test_behavior.get("error_message", "Test adapter failure"),
+                recovery=test_behavior.get("recovery", "transient"),
+                details=test_behavior.get(
+                    "error_details", {"suggestion": "Retry the operation or contact ad server support"}
+                ),
+            )
+
         # Log pricing model info if provided (AdCP PR #88)
         if package_pricing_info:
             for pkg_id, pricing in package_pricing_info.items():
@@ -473,11 +518,14 @@ class MockAdServer(AdServerAdapter):
         if scenario:
             # Handle error simulation
             if scenario.error_message:
-                raise Exception(scenario.error_message)
+                raise AdCPError(scenario.error_message)
 
             # Handle rejection
             if scenario.should_reject:
-                raise Exception(f"Media buy rejected: {scenario.rejection_reason or 'Test rejection'}")
+                raise AdCPError(
+                    f"Media buy rejected: {scenario.rejection_reason or 'Test rejection'}",
+                    error_code="MEDIA_BUY_REJECTED",
+                )
 
             # Handle question asking (return pending with question)
             if scenario.should_ask_question:
@@ -555,7 +603,7 @@ class MockAdServer(AdServerAdapter):
         )
         if validation_errors:
             error_message = "[" + ", ".join(validation_errors) + "]"
-            raise Exception(error_message)
+            raise AdCPValidationError(error_message)
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
@@ -641,7 +689,10 @@ class MockAdServer(AdServerAdapter):
         approved, rejection_reason = self._simulate_approval()
         if not approved:
             self.log(f"❌ Simulated rejection: {rejection_reason}")
-            raise Exception(f"Media buy rejected: {rejection_reason}")
+            raise AdCPError(
+                f"Media buy rejected: {rejection_reason}",
+                error_code="MEDIA_BUY_REJECTED",
+            )
 
         # Continue with immediate processing
         self.log("✅ SYNC delay completed, proceeding with creation")
@@ -711,13 +762,19 @@ class MockAdServer(AdServerAdapter):
 
             # Check for forced errors
             if self._should_force_error("budget_exceeded"):
-                raise Exception("Simulated error: Campaign budget exceeds available funds")
+                raise AdCPBudgetExhaustedError("Simulated error: Campaign budget exceeds available funds")
 
             if self._should_force_error("targeting_invalid"):
-                raise Exception("Simulated error: Invalid targeting parameters")
+                raise AdCPValidationError(
+                    "Simulated error: Invalid targeting parameters",
+                    field="targeting",
+                )
 
             if self._should_force_error("inventory_unavailable"):
-                raise Exception("Simulated error: Requested inventory not available")
+                raise AdCPError(
+                    "Simulated error: Requested inventory not available",
+                    error_code="INVENTORY_UNAVAILABLE",
+                )
 
         # Default priority for campaigns (standard = 8, guaranteed = 4)
         priority = 4 if any(p.delivery_type == "guaranteed" for p in packages) else 8
@@ -943,7 +1000,10 @@ class MockAdServer(AdServerAdapter):
         if rejected_assets and not approved_assets:
             # All rejected
             reasons = [reason if reason else "unknown" for _, reason in rejected_assets]
-            raise Exception(f"All creatives rejected: {', '.join(reasons)}")
+            raise AdCPError(
+                f"All creatives rejected: {', '.join(reasons)}",
+                error_code="CREATIVE_REJECTED",
+            )
         elif rejected_assets:
             # Some rejected - log warnings but continue with approved ones
             for asset, reason in rejected_assets:
@@ -1071,7 +1131,7 @@ class MockAdServer(AdServerAdapter):
         if self.strategy_context and hasattr(self.strategy_context, "force_error"):
             if self.strategy_context.force_error == "platform_error":
                 self.log("[red]Simulating platform error[/red]")
-                raise Exception("Platform connectivity error (simulated)")
+                raise AdCPServiceUnavailableError("Platform connectivity error (simulated)")
             elif self.strategy_context.force_error == "budget_exceeded":
                 self.log("[yellow]Simulating budget exceeded scenario[/yellow]")
             elif self.strategy_context.force_error == "low_delivery":
@@ -1123,7 +1183,7 @@ class MockAdServer(AdServerAdapter):
             # Check for test scenario outage simulation
             if test_scenario and test_scenario.simulate_outage:
                 self.log(f"🚨 Test Scenario: Simulating platform outage on day {current_day}")
-                raise Exception(f"Simulated platform outage on day {current_day} (test scenario)")
+                raise AdCPServiceUnavailableError(f"Simulated platform outage on day {current_day} (test scenario)")
 
             if elapsed_duration <= 0:
                 # Campaign hasn't started
@@ -1324,6 +1384,19 @@ class MockAdServer(AdServerAdapter):
         logger = logging.getLogger(__name__)
 
         assert self.tenant_id is not None, "tenant_id required for DB operations"
+
+        # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
+        test_behavior = self._read_test_behavior()
+        if test_behavior.get("fail_on_update"):
+            from src.core.exceptions import AdCPAdapterError
+
+            raise AdCPAdapterError(
+                test_behavior.get("error_message", "Test adapter failure"),
+                recovery=test_behavior.get("recovery", "transient"),
+                details=test_behavior.get(
+                    "error_details", {"suggestion": "Retry the operation or contact ad server support"}
+                ),
+            )
 
         with get_db_session() as session:
             if action == "update_package_budget" and package_id and budget is not None:

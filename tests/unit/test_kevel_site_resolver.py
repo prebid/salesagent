@@ -281,9 +281,9 @@ class TestSiteIndexCache:
         # All 8 threads completed without raising (no KeyError on expiry race).
         assert len(results) == 8, f"Expected 8 thread results, got {len(results)} — some threads raised/hung"
         # Every thread observes the same resolved set — no torn write.
-        assert all(
-            r.site_ids == {42} for r in results
-        ), "Concurrent resolvers returned inconsistent site_ids — cache write was not atomic"
+        assert all(r.site_ids == {42} for r in results), (
+            "Concurrent resolvers returned inconsistent site_ids — cache write was not atomic"
+        )
         # Final cache state holds the lookup once with no torn entries.
         cache_key = (resolver.base_url, resolver.network_id)
         cached_lookup, _expires_at = KevelSiteResolver._site_cache[cache_key]

@@ -86,11 +86,10 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
     """Product with property_targeting_allowed=False rejects property_list targeting on create.
 
     The validation block raises AdCPValidationError so the transport boundary translates
-    to the spec-compliant two-layer envelope. The previous raw ValueError shape was caught
-    by an inner (ValueError, PermissionError) catchall and re-emitted via Pattern A
-    (Error(code=...) construction in _impl) — anti-pattern that the error-emission
-    architecture work eliminates. After PR #1306 / PR #1307 land, this raise propagates
-    cleanly through the narrowed except AdCPError boundary.
+    to the spec-compliant two-layer envelope. The raise propagates cleanly through the
+    narrowed except AdCPError boundary; the prior ValueError shape was caught by an inner
+    (ValueError, PermissionError) catchall and re-emitted via Pattern A, which is the
+    anti-pattern the typed-error substrate eliminates.
     """
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
@@ -155,9 +154,9 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
     # checks, leaving the happy-path proof vacuous. If the response IS an
     # error variant, accept any failure cause that isn't the property_targeting
     # rule itself (test stays decoupled from unrelated downstream errors).
-    assert not isinstance(
-        response, CreateMediaBuyError
-    ), f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
+    assert not isinstance(response, CreateMediaBuyError), (
+        f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
+    )
     assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
@@ -191,9 +190,9 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
     # happy-path proof vacuous. Separate ``not isinstance`` gates the success
     # branch with a real check; the follow-up ``all(...)`` ensures the
     # property_list rule still doesn't fire if an unrelated error did appear.
-    assert not isinstance(
-        response, CreateMediaBuyError
-    ), f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
+    assert not isinstance(response, CreateMediaBuyError), (
+        f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
+    )
     assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 

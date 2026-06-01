@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types import CreativeAsset
 
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 from src.core.validation_helpers import run_async_in_sync_context

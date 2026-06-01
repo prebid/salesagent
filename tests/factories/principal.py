@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
@@ -34,7 +36,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         protocol: str = "mcp",
         dry_run: bool = False,
         auth_token: str | None = None,
-        tenant: dict | None = _UNSET,  # type: ignore[assignment]
+        tenant: Any = _UNSET,
         testing_context: AdCPTestContext | None = None,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
@@ -45,6 +47,11 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass **tenant_overrides for domain fields (approval_mode, etc).
         Pass testing_context to override the default (e.g. set
         test_session_id for harness routing).
+
+        ``tenant`` is typed ``Any`` to match the underlying
+        ``ResolvedIdentity.tenant`` field, which accepts plain dicts in
+        most call sites and lazy proxies (``LazyTenantContext``) in tests
+        that need deferred config resolution.
         """
         resolved_tenant = (
             TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant

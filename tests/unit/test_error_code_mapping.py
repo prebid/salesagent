@@ -41,19 +41,36 @@ class TestErrorCodeMapping:
         assert isinstance(INTERNAL_CODES, frozenset)
         assert len(INTERNAL_CODES) > 0, "Internal codes set must not be empty"
 
-    def test_no_overlap_between_mapping_and_internal(self):
-        """A code is either mapped or internal, never both."""
+    def test_internal_codes_overlap_with_mapping_have_wire_safe_targets(self):
+        """Internal codes that also appear in the mapping must translate to STANDARD targets.
+
+        INTERNAL_CODES documents codes that should never reach the wire as-is.
+        ERROR_CODE_MAPPING is the safety net: if an internal code escapes to a
+        boundary (base-class raise instead of a specific subclass), the mapping
+        translates it to STANDARD_ERROR_CODES. Overlap is intentional — it
+        means "this code is internal AND has a wire-safe fallback if it leaks".
+        Both invariants must hold for every overlap entry.
+        """
+        std = set(STANDARD_ERROR_CODES)
         overlap = set(ERROR_CODE_MAPPING.keys()) & INTERNAL_CODES
-        assert not overlap, f"Codes in both mapping and internal set: {overlap}"
+        unsafe = {code: ERROR_CODE_MAPPING[code] for code in overlap if ERROR_CODE_MAPPING[code] not in std}
+        assert not unsafe, f"Internal codes in mapping must translate to STANDARD targets: {unsafe}"
 
     def test_class_error_codes_are_standard_or_internal(self):
-        """Every AdCPError subclass error_code must be standard or internal."""
-        std = set(STANDARD_ERROR_CODES)
+        """Every AdCPError subclass _default_error_code must be standard, internal, or spec-required.
+
+        Reads ``_default_error_code`` (the ClassVar slot per option-A refactor
+        salesagent-fnk9). The public ``error_code`` is an instance attribute
+        set in ``__init__`` and is not present on the class object.
+        """
+        # Spec-required codes not yet in SDK STANDARD_ERROR_CODES
+        spec_codes = {"AUTH_TOKEN_INVALID", "BILLING_NOT_SUPPORTED"}
+        allowed = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | spec_codes
         violations = []
         for cls in _all_adcp_error_subclasses():
-            code = cls.error_code
-            if code not in std and code not in INTERNAL_CODES:
-                violations.append(f"{cls.__name__}.error_code = {code!r}")
+            code = cls._default_error_code
+            if code not in allowed:
+                violations.append(f"{cls.__name__}._default_error_code = {code!r}")
         assert not violations, "AdCPError subclasses with non-standard, non-internal codes:\n" + "\n".join(
             f"  {v}" for v in violations
         )

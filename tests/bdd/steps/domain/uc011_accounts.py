@@ -97,7 +97,7 @@ def _make_governance_agent(
 
     Note: authentication was removed from GovernanceAgent in adcp 3.12.
     """
-    from adcp.types.generated_poc.core.account import GovernanceAgent
+    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
 
     agent = GovernanceAgent(
         url=url,
@@ -373,7 +373,7 @@ def when_list_accounts_no_auth(ctx: dict) -> None:
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with max_results {value:d}"))
 def when_list_accounts_paginated(ctx: dict, value: int) -> None:
     """Send list_accounts with max_results pagination."""
-    from adcp.types.generated_poc.core.pagination_request import PaginationRequest
+    from adcp.types import PaginationRequest
 
     from src.core.schemas.account import ListAccountsRequest
 
@@ -387,7 +387,7 @@ def when_list_accounts_paginated(ctx: dict, value: int) -> None:
 @when("the Buyer Agent sends a list_accounts request with the returned cursor")
 def when_list_accounts_with_cursor(ctx: dict) -> None:
     """Send list_accounts with the cursor from the previous response."""
-    from adcp.types.generated_poc.core.pagination_request import PaginationRequest
+    from adcp.types import PaginationRequest
 
     from src.core.schemas.account import ListAccountsRequest
 
@@ -405,7 +405,7 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 @when(parsers.parse('the Buyer Agent sends a list_accounts request with cursor "{cursor}"'))
 def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
     """Send list_accounts with a specific cursor string (e.g. malformed base64)."""
-    from adcp.types.generated_poc.core.pagination_request import PaginationRequest
+    from adcp.types import PaginationRequest
 
     from src.core.schemas.account import ListAccountsRequest
 
@@ -1128,7 +1128,7 @@ def then_billing_error_message(ctx: dict) -> None:
     """Assert the billing error has an explanatory message."""
     acct = ctx.get("last_account")
     assert acct is not None and acct.errors, "No account errors"
-    billing_err = next((e for e in acct.errors if e.code == "UNSUPPORTED_FEATURE"), None)
+    billing_err = next((e for e in acct.errors if e.code == "BILLING_NOT_SUPPORTED"), None)
     assert billing_err is not None, "No BILLING_NOT_SUPPORTED error found"
     assert "billing" in billing_err.message.lower() or "supported" in billing_err.message.lower(), (
         f"Expected billing-related message, got: {billing_err.message}"
@@ -1654,7 +1654,7 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
     context_data = _parse_inline_context(ctx_json)
     ctx["sent_context"] = context_data
 
-    from adcp.types.generated_poc.core.context import ContextObject
+    from adcp.types import ContextObject
 
     context_obj = ContextObject.model_validate(context_data)
 

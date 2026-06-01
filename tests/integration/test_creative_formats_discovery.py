@@ -167,7 +167,7 @@ class TestAuthOptionalForDiscovery:
             result = env.call_via(Transport.IMPL, identity=identity_no_tenant)
 
         assert result.is_error
-        assert result.error.error_code == "AUTH_REQUIRED"
+        assert result.error.error_code == "AUTH_TOKEN_INVALID"
 
     def test_authenticated_vs_unauthenticated_return_same_catalog(self, integration_db):
         """UC-005-MAIN-MCP-02: auth token does not affect the catalog returned.
@@ -235,7 +235,7 @@ class TestTenantResolutionFailure:
             result = env.call_via(Transport.IMPL, identity=identity)
 
         assert result.is_error
-        assert result.error.error_code == "AUTH_REQUIRED"
+        assert result.error.error_code == "AUTH_TOKEN_INVALID"
 
     def test_error_message_mentions_tenant(self, integration_db):
         """UC-005-EXT-A-01: error message indicates tenant context could not be determined."""
@@ -253,5 +253,15 @@ class TestTenantResolutionFailure:
             result = env.call_via(Transport.A2A, identity=identity)
 
         assert result.is_error
-        assert result.error.error_code == "AUTH_REQUIRED"
-        assert "tenant" in str(result.error).lower()
+        # Wire-envelope assertion via the harness's captured A2A artifact DataPart —
+        # exercises the real on_message_send pipeline + serialize-for-a2a envelope
+        # build, not the lossy reconstructed exception. See tests/CLAUDE.md §
+        # Error Verification Policy.
+        from tests.helpers import assert_envelope_shape
+
+        assert_envelope_shape(
+            result.wire_error_envelope,
+            "AUTH_TOKEN_INVALID",
+            recovery="terminal",
+            message_substr="tenant",
+        )

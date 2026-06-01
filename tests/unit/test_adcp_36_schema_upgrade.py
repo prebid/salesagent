@@ -65,14 +65,14 @@ class TestCreativeListingBoundary:
 
     def test_creative_variant_without_variant_id_is_rejected(self):
         """CreativeVariant.variant_id is REQUIRED — missing it must raise ValidationError."""
-        from adcp.types.generated_poc.core.creative_variant import CreativeVariant
+        from adcp.types import CreativeVariant
 
         with pytest.raises(ValidationError, match="variant_id"):
             CreativeVariant()
 
     def test_creative_variant_with_optional_metrics_is_valid(self):
         """CreativeVariant accepts optional delivery metrics alongside variant_id."""
-        from adcp.types.generated_poc.core.creative_variant import CreativeVariant
+        from adcp.types import CreativeVariant
 
         variant = CreativeVariant(variant_id="v1", impressions=1000, clicks=50)
         assert variant.variant_id == "v1"

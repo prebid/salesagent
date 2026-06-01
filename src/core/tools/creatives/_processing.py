@@ -8,8 +8,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.error import Error as AdCPErrorDetail
+from adcp.types import CreativeAsset
+from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
 from src.core.helpers import _extract_format_info, _validate_creative_assets
