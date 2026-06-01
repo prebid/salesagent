@@ -245,9 +245,7 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
     from src.core.database.models import MediaBuy as MediaBuyModel
     from tests.factories import CreativeAssignmentFactory
 
-    creative = session.scalars(
-        sa_select(CreativeModel).filter_by(tenant_id=tenant_id, creative_id=creative_id)
-    ).first()
+    creative = session.scalars(sa_select(CreativeModel).filter_by(tenant_id=tenant_id, creative_id=creative_id)).first()
     media_buy = session.scalars(
         sa_select(MediaBuyModel).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
     ).first()

@@ -56,9 +56,7 @@ def _registered_plugins() -> set[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "pytest_plugins":
                     return {
-                        el.value
-                        for el in node.value.elts
-                        if isinstance(el, ast.Constant) and isinstance(el.value, str)
+                        el.value for el in node.value.elts if isinstance(el, ast.Constant) and isinstance(el.value, str)
                     }
     raise AssertionError("pytest_plugins not found in tests/bdd/conftest.py")
 
@@ -109,8 +107,7 @@ class TestBddStepModuleReachability:
         assert not new_violations, (
             f"Found {len(new_violations)} step-defining module(s) not registered in "
             f"tests/bdd/conftest.py pytest_plugins (their steps are dead). Register "
-            f"them or delete them — do not add to _ALLOWED_UNREGISTERED:\n  "
-            + "\n  ".join(new_violations)
+            f"them or delete them — do not add to _ALLOWED_UNREGISTERED:\n  " + "\n  ".join(new_violations)
         )
 
     def test_no_stale_allowlist_entries(self):

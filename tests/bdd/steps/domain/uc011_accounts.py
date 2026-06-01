@@ -1499,7 +1499,9 @@ def then_webhook_registered(ctx: dict) -> None:
         )
     # Verify the request actually carried push_notification_config (distinguishes
     # this step from a plain "sync succeeded" check)
-    push_config = ctx.get("push_notification_config") or ctx.get("request_push_config") or ctx.get("push_notification_url")
+    push_config = (
+        ctx.get("push_notification_config") or ctx.get("request_push_config") or ctx.get("push_notification_url")
+    )
     assert push_config is not None, (
         "Then 'webhook registered' but the When step did not set push_notification_config/url in ctx — "
         "cannot verify webhook registration without a configured webhook"

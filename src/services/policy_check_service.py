@@ -2,7 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 
 from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 from pydantic import BaseModel, Field
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _UNSET = object()
 
 
-class PolicyStatus(str, Enum):
+class PolicyStatus(StrEnum):
     """Policy compliance status options."""
 
     ALLOWED = "allowed"

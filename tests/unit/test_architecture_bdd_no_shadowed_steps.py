@@ -47,9 +47,7 @@ def _registered_step_plugins() -> list[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "pytest_plugins":
                     return [
-                        el.value
-                        for el in node.value.elts
-                        if isinstance(el, ast.Constant) and isinstance(el.value, str)
+                        el.value for el in node.value.elts if isinstance(el, ast.Constant) and isinstance(el.value, str)
                     ]
     raise AssertionError("pytest_plugins not found in tests/bdd/conftest.py")
 

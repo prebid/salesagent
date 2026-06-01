@@ -11,9 +11,8 @@ UC-006-CREATIVE-SCHEMA-COMPLIANCE-09, UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
 from __future__ import annotations
 
 import pytest
-from adcp.types import CreativeAction
+from adcp.types import CreativeAction, CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
-from adcp.types import CreativeAsset
 
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 

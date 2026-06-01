@@ -14,13 +14,13 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
 
 
-class Transport(str, Enum):
+class Transport(StrEnum):
     """Dispatch transports for behavioral tests."""
 
     IMPL = "impl"  # Direct _impl() call

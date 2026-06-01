@@ -435,12 +435,10 @@ jobs:
       run: uv sync --extra dev
 
     - name: Run Ruff linter
-      run: uv run ruff check . --config pyproject.toml || true
-      continue-on-error: true
+      run: uv run ruff check . --config pyproject.toml
 
     - name: Run Ruff formatter
-      run: uv run ruff format . --check --config pyproject.toml || true
-      continue-on-error: true
+      run: uv run ruff format . --check --config pyproject.toml
 
     - name: Run mypy type checking (ENFORCED - must pass)
       run: |

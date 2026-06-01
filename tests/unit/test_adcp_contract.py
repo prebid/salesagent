@@ -1396,7 +1396,9 @@ class TestAdCPContract:
         )
 
         # Test with spec-compliant fields only (adcp 3.9)
-        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment  # TODO: no stable alias in adcp.types  # TODO: no stable alias in adcp.types
+        from adcp.types.generated_poc.creative.sync_creatives_request import (
+            Assignment,
+        )  # TODO: no stable alias in adcp.types  # TODO: no stable alias in adcp.types
 
         request = SyncCreativesRequest(
             creatives=[creative],
@@ -1521,7 +1523,9 @@ class TestAdCPContract:
 
         # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
         from adcp.types import PaginationRequest
-        from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort  # TODO: different Sort from adcp.types.Sort
+        from adcp.types.generated_poc.creative.list_creatives_request import (
+            Sort as LibrarySort,
+        )  # TODO: different Sort from adcp.types.Sort
 
         from src.core.schemas import ListCreativesRequest
 

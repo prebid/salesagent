@@ -1411,8 +1411,7 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
         )
         checked += 1
     assert checked == len(seeded), (
-        f"Expected {len(seeded)} media buys with buyer_campaign_ref verified, "
-        f"but only checked {checked}"
+        f"Expected {len(seeded)} media buys with buyer_campaign_ref verified, but only checked {checked}"
     )
 
 
