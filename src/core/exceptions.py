@@ -81,11 +81,15 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "ACTIVATION_ERROR": "SERVICE_UNAVAILABLE",
     "ACTIVATION_FAILED": "SERVICE_UNAVAILABLE",
     "WORKFLOW_CREATION_FAILED": "SERVICE_UNAVAILABLE",
+    "ACTIVATION_WORKFLOW_FAILED": "SERVICE_UNAVAILABLE",
     "LINE_ITEM_CREATION_FAILED": "SERVICE_UNAVAILABLE",
+    "GAM_UPDATE_FAILED": "SERVICE_UNAVAILABLE",
     "CREATIVE_SYNC_FAILED": "SERVICE_UNAVAILABLE",
     "PARTIAL_FAILURE": "SERVICE_UNAVAILABLE",
     "PRODUCT_NOT_CONFIGURED": "PRODUCT_UNAVAILABLE",
+    "INVENTORY_UNAVAILABLE": "PRODUCT_UNAVAILABLE",
     "CREATIVES_NOT_FOUND": "CREATIVE_REJECTED",
+    "MEDIA_BUY_REJECTED": "POLICY_VIOLATION",
 }
 
 # Internal-only codes: never reach the buyer agent.  Each entry has a
@@ -103,6 +107,8 @@ INTERNAL_CODES: frozenset[str] = frozenset(
         "API_UPDATE_FAILED",  # Broadstreet API update detail
         "GAM_UPDATE_FAILED",  # GAM update API detail
         "PARTIAL_FAILURE",  # Bulk partial-failure taxonomy (AdCPBulkUpdateError)
+        "MEDIA_BUY_REJECTED",  # Seller declined the buy; wire emits POLICY_VIOLATION
+        "INVENTORY_UNAVAILABLE",  # Requested inventory absent; wire emits PRODUCT_UNAVAILABLE
     }
 )
 
@@ -497,12 +503,12 @@ class AdCPConfigurationError(AdCPError):
 
     Raised when encrypted secrets cannot be decrypted (key rotation,
     corruption, missing ENCRYPTION_KEY). Callers should NOT silently
-    fall back — the configuration needs admin intervention.
+    fall back — the configuration needs admin intervention, so recovery is
+    ``terminal`` (inherited): the buyer has no lever to fix server config.
     """
 
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPServiceUnavailableError(AdCPError):
@@ -673,6 +679,53 @@ class AdCPBulkUpdateError(AdCPAdapterError):
     """
 
     _default_error_code: ClassVar[str] = "PARTIAL_FAILURE"
+
+
+class AdCPActivationWorkflowError(AdCPAdapterError):
+    """Adapter order/line-item activation workflow failed (502 → SERVICE_UNAVAILABLE).
+
+    Distinct from ``AdCPWorkflowError`` (creation): this is the activation step
+    of an existing order. Carries the ACTIVATION_WORKFLOW_FAILED taxonomy as the
+    class identity; same wire mapping as the other adapter-workflow failures.
+    """
+
+    _default_error_code: ClassVar[str] = "ACTIVATION_WORKFLOW_FAILED"
+
+
+class AdCPGamUpdateError(AdCPAdapterError):
+    """A GAM line-item update API call failed (502 → SERVICE_UNAVAILABLE).
+
+    Carries the GAM_UPDATE_FAILED taxonomy as the class identity; per-operation
+    detail (package_id, line_item_id) belongs in ``details`` as data.
+    """
+
+    _default_error_code: ClassVar[str] = "GAM_UPDATE_FAILED"
+
+
+class AdCPMediaBuyRejectedError(AdCPError):
+    """The seller declined the media buy (422 → POLICY_VIOLATION).
+
+    A business rejection, not a server failure: recovery=correctable so the
+    buyer can adjust the request and resubmit. Carries the MEDIA_BUY_REJECTED
+    taxonomy as the class identity; the wire code is the standard POLICY_VIOLATION.
+    """
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "MEDIA_BUY_REJECTED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPInventoryUnavailableError(AdCPError):
+    """Requested inventory is not available (422 → PRODUCT_UNAVAILABLE).
+
+    recovery=correctable: the buyer can select different inventory. Carries the
+    INVENTORY_UNAVAILABLE taxonomy as the class identity; the wire code is the
+    standard PRODUCT_UNAVAILABLE.
+    """
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "INVENTORY_UNAVAILABLE"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 # ---------------------------------------------------------------------------

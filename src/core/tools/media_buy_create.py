@@ -42,6 +42,7 @@ from src.core.exceptions import (
     AdCPBudgetTooLowError,
     AdCPError,
     AdCPNotFoundError,
+    AdCPProductNotFoundError,
     AdCPValidationError,
 )
 
@@ -1766,7 +1767,6 @@ async def _create_media_buy_impl(
                 error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
                 raise AdCPValidationError(
                     error_msg,
-                    error_code="INVALID_REQUEST",
                     suggestion="Use a future datetime or 'asap' for immediate start.",
                     field="start_time",
                 )
@@ -1785,7 +1785,6 @@ async def _create_media_buy_impl(
             error_msg = f"Invalid time range: end time ({req.end_time}) must be after start time ({req.start_time})."
             raise AdCPValidationError(
                 error_msg,
-                error_code="INVALID_REQUEST",
                 suggestion="Set end_time to a datetime after start_time.",
                 field="end_time",
             )
@@ -1858,9 +1857,8 @@ async def _create_media_buy_impl(
             missing_product_ids = set(product_ids) - set(product_map.keys())
             if missing_product_ids:
                 error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
-                raise AdCPValidationError(
+                raise AdCPProductNotFoundError(
                     error_msg,
-                    error_code="PRODUCT_NOT_FOUND",
                     suggestion="Check available products with get_products.",
                     field="packages[].product_id",
                 )
@@ -2181,7 +2179,6 @@ async def _create_media_buy_impl(
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
                         raise AdCPValidationError(
                             error_msg,
-                            error_code="INVALID_REQUEST",
                             suggestion="Check targeting constraints.",
                             field="targeting_overlay",
                         )

@@ -46,15 +46,19 @@ from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import validate_and_log_freshness
 from src.core.audit_logger import AuditLogger
 from src.core.exceptions import (
+    AdCPActivationWorkflowError,
     AdCPAdapterError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
+    AdCPBulkUpdateError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
+    AdCPGamUpdateError,
+    AdCPLineItemError,
     AdCPPackageNotFoundError,
     AdCPProductUnavailableError,
-    AdCPServiceUnavailableError,
     AdCPValidationError,
+    AdCPWorkflowError,
 )
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -142,14 +146,15 @@ class GoogleAdManager(AdServerAdapter):
 
         # Validate advertiser_id is numeric if provided (GAM expects integer company IDs)
         if advertiser_id is not None and advertiser_id != "":
-            # Check if it's numeric (as string or int)
+            # Format check (distinct from the _require_config presence guards above):
+            # advertiser_id is optional, but if provided it must parse as an integer.
             try:
                 int(advertiser_id)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
                 raise AdCPConfigurationError(
                     f"GAM advertiser_id must be numeric (got: '{advertiser_id}'). "
                     f"Check principal platform_mappings configuration."
-                )
+                ) from e
 
         # advertiser_id is only required for order/campaign operations, not inventory sync
 
@@ -596,7 +601,7 @@ class GoogleAdManager(AdServerAdapter):
                 )
             else:
                 error_msg = "Failed to create manual order workflow step"
-                raise AdCPAdapterError(error_msg, details={"internal_code": "WORKFLOW_CREATION_FAILED"})
+                raise AdCPWorkflowError(error_msg)
 
         # Automatic mode - create order directly
         # Use pre-loaded naming template, or fallback to default
@@ -764,7 +769,7 @@ class GoogleAdManager(AdServerAdapter):
             # CRITICAL: Return media_buy_id=None to indicate failure
             # Even though order was created, line items failed, so media buy is not functional
             # Per AdCP spec: errors present → media_buy_id must be None
-            raise AdCPAdapterError(error_msg, details={"internal_code": "LINE_ITEM_CREATION_FAILED"})
+            raise AdCPLineItemError(error_msg)
 
         # Check if activation approval is needed (guaranteed line items require human approval)
         has_guaranteed, item_types = self._check_order_has_guaranteed_items(order_id)
@@ -1329,10 +1334,7 @@ class GoogleAdManager(AdServerAdapter):
                     implementation_date=today,
                 )
             else:
-                raise AdCPAdapterError(
-                    "Failed to create approval workflow step",
-                    details={"internal_code": "WORKFLOW_CREATION_FAILED"},
-                )
+                raise AdCPWorkflowError("Failed to create approval workflow step")
 
         # Check for activate_order action with guaranteed items
         if action == "activate_order":
@@ -1353,9 +1355,8 @@ class GoogleAdManager(AdServerAdapter):
                         workflow_step_id=step_id,
                     )
                 else:
-                    raise AdCPAdapterError(
-                        f"Cannot auto-activate order with guaranteed line items: {', '.join(item_types)}",
-                        details={"internal_code": "ACTIVATION_WORKFLOW_FAILED"},
+                    raise AdCPActivationWorkflowError(
+                        f"Cannot auto-activate order with guaranteed line items: {', '.join(item_types)}"
                     )
 
         # Handle package budget updates
@@ -1429,12 +1430,11 @@ class GoogleAdManager(AdServerAdapter):
 
                 if not success:
                     self.log(f"[red]Failed to update GAM line item {platform_line_item_id} budget[/red]")
-                    raise AdCPAdapterError(
+                    raise AdCPGamUpdateError(
                         "Failed to update budget in Google Ad Manager",
                         details={
                             "package_id": package_id,
                             "line_item_id": platform_line_item_id,
-                            "internal_code": "GAM_UPDATE_FAILED",
                         },
                     )
 
@@ -1497,12 +1497,11 @@ class GoogleAdManager(AdServerAdapter):
                         success = self.orders_manager.resume_line_item(platform_line_item_id)
 
                     if not success:
-                        raise AdCPAdapterError(
+                        raise AdCPGamUpdateError(
                             f"Failed to {action_verb.lower()} line item in GAM",
                             details={
                                 "package_id": package_id,
                                 "line_item_id": platform_line_item_id,
-                                "internal_code": "GAM_UPDATE_FAILED",
                             },
                         )
 
@@ -1554,7 +1553,7 @@ class GoogleAdManager(AdServerAdapter):
                             )
 
                     if failed_packages:
-                        raise AdCPServiceUnavailableError(
+                        raise AdCPBulkUpdateError(
                             f"Failed to {action_verb.lower()} some packages in GAM",
                             details={"failed_packages": failed_packages},
                         )

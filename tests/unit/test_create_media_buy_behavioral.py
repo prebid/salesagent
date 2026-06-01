@@ -43,6 +43,7 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPNotFoundError,
+    AdCPProductNotFoundError,
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
@@ -238,14 +239,12 @@ class _PatchContext:
 
 
 class TestProductNotFound:
-    """GAP-001: Product not found returns CreateMediaBuyError with validation_error."""
+    """GAP-001: Product not found raises the typed AdCPProductNotFoundError."""
 
     @pytest.mark.asyncio
     async def test_product_not_found_returns_error(self):
-        """When packages reference non-existent product_ids, return validation_error
-        with missing IDs listed.
-
-        Anchors: media_buy_create.py:1470-1473
+        """When packages reference non-existent product_ids, raise
+        AdCPProductNotFoundError with the missing IDs listed.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -268,14 +267,14 @@ class TestProductNotFound:
         existing_product = _mock_product("prod_exists")
 
         with _PatchContext(products=[existing_product]) as pc:
-            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") is converted by
-            # the _impl boundary catch into AdCPValidationError with error_code
-            # "PRODUCT_NOT_FOUND" (richer than the base NOT_FOUND default).
-            with pytest.raises(AdCPValidationError) as excinfo:
+            # Missing product_ids raise the typed AdCPProductNotFoundError, whose
+            # class identity carries the PRODUCT_NOT_FOUND wire code (404).
+            with pytest.raises(AdCPProductNotFoundError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         exc = excinfo.value
         assert exc.error_code == "PRODUCT_NOT_FOUND"
+        assert exc.status_code == 404
         assert "prod_missing" in exc.message
         assert "not found" in exc.message.lower()
 
@@ -1820,10 +1819,8 @@ class TestProposalBasedObligations:
         with _PatchContext(products=[]) as pc:
             # No products in DB -> products not found
             pc.db_session.scalars.return_value.all.return_value = []
-            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") is converted by
-            # the _impl boundary catch into AdCPValidationError with the richer
-            # PRODUCT_NOT_FOUND error_code (not the base NOT_FOUND default).
-            with pytest.raises(AdCPValidationError) as excinfo:
+            # Missing product_ids raise the typed AdCPProductNotFoundError.
+            with pytest.raises(AdCPProductNotFoundError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         exc = excinfo.value
@@ -2299,11 +2296,9 @@ class TestPostconditionObligations:
 
         # Default _PatchContext mocks one product with id "prod_1"; req asks
         # for "nonexistent_prod" so the validation block hits the not-found
-        # branch. AdCPValidationError(error_code="PRODUCT_NOT_FOUND") becomes
-        # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") via the _impl
-        # boundary catch and propagates to the transport boundary.
+        # branch, raising the typed AdCPProductNotFoundError.
         with _PatchContext() as pc:
-            with pytest.raises(AdCPValidationError):
+            with pytest.raises(AdCPProductNotFoundError):
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         # Postcondition: the typed raise happens BEFORE any session.add() —
@@ -2331,10 +2326,9 @@ class TestPostconditionObligations:
 
         with _PatchContext(products=[]) as pc:
             pc.db_session.scalars.return_value.all.return_value = []
-            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
-            # which the _impl boundary catch converts to AdCPValidationError with
-            # error_code="PRODUCT_NOT_FOUND" (richer than the base NOT_FOUND default).
-            with pytest.raises(AdCPValidationError) as excinfo:
+            # Production raises the typed AdCPProductNotFoundError, whose class
+            # identity carries the PRODUCT_NOT_FOUND wire code.
+            with pytest.raises(AdCPProductNotFoundError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
 
         exc = excinfo.value

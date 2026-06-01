@@ -124,9 +124,8 @@ class TestGAMManualApprovalPath:
                 # Assert - Package IDs must match input packages
                 returned_ids = {pkg.package_id for pkg in response.packages}
                 expected_ids = {pkg.package_id for pkg in sample_packages}
-                assert returned_ids == expected_ids, (
-                    f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-                )
+                ids_msg = f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
+                assert returned_ids == expected_ids, ids_msg
 
                 # Assert - Other required fields
                 # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
@@ -157,21 +156,22 @@ class TestGAMManualApprovalPath:
             ):
                 mock_workflow.return_value = None  # Simulate failure
 
-                # Act / Assert - workflow failure raises AdCPAdapterError carrying internal_code
+                # Act / Assert - workflow failure raises the typed AdCPWorkflowError,
+                # whose class identity carries the WORKFLOW_CREATION_FAILED taxonomy.
                 import pytest
 
-                from src.core.exceptions import AdCPAdapterError
+                from src.core.exceptions import AdCPWorkflowError
 
                 start_time = datetime.now()
                 end_time = start_time + timedelta(days=30)
-                with pytest.raises(AdCPAdapterError) as exc_info:
+                with pytest.raises(AdCPWorkflowError) as exc_info:
                     adapter.create_media_buy(
                         request=sample_request,
                         packages=sample_packages,
                         start_time=start_time,
                         end_time=end_time,
                     )
-                assert exc_info.value.details.get("internal_code") == "WORKFLOW_CREATION_FAILED"
+                assert exc_info.value.error_code == "WORKFLOW_CREATION_FAILED"
 
 
 class TestGAMActivationWorkflowPath:

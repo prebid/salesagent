@@ -27,6 +27,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
+    AdCPProductNotFoundError,
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
@@ -409,10 +410,8 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
-            # converted to AdCPValidationError with error_code="PRODUCT_NOT_FOUND" at
-            # the _impl boundary catch.
-            with pytest.raises(AdCPValidationError) as excinfo:
+            # Missing product_ids raise the typed AdCPProductNotFoundError.
+            with pytest.raises(AdCPProductNotFoundError) as excinfo:
                 await _create_media_buy_impl(req, identity=identity)
 
         exc = excinfo.value
@@ -1279,13 +1278,11 @@ class TestCreateMediaBuyIdempotency:
             mock_ctx_mgr.return_value = ctx_mgr
 
             # Without idempotency_key, the function proceeds past the check.
-            # It will fail at product validation (no products in mock DB).
-            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
-            # which the _impl boundary catch converts to AdCPValidationError with
-            # error_code="PRODUCT_NOT_FOUND" and propagates. The point of this test
+            # It will fail at product validation (no products in mock DB),
+            # raising the typed AdCPProductNotFoundError. The point of this test
             # is that find_by_idempotency_key was never called — capture the
             # propagation so we can still assert that.
-            with pytest.raises(AdCPValidationError):
+            with pytest.raises(AdCPProductNotFoundError):
                 await _create_media_buy_impl(req, identity=identity)
 
         mock_uow.media_buys.find_by_idempotency_key.assert_not_called()
@@ -1345,12 +1342,9 @@ class TestCreateMediaBuyIdempotency:
             mock_ctx_mgr.return_value = ctx_mgr
 
             # Idempotency probe miss → flow continues into product validation,
-            # which fails with AdCPValidationError(error_code="PRODUCT_NOT_FOUND")
-            # via the _impl boundary catch (sourced from
-            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND")). The typed error
-            # propagates past the narrowed boundary catch. Capture it so we can still
-            # assert the idempotency probe ran.
-            with pytest.raises(AdCPValidationError):
+            # which fails with the typed AdCPProductNotFoundError. Capture it so
+            # we can still assert the idempotency probe ran.
+            with pytest.raises(AdCPProductNotFoundError):
                 await _create_media_buy_impl(req, identity=identity)
 
         # Idempotency check ran but found nothing — proceeded to normal flow

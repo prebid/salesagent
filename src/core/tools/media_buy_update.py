@@ -42,11 +42,11 @@ from src.core.exceptions import (
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPCreativeRejectedError,
-    AdCPError,
     AdCPGoneError,
     AdCPMediaBuyNotFoundError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
+    AdCPWorkflowError,
 )
 from src.core.tool_context import ToolContext
 
@@ -287,10 +287,7 @@ def _update_media_buy_impl(
 
                 # Verify persistent_ctx is not None
                 if persistent_ctx is None:
-                    raise AdCPError(
-                        "Failed to create or get persistent context",
-                        error_code="WORKFLOW_CREATION_FAILED",
-                    )
+                    raise AdCPWorkflowError("Failed to create or get persistent context")
 
                 # Create workflow step for this tool call
                 step = ctx_manager.create_workflow_step(

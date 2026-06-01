@@ -750,8 +750,13 @@ class TestErrorCodeVocabularyConsistency:
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
         # Adapter-taxonomy codes (internal; wire → SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING)
         "WORKFLOW_CREATION_FAILED",  # Internal: AdCPWorkflowError
+        "ACTIVATION_WORKFLOW_FAILED",  # Internal: AdCPActivationWorkflowError
         "LINE_ITEM_CREATION_FAILED",  # Internal: AdCPLineItemError
+        "GAM_UPDATE_FAILED",  # Internal: AdCPGamUpdateError
         "PARTIAL_FAILURE",  # Internal: AdCPBulkUpdateError
+        # Mock-adapter business-outcome codes (internal; wire → standard via ERROR_CODE_MAPPING)
+        "MEDIA_BUY_REJECTED",  # Internal: AdCPMediaBuyRejectedError (wire → POLICY_VIOLATION)
+        "INVENTORY_UNAVAILABLE",  # Internal: AdCPInventoryUnavailableError (wire → PRODUCT_UNAVAILABLE)
         # Advisory-on-success Pattern A codes (no dedicated exception subclass —
         # construction sites use Error(code=...) inside success envelopes).
         "CREATIVE_REJECTED",

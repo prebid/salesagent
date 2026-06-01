@@ -30,7 +30,7 @@ from src.adapters.broadstreet.managers import (
 from src.adapters.broadstreet.schemas import BroadstreetConnectionConfig, BroadstreetProductConfig
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.core.exceptions import (
-    AdCPAdapterError,
+    AdCPBulkUpdateError,
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
@@ -672,7 +672,7 @@ class BroadstreetAdapter(AdServerAdapter):
                     else:
                         failed = self._toggle_advertisements(unique_ad_ids, active=is_resume)
                         if failed:
-                            raise AdCPAdapterError(
+                            raise AdCPBulkUpdateError(
                                 f"Failed to update {len(failed)} advertisements",
                                 details={"failed_advertisement_ids": failed},
                             )
@@ -713,9 +713,9 @@ class BroadstreetAdapter(AdServerAdapter):
                     else:
                         failed = self._toggle_advertisements(ad_ids, active=is_resume)
                         if failed:
-                            raise AdCPAdapterError(
+                            raise AdCPBulkUpdateError(
                                 f"Failed to update {len(failed)} advertisements",
-                                details={"failed_advertisement_ids": failed, "internal_code": "API_UPDATE_FAILED"},
+                                details={"failed_advertisement_ids": failed},
                             )
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs for package {package_id}[/yellow]")
