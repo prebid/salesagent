@@ -12,13 +12,8 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.core.format import (
-    Accessibility,
-    Assets,
-    Assets5,
-    Assets9,
-)
-from adcp.types.generated_poc.enums.wcag_level import WcagLevel
+from adcp.types import HtmlFormatAsset, ImageFormatAsset, VideoFormatAsset, WcagLevel
+from adcp.types.generated_poc.core.format import Accessibility  # TODO: no stable alias in adcp.types
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory
@@ -65,13 +60,13 @@ class TestAssetTypesFilter:
             _fmt(
                 "img_banner",
                 "Image Banner",
-                assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
+                assets=[ImageFormatAsset(asset_id="main", asset_type="image", item_type="individual", required=True)],
             ),
             _fmt(
                 "vid_player",
                 "Video Player",
                 type="video",
-                assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+                assets=[VideoFormatAsset(asset_id="video", asset_type="video", item_type="individual", required=True)],
             ),
         ]
         with CreativeFormatsEnv() as env:
@@ -89,13 +84,13 @@ class TestAssetTypesFilter:
             _fmt(
                 "img_banner",
                 "Image Banner",
-                assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
+                assets=[ImageFormatAsset(asset_id="main", asset_type="image", item_type="individual", required=True)],
             ),
             _fmt(
                 "vid_player",
                 "Video Player",
                 type="video",
-                assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+                assets=[VideoFormatAsset(asset_id="video", asset_type="video", item_type="individual", required=True)],
             ),
         ]
         with CreativeFormatsEnv() as env:
@@ -113,18 +108,18 @@ class TestAssetTypesFilter:
             _fmt(
                 "img_only",
                 "Image Only",
-                assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
+                assets=[ImageFormatAsset(asset_id="main", asset_type="image", item_type="individual", required=True)],
             ),
             _fmt(
                 "vid_player",
                 "Video Player",
                 type="video",
-                assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+                assets=[VideoFormatAsset(asset_id="video", asset_type="video", item_type="individual", required=True)],
             ),
             _fmt(
                 "html_widget",
                 "HTML Widget",
-                assets=[Assets9(asset_id="code", asset_type="html", item_type="individual", required=True)],
+                assets=[HtmlFormatAsset(asset_id="code", asset_type="html", item_type="individual", required=True)],
             ),
         ]
         with CreativeFormatsEnv() as env:
@@ -143,7 +138,7 @@ class TestAssetTypesFilter:
             _fmt(
                 "img_banner",
                 "Image Banner",
-                assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
+                assets=[ImageFormatAsset(asset_id="main", asset_type="image", item_type="individual", required=True)],
             ),
         ]
         with CreativeFormatsEnv() as env:

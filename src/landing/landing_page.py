@@ -3,7 +3,7 @@
 import html
 import os
 
-from adcp import get_adcp_version
+from adcp import get_adcp_spec_version
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.core.domain_config import (
@@ -283,7 +283,7 @@ def generate_tenant_landing_page(tenant: dict, virtual_host: str | None = None) 
         # Additional context
         "page_title": f"{tenant.get('name', 'Publisher')} Sales Agent",
         "version": get_version(),
-        "adcp_version": get_adcp_version(),
+        "adcp_version": get_adcp_spec_version(),
     }
 
     # Load and render template

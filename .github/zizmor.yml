@@ -1,0 +1,55 @@
+# zizmor allowlist — per ADR-003 and security.yml policy.
+#
+# POLICY: every allowlist entry MUST have:
+#   1. The zizmor rule ID (from error[rule-id] in zizmor output)
+#   2. The workflow base filename it applies to (NOT the full path)
+#   3. A justification and owner
+#
+# Format: ignore entries use the workflow base filename (e.g. "foo.yml"),
+# optionally with :line or :line:column for narrower suppression.
+#
+# To re-audit: uvx zizmor --min-severity medium --config .github/zizmor.yml .github/workflows/
+# Entries that no longer appear in zizmor output should be removed.
+
+rules:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # dangerous-triggers — pull_request_target permitted ONLY for metadata-only
+  # workflows that do NOT check out PR source code (ADR-003).
+  # ipr-agreement.yml: reads PR author/comment, writes CLA status — no checkout.
+  # pr-title-check.yml: reads PR title metadata only — no checkout.
+  # ─────────────────────────────────────────────────────────────────────────────
+  dangerous-triggers:
+    ignore:
+      - ipr-agreement.yml
+      - pr-title-check.yml
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # archived-uses — ipr-agreement.yml uses contributor-assistant/github-action
+  # from an archived repository. There is no maintained alternative for the
+  # CLA/IPR assistant workflow at this time.
+  # Risk accepted by @chrishuie; tracked for replacement in #1234-pr6.
+  # ─────────────────────────────────────────────────────────────────────────────
+  archived-uses:
+    ignore:
+      - ipr-agreement.yml
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # excessive-permissions:
+  #
+  # ipr-agreement.yml: requires contents/pull-requests/statuses: write for the
+  # CLA-assistant action to commit signatures and post status checks.
+  # Minimum required permissions; no narrowing possible without breaking the action.
+  #
+  # release-please.yml: contents/pull-requests/packages: write are required at
+  # workflow level for release-please-action (tag/release creation) and
+  # docker/build-push-action (GHCR push). Narrowing to job-level tracked for #1234-pr3.
+  #
+  # pr-title-check.yml: no explicit permissions block — uses workflow default.
+  # The amannn/action-semantic-pull-request action requires pull-requests: write
+  # to post status checks. Narrowing tracked for #1234-pr3.
+  # ─────────────────────────────────────────────────────────────────────────────
+  excessive-permissions:
+    ignore:
+      - ipr-agreement.yml
+      - release-please.yml
+      - pr-title-check.yml

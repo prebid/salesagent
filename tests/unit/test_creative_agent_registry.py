@@ -6,7 +6,7 @@ import pytest
 from pydantic import AnyUrl
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPServiceUnavailableError
 
 
 class TestCacheKeyAcceptsAnyUrl:
@@ -219,8 +219,8 @@ class TestCreativeAgentRegistry:
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=auth_error)
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Should raise RuntimeError (wrapped)
-        with pytest.raises(RuntimeError, match="Authentication failed"):
+        # Should re-raise as typed src.core.AdCPAuthenticationError (wrapped)
+        with pytest.raises(AdCPAuthenticationError, match="Authentication failed"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio
@@ -250,8 +250,8 @@ class TestCreativeAgentRegistry:
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=timeout_error)
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Should raise RuntimeError with timeout message
-        with pytest.raises(RuntimeError, match="Request timed out"):
+        # Should raise typed AdCPServiceUnavailableError with timeout message
+        with pytest.raises(AdCPServiceUnavailableError, match="Request timed out"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio
@@ -276,8 +276,8 @@ class TestCreativeAgentRegistry:
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=conn_error)
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Should raise RuntimeError
-        with pytest.raises(RuntimeError, match="Connection failed"):
+        # Should raise typed AdCPServiceUnavailableError
+        with pytest.raises(AdCPServiceUnavailableError, match="Connection failed"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio

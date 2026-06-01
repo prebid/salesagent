@@ -200,7 +200,7 @@ class TestNonexistentMediaBuyIdReturnsNotFoundError:
             assert response.errors is not None
             assert len(response.errors) == 1
             error = response.errors[0]
-            assert error.code == "media_buy_not_found"
+            assert error.code == "MEDIA_BUY_NOT_FOUND"
             assert "nonexistent_id" in error.message
 
 
@@ -253,7 +253,7 @@ class TestPartialMediaBuyIdsNotFound:
             assert response.errors is not None
             assert len(response.errors) == 1
             not_found_error = response.errors[0]
-            assert not_found_error.code == "media_buy_not_found"
+            assert not_found_error.code == "MEDIA_BUY_NOT_FOUND"
             assert "mb_999" in not_found_error.message
 
             assert all("mb_1" not in e.message for e in response.errors)
@@ -291,7 +291,7 @@ class TestEqualDateRangeReturnsInvalidDateRangeError:
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "invalid_date_range"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +326,7 @@ class TestStartDateAfterEndDateReturnsInvalidDateRangeError:
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "invalid_date_range"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +361,7 @@ class TestInvalidDateRangeDoesNotFetchDeliveryData:
 
             assert response.media_buy_deliveries == []
             assert len(response.errors) == 1
-            assert response.errors[0].code == "invalid_date_range"
+            assert response.errors[0].code == "VALIDATION_ERROR"
 
             # Verify adapter's delivery method was never called (no data fetched)
             env.mock["adapter"].return_value.get_media_buy_delivery.assert_not_called()
@@ -403,8 +403,8 @@ class TestAdapterUnavailableReturnsAdapterError:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             error_codes = [e.code for e in response.errors]
-            assert "adapter_error" in error_codes
-            adapter_error = next(e for e in response.errors if e.code == "adapter_error")
+            assert "SERVICE_UNAVAILABLE" in error_codes
+            adapter_error = next(e for e in response.errors if e.code == "SERVICE_UNAVAILABLE")
             assert "mb_001" in adapter_error.message
 
 
@@ -444,8 +444,8 @@ class TestAdapterInternalServerErrorReturnsAdapterError:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             error_codes = [e.code for e in response.errors]
-            assert "adapter_error" in error_codes
-            adapter_error = next(e for e in response.errors if e.code == "adapter_error")
+            assert "SERVICE_UNAVAILABLE" in error_codes
+            adapter_error = next(e for e in response.errors if e.code == "SERVICE_UNAVAILABLE")
             assert "mb_001" in adapter_error.message
 
 
@@ -490,7 +490,7 @@ class TestAdapterFailureAuditTrail:
 
             assert response is not None
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            assert any(e.code == "adapter_error" for e in response.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in response.errors)
 
             # Check real audit log table for records
             from sqlalchemy import select
@@ -542,7 +542,7 @@ class TestAdapterErrorNoStateMutation:
             assert isinstance(result, GetMediaBuyDeliveryResponse)
             assert result.errors is not None
             assert len(result.errors) == 1
-            assert result.errors[0].code == "adapter_error"
+            assert result.errors[0].code == "SERVICE_UNAVAILABLE"
             assert "mb_err" in result.errors[0].message
             assert result.media_buy_deliveries == []
             assert result.aggregated_totals.impressions == 0.0
@@ -646,6 +646,9 @@ class TestNoIdentifiersReturnAll:
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
+                    # Serving buy: persisted status is authoritative (salesagent-18h.1).
+                    # The flight window alone no longer implies "active".
+                    status="active",
                     start_date=today - timedelta(days=30),
                     end_date=today + timedelta(days=30),
                     budget=10000.0 + i * 1000,
@@ -689,6 +692,8 @@ class TestNoIdentifiersReturnAll:
                     tenant=tenant,
                     principal=principal,
                     media_buy_id=mb_id,
+                    # Serving buy: persisted status is authoritative (salesagent-18h.1).
+                    status="active",
                     start_date=today - timedelta(days=30),
                     end_date=today + timedelta(days=30),
                 )
@@ -906,7 +911,7 @@ class TestPackageDeliveryStatus:
 
             resp = env.call_impl(
                 media_buy_ids=["mb_future"],
-                status_filter=[MediaBuyStatus.pending_activation],
+                status_filter=[MediaBuyStatus.pending_start],
                 start_date="2025-01-01",
                 end_date="2025-03-15",
             )
@@ -958,6 +963,10 @@ class TestPackageDeliveryStatus:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_past",
+                # Buy that WAS serving (active) and whose flight has ended →
+                # persisted "active" is date-refined to "completed"
+                # (salesagent-18h.1). A pending_approval buy never served.
+                status="active",
                 start_date=date(2024, 1, 1),
                 end_date=date(2024, 12, 31),
             )
@@ -1016,7 +1025,7 @@ class TestPackageDeliveryStatus:
             resp = env.call_impl(
                 media_buy_ids=["mb_future", "mb_active", "mb_completed"],
                 status_filter=[
-                    MediaBuyStatus.pending_activation,
+                    MediaBuyStatus.pending_start,
                     MediaBuyStatus.active,
                     MediaBuyStatus.completed,
                 ],
@@ -2423,7 +2432,7 @@ class TestPrincipalNotFoundReturnsError:
 
         assert response.errors is not None
         assert len(response.errors) == 1
-        assert response.errors[0].code == "principal_not_found"
+        assert response.errors[0].code == "AUTH_REQUIRED"
         assert response.media_buy_deliveries == []
 
 

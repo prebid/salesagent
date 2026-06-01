@@ -10,15 +10,14 @@ Covers: salesagent-rrt0
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.core.format import (
-    Assets5,
-    Assets18,
-    Assets19,
-    Assets22,
-    Dimensions,
-    Renders,
+from adcp.types import (
+    ImageFormatGroupAsset,
+    RepeatableAssetGroup,
     Responsive,
+    TextFormatGroupAsset,
+    VideoFormatAsset,
 )
+from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
@@ -199,15 +198,14 @@ class TestFormatsAssetTypes:
 
     def test_group_assets_match(self, integration_db):
         """Covers: T-UC-005-inv4-group — group assets with image match image filter."""
-        group_asset = Assets18(
-            item_type="repeatable_group",
+        group_asset = RepeatableAssetGroup(
             asset_group_id="product_group",
             required=True,
             min_count=1,
             max_count=5,
             assets=[
-                Assets19(asset_id="product_image", required=True),
-                Assets22(asset_id="product_title", required=True),
+                ImageFormatGroupAsset(asset_id="product_image", required=True),
+                TextFormatGroupAsset(asset_id="product_title", required=True),
             ],
         )
         fmt = Format(
@@ -226,13 +224,12 @@ class TestFormatsAssetTypes:
 
     def test_group_assets_no_match_excluded(self, integration_db):
         """Covers: T-UC-005-inv4-group — group with only text excluded by video filter."""
-        group_asset = Assets18(
-            item_type="repeatable_group",
+        group_asset = RepeatableAssetGroup(
             asset_group_id="text_group",
             required=True,
             min_count=1,
             max_count=3,
-            assets=[Assets22(asset_id="headline", required=True)],
+            assets=[TextFormatGroupAsset(asset_id="headline", required=True)],
         )
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="text_only"),
@@ -249,14 +246,13 @@ class TestFormatsAssetTypes:
 
     def test_mixed_individual_and_group_assets(self, integration_db):
         """Covers: T-UC-005-inv4-group — mixed format matches both asset types."""
-        individual = Assets5(item_type="individual", asset_id="hero_video", required=True)
-        group = Assets18(
-            item_type="repeatable_group",
+        individual = VideoFormatAsset(asset_id="hero_video", required=True)
+        group = RepeatableAssetGroup(
             asset_group_id="product_group",
             required=False,
             min_count=0,
             max_count=5,
-            assets=[Assets19(asset_id="product_image", required=True)],
+            assets=[ImageFormatGroupAsset(asset_id="product_image", required=True)],
         )
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="mixed"),

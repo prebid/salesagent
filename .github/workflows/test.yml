@@ -7,6 +7,8 @@ on:
     branches: [ main , develop ]
   workflow_dispatch:
 
+permissions: {}
+
 env:
   PYTHON_VERSION: '3.12'
   UV_VERSION: '0.11.6'
@@ -17,39 +19,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        persist-credentials: false
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
       with:
         version: ${{ env.UV_VERSION }}
 
     - name: Scan for vulnerabilities
-      # GHSA-7gcm-g887-7qv7: protobuf DoS (CVE-2026-0994) - no fix available; transitive via
-      #   google-ads, google-api-core, logfire, a2a-sdk
-      # GHSA-5239-wwwm-4pmq: Pygments ReDoS in AdlLexer (CVE-2026-4539) - no fix available;
-      #   local-access-only (AV:L, CVSS 3.3); ADL lexer not invoked by this application
-      run: uvx uv-secure --ignore-vulns GHSA-7gcm-g887-7qv7,GHSA-5239-wwwm-4pmq
+      # Ignored-vulnerabilities list + uv-secure invocation are single-sourced
+      # in scripts/security-audit.sh (the same script is called by
+      # ./run_all_tests.sh), so CI and local cannot drift. Bump the list there.
+      run: ./scripts/security-audit.sh
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
       with:
         version: ${{ env.UV_VERSION }}
 
     - name: Cache uv dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cache/uv
@@ -79,20 +84,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
       with:
         version: ${{ env.UV_VERSION }}
 
     - name: Cache uv dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cache/uv
@@ -146,20 +153,22 @@ jobs:
           - 5432:5432
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
       with:
         version: ${{ env.UV_VERSION }}
 
     - name: Cache uv dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cache/uv
@@ -179,48 +188,11 @@ jobs:
 
     - name: Start reference creative agent
       if: matrix.group == 'creative'
-      run: |
-        # Build the adcp server (includes the reference creative agent)
-        # Pin to known-good commit — upstream HEAD has broken migrations (community_points FK violation)
-        mkdir -p /tmp/adcp-server
-        curl -sL https://github.com/adcontextprotocol/adcp/archive/ca70dd1e2a6c.tar.gz | tar xz -C /tmp/adcp-server --strip-components=1
-        docker build -t adcp-creative-agent /tmp/adcp-server
-
-        # The adcp monolith needs its own Postgres — creative agent is one route in the full app
-        docker network create creative-net
-
-        docker run -d --network creative-net --name adcp-postgres \
-          -e POSTGRES_DB=adcp_registry \
-          -e POSTGRES_USER=adcp \
-          -e POSTGRES_PASSWORD=localdev \
-          postgres:16
-        sleep 5
-
-        docker run -d --network creative-net --name creative-agent \
-          -p 9999:8080 \
-          -e NODE_ENV=production \
-          -e PORT=8080 \
-          -e DATABASE_URL=postgresql://adcp:localdev@adcp-postgres:5432/adcp_registry \
-          -e RUN_MIGRATIONS=true \
-          -e ALLOW_INSECURE_COOKIES=true \
-          -e DEV_USER_EMAIL=ci@test.com \
-          -e DEV_USER_ID=ci-user \
-          -e AGENT_TOKEN_ENCRYPTION_SECRET=local-ci-encryption-key-32chars!! \
-          -e WORKOS_API_KEY=sk_test_dummy \
-          -e WORKOS_CLIENT_ID=client_dummy \
-          adcp-creative-agent
-
-        echo "Waiting for creative agent..."
-        for i in $(seq 1 60); do
-          if curl -sf http://localhost:9999/api/creative-agent/health > /dev/null 2>&1; then
-            echo "Creative agent healthy on :9999"
-            break
-          fi
-          sleep 2
-        done
-        curl -sf http://localhost:9999/api/creative-agent/health || {
-          echo "Creative agent failed to start"; docker logs creative-agent | tail -20; exit 1;
-        }
+      # Single source of truth for the pinned reference agent (commit pin +
+      # build + run + healthwait) is scripts/creative-agent-stack.sh, so CI
+      # and the local authoritative run (run_all_tests.sh) cannot drift
+      # (salesagent-kczg). Bump the pin only in that script.
+      run: ./scripts/creative-agent-stack.sh up
 
     - name: Run integration tests (${{ matrix.group }})
       env:
@@ -236,6 +208,84 @@ jobs:
         uv run pytest tests/integration/ -v --tb=short --timeout=60 \
           -m "(${{ matrix.marker }}) and not requires_server and not skip_ci"
 
+  bdd-tests:
+    name: BDD Tests
+    runs-on: ubuntu-latest
+    # 4265 BDD tests run sequentially; previous 15-minute limit was tight (one
+    # canceled run hit 15m17s at ~95% complete) so the suite needs headroom.
+    timeout-minutes: 25
+    # BDD scenarios (tests/bdd/) use the integration_db fixture (Flask
+    # test_client + real PostgreSQL) — same infra model as integration-tests,
+    # NOT the full docker-compose stack. This job mirrors integration-tests.
+    # Before this job existed, ./run_all_tests.sh ran BDD but CI did not,
+    # so a broken BDD suite could land on main with CI green (see #1233 D1).
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        persist-credentials: false
+
+    - name: Set up Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+      with:
+        version: ${{ env.UV_VERSION }}
+
+    - name: Cache uv dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/uv
+          .venv
+        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
+
+    - name: Install dependencies
+      run: |
+        uv sync --extra dev
+        find . -type d -name __pycache__ -exec rm -rf {} + || true
+        find . -type f -name '*.pyc' -delete || true
+
+    - name: Run database migrations
+      env:
+        DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+      run: uv run python scripts/ops/migrate.py
+
+    - name: Run BDD tests
+      env:
+        DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+        GEMINI_API_KEY: test_key_for_mocking
+        GOOGLE_CLIENT_ID: test_client_id
+        GOOGLE_CLIENT_SECRET: test_client_secret
+        SUPER_ADMIN_EMAILS: test@example.com
+        ENCRYPTION_KEY: PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=
+        ADCP_TESTING: true
+      # No marker exclusions — mirror tox [testenv:bdd] exactly so CI and
+      # local `tox -e bdd` / `./run_all_tests.sh` stay in parity. ``-v`` is
+      # dropped: per-test PASSED lines for 4265 tests dominate the CI log and
+      # writing them measurably slows the job; ``--tb=short`` still preserves
+      # failure context.
+      run: |
+        uv run pytest tests/bdd/ --tb=short --timeout=60
+
   quickstart-test:
     name: Quickstart Docker Compose Test
     runs-on: ubuntu-latest
@@ -243,7 +293,9 @@ jobs:
     # Test the actual quickstart flow users follow
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        persist-credentials: false
 
     - name: Start services with docker compose
       run: |
@@ -292,20 +344,22 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
       with:
         version: ${{ env.UV_VERSION }}
 
     - name: Cache uv dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cache/uv
@@ -363,15 +417,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
       with:
         version: ${{ env.UV_VERSION }}
 
@@ -396,15 +452,15 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [security-audit, smoke-tests, unit-tests, integration-tests, quickstart-test, e2e-tests, lint]
+    needs: [security-audit, smoke-tests, unit-tests, integration-tests, bdd-tests, quickstart-test, e2e-tests, lint]
     if: always()
 
     steps:
     - name: Check test results
       run: |
-        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
+        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.bdd-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
           echo "❌ Tests failed"
           exit 1
         else
-          echo "✅ All tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, lint+mypy)"
+          echo "✅ All tests passed (security-audit, smoke, unit, integration x5, bdd, quickstart, e2e, lint+mypy)"
         fi

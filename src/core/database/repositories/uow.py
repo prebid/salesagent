@@ -39,6 +39,7 @@ from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
@@ -120,7 +121,8 @@ class MediaBuyUoW(BaseUoW):
     """Unit of Work for MediaBuy operations.
 
     Wraps a database session and provides tenant-scoped repositories for
-    media buys and related data (currency limits).
+    media buys, products (read-side; create_media_buy resolves product_map
+    via this), and currency limits.
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -128,15 +130,18 @@ class MediaBuyUoW(BaseUoW):
     """
 
     media_buys: MediaBuyRepository | None
+    products: ProductRepository | None
     currency_limits: CurrencyLimitRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
+        self.products = ProductRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
+        self.products = None
         self.currency_limits = None
 
 
@@ -220,6 +225,27 @@ class AccountUoW(BaseUoW):
 
     def _clear_repos(self) -> None:
         self.accounts = None
+
+
+class PushNotificationConfigUoW(BaseUoW):
+    """Unit of Work for PushNotificationConfig operations.
+
+    Wraps a database session and provides a tenant-scoped
+    ``PushNotificationConfigRepository``. Auto-commits on clean exit,
+    rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    push_notification_configs: PushNotificationConfigRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.push_notification_configs = PushNotificationConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.push_notification_configs = None
 
 
 class CreativeUoW(BaseUoW):

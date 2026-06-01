@@ -14,10 +14,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
 from tests.a2a_helpers import make_a2a_context
+from tests.factories.principal import PrincipalFactory
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
     tenant_id="test-tenant",
     tenant={"tenant_id": "test-tenant"},
@@ -26,25 +26,27 @@ _MOCK_IDENTITY = ResolvedIdentity(
 
 
 def _make_nl_message(text: str):
-    """Build a minimal A2A MessageSendParams with NL text (no skills)."""
-    from a2a.types import Message, MessageSendParams, Part, TextPart
+    """Build a minimal A2A SendMessageRequest with NL text (no skills)."""
+    from a2a.types import Message, Part, Role, SendMessageRequest
 
     message = Message(
-        messageId=str(uuid.uuid4()),
-        role="user",
-        parts=[Part(root=TextPart(text=text))],
+        message_id=str(uuid.uuid4()),
+        role=Role.ROLE_USER,
     )
-    return MessageSendParams(message=message)
+    message.parts.append(Part(text=text))
+    return SendMessageRequest(message=message)
 
 
 @pytest.mark.asyncio
 async def test_nl_product_query_calls_resolve_identity_once():
     """NL product query should call resolve_identity at most once, not twice.
 
-    Current bug: _get_products() calls _create_tool_context_from_a2a() internally
-    (which calls resolve_identity), then the NL dispatch code calls it AGAIN just
-    for logging. This test will FAIL until the redundant logging call is removed.
+    Pre-fix bug: _get_products() called _create_tool_context_from_a2a()
+    internally (which calls resolve_identity), then the NL dispatch code
+    called it AGAIN for logging. Fix removed the redundant logging call.
     """
+    from src.core.schemas import GetProductsResponse
+
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
@@ -53,15 +55,16 @@ async def test_nl_product_query_calls_resolve_identity_once():
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
-            mock_products.return_value = {"products": [], "message": "No products found"}
+            # core_get_products_tool returns a Pydantic GetProductsResponse;
+            # NL _get_products iterates response.products so the mock must
+            # return a real model (not a raw dict).
+            mock_products.return_value = GetProductsResponse(products=[])
 
             await handler.on_message_send(params, context=ctx)
 
-    # BUG: Currently called 2x — once in _get_products():2046 and once for logging:649
-    # FIX target: should be called exactly 1x
     assert mock_resolve.call_count == 1, (
         f"resolve_identity called {mock_resolve.call_count} times for a single NL request. "
-        f"Expected 1 (handler call only), but logging code re-runs auth redundantly."
+        f"Expected 1 (handler call only); regression means the logging code re-runs auth."
     )
 
 
@@ -116,11 +119,19 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
 
 
 @pytest.mark.asyncio
-async def test_nl_media_buy_query_calls_resolve_identity_once():
-    """NL media buy query should call resolve_identity at most once.
+async def test_nl_media_buy_raises_capability_not_supported():
+    """NL media buy is not supported — invocation must surface a typed AdCPError.
 
-    Media buy NL path (line 738) → _create_media_buy (line 2126 calls
-    _create_tool_context_from_a2a) → then line 742 calls it AGAIN for logging.
+    Pre-fix the NL stub returned ``{"success": False, "message": "use explicit"}``
+    which bypassed the two-layer-envelope contract — storyboard runners
+    parsed the artifact as ``MCP_ERROR``. The handler now raises
+    ``AdCPCapabilityNotSupportedError`` which propagates to the outer
+    ``on_message_send`` error handler that attaches a spec-compliant
+    envelope to the failed Task artifact.
+
+    Pin: identity resolution still runs once (the route dispatch happens
+    before ``_create_media_buy`` raises), and the failed Task must surface
+    a wire envelope (not a fake-success dict).
     """
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
@@ -129,10 +140,19 @@ async def test_nl_media_buy_query_calls_resolve_identity_once():
     params = _make_nl_message("Create a campaign for Nike")
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
-        # Let _create_media_buy run naturally — it calls _create_tool_context_from_a2a
-        # internally, then the logging code calls it again
-        await handler.on_message_send(params, context=ctx)
+        # NL media buy raises AdCPCapabilityNotSupportedError; outer
+        # on_message_send catches and surfaces it as InternalError after
+        # attaching the envelope to the failed Task artifact.
+        from a2a.utils.errors import InternalError
 
+        with pytest.raises(InternalError) as exc_info:
+            await handler.on_message_send(params, context=ctx)
+
+    # Identity is resolved once during route dispatch before the raise.
     assert mock_resolve.call_count == 1, (
         f"resolve_identity called {mock_resolve.call_count} times for media buy NL request. Expected 1."
+    )
+    # InternalError message names the original capability failure (sanity check).
+    assert "create_media_buy" in str(exc_info.value).lower() or "explicit" in str(exc_info.value).lower(), (
+        f"InternalError should reference the unsupported capability; got: {exc_info.value}"
     )

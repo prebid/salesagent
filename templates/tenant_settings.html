@@ -556,7 +556,7 @@
                             <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; padding: 1rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
                                 <div style="width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; background: white; border: 1px solid #e2e8f0; border-radius: 6px;">
                                     {% if tenant.favicon_url %}
-                                    <img src="{{ script_name }}{{ tenant.favicon_url }}" alt="Current favicon" style="max-width: 32px; max-height: 32px;">
+                                    <img src="{{ script_name }}{{ tenant.favicon_url }}?v={{ tenant.updated_at.timestamp() | int }}" alt="Current favicon" style="max-width: 32px; max-height: 32px;">
                                     {% else %}
                                     <img src="{{ script_name }}/static/favicons/default/favicon.jpg" alt="Default favicon" style="max-width: 32px; max-height: 32px;">
                                     {% endif %}

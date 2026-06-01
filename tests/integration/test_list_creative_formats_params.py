@@ -9,14 +9,8 @@ Refactored from raw ToolContext + manual patches to harness pattern.
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.core.format import (
-    Assets,
-    Assets5,
-    Assets9,
-    Dimensions,
-    Renders,
-    Responsive,
-)
+from adcp.types import HtmlFormatAsset, ImageFormatAsset, Responsive, VideoFormatAsset
+from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory
@@ -210,19 +204,19 @@ def test_filtering_by_asset_types(integration_db):
         _fmt(
             "image_banner",
             "Image Banner",
-            assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
+            assets=[ImageFormatAsset(asset_id="main", asset_type="image", item_type="individual", required=True)],
         ),
         _fmt(
             "video_player",
             "Video Player",
-            assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+            assets=[VideoFormatAsset(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         _fmt(
             "rich_media",
             "Rich Media",
             assets=[
-                Assets(asset_id="image", asset_type="image", item_type="individual", required=True),
-                Assets9(asset_id="code", asset_type="html", item_type="individual", required=True),
+                ImageFormatAsset(asset_id="image", asset_type="image", item_type="individual", required=True),
+                HtmlFormatAsset(asset_id="code", asset_type="html", item_type="individual", required=True),
             ],
         ),
         _fmt("no_assets", "No Asset Types"),
@@ -306,26 +300,26 @@ def test_new_filters_combined_with_existing(integration_db):
             "display_300x250",
             "Display 300x250",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
+            assets=[ImageFormatAsset(asset_id="main", asset_type="image", item_type="individual", required=True)],
         ),
         _fmt(
             "display_728x90",
             "Display 728x90",
             renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
-            assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
+            assets=[ImageFormatAsset(asset_id="main", asset_type="image", item_type="individual", required=True)],
         ),
         _fmt(
             "video_16x9",
             "Video 16:9",
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
-            assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
+            assets=[VideoFormatAsset(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         _fmt(
             "custom_display",
             "Custom Display",
             is_standard=False,
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets(asset_id="main", asset_type="image", item_type="individual", required=True)],
+            assets=[ImageFormatAsset(asset_id="main", asset_type="image", item_type="individual", required=True)],
         ),
     ]
     # Override agent_url for custom format

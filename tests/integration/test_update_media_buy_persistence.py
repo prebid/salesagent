@@ -20,6 +20,7 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -162,7 +163,7 @@ def test_update_media_buy_requires_context():
     """Test update_media_buy raises error when context is None."""
     # Note: This will first hit Pydantic validation if buyer_ref is also provided
     # So we only provide media_buy_id to avoid the oneOf constraint
-    with pytest.raises(ValueError, match="Identity is required"):
+    with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
         req = UpdateMediaBuyRequest(media_buy_id="buy_test_123")
         _update_media_buy_impl(req=req)
 
@@ -177,7 +178,7 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
         token=test_tenant_setup["token"],
     )
 
-    # media_buy_id that doesn't exist should raise ValueError
-    with pytest.raises(ValueError, match="not found"):
+    # media_buy_id that doesn't exist should raise AdCPNotFoundError
+    with pytest.raises(AdCPNotFoundError, match="not found"):
         req = UpdateMediaBuyRequest(media_buy_id="nonexistent_ref")
         _update_media_buy_impl(req=req, identity=identity)

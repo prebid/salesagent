@@ -8,7 +8,14 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.async_utils import pin_task
+
 logger = logging.getLogger(__name__)
+
+# Fire-and-forget WebSocket broadcast tasks are pinned against asyncio's
+# weak-ref GC via the shared src.core.async_utils.pin_task helper (single
+# source of truth; see its docstring). gh-#1264 follow-up completed the fix
+# at the two call sites the original PR missed.
 
 
 class ActivityFeed:
@@ -33,7 +40,7 @@ class ActivityFeed:
         # Send recent activities to new connection
         for activity in self.recent_activities[tenant_id]:
             try:
-                asyncio.create_task(websocket.send(json.dumps(activity)))
+                pin_task(asyncio.create_task(websocket.send(json.dumps(activity))))
             except Exception:
                 logger.debug("WebSocket send failed for activity replay", exc_info=True)
 
@@ -179,7 +186,7 @@ class ActivityFeed:
             asyncio.get_running_loop()
         except RuntimeError:
             return  # No event loop — data already stored, just no live push
-        asyncio.create_task(self.broadcast_activity(tenant_id, activity))
+        pin_task(asyncio.create_task(self.broadcast_activity(tenant_id, activity)))
 
     def _get_relative_time(self, timestamp: str) -> str:
         """Convert timestamp to relative time string."""

@@ -23,12 +23,11 @@ Business logic is mocked via _get_products_impl.
 #   test_mcp_passes_none_identity_when_no_ctx — CLAUDE.md #5: identity optional
 #   test_a2a_passes_none_identity_when_not_provided — CLAUDE.md #5: identity optional
 #
-# DECISION_BACKED (1 test):
+# DECISION_BACKED (2 tests):
 #   test_a2a_wrapper_no_version_compat — arch decision: compat at handler level
+#   test_mcp_wrapper_no_version_compat — arch decision: compat at handler level (parity with A2A)
 #
-# CHARACTERIZATION (4 tests):
-#   test_mcp_wrapper_version_compat_v2 — locks: compat applied for pre-3.0
-#   test_mcp_wrapper_version_compat_v3_skips — locks: compat skipped for v3+
+# CHARACTERIZATION (2 tests):
 #   test_a2a_wrapper_empty_brief_uses_empty_string — locks: empty brief handling
 #   test_rest_applies_version_compat — locks: REST applies compat
 # ---
@@ -117,8 +116,8 @@ class TestMcpGetProductsWrapper:
             with pytest.raises(AdCPValidationError, match="Invalid get_products request"):
                 asyncio.run(get_products(brief="ads", ctx=mock_ctx))
 
-    def test_mcp_wrapper_version_compat_v2(self):
-        """MCP wrapper applies version compat for pre-3.0 clients."""
+    def test_mcp_wrapper_no_version_compat(self):
+        """MCP wrapper does NOT apply version compat — that's the handler's job (parity with A2A)."""
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=PrincipalFactory.make_identity(protocol="mcp"))
 
@@ -130,34 +129,11 @@ class TestMcpGetProductsWrapper:
             ),
             patch("src.core.version_compat.apply_version_compat") as mock_compat,
         ):
-            mock_compat.return_value = {"products": [], "compat_field": True}
             from src.core.tools.products import get_products
 
-            result = asyncio.run(get_products(brief="ads", adcp_version="2.0.0", ctx=mock_ctx))
+            asyncio.run(get_products(brief="ads", ctx=mock_ctx))
 
-        mock_compat.assert_called_once()
-        assert result.structured_content["compat_field"] is True
-
-    def test_mcp_wrapper_version_compat_v3_skips(self):
-        """MCP wrapper skips version compat for v3+ clients."""
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=PrincipalFactory.make_identity(protocol="mcp"))
-
-        with (
-            patch(
-                "src.core.tools.products._get_products_impl",
-                new_callable=AsyncMock,
-                return_value=_mock_response(),
-            ),
-            patch("src.core.version_compat.apply_version_compat") as mock_compat,
-        ):
-            # apply_version_compat returns input unchanged for v3+
-            mock_compat.side_effect = lambda tool, resp, ver: resp
-            from src.core.tools.products import get_products
-
-            result = asyncio.run(get_products(brief="ads", adcp_version="3.0.0", ctx=mock_ctx))
-
-        mock_compat.assert_called_once_with("get_products", result.structured_content, "3.0.0")
+        mock_compat.assert_not_called()
 
     def test_mcp_wrapper_reads_identity_from_ctx_state(self):
         """MCP wrapper reads identity from ctx.get_state('identity')."""

@@ -25,9 +25,10 @@ def _make_identity(tenant_id: str = "tenant_test"):
     return identity
 
 
-def _mock_media_buy(currency: str = "USD"):
+def _mock_media_buy(currency: str = "USD", status: str = "active"):
     media_buy = MagicMock()
     media_buy.currency = currency
+    media_buy.status = status
     media_buy.start_time = datetime(2025, 1, 1, tzinfo=UTC)
     media_buy.end_time = datetime(2025, 1, 31, tzinfo=UTC)
     return media_buy
@@ -96,7 +97,7 @@ def test_a2a_wrapper_rejects_oversized_campaign_budget():
 
     assert isinstance(result, UpdateMediaBuyError)
     assert result.errors
-    assert result.errors[0].code == "budget_ceiling_exceeded"
+    assert result.errors[0].code == "BUDGET_EXCEEDED"
 
 
 def test_a2a_wrapper_rejects_package_budget_below_minimum():
@@ -118,7 +119,7 @@ def test_a2a_wrapper_rejects_package_budget_below_minimum():
 
     assert isinstance(result, UpdateMediaBuyError)
     assert result.errors
-    assert result.errors[0].code == "budget_below_minimum"
+    assert result.errors[0].code == "BUDGET_TOO_LOW"
 
 
 def test_mcp_wrapper_preserves_existing_currency_for_float_budget():

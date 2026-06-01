@@ -99,9 +99,9 @@ class TestSendPushNotificationsLogsOnFailure:
                 await asyncio.sleep(0)
 
         error_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-        assert any(
-            "Webhook failed for https://example.com/webhook" in m for m in error_msgs
-        ), f"Expected logger.exception with webhook URL, got: {error_msgs}"
+        assert any("Webhook failed for https://example.com/webhook" in m for m in error_msgs), (
+            f"Expected logger.exception with webhook URL, got: {error_msgs}"
+        )
 
     def test_outer_except_logs_when_unexpected_error_escapes(self, caplog, mock_step):
         """Site 3: when an unexpected error escapes inner handlers, the outer
@@ -117,6 +117,6 @@ class TestSendPushNotificationsLogsOnFailure:
             cm._send_push_notifications(mock_step, "completed", mock_session)
 
         error_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-        assert any(
-            "Error sending push notifications" in m for m in error_msgs
-        ), f"Expected outer except to log via logger.exception, got: {error_msgs}"
+        assert any("Error sending push notifications" in m for m in error_msgs), (
+            f"Expected outer except to log via logger.exception, got: {error_msgs}"
+        )

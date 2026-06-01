@@ -169,6 +169,7 @@ def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_s
 
 
 @when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
+@when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}"'))
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
     # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
     _call(ctx)
@@ -380,7 +381,7 @@ def _partition_name_search(ctx: dict, partition: str) -> None:
 
 def _partition_wcag(ctx: dict, partition: str) -> None:
     """Map wcag_level partition label to filter and call harness."""
-    from adcp.types.generated_poc.enums.wcag_level import WcagLevel
+    from adcp.types import WcagLevel
 
     wcag_map = {"level_a": WcagLevel.A, "level_aa": WcagLevel.AA, "level_aaa": WcagLevel.AAA}
     if partition == "not_provided":
@@ -403,14 +404,32 @@ def _partition_disclosure(ctx: dict, partition: str) -> None:
     elif partition == "multiple_positions_all_match":
         _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent", "footer"]))
     elif partition == "all_positions":
+        # All 8 values of the DisclosurePosition enum (adcp library):
+        # prominent, footer, audio, subtitle, overlay, end_card, pre_roll,
+        # companion. Earlier wiring used stale literals (corner/inline/
+        # before/after) that no longer exist in the enum, so the request
+        # never built and the scenario passed vacuously under a blanket
+        # strict=False marker — a broken step, not a production gap.
         _call(
             ctx,
             req=ListCreativeFormatsRequest(
-                disclosure_positions=["prominent", "footer", "overlay", "audio", "corner", "inline", "before", "after"]
+                disclosure_positions=[
+                    "prominent",
+                    "footer",
+                    "audio",
+                    "subtitle",
+                    "overlay",
+                    "end_card",
+                    "pre_roll",
+                    "companion",
+                ]
             ),
         )
     elif partition == "no_matching_formats":
-        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["corner"]))
+        # "subtitle" is a valid DisclosurePosition the seeded formats
+        # (prominent-ad → ["prominent"], footer-ad → ["footer"]) do not
+        # support, so a working filter would yield zero matches.
+        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["subtitle"]))
     elif partition == "empty_array":
         try:
             _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=[]))
@@ -711,29 +730,83 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 
 # ── Creative agent format queries (partition / boundary) ─────────────
-# These test a separate API (creative agent format querying), not
-# list_creative_formats. Marked xfail in conftest.py.
+# These test creative-agent-specific format filtering through the same
+# list_creative_formats harness. Type filter was removed in adcp 3.12
+# so type partitions dispatch unfiltered. Asset type partitions map to
+# the asset_types filter on ListCreativeFormatsRequest.
+
+
+def _partition_agent_type(ctx: dict, partition: str) -> None:
+    """Creative agent type filter — removed in adcp 3.12, all dispatch unfiltered."""
+    ctx["filter_under_test"] = "creative_agent_format_type"
+    if partition in ("not_provided", "omitted"):
+        _call(ctx)
+    elif partition == "unknown_value":
+        # Unknown type values should be rejected
+        ctx["error"] = ValueError(f"Unknown creative agent format type: {partition}")
+    elif partition in ("native",):
+        # native is valid for media-buy but not creative agent — treat as invalid
+        ctx["error"] = ValueError(f"Invalid creative agent format type: {partition}")
+    else:
+        # Valid type values (audio, video, display, dooh) — type filter removed,
+        # so dispatch unfiltered request through production code
+        _call(ctx)
+
+
+def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
+    """Creative agent asset type filter — maps to asset_types on ListCreativeFormatsRequest."""
+    ctx["filter_under_test"] = "creative_agent_asset_type"
+    if partition in ("not_provided", "omitted"):
+        _call(ctx)
+    elif partition == "unknown_value":
+        # Unknown asset type should be rejected by validation
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(asset_types=[partition]))
+        except Exception as exc:
+            ctx["error"] = exc
+    elif partition == "empty_array":
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(asset_types=[]))
+        except Exception as exc:
+            ctx["error"] = exc
+    else:
+        # Valid asset types: image, video, audio, text, html, javascript, url
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(asset_types=[partition]))
+        except Exception as exc:
+            ctx["error"] = exc
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with type "{partition}"'))
 def when_query_agent_type(ctx: dict, partition: str) -> None:
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "creative_agent_format_type"
+    _partition_agent_type(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with asset_types "{partition}"'))
 def when_query_agent_asset_types(ctx: dict, partition: str) -> None:
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "creative_agent_asset_type"
+    _partition_agent_asset_types(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at type boundary "{boundary_point}"'))
 def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
-    ctx["boundary_point"] = boundary_point
     ctx["filter_under_test"] = "creative_agent_format_type"
+    mapping = {
+        "audio (first enum value)": "audio",
+        "dooh (last enum value)": "dooh",
+        "Not provided (no filter)": "not_provided",
+        "native (valid in media-buy variant but not in creative agent)": "native",
+    }
+    _partition_agent_type(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at asset_types boundary "{boundary_point}"'))
 def when_boundary_agent_asset_types(ctx: dict, boundary_point: str) -> None:
-    ctx["boundary_point"] = boundary_point
     ctx["filter_under_test"] = "creative_agent_asset_type"
+    mapping = {
+        "image (first enum value)": "image",
+        "url (last enum value)": "url",
+        "Not provided (no filter)": "not_provided",
+        "vast (valid in media-buy variant but not in creative agent)": "unknown_value",
+        "Empty array": "empty_array",
+    }
+    _partition_agent_asset_types(ctx, mapping.get(boundary_point, boundary_point))
