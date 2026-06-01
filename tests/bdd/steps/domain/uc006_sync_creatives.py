@@ -1466,6 +1466,38 @@ def _get_creative_assigned_to(ctx: dict) -> list[str]:
     return list(results[0].assigned_to or [])
 
 
+def _get_assignment_from_db(ctx: dict) -> object:
+    """Return the CreativeAssignment row created by the sync.
+
+    Performs the lookup and existence assertions shared by assignment
+    outcome steps: success (no error), the package present in assigned_to,
+    e2e xfail guard, then a tenant/creative/package-scoped DB lookup that is
+    asserted to exist. Callers add their own divergent attribute checks.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment
+
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    expected_pkg = ctx["package"].package_id
+    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
+
+    _xfail_if_e2e(ctx)
+    tenant_id = ctx["tenant"].tenant_id
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    with db_session(ctx) as session:
+        assignment = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id,
+                creative_id=creative_id,
+                package_id=expected_pkg,
+            )
+        ).first()
+        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
+        return assignment
+
+
 def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
     """Assert a per-creative failure with the expected error code.
 
@@ -1766,36 +1798,14 @@ def then_assignment_created_as_paused(ctx: dict) -> None:
     Production hard-codes weight=100 on all new assignments and has no API
     surface for per-entry weight. SPEC-PRODUCTION GAP on weight only.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    # Assert what production DOES provide: assignment was created
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    # Verify the DB row exists
-    _xfail_if_e2e(ctx)
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        # Xfail ONLY the specific unimplemented claim
-        if assignment.weight != 0:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused) is not supported. "
-                f"Expected weight=0, got weight={assignment.weight}. "
-                "Production hard-codes weight=100 on create."
-            )
+    assignment = _get_assignment_from_db(ctx)
+    # Xfail ONLY the specific unimplemented claim
+    if assignment.weight != 0:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused) is not supported. "
+            f"Expected weight=0, got weight={assignment.weight}. "
+            "Production hard-codes weight=100 on create."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1991,42 +2001,22 @@ def then_assignment_includes_placement(ctx: dict) -> None:
     CreativeAssignment ORM model does not persist per-assignment placement ids.
     SPEC-PRODUCTION GAP on placement_ids only.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    # Assert what production DOES provide: assignment was created
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    # Verify the DB row exists
-    _xfail_if_e2e(ctx)
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        # Check if placement_ids is supported on the assignment
-        placement_ids = getattr(assignment, "placement_ids", None)
-        if placement_ids is not None:
-            assert placement_ids, (
-                f"Assignment has placement_ids field but it is empty for creative={creative_id}, package={expected_pkg}"
-            )
-        else:
-            # Xfail ONLY the specific unimplemented claim
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: Per-assignment placement_ids targeting "
-                "is not supported. CreativeAssignment model does not have a "
-                "placement_ids field."
-            )
+    assignment = _get_assignment_from_db(ctx)
+    # Check if placement_ids is supported on the assignment
+    placement_ids = getattr(assignment, "placement_ids", None)
+    if placement_ids is not None:
+        creative_id = ctx["creatives"][-1]["creative_id"]
+        expected_pkg = ctx["package"].package_id
+        assert placement_ids, (
+            f"Assignment has placement_ids field but it is empty for creative={creative_id}, package={expected_pkg}"
+        )
+    else:
+        # Xfail ONLY the specific unimplemented claim
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: Per-assignment placement_ids targeting "
+            "is not supported. CreativeAssignment model does not have a "
+            "placement_ids field."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
