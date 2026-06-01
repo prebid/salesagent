@@ -3347,6 +3347,29 @@ def given_assignments_to_package_no_product_id(ctx: dict) -> None:
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
+def _assert_format_check_outcome(ctx: dict, label: str) -> None:
+    """Assert the creative was accepted past the format compatibility gate.
+
+    Shared by the ``skipped`` and ``passed`` outcomes: no error was raised, the
+    response carries at least one SyncCreativeResult, the first result's action
+    is accept-like (created/updated/unchanged), and there are no format-related
+    warnings. ``label`` tags the outcome in the failure messages.
+    """
+    assert "error" not in ctx, f"format check ({label}): expected no error, but production raised: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, f"format check ({label}): expected a response"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"format check ({label}): expected at least one SyncCreativeResult"
+    first = results[0]
+    action_str = str(getattr(getattr(first, "action", None), "value", getattr(first, "action", None)))
+    assert action_str in ("created", "updated", "unchanged"), (
+        f"format check ({label}): expected creative accepted (created/updated/unchanged), got action='{action_str}'"
+    )
+    warnings = getattr(first, "warnings", None) or []
+    format_warnings = [w for w in warnings if "format" in str(w).lower()]
+    assert not format_warnings, f"format check ({label}): expected no format warnings, got: {format_warnings}"
+
+
 @then("the format compatibility check should be skipped")
 def then_format_check_skipped(ctx: dict) -> None:
     """Assert the format check was skipped because the package has no product_id.
@@ -3356,9 +3379,6 @@ def then_format_check_skipped(ctx: dict) -> None:
     not match any product format set — proving the check was bypassed, not passed.
     (3) No format-related warnings or errors appear on the per-creative result.
     """
-    assert "error" not in ctx, (
-        f"Expected format check to be skipped (no product_id), but production raised: {ctx.get('error')}"
-    )
     # Verify the skip precondition: the package has no product_id
     package = ctx.get("package")
     if package is not None:
@@ -3366,19 +3386,7 @@ def then_format_check_skipped(ctx: dict) -> None:
         assert pkg_product_id is None, (
             f"INV-6: format check skip requires package with no product_id, but got '{pkg_product_id}'"
         )
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response when format check is skipped"
-    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    assert results, "Expected at least one SyncCreativeResult when format check is skipped"
-    first = results[0]
-    action_str = str(getattr(getattr(first, "action", None), "value", getattr(first, "action", None)))
-    assert action_str in ("created", "updated", "unchanged"), (
-        f"Expected creative accepted when format check skipped, got action='{action_str}'"
-    )
-    # Verify no format-related warnings on the result
-    warnings = getattr(first, "warnings", None) or []
-    format_warnings = [w for w in warnings if "format" in str(w).lower()]
-    assert not format_warnings, f"INV-6: format check should be skipped, but format warnings present: {format_warnings}"
+    _assert_format_check_outcome(ctx, "skipped")
 
 
 @then("the format compatibility check should pass")
@@ -3389,22 +3397,7 @@ def then_format_check_should_pass(ctx: dict) -> None:
     compatibility gate (action is created/updated, no format-incompatibility
     warning in the per-creative result). Hard-asserts the happy path.
     """
-    assert "error" not in ctx, (
-        f"Expected format check to pass (empty format_ids allows all), but production raised: {ctx.get('error')}"
-    )
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response after format check pass"
-    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    assert results, "Expected at least one SyncCreativeResult after format check pass"
-    first = results[0]
-    action_str = str(getattr(getattr(first, "action", None), "value", getattr(first, "action", None)))
-    assert action_str in ("created", "updated", "unchanged"), (
-        f"Expected creative accepted past format gate (created/updated/unchanged), got action='{action_str}'"
-    )
-    # Verify no format-incompatibility warnings
-    warnings_list = getattr(first, "warnings", None) or []
-    format_warnings = [w for w in warnings_list if "format" in str(w).lower()]
-    assert not format_warnings, f"Expected no format-incompatibility warnings, got: {format_warnings}"
+    _assert_format_check_outcome(ctx, "passed")
 
 
 # --- pzlv: assignment format compatibility boundary (BR-RULE-039) ---
