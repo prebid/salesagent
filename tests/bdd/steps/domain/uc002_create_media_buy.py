@@ -786,8 +786,8 @@ def _assert_tasks_sorted(tasks: list, outcome: str) -> None:
     values = [_get_task_field(t, sort_field) for t in tasks]
     non_none = [v for v in values if v is not None]
     if len(non_none) >= 2:
-        is_ascending = all(a <= b for a, b in zip(non_none, non_none[1:]))
-        is_descending = all(a >= b for a, b in zip(non_none, non_none[1:]))
+        is_ascending = all(a <= b for a, b in zip(non_none, non_none[1:], strict=False))
+        is_descending = all(a >= b for a, b in zip(non_none, non_none[1:], strict=False))
         assert is_ascending or is_descending, f"Tasks not sorted by '{sort_field}': values = {non_none[:5]}"
 
 
@@ -857,7 +857,7 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
             values = [_get_task_field(t, "created_at") for t in tasks]
             non_none = [v for v in values if v is not None]
             if len(non_none) >= 2:
-                assert all(a >= b for a, b in zip(non_none, non_none[1:])), (
+                assert all(a >= b for a, b in zip(non_none, non_none[1:], strict=False)), (
                     f"Expected default descending created_at sort, values = {non_none[:5]}"
                 )
     elif outcome.startswith("results in") and len(tasks) >= 2:
@@ -865,11 +865,11 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
         non_none = [v for v in values if v is not None]
         if len(non_none) >= 2:
             if "ascending" in outcome:
-                assert all(a <= b for a, b in zip(non_none, non_none[1:])), (
+                assert all(a <= b for a, b in zip(non_none, non_none[1:], strict=False)), (
                     f"Expected ascending order, values = {non_none[:5]}"
                 )
             elif "descending" in outcome:
-                assert all(a >= b for a, b in zip(non_none, non_none[1:])), (
+                assert all(a >= b for a, b in zip(non_none, non_none[1:], strict=False)), (
                     f"Expected descending order, values = {non_none[:5]}"
                 )
 
