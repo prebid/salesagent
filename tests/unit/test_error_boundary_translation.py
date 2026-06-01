@@ -458,8 +458,8 @@ class TestA2ADispatcherFailedSkillResult:
 
         assert result["success"] is False
         assert result["skill"] == "get_products"
-        assert result["error"] == "bad input"
         env = result["error_envelope"]
+        assert env["errors"][0]["message"] == "bad input"
         assert env["adcp_error"]["code"] == "VALIDATION_ERROR"
         assert env["errors"][0]["code"] == "VALIDATION_ERROR"
         assert env["errors"][0]["recovery"] == "correctable"
@@ -493,7 +493,6 @@ class TestA2ADispatcherFailedSkillResult:
 
         result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError())
 
-        assert result["error"] == "RuntimeError"
         env = result["error_envelope"]
         assert env["errors"][0]["message"] == "RuntimeError"
 
@@ -932,9 +931,8 @@ class TestToDictRecoveryField:
         for exc, expected_recovery in cases:
             d = exc.to_dict()
             assert "recovery" in d, f"{type(exc).__name__}.to_dict() missing 'recovery' key"
-            assert d["recovery"] == expected_recovery, (
-                f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
-            )
+            msg = f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
+            assert d["recovery"] == expected_recovery, msg
 
     def test_to_dict_custom_recovery_override(self):
         """Custom recovery= kwarg overrides class default in to_dict() output."""
@@ -1209,7 +1207,6 @@ class TestRecoveryRoundtrip:
             ):
                 client = TestClient(app, raise_server_exceptions=False)
                 response = client.get("/api/v1/capabilities")
-                assert response.status_code == expected_status, (
-                    f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
-                )
+                status_msg = f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
+                assert response.status_code == expected_status, status_msg
                 assert_envelope_shape(response.json(), expected_code, recovery=expected_recovery)

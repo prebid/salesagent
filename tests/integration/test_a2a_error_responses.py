@@ -848,8 +848,8 @@ class TestA2AContextEcho:
         )
 
         async def raise_with_context(params, identity):
-            # @_a2a_skill decorator passes AdCPError through unchanged so the
-            # dispatcher catches it and builds the envelope.
+            # AdCPError raised from a skill handler propagates to the dispatcher,
+            # which catches it and builds the envelope.
             raise AdCPValidationError(
                 "Synthetic validation error to verify context echo",
                 context=echoed_context,

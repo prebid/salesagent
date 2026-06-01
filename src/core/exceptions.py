@@ -10,6 +10,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from adcp.types import ContextObject
+
+logger = logging.getLogger(__name__)
 
 RecoveryHint = Literal["transient", "correctable", "terminal"]
 
@@ -137,13 +140,21 @@ def _serialize_context(
           ``mode="json"`` coerces datetimes/UUIDs/etc. to JSON-serializable
           primitives; ``exclude_none=True`` matches the spec's emit-only-
           populated-fields norm.
+        - anything else → log a warning and return ``None``. This is reached
+          from ``to_dict``/``to_adcp_error``/``build_two_layer_error_envelope``,
+          all of which run inside exception handlers — raising here would shadow
+          the original exception and the boundary translator would fail open
+          with no envelope. A malformed context drops to ``None`` instead.
     """
     if context is None:
         return None
     if isinstance(context, dict):
         return dict(context)
     if not isinstance(context, BaseModel):
-        raise TypeError(f"_serialize_context expected dict or BaseModel, got {type(context).__name__}")
+        logger.warning(
+            "_serialize_context expected dict or BaseModel, got %s; dropping context", type(context).__name__
+        )
+        return None
     return context.model_dump(mode="json", exclude_none=True)
 
 
