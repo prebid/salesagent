@@ -113,7 +113,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
     with (
         patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -294,7 +293,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
 
     with (
         patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -423,7 +421,6 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
 
     with (
         patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -554,7 +551,6 @@ def test_creative_assignments_with_weights(integration_db):
     )
 
     with (
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -715,7 +711,6 @@ def test_creative_assignments_replaces_all(integration_db):
     )
 
     with (
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
