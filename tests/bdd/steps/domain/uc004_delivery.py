@@ -20,6 +20,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_error
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -1710,7 +1711,7 @@ def then_circuit_healthy(ctx: dict) -> None:
 def then_config_rejected(ctx: dict) -> None:
     """Assert configuration was rejected with a validation/rejection error message."""
     error = _require_error(ctx)
-    msg = str(error).lower()
+    msg = _get_error_message(error).lower()
     rejection_keywords = {"reject", "invalid", "validation", "minimum", "too short", "credential", "length", "required"}
     assert any(kw in msg for kw in rejection_keywords), (
         f"Expected a rejection/validation error message, but got: {error!r}. Expected one of: {rejection_keywords}"
@@ -1725,7 +1726,7 @@ def then_error_min_credential_length(ctx: dict) -> None:
     validation/credential rejection (not some unrelated error containing '32').
     """
     error = _require_error(ctx)
-    msg = str(error).lower()
+    msg = _get_error_message(error).lower()
     assert "32" in msg, f"Expected '32' (minimum length) in error message: {error}"
     credential_terms = {"credential", "secret", "length", "minimum", "characters", "short"}
     assert any(term in msg for term in credential_terms), (
@@ -1894,7 +1895,7 @@ def then_error_no_reveal(ctx: dict) -> None:
     """Assert error does not leak existence information via message content or ID echoing."""
     error = ctx.get("error")
     assert error is not None, "Expected an error"
-    msg = str(error).lower()
+    msg = _get_error_message(error).lower()
     leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
     for phrase in leaking_phrases:
         assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
@@ -2932,7 +2933,7 @@ def _assert_no_error_for_mb(ctx: dict, mb_id: str) -> None:
     assert resp is not None or error is not None, "Neither error nor response in ctx — test setup failed"
     # If a general error occurred, check it's not about this specific mb_id
     if error is not None:
-        error_msg = str(error).lower()
+        error_msg = _get_error_message(error).lower()
         assert real_id.lower() not in error_msg, f"Error mentions '{mb_id}' (real_id={real_id}): {error}"
     # If response exists, check response-level errors list and per-delivery errors
     if resp is not None:
@@ -2940,7 +2941,7 @@ def _assert_no_error_for_mb(ctx: dict, mb_id: str) -> None:
         resp_errors = getattr(resp, "errors", None)
         if resp_errors:
             for err in resp_errors:
-                err_str = str(err).lower()
+                err_str = _get_error_message(err).lower()
                 assert real_id.lower() not in err_str, (
                     f"Response-level errors list mentions '{mb_id}' (real_id={real_id}): {err}"
                 )
