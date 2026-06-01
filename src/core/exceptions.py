@@ -76,6 +76,7 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "ACTIVATION_ERROR": "SERVICE_UNAVAILABLE",
     "ACTIVATION_FAILED": "SERVICE_UNAVAILABLE",
     "WORKFLOW_CREATION_FAILED": "SERVICE_UNAVAILABLE",
+    "LINE_ITEM_CREATION_FAILED": "SERVICE_UNAVAILABLE",
     "CREATIVE_SYNC_FAILED": "SERVICE_UNAVAILABLE",
     "PARTIAL_FAILURE": "SERVICE_UNAVAILABLE",
     "PRODUCT_NOT_CONFIGURED": "PRODUCT_UNAVAILABLE",
@@ -96,13 +97,13 @@ INTERNAL_CODES: frozenset[str] = frozenset(
         "ACTIVATION_WORKFLOW_FAILED",  # GAM activation workflow detail
         "API_UPDATE_FAILED",  # Broadstreet API update detail
         "GAM_UPDATE_FAILED",  # GAM update API detail
+        "PARTIAL_FAILURE",  # Bulk partial-failure taxonomy (AdCPBulkUpdateError)
     }
 )
 
 # Sanity check: every mapping target must be a standard code.
-assert all(v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()), (
-    "ERROR_CODE_MAPPING contains non-standard target codes"
-)
+_NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(STANDARD_ERROR_CODES)
+assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
 
 
 def translate_error_code(code: str) -> str:
@@ -518,6 +519,21 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+class AdCPProductNotFoundError(AdCPNotFoundError):
+    """Requested product does not exist (404, PRODUCT_NOT_FOUND).
+
+    Recovery=correctable: the buyer can correct by supplying a valid
+    product_id (discoverable via get_products). Overrides the
+    ``AdCPNotFoundError`` ``terminal`` default for the same reason as
+    ``AdCPMediaBuyNotFoundError`` — the buyer's own request is the lever
+    for recovery. PRODUCT_NOT_FOUND is a standard SDK code (passthrough,
+    not in ERROR_CODE_MAPPING).
+    """
+
+    _default_error_code: ClassVar[str] = "PRODUCT_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
 class AdCPBudgetTooLowError(AdCPError):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
@@ -577,6 +593,53 @@ class AdCPProductUnavailableError(AdCPError):
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "PRODUCT_UNAVAILABLE"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+# ---------------------------------------------------------------------------
+# Adapter-taxonomy subclasses (502 → SERVICE_UNAVAILABLE).
+# ---------------------------------------------------------------------------
+# These extend AdCPAdapterError to carry an internal failure taxonomy as the
+# class identity instead of smuggling it through ``details["internal_code"]``
+# (which is buyer-visible). The raw ``error_code`` stays in INTERNAL_CODES for
+# server-side logs/audit; ``wire_error_code`` translates it to
+# SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING so the buyer sees a standard code.
+
+
+class AdCPWorkflowError(AdCPAdapterError):
+    """Workflow-step orchestration failed inside an adapter (502 → SERVICE_UNAVAILABLE).
+
+    Carries the WORKFLOW_CREATION_FAILED taxonomy as the class identity so
+    logs/audit retain the specific failure mode while the wire shows the
+    standard SERVICE_UNAVAILABLE. Recovery=transient (inherited): the
+    workflow subsystem may succeed on retry.
+    """
+
+    _default_error_code: ClassVar[str] = "WORKFLOW_CREATION_FAILED"
+
+
+class AdCPLineItemError(AdCPAdapterError):
+    """Adapter line-item creation failed (502 → SERVICE_UNAVAILABLE).
+
+    Carries the LINE_ITEM_CREATION_FAILED taxonomy as the class identity;
+    same rationale as ``AdCPWorkflowError``.
+    """
+
+    _default_error_code: ClassVar[str] = "LINE_ITEM_CREATION_FAILED"
+
+
+class AdCPBulkUpdateError(AdCPAdapterError):
+    """A bulk update partially failed — N operations attempted, M failed (502 → SERVICE_UNAVAILABLE).
+
+    Unifies the cross-adapter partial-failure event under one class and one
+    status (502) so REST clients filtering on HTTP status don't fork by
+    adapter (previously broadstreet raised 502, GAM raised 503 for the same
+    semantic event). Carries the PARTIAL_FAILURE taxonomy as the class
+    identity; per-operation detail (failed IDs, counts) belongs in ``details``
+    as data. Recovery=transient (inherited): failed operations may succeed
+    on retry.
+    """
+
+    _default_error_code: ClassVar[str] = "PARTIAL_FAILURE"
 
 
 # ---------------------------------------------------------------------------

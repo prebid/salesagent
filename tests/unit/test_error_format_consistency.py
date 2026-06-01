@@ -79,9 +79,8 @@ class TestMCPErrorShapes:
         # missing brand.domain field. We don't pin on a specific code because
         # Pydantic v2's error codes vary by union/discriminator path.
         error_msg = str(exc_info.value)
-        assert "packages" in error_msg or "domain" in error_msg, (
-            f"Pydantic error should reference the malformed field, got: {error_msg}"
-        )
+        field_referenced = "packages" in error_msg or "domain" in error_msg
+        assert field_referenced, f"Pydantic error should reference the malformed field, got: {error_msg}"
 
     @pytest.mark.asyncio
     async def test_auth_error_raises_validation_error(self):
@@ -746,8 +745,13 @@ class TestErrorCodeVocabularyConsistency:
         # SDK standard codes added by the error-emission-architecture substrate.
         "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
+        "PRODUCT_NOT_FOUND",  # SDK standard: AdCPProductNotFoundError
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
+        # Adapter-taxonomy codes (internal; wire → SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING)
+        "WORKFLOW_CREATION_FAILED",  # Internal: AdCPWorkflowError
+        "LINE_ITEM_CREATION_FAILED",  # Internal: AdCPLineItemError
+        "PARTIAL_FAILURE",  # Internal: AdCPBulkUpdateError
         # Advisory-on-success Pattern A codes (no dedicated exception subclass —
         # construction sites use Error(code=...) inside success envelopes).
         "CREATIVE_REJECTED",
