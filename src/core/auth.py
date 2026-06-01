@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, Union
 from fastmcp.server.context import Context
 
 if TYPE_CHECKING:
+    from adcp.types import ContextObject
+
     from src.core.tool_context import ToolContext
 from fastmcp.server.dependencies import get_http_headers
 from sqlalchemy import select
@@ -304,6 +306,27 @@ def get_principal_object(principal_id: str, tenant_id: str | None = None) -> Pri
                 platform_mappings=principal.platform_mappings,
             )
     return None
+
+
+def resolve_principal_or_raise(
+    principal_id: str,
+    *,
+    tenant_id: str | None = None,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> Principal:
+    """Resolve the Principal for ``principal_id`` or raise ``AdCPAuthenticationError``.
+
+    Collapses the identical "look up the principal, fail authentication if it
+    does not exist" guard shared by the create, update, and delivery media-buy
+    tools into one definition. ``context`` is echoed into the error envelope so
+    buyer agents can correlate the failure to their request.
+    """
+    from src.core.exceptions import AdCPAuthenticationError
+
+    principal = get_principal_object(principal_id, tenant_id=tenant_id)
+    if principal is None:
+        raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=context)
+    return principal
 
 
 def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | None = None) -> str | None:

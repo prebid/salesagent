@@ -128,7 +128,7 @@ class TestMCPErrorShapes:
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
+            patch("src.core.auth.get_principal_object", return_value=None),
         ):
             with pytest.raises(AdCPAuthenticationError, match="nonexistent"):
                 await _create_media_buy_impl(req=req, identity=identity)
@@ -470,7 +470,7 @@ class TestCrossTransportErrorConsistency:
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
+            patch("src.core.auth.get_principal_object", return_value=None),
         ):
             with pytest.raises(AdCPAuthenticationError, match="ghost_principal") as exc_info:
                 await _create_media_buy_impl(req=req, identity=identity)

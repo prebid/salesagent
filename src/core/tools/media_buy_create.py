@@ -107,6 +107,7 @@ from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_object,
+    resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
 from src.core.database.models import MediaBuy
@@ -1605,11 +1606,9 @@ async def _create_media_buy_impl(
             )
             raise AdCPValidationError(error_msg, recovery="terminal")
 
-    # Validate principal exists BEFORE creating context (foreign key constraint)
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
-    if not principal:
-        # Cannot create context or workflow step without valid principal
-        raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=req.context)
+    # Validate principal exists BEFORE creating context (foreign key constraint).
+    # Cannot create context or workflow step without a valid principal.
+    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
     # Idempotency check: if request carries an idempotency_key, look up an existing
     # media buy for the same (tenant, principal, key) triple.  Per adcp 3.12 spec,
@@ -2983,9 +2982,8 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]]
+                product_format_dimensions = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url

@@ -54,7 +54,7 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
-from src.core.auth import get_principal_object
+from src.core.auth import resolve_principal_or_raise
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import DeliveryRepository
@@ -112,9 +112,7 @@ def _get_media_buy_delivery_impl(
         raise AdCPAuthenticationError("Principal ID not found in context", context=req.context)
 
     # Get the Principal object
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
-    if not principal:
-        raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=req.context)
+    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = identity.tenant

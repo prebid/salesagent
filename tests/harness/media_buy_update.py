@@ -62,7 +62,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
     MODULE = _MODULE
     EXTERNAL_PATCHES = {
         "uow": f"{_MODULE}.MediaBuyUoW",
-        "principal": f"{_MODULE}.get_principal_object",
+        "principal": "src.core.auth.get_principal_object",
         "verify": f"{_MODULE}._verify_principal",
         "ctx_mgr": f"{_MODULE}.get_context_manager",
         "adapter": f"{_MODULE}.get_adapter",

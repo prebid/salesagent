@@ -75,7 +75,7 @@ def standard_mocks():
 
     with (
         patch("src.core.helpers.context_helpers.ensure_tenant_context") as m_tenant,
-        patch(f"{MODULE}.get_principal_object") as m_principal_obj,
+        patch("src.core.auth.get_principal_object") as m_principal_obj,
         patch(f"{MODULE}._verify_principal") as m_verify,
         patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
         patch(f"{MODULE}.get_adapter") as m_adapter,

@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
-    get_principal_object,
+    resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
@@ -302,9 +302,7 @@ def _update_media_buy_impl(
                     request_metadata={"protocol": identity.protocol},
                 )
 
-            principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)  # Now guaranteed to be str
-            if not principal:
-                raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=req.context)
+            principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
             adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
             today = req.today or date.today()

@@ -175,7 +175,7 @@ def _standard_patches(
 
     return {
         "principal_obj": patch(
-            f"{_PATCH_PREFIX}.get_principal_object",
+            "src.core.auth.get_principal_object",
             return_value=principal_obj,
         ),
         "adapter": patch(
@@ -1275,7 +1275,7 @@ class TestDeliveryAuthErrors:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
         identity = _make_identity(principal_id="ghost_principal")
 
-        with patch(f"{_PATCH_PREFIX}.get_principal_object", return_value=None):
+        with patch("src.core.auth.get_principal_object", return_value=None):
             with pytest.raises(AdCPAuthenticationError, match="ghost_principal"):
                 _get_media_buy_delivery_impl(req, identity)
 
@@ -1696,9 +1696,7 @@ class TestDeliveryWebhookHappyPath:
         """
         service = WebhookDeliveryService()
 
-        with (
-            patch.object(service, "_send_webhook_enhanced", return_value=True) as mock_send,
-        ):
+        with patch.object(service, "_send_webhook_enhanced", return_value=True) as mock_send:
             service.send_delivery_webhook(
                 media_buy_id="mb_wh06",
                 tenant_id="t1",

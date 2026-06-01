@@ -789,7 +789,7 @@ class TestMissingTenantRaisesAuthError:
         )
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
 
-        with patch("src.core.tools.media_buy_delivery.get_principal_object", return_value=MagicMock()):
+        with patch("src.core.auth.get_principal_object", return_value=MagicMock()):
             with pytest.raises(AdCPAuthenticationError, match="No tenant context"):
                 _get_media_buy_delivery_impl(req, identity)
 
