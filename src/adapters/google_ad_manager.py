@@ -134,8 +134,11 @@ class GoogleAdManager(AdServerAdapter):
         self.principal = principal
 
         # Validate configuration
-        if not self.network_code:
-            raise AdCPConfigurationError("GAM config requires 'network_code'")
+        self.network_code = self._require_config(
+            self.network_code,
+            field="network_code",
+            message="GAM config is missing 'network_code'",
+        )
 
         # Validate advertiser_id is numeric if provided (GAM expects integer company IDs)
         if advertiser_id is not None and advertiser_id != "":
@@ -160,7 +163,8 @@ class GoogleAdManager(AdServerAdapter):
         if not self.dry_run:
             if not self.key_file and not self.service_account_json and not self.refresh_token:
                 raise AdCPConfigurationError(
-                    "GAM config requires either 'service_account_key_file', 'service_account_json', or 'refresh_token'"
+                    "GAM config is missing an authentication credential: set one of "
+                    "'service_account_key_file', 'service_account_json', or 'refresh_token'"
                 )
 
         # Initialize modular components

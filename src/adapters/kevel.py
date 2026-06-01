@@ -10,7 +10,6 @@ from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
-    AdCPConfigurationError,
     AdCPPackageNotFoundError,
 )
 from src.core.schemas import *
@@ -38,9 +37,11 @@ class Kevel(AdServerAdapter):
         super().__init__(config, principal, dry_run, creative_engine, tenant_id)
 
         # Get Kevel-specific principal ID
-        self.advertiser_id = self.principal.get_adapter_id("kevel")
-        if not self.advertiser_id:
-            raise AdCPConfigurationError(f"Principal {principal.principal_id} does not have a Kevel advertiser ID")
+        self.advertiser_id = self._require_config(
+            self.principal.get_adapter_id("kevel"),
+            field="advertiser_id",
+            message=f"Principal {principal.principal_id} does not have a Kevel advertiser ID",
+        )
 
         # Get Kevel configuration
         self.network_id = self.config.get("network_id")
@@ -53,9 +54,9 @@ class Kevel(AdServerAdapter):
 
         if self.dry_run:
             self.log("Running in dry-run mode - Kevel API calls will be simulated", dry_run_prefix=False)
-        elif not self.network_id or not self.api_key:
-            raise AdCPConfigurationError("Kevel config is missing 'network_id' or 'api_key'")
         else:
+            self._require_config(self.network_id, field="network_id", message="Kevel config is missing 'network_id'")
+            self._require_config(self.api_key, field="api_key", message="Kevel config is missing 'api_key'")
             self.headers = {"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"}
 
     # Supported device types (Kevel doesn't support CTV)

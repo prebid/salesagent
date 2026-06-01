@@ -9,7 +9,6 @@ from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
-    AdCPConfigurationError,
     AdCPPackageNotFoundError,
 )
 from src.core.schemas import *
@@ -37,9 +36,11 @@ class TritonDigital(AdServerAdapter):
         super().__init__(config, principal, dry_run, creative_engine, tenant_id)
 
         # Get Triton-specific principal ID
-        self.advertiser_id = self.principal.get_adapter_id("triton")
-        if not self.advertiser_id:
-            raise AdCPConfigurationError(f"Principal {principal.principal_id} does not have a Triton advertiser ID")
+        self.advertiser_id = self._require_config(
+            self.principal.get_adapter_id("triton"),
+            field="advertiser_id",
+            message=f"Principal {principal.principal_id} does not have a Triton advertiser ID",
+        )
 
         # Get Triton configuration
         self.base_url = self.config.get("base_url", "https://tap-api.tritondigital.com/v1")
@@ -47,9 +48,12 @@ class TritonDigital(AdServerAdapter):
 
         if self.dry_run:
             self.log("Running in dry-run mode - Triton API calls will be simulated", dry_run_prefix=False)
-        elif not self.auth_token:
-            raise AdCPConfigurationError("Triton Digital config is missing 'auth_token'")
         else:
+            self._require_config(
+                self.auth_token,
+                field="auth_token",
+                message="Triton Digital config is missing 'auth_token'",
+            )
             self.headers = {"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"}
 
     # Only audio device types supported

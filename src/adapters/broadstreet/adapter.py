@@ -32,7 +32,6 @@ from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
-    AdCPConfigurationError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -106,10 +105,14 @@ class BroadstreetAdapter(AdServerAdapter):
         if not self.advertiser_id:
             # Fall back to default advertiser from config
             self.advertiser_id = self.config.get("default_advertiser_id")
-            if not self.advertiser_id and not self.dry_run:
-                raise AdCPConfigurationError(
-                    f"Principal {principal.principal_id} does not have a Broadstreet advertiser ID "
-                    "and no default_advertiser_id configured"
+            if not self.dry_run:
+                self._require_config(
+                    self.advertiser_id,
+                    field="advertiser_id",
+                    message=(
+                        f"Principal {principal.principal_id} does not have a Broadstreet advertiser ID "
+                        "and no default_advertiser_id configured"
+                    ),
                 )
 
         # Get Broadstreet configuration
@@ -120,9 +123,17 @@ class BroadstreetAdapter(AdServerAdapter):
         if self.dry_run:
             self.log("Running in dry-run mode - Broadstreet API calls will be simulated", dry_run_prefix=False)
             self.client = None
-        elif not self.network_id or not self.api_key:
-            raise AdCPConfigurationError("Broadstreet config is missing 'network_id' or 'api_key'")
         else:
+            self.network_id = self._require_config(
+                self.network_id,
+                field="network_id",
+                message="Broadstreet config is missing 'network_id'",
+            )
+            self.api_key = self._require_config(
+                self.api_key,
+                field="api_key",
+                message="Broadstreet config is missing 'api_key'",
+            )
             self.client = BroadstreetClient(access_token=self.api_key, network_id=self.network_id)
 
         # Initialize managers
