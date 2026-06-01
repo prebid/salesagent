@@ -404,12 +404,11 @@ def _update_media_buy_impl(
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
-                approval_data = approval_response.model_dump(mode="json")
-                approval_data["request_data"] = req.model_dump(mode="json")
-                ctx_manager.update_workflow_step(
+                ctx_manager.audit_workflow_step_result(
                     step.step_id,
+                    approval_response,
                     status="requires_approval",
-                    response_data=approval_data,
+                    request_obj=req,
                     add_comment={
                         "user": "system",
                         "comment": "Publisher requires manual approval for all media buy updates",
@@ -524,10 +523,10 @@ def _update_media_buy_impl(
                 # adcp v1.2.1 oneOf pattern: Check if result is Error variant (has errors field)
                 if isinstance(result, UpdateMediaBuyError) and result.errors:
                     error_response = UpdateMediaBuyError(errors=result.errors)
-                    ctx_manager.update_workflow_step(
+                    ctx_manager.audit_workflow_step_result(
                         step.step_id,
+                        error_response,
                         status="failed",
-                        response_data=error_response.model_dump(mode="json"),
                         error_message=result.errors[0].message if result.errors else "Pause/resume failed",
                     )
                     return error_response
@@ -567,11 +566,7 @@ def _update_media_buy_impl(
                             "affected_packages_count": len(affected_pkgs),
                         },
                     )
-                    ctx_manager.update_workflow_step(
-                        step.step_id,
-                        status="completed",
-                        response_data=success_response.model_dump(mode="json"),
-                    )
+                    ctx_manager.audit_workflow_step_result(step.step_id, success_response)
                     return success_response
 
             # Handle package-level updates
@@ -596,10 +591,10 @@ def _update_media_buy_impl(
                                 else "Update failed"
                             )
                             response_data = UpdateMediaBuyError(errors=result.errors)
-                            ctx_manager.update_workflow_step(
+                            ctx_manager.audit_workflow_step_result(
                                 step.step_id,
+                                response_data,
                                 status="failed",
-                                response_data=response_data.model_dump(mode="json"),
                                 error_message=error_message,
                             )
                             return response_data
@@ -656,10 +651,10 @@ def _update_media_buy_impl(
                                 else "Update failed"
                             )
                             response_data = UpdateMediaBuyError(errors=result.errors)
-                            ctx_manager.update_workflow_step(
+                            ctx_manager.audit_workflow_step_result(
                                 step.step_id,
+                                response_data,
                                 status="failed",
-                                response_data=response_data.model_dump(mode="json"),
                                 error_message=error_message,
                             )
                             return response_data
@@ -1294,11 +1289,7 @@ def _update_media_buy_impl(
 
             # Persist success with response data, then return
             # Use mode="json" to ensure enums are serialized as strings for JSONB storage
-            ctx_manager.update_workflow_step(
-                step.step_id,
-                status="completed",
-                response_data=final_response.model_dump(mode="json"),
-            )
+            ctx_manager.audit_workflow_step_result(step.step_id, final_response)
 
         return final_response
 

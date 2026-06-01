@@ -24,18 +24,10 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# The remaining media_buy_update entries serialize SUCCESS-shape payloads
-# (approval step + adapter-result wrappers) for workflow-step persistence;
-# failure-path persistence goes through the two-layer envelope builder instead.
+# _update_media_buy_impl's workflow-step result persistence moved its
+# serialization into ContextManager.audit_workflow_step_result, so the only
+# remaining entries are unrelated to workflow-step persistence.
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 7 violations (success-shape persistence, not failure)
-    ("media_buy_update.py", 407),
-    ("media_buy_update.py", 408),
-    ("media_buy_update.py", 530),
-    ("media_buy_update.py", 573),
-    ("media_buy_update.py", 602),
-    ("media_buy_update.py", 662),
-    ("media_buy_update.py", 1300),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 622),
     # _list_creatives_impl: 1 violation (filter dict conversion)

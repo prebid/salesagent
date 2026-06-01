@@ -529,9 +529,9 @@ def test_manual_approval_path_through_impl(standard_mocks):
     assert result.affected_packages == []
 
     # Workflow step should be updated with requires_approval status
-    update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
-    assert len(update_calls) == 1
-    call_kwargs = update_calls[0][1]
+    result_calls = standard_mocks["ctx_mgr_instance"].audit_workflow_step_result.call_args_list
+    assert len(result_calls) == 1
+    call_kwargs = result_calls[0][1]
     assert call_kwargs["status"] == "requires_approval"
     # Should have a comment about manual approval
     assert "manual approval" in str(call_kwargs.get("add_comment", "")).lower()
@@ -593,14 +593,14 @@ def test_pause_completes_workflow_step(standard_mocks):
     assert result.media_buy_id == "mb_pause"
 
     # BUG: Workflow step must be marked 'completed' after successful pause
-    update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
-    assert len(update_calls) >= 1, (
-        "update_workflow_step never called — workflow step left in 'in_progress' state. "
+    result_calls = standard_mocks["ctx_mgr_instance"].audit_workflow_step_result.call_args_list
+    assert len(result_calls) >= 1, (
+        "audit_workflow_step_result never called — workflow step left in 'in_progress' state. "
         "The pause early-return path must complete the workflow step."
     )
-    final_call_kwargs = update_calls[-1][1]
-    assert final_call_kwargs["status"] == "completed", (
-        f"Workflow step status is '{final_call_kwargs['status']}', expected 'completed'. "
+    final_status = result_calls[-1][1].get("status", "completed")
+    assert final_status == "completed", (
+        f"Workflow step status is '{final_status}', expected 'completed'. "
         "The pause path returns without completing the workflow step."
     )
 
@@ -684,22 +684,17 @@ def test_manual_approval_stores_raw_request(standard_mocks):
     # The workflow step's response_data must contain enough information
     # to execute the update after approval. At minimum, the request data
     # should be stored (similar to create_media_buy's raw_request pattern).
-    update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
-    assert len(update_calls) >= 1
-    call_kwargs = update_calls[-1][1]
+    result_calls = standard_mocks["ctx_mgr_instance"].audit_workflow_step_result.call_args_list
+    assert len(result_calls) >= 1
+    call_kwargs = result_calls[-1][1]
 
-    # The response_data stored in the workflow step
-    response_data = call_kwargs.get("response_data", {})
-
-    # BUG: response_data contains affected_packages=[] and nothing about
-    # the actual update request. After approval, there's nothing to execute.
-    # It should contain the original request (paused=True, etc.)
-    assert (
-        "request_data" in response_data or "raw_request" in response_data or response_data.get("paused") is not None
-    ), (
-        f"Workflow step response_data contains no request information: {response_data}. "
-        "After approval, the system has no data to execute the update. "
-        "The approval gate must store the original request (like create_media_buy stores raw_request)."
+    # The approval gate must pass the originating request (request_obj) so the
+    # admin approval flow can execute the update later — audit_workflow_step_result
+    # serializes it under response_data["request_data"].
+    assert call_kwargs.get("request_obj") is not None, (
+        "Workflow step persists no request information. After approval, the system has "
+        "no data to execute the update. The approval gate must pass request_obj "
+        "(like create_media_buy stores raw_request)."
     )
 
 
@@ -945,10 +940,9 @@ class TestUC003MainObligations:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
-        update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
-        assert len(update_calls) >= 1
-        final_kwargs = update_calls[-1][1]
-        assert final_kwargs["status"] == "completed"
+        result_calls = standard_mocks["ctx_mgr_instance"].audit_workflow_step_result.call_args_list
+        assert len(result_calls) >= 1
+        assert result_calls[-1][1].get("status", "completed") == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -972,9 +966,9 @@ class TestUC003PauseResume:
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
-        update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
-        assert len(update_calls) >= 1
-        assert update_calls[0][1]["status"] == "requires_approval"
+        result_calls = standard_mocks["ctx_mgr_instance"].audit_workflow_step_result.call_args_list
+        assert len(result_calls) >= 1
+        assert result_calls[0][1]["status"] == "requires_approval"
 
 
 # ---------------------------------------------------------------------------
@@ -1980,11 +1974,11 @@ class TestUC003ManualApproval:
 
         assert isinstance(result, UpdateMediaBuySuccess)
         # Verify workflow step created with requires_approval (enables rejection)
-        update_calls = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
-        assert update_calls[0][1]["status"] == "requires_approval"
-        # Verify request_data stored (needed for rejection notification)
-        response_data = update_calls[0][1]["response_data"]
-        assert "request_data" in response_data
+        result_calls = standard_mocks["ctx_mgr_instance"].audit_workflow_step_result.call_args_list
+        assert result_calls[0][1]["status"] == "requires_approval"
+        # Verify the originating request is stored (needed for rejection notification);
+        # audit_workflow_step_result serializes request_obj under response_data["request_data"].
+        assert result_calls[0][1].get("request_obj") is not None
 
     def test_buyer_can_poll_task_status(self, standard_mocks):
         """Workflow step ID returned so buyer can poll status.
@@ -2734,8 +2728,8 @@ class TestUC003ExtO:
         standard_mocks["adapter_instance"].manual_approval_required = True
         standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
 
-        # Workflow step update fails
-        standard_mocks["ctx_mgr_instance"].update_workflow_step.side_effect = Exception(
+        # Workflow step result persistence fails
+        standard_mocks["ctx_mgr_instance"].audit_workflow_step_result.side_effect = Exception(
             "Database error: workflow step creation failed"
         )
 

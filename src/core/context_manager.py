@@ -12,6 +12,7 @@ from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import McpWebhookPayload
 from adcp.webhooks import GeneratedTaskStatus
+from pydantic import BaseModel
 from rich.console import Console
 from sqlalchemy import select
 
@@ -436,6 +437,38 @@ class ContextManager(DatabaseManager):
         except Exception as exc:
             self.audit_workflow_step_failure_if_present(get_step(), exc)
             raise
+
+    def audit_workflow_step_result(
+        self,
+        step_id: str,
+        response_obj: BaseModel,
+        *,
+        status: str = "completed",
+        error_message: str | None = None,
+        add_comment: dict[str, str] | None = None,
+        request_obj: BaseModel | None = None,
+    ) -> None:
+        """Persist a workflow step's result, serializing the response inside ContextManager.
+
+        Owns the ``model_dump`` that the update-media-buy ``_impl`` previously
+        open-coded as ``update_workflow_step(..., response_data=<obj>.model_dump(mode="json"))``,
+        keeping serialization in the persistence layer (the no-model_dump-in-_impl
+        boundary). ``status`` reflects the outcome — ``"completed"`` for a success
+        result, ``"failed"`` for an adapter-returned error variant,
+        ``"requires_approval"`` for a pending-approval step. ``request_obj``, when
+        given, is serialized under the ``request_data`` key so the approval step
+        records the originating request alongside the response.
+        """
+        response_data = response_obj.model_dump(mode="json")
+        if request_obj is not None:
+            response_data["request_data"] = request_obj.model_dump(mode="json")
+        self.update_workflow_step(
+            step_id,
+            status=status,
+            response_data=response_data,
+            error_message=error_message,
+            add_comment=add_comment,
+        )
 
     def mark_human_needed(
         self,

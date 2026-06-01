@@ -2879,8 +2879,8 @@ class TestUpdateMediaBuyManualApproval:
 
         # Should return success but workflow step should be marked as requires_approval
         assert isinstance(result, UpdateMediaBuySuccess)
-        ctx_mgr.update_workflow_step.assert_called_once_with(
-            ANY, status="requires_approval", response_data=ANY, add_comment=ANY
+        ctx_mgr.audit_workflow_step_result.assert_called_once_with(
+            ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
         # Affected packages should be empty (not yet applied)
         assert result.affected_packages == []
@@ -3079,8 +3079,8 @@ class TestUpdateMediaBuyAdapterFailure:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        ctx_mgr.update_workflow_step.assert_called()
-        call_kwargs = ctx_mgr.update_workflow_step.call_args
+        ctx_mgr.audit_workflow_step_result.assert_called()
+        call_kwargs = ctx_mgr.audit_workflow_step_result.call_args
         assert call_kwargs[1].get("status") == "failed" or call_kwargs.kwargs.get("status") == "failed"
 
 
