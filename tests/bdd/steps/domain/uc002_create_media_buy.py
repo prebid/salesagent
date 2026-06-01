@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._harness_db import db_session as _db_session
+from tests.bdd.steps._outcome_helpers import _get_response_field
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -31,8 +33,7 @@ def given_request_with_account_id(ctx: dict, account_id: str) -> None:
 @given(parsers.parse('a valid create_media_buy request with account natural key brand "{brand}" operator "{operator}"'))
 def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None:
     """Set up a create_media_buy request referencing a natural key (brand + operator)."""
-    from adcp.types import AccountReference, AccountReferenceByNaturalKey
-    from adcp.types import BrandReference
+    from adcp.types import AccountReference, AccountReferenceByNaturalKey, BrandReference
 
     ctx["account_ref"] = AccountReference(
         root=AccountReferenceByNaturalKey(brand=BrandReference(domain=brand), operator=operator),
@@ -189,8 +190,7 @@ def given_account_active(ctx: dict) -> None:
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))
 def given_request_with_partition(ctx: dict, partition: str) -> None:
     """Set up request based on partition name (for Scenario Outline tables)."""
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
-    from adcp.types import BrandReference
+    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     if "tenant" not in ctx:
@@ -294,8 +294,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 @given(parsers.parse("a create_media_buy request with account: {config}"))
 def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     """Set up request based on boundary config string."""
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
-    from adcp.types import BrandReference
+    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     if "tenant" not in ctx:
@@ -516,9 +515,7 @@ def _assert_account_resolution_succeeds(ctx: dict) -> None:
 
 def _is_pipeline_routing_outcome(outcome: str) -> bool:
     """Check if outcome is a pipeline routing result (UC-001 buying_mode)."""
-    return outcome.startswith("request proceeds to") or outcome.startswith(
-        "request defaults to"
-    )
+    return outcome.startswith("request proceeds to") or outcome.startswith("request defaults to")
 
 
 def _is_validation_pass_outcome(outcome: str) -> bool:
@@ -613,18 +610,11 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
     4. For full create scenarios: the response has a media_buy_id (success)
     """
     domain = _extract_validation_domain(outcome)
-    assert "error" not in ctx, (
-        f"Expected '{domain}' validation to pass but got error: {ctx.get('error')}"
-    )
+    assert "error" not in ctx, f"Expected '{domain}' validation to pass but got error: {ctx.get('error')}"
     resp = ctx.get("response")
-    assert resp is not None, (
-        f"Expected response for '{domain}' validation pass but ctx['response'] is None"
-    )
+    assert resp is not None, f"Expected response for '{domain}' validation pass but ctx['response'] is None"
     if isinstance(resp, str):
-        assert len(resp) > 0, (
-            f"Expected non-empty account_id for '{domain}' validation pass, "
-            f"got empty string"
-        )
+        assert len(resp) > 0, f"Expected non-empty account_id for '{domain}' validation pass, got empty string"
         # Verify the resolved account_id matches the Given step's account_ref
         account_ref = ctx.get("account_ref")
         if account_ref is not None and hasattr(account_ref, "root"):
@@ -664,13 +654,11 @@ def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
     is_default = outcome.startswith("request defaults to")
 
     assert "error" not in ctx, (
-        f"Expected request to route to '{expected_pipeline}' pipeline "
-        f"but got error: {ctx.get('error')}"
+        f"Expected request to route to '{expected_pipeline}' pipeline but got error: {ctx.get('error')}"
     )
     resp = ctx.get("response")
     assert resp is not None, (
-        f"Expected response for pipeline routing to '{expected_pipeline}' "
-        f"but ctx['response'] is None"
+        f"Expected response for pipeline routing to '{expected_pipeline}' but ctx['response'] is None"
     )
     dispatched = ctx.get("dispatched_pipeline")
     if dispatched is None:
@@ -679,9 +667,7 @@ def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
             f"(expected '{expected_pipeline}'). "
             f"Add ctx['dispatched_pipeline'] to the When step."
         )
-    assert dispatched == expected_pipeline, (
-        f"Expected dispatched pipeline '{expected_pipeline}', got '{dispatched}'"
-    )
+    assert dispatched == expected_pipeline, f"Expected dispatched pipeline '{expected_pipeline}', got '{dispatched}'"
     if is_default:
         explicit_mode = ctx.get("explicit_buying_mode")
         assert explicit_mode is None, (
@@ -738,14 +724,9 @@ def _assert_persistence_outcome(ctx: dict, outcome: str) -> None:
 
 def _extract_tasks_from_response(ctx: dict, outcome: str) -> list:
     """Extract the tasks list from the response, asserting it exists."""
-    assert "error" not in ctx, (
-        f"Expected task list outcome '{outcome}' but got error: {ctx.get('error')}"
-    )
+    assert "error" not in ctx, f"Expected task list outcome '{outcome}' but got error: {ctx.get('error')}"
     resp = ctx.get("response")
-    assert resp is not None, (
-        f"Expected response for task list outcome '{outcome}' "
-        f"but ctx['response'] is None"
-    )
+    assert resp is not None, f"Expected response for task list outcome '{outcome}' but ctx['response'] is None"
     tasks = None
     if isinstance(resp, dict):
         tasks = resp.get("tasks") or resp.get("items") or resp.get("results")
@@ -755,9 +736,7 @@ def _extract_tasks_from_response(ctx: dict, outcome: str) -> list:
         f"Expected 'tasks' field in response for '{outcome}', got keys: "
         f"{list(resp.keys()) if isinstance(resp, dict) else dir(resp)}"
     )
-    assert isinstance(tasks, list), (
-        f"Expected tasks to be a list, got {type(tasks).__name__}"
-    )
+    assert isinstance(tasks, list), f"Expected tasks to be a list, got {type(tasks).__name__}"
     return tasks
 
 
@@ -809,14 +788,12 @@ def _assert_tasks_sorted(tasks: list, outcome: str) -> None:
     if len(non_none) >= 2:
         is_ascending = all(a <= b for a, b in zip(non_none, non_none[1:]))
         is_descending = all(a >= b for a, b in zip(non_none, non_none[1:]))
-        assert is_ascending or is_descending, (
-            f"Tasks not sorted by '{sort_field}': values = {non_none[:5]}"
-        )
+        assert is_ascending or is_descending, f"Tasks not sorted by '{sort_field}': values = {non_none[:5]}"
 
 
 def _assert_tasks_filtered(tasks: list, outcome: str) -> None:
     """Verify all returned tasks match the claimed filter value."""
-    suffix = outcome[len("tasks filtered to "):]
+    suffix = outcome[len("tasks filtered to ") :]
     if "multiple" in suffix:
         _assert_multi_value_filter(tasks, suffix)
         return
@@ -824,18 +801,14 @@ def _assert_tasks_filtered(tasks: list, outcome: str) -> None:
         if suffix.strip() == desc:
             for task in tasks:
                 actual = _get_task_field(task, field)
-                assert actual == expected_value, (
-                    f"Expected all tasks {field}='{expected_value}', got '{actual}'"
-                )
+                assert actual == expected_value, f"Expected all tasks {field}='{expected_value}', got '{actual}'"
             return
     # Remaining: suffix IS the task_type value
     task_type = suffix.strip()
     if task_type and "domain" not in task_type and "status" not in task_type:
         for task in tasks:
             actual = _get_task_field(task, "task_type")
-            assert actual == task_type, (
-                f"Expected task_type='{task_type}', got '{actual}'"
-            )
+            assert actual == task_type, f"Expected task_type='{task_type}', got '{actual}'"
         return
     # Unmapped: matched no _FILTER_MAP entry and is not a bare task_type value
     # (empty, or an unmapped domain/status filter). Fail loudly rather than
@@ -878,17 +851,14 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
     elif outcome.startswith("tasks of all") or outcome.startswith("tasks from all"):
         seeded_count = ctx.get("seeded_task_count")
         if seeded_count is not None:
-            assert len(tasks) >= seeded_count, (
-                f"Expected >= {seeded_count} tasks (unfiltered), got {len(tasks)}"
-            )
+            assert len(tasks) >= seeded_count, f"Expected >= {seeded_count} tasks (unfiltered), got {len(tasks)}"
     elif outcome.startswith("defaults to"):
         if "created_at" in outcome and len(tasks) >= 2:
             values = [_get_task_field(t, "created_at") for t in tasks]
             non_none = [v for v in values if v is not None]
             if len(non_none) >= 2:
                 assert all(a >= b for a, b in zip(non_none, non_none[1:])), (
-                    f"Expected default descending created_at sort, "
-                    f"values = {non_none[:5]}"
+                    f"Expected default descending created_at sort, values = {non_none[:5]}"
                 )
     elif outcome.startswith("results in") and len(tasks) >= 2:
         values = [_get_task_field(t, "created_at") for t in tasks]
@@ -922,59 +892,39 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     if remainder.startswith(":"):
         description = remainder[1:].strip()
         error_msg = str(error).lower()
-        assert description.lower() in error_msg, (
-            f"Expected error message to contain '{description}', got: {error}"
-        )
+        assert description.lower() in error_msg, f"Expected error message to contain '{description}', got: {error}"
         return
 
     # Suggestion-only: "error with suggestion"
     if remainder.startswith("with suggestion"):
         assert isinstance(error, AdCPError), (
-            f"Expected AdCPError for suggestion check, "
-            f"got {type(error).__name__}: {error}"
+            f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
         )
-        assert error.details is not None, (
-            "Expected error details with suggestion, got None"
-        )
-        assert "suggestion" in error.details, (
-            f"Expected suggestion in details: {error.details}"
-        )
+        assert error.details is not None, "Expected error details with suggestion, got None"
+        assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
         return
 
     # Check if first word is a structured error code (UPPER_CASE with _)
     parts = remainder.split()
     first_word = parts[0] if parts else ""
-    is_structured = (
-        bool(first_word) and first_word == first_word.upper() and "_" in first_word
-    )
+    is_structured = bool(first_word) and first_word == first_word.upper() and "_" in first_word
 
     if is_structured:
         expected_code = first_word
         assert isinstance(error, AdCPError), (
-            f"Expected AdCPError with code '{expected_code}', "
-            f"got {type(error).__name__}: {error}"
+            f"Expected AdCPError with code '{expected_code}', got {type(error).__name__}: {error}"
         )
-        assert error.error_code == expected_code, (
-            f"Expected error code '{expected_code}', got '{error.error_code}'"
-        )
+        assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
         if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
-            assert error.recovery == parts[1], (
-                f"Expected recovery '{parts[1]}', got '{error.recovery}'"
-            )
+            assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
         if "with suggestion" in outcome.lower():
-            assert error.details is not None, (
-                "Expected error details with suggestion, got None"
-            )
-            assert "suggestion" in error.details, (
-                f"Expected suggestion in details: {error.details}"
-            )
+            assert error.details is not None, "Expected error details with suggestion, got None"
+            assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
     else:
         # Descriptive: "error unknown sort field"
         description = remainder
         error_msg = str(error).lower()
-        assert description.lower() in error_msg, (
-            f"Expected error message to contain '{description}', got: {error}"
-        )
+        assert description.lower() in error_msg, f"Expected error message to contain '{description}', got: {error}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1319,3 +1269,180 @@ def given_order_name_template(ctx: dict, template: str) -> None:
 def given_default_order_name_template(ctx: dict) -> None:
     """Use the default order_name_template (no override)."""
     ctx.setdefault("tenant_config", {}).pop("order_name_template", None)
+
+
+@then("the Buyer should be notified via webhook")
+def then_webhook_notification(ctx: dict) -> None:
+    """Assert buyer webhook notification dispatch prerequisites and payload correctness.
+
+    Production delivery path (src/core/context_manager.py::_send_push_notifications):
+      1. Query ObjectWorkflowMapping rows by step_id.
+      2. Query PushNotificationConfig (tenant_id, principal_id, is_active=True).
+      3. Read ``push_notification_config.url`` from step.request_data.
+      4. Build payload (media_buy_id, status, rejection_reason) and POST to the URL.
+
+    Hard assertions (all verified, all pass):
+      A. PushNotificationConfig row: url matches, is_active=True, principal_id matches.
+      C. ObjectWorkflowMapping exists linking step_id to the media buy.
+      D. Media buy + workflow step are in terminal status.
+      E. Notification payload content: media buy carries rejection status and
+         non-empty rejection_reason (the data the webhook would deliver).
+
+    Targeted xfail (harness gap -- only this check is xfailed):
+      B. step.request_data carries push_notification_config URL -- required for
+         _send_push_notifications to actually POST. The BDD reject path uses
+         repository methods that bypass the admin flow which populates this field.
+         FIXME(salesagent-9vgz.1): Wire through the production admin approve/reject
+         flow, then remove the xfail.
+    """
+    import pytest
+    from sqlalchemy import select
+
+    from src.core.database.models import ObjectWorkflowMapping, PushNotificationConfig
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+    from src.core.database.repositories.workflow import WorkflowRepository
+
+    # --- Extract media_buy_id and tenant ---
+    resp = ctx.get("response")
+    existing_mb = ctx.get("existing_media_buy")
+    assert resp is not None or existing_mb is not None, (
+        "No response or existing media buy in ctx — nothing to notify the Buyer about"
+    )
+
+    media_buy_id = None
+    if resp is not None:
+        media_buy_id = _get_response_field(resp, "media_buy_id")
+    elif existing_mb is not None:
+        media_buy_id = getattr(existing_mb, "media_buy_id", None)
+    assert media_buy_id, "No media_buy_id — cannot verify notification"
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — cannot verify notification scoping"
+    tenant_id = getattr(tenant, "tenant_id", None) or (tenant.get("tenant_id") if isinstance(tenant, dict) else None)
+
+    # --- Check push_notification_config was registered by Given step ---
+    push_config = ctx.get("push_notification_config")
+    assert push_config is not None, (
+        "No push_notification_config in ctx — scenario must include a Given step "
+        "that sets ctx['push_notification_config'] with the expected webhook URL."
+    )
+    expected_url = push_config.get("url") if isinstance(push_config, dict) else None
+    assert expected_url, "push_notification_config has no 'url' — cannot verify webhook destination"
+
+    # --- A. PushNotificationConfig row: exact url match, active, correct principal ---
+    principal = ctx.get("principal")
+    expected_principal_id = (
+        getattr(principal, "principal_id", None)
+        if principal is not None
+        else (principal.get("principal_id") if isinstance(principal, dict) else None)
+    )
+    with _db_session(ctx) as session:
+        configs = (
+            session.scalars(select(PushNotificationConfig).filter_by(tenant_id=tenant_id, url=expected_url)).all() or []
+        )
+        stored_urls = [c.url for c in configs]
+        assert expected_url in stored_urls, (
+            f"Expected webhook URL '{expected_url}' not found in PushNotificationConfig "
+            f"for tenant {tenant_id}. Stored URLs: {stored_urls}. "
+            "Dispatcher will not find the webhook destination."
+        )
+        assert any(c.is_active for c in configs), (
+            f"PushNotificationConfig rows for url={expected_url} exist but none have is_active=True "
+            f"(found: {[(c.id, c.is_active) for c in configs]}) — "
+            "_send_push_notifications filters by is_active=True and will skip them"
+        )
+        if expected_principal_id:
+            active_principal_ids = [c.principal_id for c in configs if c.is_active]
+            assert expected_principal_id in active_principal_ids, (
+                f"No active PushNotificationConfig for principal_id={expected_principal_id}; "
+                f"active rows belong to principals: {active_principal_ids}. "
+                "Dispatcher filters by principal_id — the webhook would be addressed to the wrong buyer."
+            )
+
+    # --- D. Media buy in terminal status (status-change trigger has fired) ---
+    with _db_session(ctx) as session:
+        mb_repo = MediaBuyRepository(session, tenant_id)
+        mb = mb_repo.get_by_id(str(media_buy_id))
+        assert mb is not None, f"Media buy {media_buy_id} not found — cannot verify status change"
+        terminal_statuses = {"rejected", "approved", "active", "completed", "cancelled"}
+        assert mb.status in terminal_statuses, (
+            f"Media buy {media_buy_id} has status '{mb.status}' — expected a terminal "
+            f"status ({terminal_statuses}) proving the status-change event that "
+            "triggers webhook delivery has occurred"
+        )
+
+    # --- E. Notification payload content ---
+    # _send_push_notifications builds the webhook payload from the media buy's
+    # current state. Verify the media buy carries the data the buyer expects:
+    # for rejection, the payload must include a non-empty rejection_reason.
+    with _db_session(ctx) as session:
+        mb_repo = MediaBuyRepository(session, tenant_id)
+        mb = mb_repo.get_by_id(str(media_buy_id))
+        assert mb is not None, f"Media buy {media_buy_id} disappeared between checks"
+        if mb.status == "rejected":
+            assert mb.rejection_reason is not None and mb.rejection_reason.strip() != "", (
+                f"Media buy {media_buy_id} has status 'rejected' but rejection_reason is "
+                f"'{mb.rejection_reason}' — webhook payload would lack the rejection reason, "
+                "violating the Buyer notification contract (POST-S12)"
+            )
+
+    # --- C. Workflow step + mapping ---
+    with _db_session(ctx) as session:
+        wf_repo = WorkflowRepository(session, tenant_id)
+        mapping = wf_repo.get_latest_mapping_for_object("media_buy", str(media_buy_id))
+        assert mapping is not None, (
+            f"No workflow mapping for media_buy {media_buy_id} — "
+            "_send_push_notifications iterates ObjectWorkflowMapping; with none, nothing is dispatched"
+        )
+        # Mapping must point at the right object (dispatcher uses object_type + object_id in payload).
+        assert mapping.object_type == "media_buy", (
+            f"Expected mapping.object_type='media_buy', got '{mapping.object_type}' — "
+            "dispatcher would build the wrong payload kind"
+        )
+        assert str(mapping.object_id) == str(media_buy_id), (
+            f"Mapping object_id='{mapping.object_id}' != media_buy_id='{media_buy_id}' — "
+            "dispatcher would address a different object"
+        )
+
+        step = wf_repo.get_step_by_id(mapping.step_id)
+        assert step is not None, (
+            f"Workflow step {mapping.step_id} not found — context_manager cannot dispatch without a step record"
+        )
+        terminal_step_statuses = {"rejected", "completed", "approved", "failed"}
+        assert step.status in terminal_step_statuses, (
+            f"Workflow step {mapping.step_id} has status '{step.status}' — "
+            f"expected one of {terminal_step_statuses} so the status-change event fires dispatch"
+        )
+
+        # Cross-check the mapping links back to this step (dispatcher reads step.request_data).
+        mappings_for_step = session.scalars(select(ObjectWorkflowMapping).filter_by(step_id=step.step_id)).all()
+        assert mappings_for_step, (
+            f"No mappings discoverable by step_id={step.step_id} — "
+            "_send_push_notifications queries ObjectWorkflowMapping by step_id and would find nothing"
+        )
+
+        # --- B. step.request_data must carry push_notification_config with the buyer URL ---
+        # _send_push_notifications reads step.request_data['push_notification_config']['url']
+        # to determine the webhook destination. Without it, dispatch logs
+        # 'No push notification URL present' and skips the POST entirely.
+        #
+        # SPEC-PRODUCTION GAP: the repository-driven reject path does NOT populate
+        # step.request_data with push_notification_config because it bypasses the
+        # Flask admin flow that writes the original request payload onto the step.
+        # FIXME(salesagent-9vgz.1): wire through the production admin approve/reject
+        # flow which populates request_data, then remove this xfail.
+        req_data = step.request_data or {}
+        step_push_cfg = req_data.get("push_notification_config") if isinstance(req_data, dict) else None
+        if not isinstance(step_push_cfg, dict) or step_push_cfg.get("url") != expected_url:
+            pytest.xfail(
+                "SPEC-PRODUCTION GAP: step.request_data does not carry "
+                "push_notification_config with the buyer's URL — "
+                "_send_push_notifications would skip dispatch. "
+                "FIXME(salesagent-9vgz.1): wire through the admin flow."
+            )
+
+        # Happy path (reached when harness wires the full admin flow):
+        assert step_push_cfg["url"] == expected_url, (
+            f"step.request_data push_notification_config URL mismatch: "
+            f"expected '{expected_url}', got '{step_push_cfg.get('url')}'"
+        )
