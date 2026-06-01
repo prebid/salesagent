@@ -20,7 +20,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import ContextObject
 from fastmcp.server.context import Context
 
 from src.core.schemas.account import (

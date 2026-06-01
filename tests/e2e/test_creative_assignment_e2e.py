@@ -23,6 +23,19 @@ from tests.e2e.adcp_request_builder import (
 )
 
 
+def discover_pricing_option_id(product: dict) -> str:
+    """Return the first real pricing_option_id from a get_products product.
+
+    Hardcoding it (e.g. "cpm_option_1") never matches the AdCP 3.12 format
+    {pricing_model}_{currency.lower()}_{fixed|auction} and only "passes" via
+    the deprecated pricing_model fallback in the server, so the test would
+    not actually exercise pricing_option_id matching.
+    """
+    product_id = product.get("product_id")
+    assert product.get("pricing_options"), f"Product {product_id} must expose pricing_options; got: {product}"
+    return product["pricing_options"][0]["pricing_option_id"]
+
+
 class TestCreativeAssignment:
     """E2E tests for creative assignment to media buy packages."""
 
@@ -75,6 +88,10 @@ class TestCreativeAssignment:
             product_id = product["product_id"]
             print(f"   ✓ Found product: {product['name']} ({product_id})")
 
+            # Discover pricing_option_id dynamically from the product response.
+            pricing_option_id = discover_pricing_option_id(product)
+            print(f"   ✓ Using pricing_option_id: {pricing_option_id}")
+
             # Get creative formats
             formats_result = await client.call_tool("list_creative_formats", {})
             formats_data = parse_tool_result(formats_result)
@@ -105,36 +122,34 @@ class TestCreativeAssignment:
 
             start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
 
-            # Generate unique buyer_ref for the package so we can reference it
-            package_buyer_ref = f"pkg_{uuid.uuid4().hex[:8]}"
-
             media_buy_request = build_adcp_media_buy_request(
                 product_ids=[product_id],
                 total_budget=5000.0,
                 start_time=start_time,
                 end_time=end_time,
                 brand={"domain": "testbrand.com"},
+                pricing_option_id=pricing_option_id,
                 targeting_overlay={
                     "geo_countries": ["US"],
                 },
             )
 
-            # Override the package buyer_ref so we can reference it in assignment
-            media_buy_request["packages"][0]["buyer_ref"] = package_buyer_ref
-
             media_buy_result = await client.call_tool("create_media_buy", media_buy_request)
             media_buy_data = parse_tool_result(media_buy_result)
 
             media_buy_id = media_buy_data.get("media_buy_id")
-            buyer_ref = media_buy_data.get("buyer_ref")
 
-            if not media_buy_id:
-                print("   ⚠️  Async operation (no media_buy_id), skipping test")
-                print(f"   ✓ Buyer ref: {buyer_ref}")
-                return
+            assert media_buy_id, (
+                f"create_media_buy must return a media_buy_id synchronously for the mock adapter; "
+                f"got: {json.dumps(media_buy_data, indent=2)}"
+            )
+
+            # Get package_id from the response (adcp 3.12: seller-assigned IDs)
+            packages = media_buy_data.get("packages", [])
+            package_id = packages[0]["package_id"] if packages else None
 
             print(f"   ✓ Media buy created: {media_buy_id}")
-            print(f"   ✓ Package buyer_ref: {package_buyer_ref}")
+            print(f"   ✓ Package ID: {package_id}")
             print(f"   ✓ Status: {media_buy_data.get('status', 'unknown')}")
 
             # ================================================================
@@ -162,7 +177,7 @@ class TestCreativeAssignment:
                 validation_mode="lenient",
                 delete_missing=False,
                 assignments={
-                    creative_id: [package_buyer_ref],  # Assign creative to package
+                    creative_id: [package_id],  # Assign creative to package
                 },
             )
 
@@ -278,10 +293,25 @@ class TestCreativeAssignment:
             )
             products_data = parse_tool_result(products_result)
 
-            assert len(products_data["products"]) > 0, "Must have at least one product"
-            product = products_data["products"][0]
-            product_id = product["product_id"]
-            print(f"   ✓ Found product: {product_id}")
+            # Two packages require two DISTINCT products: media_buy_create
+            # rejects a duplicate product_id across packages ("Each product can
+            # only be used once per media buy"), which the BR-UC-002
+            # "Duplicate product_id across packages" scenario specifies.
+            assert len(products_data["products"]) >= 2, (
+                "Need >=2 distinct products for a 2-package media buy; got "
+                f"{[p['product_id'] for p in products_data['products']]}"
+            )
+            product1 = products_data["products"][0]
+            product2 = products_data["products"][1]
+            product1_id = product1["product_id"]
+            product2_id = product2["product_id"]
+            assert product1_id != product2_id, f"Need distinct products, got {product1_id!r} twice"
+            print(f"   ✓ Found products: {product1_id}, {product2_id}")
+
+            # Discover pricing_option_id dynamically per product.
+            pricing_option_id1 = discover_pricing_option_id(product1)
+            pricing_option_id2 = discover_pricing_option_id(product2)
+            print(f"   ✓ Using pricing_option_ids: {pricing_option_id1}, {pricing_option_id2}")
 
             # Get formats
             formats_result = await client.call_tool("list_creative_formats", {})
@@ -294,12 +324,16 @@ class TestCreativeAssignment:
                 fmt_id_str = fmt_id.get("id", "") if isinstance(fmt_id, dict) else ""
 
                 if "display" in fmt_id_str.lower():
-                    format_id = fmt_id_str  # Store the STRING id
+                    # Store the FULL FormatId dict — sync_creatives' schema
+                    # requires a FormatReferenceStructuredObject, not a bare
+                    # string (matches test_creative_sync_with_assignment).
+                    format_id = fmt_id
                     break
 
             if not format_id:
                 pytest.skip("Creative agent returned no display formats - service may be unavailable")
-            print(f"   ✓ Using format: {format_id}")
+            format_id_str = format_id.get("id") if isinstance(format_id, dict) else format_id
+            print(f"   ✓ Using format: {format_id_str}")
 
             # ================================================================
             # PHASE 2: Create Media Buy with 2 Packages
@@ -312,26 +346,25 @@ class TestCreativeAssignment:
             pkg2_ref = f"pkg2_{uuid.uuid4().hex[:8]}"
 
             media_buy_request = build_adcp_media_buy_request(
-                product_ids=[product_id],
+                product_ids=[product1_id, product2_id],
                 total_budget=10000.0,
                 start_time=start_time,
                 end_time=end_time,
                 brand={"domain": "testbrand.com"},
             )
 
-            # Override packages to have 2 distinct packages
+            # Two packages on two DISTINCT products (one product per package —
+            # a product may be used only once per media buy).
             media_buy_request["packages"] = [
                 {
-                    "buyer_ref": pkg1_ref,
-                    "product_id": product_id,
-                    "pricing_option_id": "cpm_option_1",
+                    "product_id": product1_id,
+                    "pricing_option_id": pricing_option_id1,
                     "budget": 5000.0,
                     "targeting_overlay": {"geo_countries": ["US"]},
                 },
                 {
-                    "buyer_ref": pkg2_ref,
-                    "product_id": product_id,
-                    "pricing_option_id": "cpm_option_1",
+                    "product_id": product2_id,
+                    "pricing_option_id": pricing_option_id2,
                     "budget": 5000.0,
                     "targeting_overlay": {"geo_countries": ["CA"]},
                 },
@@ -342,9 +375,10 @@ class TestCreativeAssignment:
 
             media_buy_id = media_buy_data.get("media_buy_id")
 
-            if not media_buy_id:
-                print("   ⚠️  Async operation, skipping test")
-                return
+            assert media_buy_id, (
+                f"create_media_buy must return a media_buy_id synchronously for the mock adapter; "
+                f"got: {json.dumps(media_buy_data, indent=2)}"
+            )
 
             print(f"   ✓ Media buy created: {media_buy_id}")
             print(f"   ✓ Package 1: {pkg1_ref}")
@@ -421,7 +455,7 @@ class TestCreativeAssignment:
             if deliveries and "packages" in deliveries[0]:
                 print("   ✓ Package assignments verified:")
                 for pkg in deliveries[0]["packages"]:
-                    pkg_ref = pkg.get("buyer_ref", "unknown")
+                    pkg_ref = pkg.get("package_id", "unknown")
                     pkg_creatives = pkg.get("creatives", pkg.get("creative_ids", []))
                     print(f"      • Package {pkg_ref}: {pkg_creatives}")
 

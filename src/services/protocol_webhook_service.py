@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
@@ -25,13 +26,81 @@ import requests
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
 from adcp.types import McpWebhookPayload
+from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
+from src.core.lifecycle import register_shutdown
 
 logger = logging.getLogger(__name__)
+
+
+# FIXME(gh-#1299): behaviour-identical backport of adcp 5.4.0
+# ``adcp.to_wire_dict`` + ``_normalize_a2a_task_state_to_v03`` (adcp #602).
+# salesagent is pinned to adcp 4.3.0, which predates that public seam.
+# Delete this block and call ``adcp.to_wire_dict()`` directly once salesagent
+# bumps adcp to the version that ships it.
+def _normalize_message_role(message: dict[str, Any]) -> None:
+    """Rewrite a2a-sdk 1.0 ``ROLE_*`` to the A2A 0.3 lowercase wire form."""
+    role = message.get("role")
+    if isinstance(role, str) and role.startswith("ROLE_"):
+        message["role"] = role[len("ROLE_") :].lower()
+
+
+def _normalize_a2a_task_state_to_v03(payload: dict[str, Any]) -> None:
+    """Rewrite a2a-sdk 1.0 ``TASK_STATE_*`` / ``ROLE_*`` enums to A2A 0.3
+    lowercase wire strings in-place. Buyer receivers parse the 0.3 shape
+    (``"state": "completed"``); the 1.0 protobuf JSON emitter produces
+    ``"state": "TASK_STATE_COMPLETED"`` by default.
+    """
+    status = payload.get("status")
+    if isinstance(status, dict):
+        state = status.get("state")
+        if isinstance(state, str) and state.startswith("TASK_STATE_"):
+            # Spec uses hyphens for multi-word states (e.g. "auth-required").
+            status["state"] = state[len("TASK_STATE_") :].lower().replace("_", "-")
+        message = status.get("message")
+        if isinstance(message, dict):
+            _normalize_message_role(message)
+    history = payload.get("history")
+    if isinstance(history, list):
+        for entry in history:
+            if isinstance(entry, dict):
+                _normalize_message_role(entry)
+    if "role" in payload:
+        _normalize_message_role(payload)
+
+
+def _to_wire_dict(payload: Any) -> dict[str, Any]:
+    """Serialize any AdCP webhook payload to a JSON-ready dict.
+
+    Behaviour-identical backport of adcp 5.4.0 ``adcp.to_wire_dict``:
+
+    * a2a ``Task`` / ``TaskStatusUpdateEvent`` (protobuf, a2a-sdk 1.0+) ->
+      ``MessageToDict(preserving_proto_field_name=False)`` so JSON keys are
+      the A2A wire camelCase (``id``, ``contextId``, ``taskId``), then enum
+      values normalized from the 1.0 form (``TASK_STATE_COMPLETED``,
+      ``ROLE_AGENT``) to the 0.3-spec lowercase form (``completed``,
+      ``agent``).
+    * Any Pydantic model (``McpWebhookPayload`` ...) ->
+      ``model_dump(mode="json", exclude_none=True)``.
+    * ``Mapping`` -> coerced to ``dict`` (legacy hand-built passthrough).
+    """
+    if isinstance(payload, (Task, TaskStatusUpdateEvent)):
+        data: dict[str, Any] = MessageToDict(payload, preserving_proto_field_name=False)
+        _normalize_a2a_task_state_to_v03(data)
+        return data
+    if hasattr(payload, "model_dump"):
+        return cast(dict[str, Any], payload.model_dump(mode="json", exclude_none=True))
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    raise TypeError(
+        f"Unsupported webhook payload type {type(payload).__name__}: expected "
+        "a2a Task / TaskStatusUpdateEvent (protobuf), an AdCP Pydantic model "
+        "(e.g. McpWebhookPayload), or a Mapping[str, Any]."
+    )
 
 
 def _normalize_localhost_for_docker(url: str) -> str:
@@ -108,12 +177,10 @@ class ProtocolWebhookService:
         }
         logger.info(f"push_notification_config (sanitized): {safe_config}")
 
-        # Serialize payload to dict at the delivery boundary (for HMAC signing and JSON send)
-        payload_dict: dict[str, Any]
-        if isinstance(payload, (Task, TaskStatusUpdateEvent, McpWebhookPayload)):
-            payload_dict = payload.model_dump(mode="json", exclude_none=True)
-        else:
-            payload_dict = payload
+        # Serialize payload to dict at the delivery boundary (for HMAC signing
+        # and JSON send). Single seam: a2a protobuf -> camelCase + A2A 0.3
+        # lowercase enum values; Pydantic -> model_dump; Mapping -> dict.
+        payload_dict: dict[str, Any] = _to_wire_dict(payload)
 
         # Apply authentication based on schemes
         if (
@@ -200,9 +267,10 @@ class ProtocolWebhookService:
         # TODO: Fix type annotation discrepancy in adcp library - extract_webhook_result_data
         # returns dict at runtime but is typed as AdcpAsyncResponseData | None
         result = cast(dict[str, Any] | None, extract_webhook_result_data(payload))
-        # After serialization, payload is always a dict - extract task_id accordingly
-        # A2A Task uses 'id', TaskStatusUpdateEvent uses 'task_id', MCP uses 'task_id'
-        task_id = payload.get("id") or payload.get("task_id") or ""
+        # After serialization, payload is always a dict - extract task_id accordingly.
+        # A2A Task uses 'id'; A2A TaskStatusUpdateEvent uses camelCase 'taskId' (proto
+        # json_name wire contract); MCP uses snake_case 'task_id'.
+        task_id = payload.get("id") or payload.get("taskId") or payload.get("task_id") or ""
 
         # If we are delivering media buy delivery report
         notification_type_from_result = result.get("notification_type") if result is not None else None
@@ -466,8 +534,32 @@ _webhook_service: ProtocolWebhookService | None = None
 
 
 def get_protocol_webhook_service() -> ProtocolWebhookService:
-    """Get or create global webhook service instance."""
+    """Get or create global webhook service instance.
+
+    On first construction, self-registers ``close`` with the shutdown
+    registry so the long-lived ``requests.Session`` connection pool is
+    released on FastAPI lifespan shutdown — the service owns its own
+    lifecycle.
+    """
     global _webhook_service
     if _webhook_service is None:
         _webhook_service = ProtocolWebhookService()
+        register_shutdown(_webhook_service.close)
+    return _webhook_service
+
+
+def get_webhook_service_or_none() -> ProtocolWebhookService | None:
+    """Return the current singleton instance, or None if never constructed.
+
+    Distinct from :func:`get_protocol_webhook_service`: this does NOT trigger
+    construction. Use it from shutdown hooks where you only want to close an
+    *existing* instance, not create one (and its long-lived ``requests.Session``
+    connection pool) just to immediately close it.
+
+    Resolving the singleton through this function call is location-independent:
+    it reads the live module global at call time, so callers may import it at
+    module top-level without the lazy-import tripwire that a direct
+    ``from ... import _webhook_service`` would introduce (a hoisted private
+    import binds the initial ``None`` forever).
+    """
     return _webhook_service

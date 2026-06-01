@@ -10,7 +10,12 @@ import inspect
 
 import pytest
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPCapabilityNotSupportedError,
+    AdCPError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetMediaBuysRequest
 
@@ -51,7 +56,11 @@ class TestGetMediaBuysImplRaisesAdCPError:
             _get_media_buys_impl(req, identity=None)
 
     def test_unsupported_account_id_raises_adcp_error(self):
-        """Passing account_id should raise AdCPValidationError (not ToolError)."""
+        """Passing account_id should raise AdCPCapabilityNotSupportedError (not ToolError).
+
+        The wire code ``UNSUPPORTED_FEATURE`` lets buyers retry without the
+        unsupported parameter; a generic ``VALIDATION_ERROR`` would not.
+        """
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         identity = ResolvedIdentity(
@@ -60,11 +69,15 @@ class TestGetMediaBuysImplRaisesAdCPError:
             tenant={"tenant_id": "test_tenant"},
         )
         req = GetMediaBuysRequest(account_id="some_account")
-        with pytest.raises(AdCPValidationError):
+        with pytest.raises(AdCPCapabilityNotSupportedError):
             _get_media_buys_impl(req, identity=identity)
 
     def test_unsupported_account_raises_adcp_error(self):
-        """Passing account (nested, AdCP 3.x) should raise AdCPValidationError."""
+        """Passing account (nested, AdCP 3.x) should raise AdCPCapabilityNotSupportedError.
+
+        The wire code ``UNSUPPORTED_FEATURE`` lets buyers retry without the
+        unsupported parameter; a generic ``VALIDATION_ERROR`` would not.
+        """
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         identity = ResolvedIdentity(
@@ -73,7 +86,7 @@ class TestGetMediaBuysImplRaisesAdCPError:
             tenant={"tenant_id": "test_tenant"},
         )
         req = GetMediaBuysRequest(account={"account_id": "some_account"})
-        with pytest.raises(AdCPValidationError):
+        with pytest.raises(AdCPCapabilityNotSupportedError):
             _get_media_buys_impl(req, identity=identity)
 
     def test_error_types_are_adcp_error_subclasses(self):

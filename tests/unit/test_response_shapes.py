@@ -169,17 +169,14 @@ class TestCreateMediaBuyResponseShape:
 
         resp = CreateMediaBuySuccess(
             media_buy_id="buy_001",
-            buyer_ref="ref_001",
             packages=[],
         )
         data = resp.model_dump(mode="json")
 
         assert_field_type(data, "media_buy_id", str)
-        assert_field_type(data, "buyer_ref", str)
         assert_field_type(data, "packages", list)
 
         assert data["media_buy_id"] == "buy_001"
-        assert data["buyer_ref"] == "ref_001"
 
     def test_success_response_with_packages(self):
         """Response with packages has correct nested package structure."""
@@ -191,7 +188,6 @@ class TestCreateMediaBuyResponseShape:
         )
         resp = CreateMediaBuySuccess(
             media_buy_id="buy_002",
-            buyer_ref="ref_002",
             packages=[package],
         )
         data = resp.model_dump(mode="json")
@@ -208,7 +204,6 @@ class TestCreateMediaBuyResponseShape:
 
         resp = CreateMediaBuySuccess(
             media_buy_id="buy_003",
-            buyer_ref="ref_003",
             packages=[],
             workflow_step_id="wf_123",
         )
@@ -237,7 +232,7 @@ class TestSyncCreativesResponseShape:
 
     def test_sync_response_with_created_creative(self):
         """Sync response with a created creative has correct shape."""
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
@@ -260,7 +255,7 @@ class TestSyncCreativesResponseShape:
 
     def test_sync_response_internal_fields_excluded(self):
         """Internal fields (status, review_feedback) are excluded."""
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
@@ -279,14 +274,18 @@ class TestSyncCreativesResponseShape:
 
     def test_sync_response_failed_creative_has_errors(self):
         """Failed creative includes errors list."""
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
+        from adcp.types import Error as AdCPErrorDetail
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
         result = SyncCreativeResult(
             creative_id="creative_003",
             action=CreativeAction.failed,
-            errors=["Format not supported", "Missing required asset"],
+            errors=[
+                AdCPErrorDetail(code="format_error", message="Format not supported"),
+                AdCPErrorDetail(code="asset_error", message="Missing required asset"),
+            ],
         )
         resp = SyncCreativesResponse(creatives=[result], dry_run=False)  # type: ignore[call-arg]
         data = resp.model_dump(mode="json")
@@ -294,7 +293,7 @@ class TestSyncCreativesResponseShape:
         c = data["creatives"][0]
         assert_field_type(c, "errors", list)
         assert len(c["errors"]) == 2
-        assert all(isinstance(e, str) for e in c["errors"])
+        assert all(isinstance(e, dict) for e in c["errors"])
 
 
 # ===========================================================================
@@ -335,7 +334,6 @@ class TestGetMediaBuyDeliveryResponseShape:
             media_buy_deliveries=[
                 MediaBuyDeliveryData(
                     media_buy_id="buy_100",
-                    buyer_ref="ref_100",
                     status="active",
                     pricing_model=PricingModel.cpm,
                     totals=DeliveryTotals(
@@ -589,15 +587,12 @@ class TestUpdateMediaBuyResponseShape:
 
         resp = UpdateMediaBuySuccess(
             media_buy_id="buy_100",
-            buyer_ref="ref_100",
         )
         data = resp.model_dump(mode="json")
 
         assert_field_type(data, "media_buy_id", str)
-        assert_field_type(data, "buyer_ref", str)
 
         assert data["media_buy_id"] == "buy_100"
-        assert data["buyer_ref"] == "ref_100"
 
     def test_success_response_with_packages(self):
         """Response with affected_packages has correct nested package structure."""
@@ -609,7 +604,6 @@ class TestUpdateMediaBuyResponseShape:
         )
         resp = UpdateMediaBuySuccess(
             media_buy_id="buy_101",
-            buyer_ref="ref_101",
             affected_packages=[package],
         )
         data = resp.model_dump(mode="json")
@@ -634,7 +628,6 @@ class TestUpdateMediaBuyResponseShape:
         )
         resp = UpdateMediaBuySuccess(
             media_buy_id="buy_102",
-            buyer_ref="ref_102",
             affected_packages=[package],
             workflow_step_id="wf_456",
         )
@@ -793,7 +786,7 @@ class TestSerializationConsistency:
             ),
             pytest.param(
                 lambda: __import__("src.core.schemas", fromlist=["CreateMediaBuySuccess"]).CreateMediaBuySuccess(
-                    media_buy_id="buy_1", buyer_ref="ref_1", packages=[]
+                    media_buy_id="mb_test", packages=[]
                 ),
                 id="create_media_buy",
             ),
@@ -811,7 +804,7 @@ class TestSerializationConsistency:
             ),
             pytest.param(
                 lambda: __import__("src.core.schemas", fromlist=["UpdateMediaBuySuccess"]).UpdateMediaBuySuccess(
-                    media_buy_id="buy_1", buyer_ref="ref_1"
+                    media_buy_id="mb_test", affected_packages=[]
                 ),
                 id="update_media_buy",
             ),
@@ -879,7 +872,8 @@ class TestSerializationConsistency:
         """SyncCreativesResponse is JSON-serializable."""
         import json
 
-        from adcp.types.generated_poc.enums.creative_action import CreativeAction
+        from adcp.types import CreativeAction
+        from adcp.types import Error as AdCPErrorDetail
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
@@ -892,7 +886,7 @@ class TestSerializationConsistency:
                 SyncCreativeResult(
                     creative_id="c2",
                     action=CreativeAction.failed,
-                    errors=["Bad format"],
+                    errors=[AdCPErrorDetail(code="format_error", message="Bad format")],
                 ),
             ],
             dry_run=False,

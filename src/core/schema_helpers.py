@@ -13,11 +13,7 @@ Philosophy:
 from typing import Any
 
 from adcp import GetProductsResponse, Product
-from adcp.types import PropertyListReference
-from adcp.types.generated_poc.core.brand_ref import BrandReference
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.product_filters import ProductFilters
-from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
+from adcp.types import BrandReference, ContextObject, ProductFilters, PropertyListReference, ReportingWebhook
 
 from src.core.schemas.product import GetProductsRequest
 
@@ -58,11 +54,11 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
     return None  # Fallback for unexpected types
 
 
-def to_brand_reference(brand: dict[str, Any] | BrandReference | None) -> BrandReference | None:
-    """Convert dict brand to BrandReference for adcp 3.6.0 compatibility.
+def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> BrandReference | None:
+    """Convert dict/string brand to BrandReference for adcp 3.6.0 compatibility.
 
     Args:
-        brand: Brand as dict or BrandReference or None
+        brand: Brand as dict, string domain shorthand, BrandReference, or None
 
     Returns:
         BrandReference or None
@@ -71,6 +67,8 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | None) -> BrandRe
         return None
     if isinstance(brand, BrandReference):
         return brand
+    if isinstance(brand, str):
+        return BrandReference(domain=brand)
     if isinstance(brand, dict):
         return BrandReference(**brand)
     return None  # Fallback for unexpected types
@@ -98,7 +96,7 @@ def to_property_list_reference(
 
 def create_get_products_request(
     brief: str = "",
-    brand: dict[str, Any] | BrandReference | None = None,
+    brand: dict[str, Any] | BrandReference | str | None = None,
     filters: dict[str, Any] | ProductFilters | None = None,
     property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,

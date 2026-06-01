@@ -10,11 +10,12 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
-from a2a.types import MessageSendParams, Task
-from a2a.utils.errors import InvalidParamsError, ServerError
+from a2a.server.routes.common import ServerCallContext
+from a2a.types import SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def _make_identity(sample_tenant, sample_principal) -> ResolvedIdentity:
     """Build a ResolvedIdentity for A2A tests."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=sample_principal["principal_id"],
         tenant_id=sample_tenant["tenant_id"],
         tenant=sample_tenant,
@@ -49,9 +50,10 @@ async def test_get_products_with_brief_only(sample_tenant, sample_principal, sam
         skill_name="get_products",
         parameters={"brief": "Athletic footwear advertising"},
     )
-    params = MessageSendParams(message=message)
+    params = SendMessageRequest(message=message)
 
-    result = await handler.on_message_send(params)
+    context = ServerCallContext()
+    result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -77,9 +79,10 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
             "brief": "Athletic footwear advertising",
         },
     )
-    params = MessageSendParams(message=message)
+    params = SendMessageRequest(message=message)
 
-    result = await handler.on_message_send(params)
+    context = ServerCallContext()
+    result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -110,10 +113,11 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
             # No brief, no brand — but brand_manifest is translated to brand
         },
     )
-    params = MessageSendParams(message=message)
+    params = SendMessageRequest(message=message)
 
     # brand_manifest is now translated to brand: {domain: "nike.com"}
-    result = await handler.on_message_send(params)
+    context = ServerCallContext()
+    result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -124,9 +128,15 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
 async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, sample_principal, sample_products):
     """Test that requests with neither brief nor brand are rejected.
 
-    The handler raises AdCPValidationError which is translated to
-    InvalidParamsError at the A2A boundary via _adcp_to_a2a_error().
+    The handler raises AdCPValidationError; the explicit-skill dispatcher
+    catches it and surfaces a failed Task with the two-layer envelope as
+    the artifact DataPart — AdCP-domain errors are async-task failures, not
+    JSON-RPC transport errors.
     """
+    from a2a.types import TaskState
+
+    from tests.utils.a2a_helpers import extract_data_from_artifact
+
     handler = AdCPRequestHandler()
     identity = _make_identity(sample_tenant, sample_principal)
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
@@ -140,10 +150,17 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
         skill_name="get_products",
         parameters={},
     )
-    params = MessageSendParams(message=message)
+    params = SendMessageRequest(message=message)
 
-    # Empty params → AdCPValidationError → InvalidParamsError
-    with pytest.raises(ServerError) as exc_info:
-        await handler.on_message_send(params)
+    context = ServerCallContext()
+    result = await handler.on_message_send(params, context)
 
-    assert isinstance(exc_info.value.error, InvalidParamsError)
+    # Empty params → AdCPValidationError → failed Task with envelope DataPart
+    assert isinstance(result, Task)
+    assert result.status.state == TaskState.TASK_STATE_FAILED, f"Expected failed task, got {result.status.state}"
+    assert result.artifacts, "Failed task must carry an envelope artifact"
+    envelope = extract_data_from_artifact(result.artifacts[0])
+    # Two-layer envelope: adcp_error mirror + errors[] payload
+    from tests.helpers import assert_envelope_shape
+
+    assert_envelope_shape(envelope, "VALIDATION_ERROR")

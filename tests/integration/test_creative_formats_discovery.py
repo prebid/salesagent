@@ -27,12 +27,10 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 def _make_format(format_id: str, name: str) -> Format:
     """Build a minimal Format for testing."""
-    from adcp.types.generated_poc.enums.format_category import FormatCategory
-
     return Format(
         format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
         name=name,
-        type=FormatCategory.display,
+        type="display",
         is_standard=True,
     )
 
@@ -151,10 +149,8 @@ class TestAuthOptionalForDiscovery:
 
         Authentication is optional for discovery, but tenant context is still
         required to resolve which format catalog to return. When tenant=None,
-        AdCPAuthenticationError is raised.
+        the AUTH_REQUIRED error code is returned.
         """
-        from src.core.exceptions import AdCPAuthenticationError
-
         formats = [_make_format("no_tenant_fmt", "Should Not Reach")]
 
         with CreativeFormatsEnv() as env:
@@ -171,7 +167,7 @@ class TestAuthOptionalForDiscovery:
             result = env.call_via(Transport.IMPL, identity=identity_no_tenant)
 
         assert result.is_error
-        assert isinstance(result.error, AdCPAuthenticationError)
+        assert result.error.error_code == "AUTH_TOKEN_INVALID"
 
     def test_authenticated_vs_unauthenticated_return_same_catalog(self, integration_db):
         """UC-005-MAIN-MCP-02: auth token does not affect the catalog returned.
@@ -224,9 +220,7 @@ class TestTenantResolutionFailure:
     """
 
     def test_no_tenant_no_auth_raises_auth_error(self, integration_db):
-        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AdCPAuthenticationError."""
-        from src.core.exceptions import AdCPAuthenticationError
-
+        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AUTH_REQUIRED error code."""
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([_make_format("unreachable", "Should Not Reach")])
@@ -241,12 +235,10 @@ class TestTenantResolutionFailure:
             result = env.call_via(Transport.IMPL, identity=identity)
 
         assert result.is_error
-        assert isinstance(result.error, AdCPAuthenticationError)
+        assert result.error.error_code == "AUTH_TOKEN_INVALID"
 
     def test_error_message_mentions_tenant(self, integration_db):
         """UC-005-EXT-A-01: error message indicates tenant context could not be determined."""
-        from src.core.exceptions import AdCPAuthenticationError
-
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([])
@@ -261,5 +253,15 @@ class TestTenantResolutionFailure:
             result = env.call_via(Transport.A2A, identity=identity)
 
         assert result.is_error
-        assert isinstance(result.error, AdCPAuthenticationError)
-        assert "tenant" in str(result.error).lower()
+        # Wire-envelope assertion via the harness's captured A2A artifact DataPart —
+        # exercises the real on_message_send pipeline + serialize-for-a2a envelope
+        # build, not the lossy reconstructed exception. See tests/CLAUDE.md §
+        # Error Verification Policy.
+        from tests.helpers import assert_envelope_shape
+
+        assert_envelope_shape(
+            result.wire_error_envelope,
+            "AUTH_TOKEN_INVALID",
+            recovery="terminal",
+            message_substr="tenant",
+        )

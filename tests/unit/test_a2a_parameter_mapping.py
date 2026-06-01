@@ -14,9 +14,9 @@ from unittest.mock import patch
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="principal_123",
     tenant_id="tenant_123",
     tenant={"tenant_id": "tenant_123"},
@@ -135,10 +135,10 @@ class TestA2AParameterMapping:
 
             import asyncio
 
-            from a2a.utils.errors import ServerError
+            from a2a.utils.errors import A2AError
 
-            # Should raise ServerError for missing required parameter
-            with pytest.raises(ServerError) as exc_info:
+            # Should raise A2AError for missing required parameter
+            with pytest.raises(A2AError) as exc_info:
                 asyncio.run(
                     handler._handle_update_media_buy_skill(parameters=invalid_parameters, identity=_MOCK_IDENTITY)
                 )
@@ -242,14 +242,19 @@ class TestA2AParameterMapping:
 
             import asyncio
 
-            result = asyncio.run(
-                handler._handle_create_media_buy_skill(parameters=incomplete_parameters, identity=_MOCK_IDENTITY)
-            )
+            # Skill handlers raise typed AdCPValidationError on missing-params; the
+            # outer dispatcher catches AdCPError and routes through
+            # _build_failed_skill_result to produce the two-layer envelope.
+            # Asserting on the raised exception (not a returned dict) verifies the
+            # flat-dict bypass path is closed — handlers must raise, never return
+            # {"success": False, ...} that bypasses envelope construction.
+            from src.core.exceptions import AdCPValidationError
 
-            # Should reject and list missing required parameters
-            assert result["success"] is False, "Should reject request missing required AdCP parameters"
+            with pytest.raises(AdCPValidationError) as exc_info:
+                asyncio.run(
+                    handler._handle_create_media_buy_skill(parameters=incomplete_parameters, identity=_MOCK_IDENTITY)
+                )
 
-            # ValidationError message includes missing field names
-            error_message = str(result.get("message", "")).lower()
+            error_message = str(exc_info.value).lower()
             assert "brand" in error_message, "Error message should mention missing 'brand'"
             assert "packages" in error_message, "Error message should mention missing 'packages'"

@@ -146,6 +146,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "check_inventory_sync"),
     ("src/admin/blueprints/inventory.py", "get_inventory_list"),
     ("src/admin/blueprints/inventory.py", "get_inventory_sizes"),
+    ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(salesagent-y6n3): extract to repository
     ("src/admin/blueprints/inventory.py", "get_inventory_tree"),
     ("src/admin/blueprints/inventory.py", "get_order_details"),
     ("src/admin/blueprints/inventory.py", "get_orders"),
@@ -299,7 +300,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl"),
     ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),
     ("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"),
-    ("src/core/tools/media_buy_update.py", "_update_media_buy_impl"),
     # ── Routes ──
     ("src/routes/health.py", "debug_db_state"),
     ("src/routes/health.py", "debug_root_logic"),

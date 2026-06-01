@@ -10,6 +10,7 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, GetProductsRequest, PricingModel
 from src.core.testing_hooks import AdCPTestContext
@@ -286,11 +287,9 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
     """Test creating media buy with fixed CPM pricing."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpm_fixed",
                 pricing_option_id="cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=10000.0,
@@ -323,11 +322,9 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
     """Test creating media buy with auction CPM pricing."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpm_auction",
                 pricing_option_id="cpm_usd_auction",  # Format: {model}_{currency}_{fixed|auction}
                 bid_price=15.0,  # Above floor of 8.0
@@ -361,11 +358,9 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
     """Test that auction bid below floor price fails."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpm_auction",
                 pricing_option_id="cpm_usd_auction",  # Format: {model}_{currency}_{fixed|auction}
                 bid_price=5.0,  # Below floor of 8.0
@@ -384,13 +379,17 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         protocol="mcp",
     )
 
-    # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    # Boundary-validation failures are now signaled via typed AdCPError that
+    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
+    # and is translated to the spec two-layer envelope at the transport
+    # boundary. Verify the typed raise at the layer above the transport.
+    with pytest.raises(AdCPValidationError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=identity)
 
-    # Check for errors in response (AdCP 2.4 compliant)
-    assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"
-    error_messages = " ".join(str(e) for e in response.errors)
-    assert "below floor price" in error_messages.lower() or "floor" in error_messages.lower()
+    exc = excinfo.value
+    assert exc.details == {"error_code": "PRICING_ERROR"}
+    msg = exc.message.lower()
+    assert "below floor price" in msg or "floor" in msg
 
 
 @pytest.mark.requires_db
@@ -398,11 +397,9 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
     """Test creating media buy with CPCV pricing."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpcv",
                 pricing_option_id="cpcv_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=8000.0,  # Above min spend of 5000
@@ -435,11 +432,9 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
     """Test that budget below min_spend_per_package fails."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpcv",
                 pricing_option_id="cpcv_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=3000.0,  # Below min spend of 5000
@@ -457,13 +452,17 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         protocol="mcp",
     )
 
-    # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    # Boundary-validation failures are now signaled via typed AdCPError that
+    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
+    # and is translated to the spec two-layer envelope at the transport
+    # boundary. Verify the typed raise at the layer above the transport.
+    with pytest.raises(AdCPValidationError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=identity)
 
-    # Check for errors in response (AdCP 2.4 compliant)
-    assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"
-    error_messages = " ".join(str(e) for e in response.errors)
-    assert "below minimum spend" in error_messages.lower() or "minimum" in error_messages.lower()
+    exc = excinfo.value
+    assert exc.details == {"error_code": "PRICING_ERROR"}
+    msg = exc.message.lower()
+    assert "below minimum spend" in msg or "minimum" in msg
 
 
 @pytest.mark.requires_db
@@ -471,11 +470,9 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
     """Test creating media buy choosing CPP from multi-pricing product."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_multi",
                 pricing_option_id="cpp_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=15000.0,  # Above min spend of 10000
@@ -508,11 +505,9 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
     """Test that requesting unavailable pricing model fails."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpm_fixed",  # Only offers CPM
                 pricing_option_id="cpcv_usd_fixed",  # Requesting CPCV (should fail)
                 budget=10000.0,
@@ -530,10 +525,14 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         protocol="mcp",
     )
 
-    # AdCP 2.4 spec: Errors are returned in response.errors, not raised as exceptions
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    # Boundary-validation failures are now signaled via typed AdCPError that
+    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
+    # and is translated to the spec two-layer envelope at the transport
+    # boundary. Verify the typed raise at the layer above the transport.
+    with pytest.raises(AdCPValidationError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=identity)
 
-    # Check for errors in response (AdCP 2.4 compliant)
-    assert response.errors is not None and len(response.errors) > 0, "Expected errors in response"
-    error_messages = " ".join(str(e) for e in response.errors)
-    assert "does not offer pricing model" in error_messages.lower() or "pricing" in error_messages.lower()
+    exc = excinfo.value
+    assert exc.details == {"error_code": "PRICING_ERROR"}
+    msg = exc.message.lower()
+    assert "does not offer" in msg or "pricing" in msg

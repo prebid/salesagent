@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 if TYPE_CHECKING:
@@ -11,18 +11,17 @@ if TYPE_CHECKING:
 
 from adcp import Error
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 from adcp.types import (
+    ContextObject,
     DeliveryStatus,  # noqa: F401 — used by Snapshot below
+    MediaBuyStatus,
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
+from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 
 # Import main request/response types from stable API
 from adcp.types import Format as LibraryFormat
-from adcp.types import (
-    FormatCategory as FormatTypeEnum,
-)
 
 # Import types from stable API (per adcp 2.7.0+)
 from adcp.types import FormatId as LibraryFormatId
@@ -46,17 +45,18 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
+from adcp.types.generated_poc.enums.media_buy_valid_action import (
+    MediaBuyValidAction,
+)  # TODO: no stable alias in adcp.types
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.exceptions import AdCPNotFoundError
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
 # Simple types that match library exactly
 # V3: Structured geo targeting types
 from adcp.types import ActivateSignalRequest as LibraryActivateSignalRequest
-from adcp.types import BrandManifest as LibraryBrandManifest
 from adcp.types import (
     CpcPricingOption,
     CpcvPricingOption,
@@ -82,6 +82,17 @@ from adcp.types import PlatformDeployment as LibraryPlatformDeployment
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
+
+# adcp 4.3 generates CollectionListReference and uses it on TargetingOverlay.collection_list /
+# collection_list_exclude, but does not re-export the type from the public adcp.types namespace
+# (PropertyListReference is exported, CollectionListReference is not — likely a codegen oversight).
+# We import from the internal generated path so our isinstance checks and type annotations match
+# the library's TargetingOverlay field types exactly. Track upstream:
+# https://github.com/adcontextprotocol/adcp-client-python — when CollectionListReference is added
+# to adcp.types, switch this import to the public path.
+from adcp.types.generated_poc.core.collection_list_ref import (
+    CollectionListReference,  # noqa: F401 — re-exported via src.core.schemas; used by callers and TargetingOverlay.collection_list type
+)
 from pydantic import (
     AnyUrl,
     BaseModel,
@@ -189,10 +200,25 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+
+    AdCP spec 3.0.0 ``error-handling.mdx`` allows non-fatal errors on the
+    success envelope ("populate only the payload... MUST NOT populate
+    ``adcp_error``"). The ``errors`` field below carries per-package
+    advisories like ``UNSUPPORTED_FEATURE`` for fields the seller persists but
+    cannot yet honor (e.g. ``property_list_filtering=False`` window). Mirrors
+    the pattern used by ``GetProductsResponse``, ``ListCreativeFormatsResponse``,
+    ``SyncAccountsResponse``.
     """
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
+
+    # Non-fatal advisories — see class docstring for the spec basis.
+    errors: list[Error] | None = Field(
+        default=None,
+        description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
+        "field is persisted but won't yet affect targeting). Absent on a fully-honored buy.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -232,10 +258,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
-        if self.media_buy_id:
-            return f"Media buy {self.media_buy_id} created successfully."
-        else:
-            return f"Media buy {self.buyer_ref} created."
+        return f"Media buy {self.media_buy_id} created successfully."
 
 
 class CreateMediaBuyError(AdCPCreateMediaBuyError):
@@ -272,7 +295,7 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
-        result = self.response.model_dump(mode=info.mode)
+        result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
         return result
 
@@ -316,6 +339,12 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     Per AdCP PR #113, this response contains ONLY domain data.
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+
+    Carries an optional ``errors`` field for non-fatal advisories on the
+    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.0 error-handling
+    "non-fatal in payload" rule). Used today for per-package
+    ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
+    not yet compiled by the adapter.
     """
 
     # Override affected_packages to use our extended AffectedPackage type
@@ -326,6 +355,13 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
+
+    # Non-fatal advisories — see class docstring for the spec basis.
+    errors: list[Error] | None = Field(
+        default=None,
+        description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
+        "field is persisted but won't yet affect targeting). Absent when fully honored.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -391,7 +427,7 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):
 UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Standardized task status enum per AdCP MCP Status specification.
 
     Provides crystal clear guidance on when operations need clarification,
@@ -735,7 +771,6 @@ def get_format_by_id(format_id: str, tenant_id: str | None = None) -> Format | N
     Returns:
         Format object or None if not found
     """
-    from src.core.exceptions import AdCPNotFoundError
     from src.core.format_resolver import get_format
 
     try:
@@ -768,7 +803,6 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
                 Format(
                     format_id=FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id=format_id),
                     name=format_id.replace("_", " ").title(),
-                    type=FormatTypeEnum.display,  # Default to display type
                 )
             )
     return formats
@@ -864,6 +898,10 @@ class Targeting(TargetingOverlay):
     geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
     geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
     geo_postal_areas_exclude: list[GeoPostalArea] | None = None  # type: ignore[assignment]
+
+    # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
+    # TargetingOverlay (added natively in adcp 4.3). CollectionListReference is re-exported
+    # from src.core.schemas (see import above) so callers can use a single import path.
 
     # --- Internal dimensions (unchanged) ---
 
@@ -1154,7 +1192,6 @@ class UpdatePerformanceIndexResponse(SalesAgentBaseModel):
 
 
 # --- Discovery ---
-# Note: FormatType is imported from adcp library as FormatTypeEnum
 
 
 class FormatId(LibraryFormatId):
@@ -1235,38 +1272,6 @@ class BrandAsset(SalesAgentBaseModel):
     duration: float | None = Field(None, ge=0, description="Duration in seconds (for video/audio)")
 
 
-# Use library BrandManifest directly - all fields inherited from AdCP spec
-BrandManifest: TypeAlias = LibraryBrandManifest
-
-
-class BrandManifestRef(SalesAgentBaseModel):
-    """Brand manifest reference - can be inline object or URL string.
-
-    Per AdCP spec, this supports two formats:
-    1. Inline BrandManifest object
-    2. URL string pointing to hosted manifest JSON
-    """
-
-    # We'll handle this as a union type during validation
-    manifest: BrandManifest | str = Field(
-        ...,
-        description="Brand manifest: either inline BrandManifest object or URL string to hosted manifest",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def parse_manifest_ref(cls, values):
-        """Handle both inline manifest and URL string formats."""
-        if isinstance(values, str):
-            # Direct string = URL reference
-            return {"manifest": values}
-        elif isinstance(values, dict):
-            if "manifest" not in values:
-                # If no manifest field, treat entire dict as inline manifest
-                return {"manifest": values}
-        return values
-
-
 # --- Package Schemas (Extend adcp library for proper request/response separation) ---
 
 
@@ -1298,7 +1303,7 @@ class PackageRequest(LibraryPackageRequest):
     Used when CREATING media buys - has creative_ids/creatives/format_ids but no package_id/status.
 
     Library PackageRequest required fields per AdCP spec:
-    - budget, buyer_ref, pricing_option_id, product_id
+    - budget, pricing_option_id, product_id
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1420,7 +1425,6 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     Per AdCP spec, the required fields are:
     - brand: BrandReference (with domain and optional brand_id)
-    - buyer_ref: str (buyer's reference identifier)
     - packages: list[PackageRequest] (array of package configurations)
     - start_time: str | datetime ('asap' or ISO 8601 datetime)
     - end_time: datetime (ISO 8601 datetime)
@@ -1434,9 +1438,12 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 3.9 makes account required. Our impl resolves identity at the transport
-    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
+    # adcp 4.3 makes account and idempotency_key required.  Our impl resolves
+    # identity at the transport layer (ResolvedIdentity), not from the request
+    # payload, so account is optional here.  idempotency_key is generated at
+    # the transport boundary when not supplied by the caller.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
@@ -1504,23 +1511,15 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
 
 class CheckMediaBuyStatusRequest(SalesAgentBaseModel):
-    media_buy_id: str | None = None
-    buyer_ref: str | None = None
+    media_buy_id: str
     strategy_id: str | None = Field(
         None,
         description="Optional strategy ID for consistent simulation/testing context",
     )
 
-    def model_validate(cls, values):
-        # Ensure at least one of media_buy_id or buyer_ref is provided
-        if not values.get("media_buy_id") and not values.get("buyer_ref"):
-            raise ValueError("Either media_buy_id or buyer_ref must be provided")
-        return values
-
 
 class CheckMediaBuyStatusResponse(SalesAgentBaseModel):
     media_buy_id: str
-    buyer_ref: str
     status: str  # pending_creative, active, paused, completed, failed
     packages: list[dict[str, Any]] | None = None
     budget_spent: Budget | None = None
@@ -1539,7 +1538,6 @@ class MediaPackage(SalesAgentBaseModel):
     # when Product from library returns LibraryFormatId instances
     format_ids: list[LibraryFormatId]  # FormatId objects per AdCP spec
     targeting_overlay: Targeting | None = None
-    buyer_ref: str | None = None  # Optional buyer reference from request package
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
@@ -1598,11 +1596,19 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
 
     Adds creative_ids — spec-mandated field missing from library codegen.
     TODO(adcp-library): Remove creative_ids once upstream codegen adds it.
+
+    Overrides targeting_overlay to use the local Targeting subclass so
+    extensions (collection_list / collection_list_exclude) are typed at the
+    request boundary instead of dropping through library extra="allow" as
+    raw dicts. Mirrors the PackageRequest.targeting_overlay override pattern.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
     # Spec field missing from library codegen (adcp#208)
     creative_ids: list[str] | None = None
+    # Override library targeting_overlay so local extensions (collection_list)
+    # are coerced to typed CollectionListReference at the boundary, not dicts.
+    targeting_overlay: Targeting | None = None
 
 
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
@@ -1617,16 +1623,16 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     - packages: use our AdCPPackageUpdate (adds creative_ids)
     - budget: campaign-level budget (not in library — convenience field)
     - today: internal testing field
-
-    Spec fields missing from library codegen (accepted here for forward compatibility):
-    - revision: optimistic concurrency control
-    - canceled: irreversible cancellation flag
-    - cancellation_reason: reason for cancellation
-    - new_packages: mid-flight package additions
-    - invoice_recipient: override billing entity for this buy
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # adcp 4.3 makes account and idempotency_key required.  Override as optional
+    # — identity is resolved at the transport boundary, and idempotency_key is
+    # generated at the boundary when not supplied by the caller.
+    account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
+
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None
@@ -1636,17 +1642,6 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.
     budget: Budget | float | None = None
-    # Spec fields missing from library codegen — accept for forward compatibility
-    revision: int | None = Field(None, description="Expected current revision for optimistic concurrency")
-    canceled: bool | None = Field(None, description="Cancel the media buy (irreversible)")
-    cancellation_reason: str | None = Field(None, description="Reason for cancellation", max_length=500)
-    new_packages: list[PackageRequest] | None = Field(None, description="New packages to add mid-flight")
-    invoice_recipient: dict[str, Any] | None = Field(
-        None,
-        description="Override who receives the invoice for this buy (business-entity.json). "
-        "When provided, the seller invoices this entity instead of the account's default billing_entity.",
-    )
-    # idempotency_key: now provided by adcp library base class (since 3.10)
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
@@ -1695,25 +1690,10 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
         return self
 
-    @model_validator(mode="after")
-    def validate_identification_xor(self):
-        """Enforce AdCP oneOf: exactly one of media_buy_id or buyer_ref required.
-
-        Per update-media-buy-request.json, the request uses oneOf to require
-        either media_buy_id or buyer_ref, but not both and not neither.
-        """
-        has_id = self.media_buy_id is not None
-        has_ref = self.buyer_ref is not None
-        if has_id and has_ref:
-            raise ValueError("Provide either media_buy_id or buyer_ref, not both (AdCP oneOf constraint)")
-        if not has_id and not has_ref:
-            raise ValueError("Either media_buy_id or buyer_ref is required (AdCP oneOf constraint)")
-        return self
-
     def has_updatable_fields(self) -> bool:
         """Check whether this request includes at least one updatable field.
 
-        Returns True if any field beyond the identifier (media_buy_id/buyer_ref)
+        Returns True if any field beyond the identifier (media_buy_id)
         is set. Used by _build_update_request to enforce BR-RULE-022.
         """
         return any(
@@ -2187,7 +2167,9 @@ PROPERTY_ERROR_MESSAGES = {
 # --- Authorized Properties (AdCP Spec) ---
 # Use library types directly - all fields inherited from AdCP spec
 # V3: Property uses property-specific Identifier, not generic Identifier
-from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
+from adcp.types.generated_poc.core.property import (
+    Identifier as PropertySpecificIdentifier,
+)  # TODO: no stable alias in adcp.types (different from adcp.types.Identifier)
 
 PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific identifier
 Property: TypeAlias = LibraryProperty
@@ -2279,14 +2261,14 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 # DeliveryStatus: imported from adcp library at top of file (all 6 values).
 
 
-class SnapshotUnavailableReason(str, Enum):
+class SnapshotUnavailableReason(StrEnum):
     """Reason why a delivery snapshot is not available."""
 
     SNAPSHOT_UNSUPPORTED = "SNAPSHOT_UNSUPPORTED"
     SNAPSHOT_TEMPORARILY_UNAVAILABLE = "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
 
 
-class ApprovalStatus(str, Enum):
+class ApprovalStatus(StrEnum):
     """Approval status value for a creative assignment in a get_media_buys response."""
 
     pending_review = "pending_review"
@@ -2319,13 +2301,16 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
     """Package details within a GetMediaBuys response."""
 
     package_id: str = Field(..., description="Package identifier")
-    buyer_ref: str | None = Field(default=None, description="Buyer reference for this package")
     budget: float | None = Field(default=None, description="Package budget allocation")
     bid_price: float | None = Field(default=None, description="Bid price for auction-based pricing")
     product_id: str | None = Field(default=None, description="Product identifier for this package")
     start_time: str | None = Field(default=None, description="Package start time (ISO 8601)")
     end_time: str | None = Field(default=None, description="Package end time (ISO 8601)")
     paused: bool | None = Field(default=None, description="Whether this package is paused")
+    targeting_overlay: Targeting | None = Field(
+        default=None,
+        description="Targeting overlay echoed from the most recent create_media_buy or update_media_buy. Includes any property_list / collection_list references the buyer attached, so callers can verify what was persisted without replaying the request.",
+    )
     creative_approvals: list["CreativeApproval"] | None = Field(
         default=None, description="Creative approval state for creatives assigned to this package"
     )
@@ -2336,14 +2321,22 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
         default=None, description="Reason snapshot is unavailable (present when include_snapshot=true but no snapshot)"
     )
 
+    def model_dump(self, **kwargs):
+        result = super().model_dump(**kwargs)
+        if "targeting_overlay" in result and self.targeting_overlay is not None:
+            result["targeting_overlay"] = self.targeting_overlay.model_dump(**kwargs)
+        return result
+
 
 class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     """Media buy details in a GetMediaBuys response."""
 
     media_buy_id: str = Field(..., description="Publisher media buy identifier")
-    buyer_ref: str | None = Field(default=None, description="Buyer reference identifier")
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
     status: MediaBuyStatus = Field(..., description="Current media buy status")
+    valid_actions: list[MediaBuyValidAction] | None = Field(
+        default=None, description="Actions available for this media buy given its current status"
+    )
     currency: str = Field(..., description="ISO 4217 currency code")
     total_budget: float = Field(..., description="Total budget across all packages")
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
@@ -2365,7 +2358,6 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
     """
 
     media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
-    buyer_refs: list[str] | None = Field(default=None, description="Buyer references to filter by")
     status_filter: Any | None = Field(default=None, description="Filter by status (MediaBuyStatus or list)")
     account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
     account: LibraryAccountReference | None = Field(default=None, description="Account reference (AdCP 3.x)")
@@ -2379,7 +2371,7 @@ class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """
 
     media_buys: list[GetMediaBuysMediaBuy] = Field(..., description="List of matching media buys")
-    errors: list[Any] | None = Field(default=None, description="Errors encountered during retrieval")
+    errors: list[Error] | None = Field(default=None, description="Errors encountered during retrieval")
     context: ContextObject | None = Field(default=None, description="Application-level context from the request")
 
     def model_dump(self, **kwargs):

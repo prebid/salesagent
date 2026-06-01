@@ -18,7 +18,10 @@ Testing:
 - This avoids timeouts in CI when external creative agents are unreachable
 """
 
+import copy
+import logging
 import os
+import typing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -26,13 +29,130 @@ from typing import Any
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
-from adcp.types import FormatCategory as FormatType
-from adcp.types.generated_poc.core.error import Error as AdCPResponseError
-from adcp.types.generated_poc.core.format import Assets
+from adcp.types import Error as AdCPResponseError
+from adcp.types import ImageFormatAsset
+from pydantic import ValidationError
 from yarl import URL
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPRateLimitError,
+    AdCPServiceUnavailableError,
+)
 from src.core.schemas import Format, FormatId, url
+
+
+def _known_asset_types() -> frozenset[str]:
+    """Asset-type Literals adcp's closed discriminated union models.
+
+    Derived dynamically from the adcp schema (not hardcoded) so the tolerant
+    ingestion stays correct across adcp version bumps — what counts as
+    "additive" is always "not in the union the pinned library knows about".
+    """
+    literals: set[str] = set()
+    assets_field = Format.model_fields["assets"].annotation
+    # annotation shape: list[Union[ImageFormatAsset, VideoFormatAsset, ...]] | None
+    for outer in typing.get_args(assets_field):
+        for inner in typing.get_args(outer):  # the Union inside list[...]
+            for arm in typing.get_args(inner):
+                asset_type_field = getattr(arm, "model_fields", {}).get("asset_type")
+                if asset_type_field is not None:
+                    literals.update(typing.get_args(asset_type_field.annotation))
+    return frozenset(literals)
+
+
+_KNOWN_ASSET_TYPES = _known_asset_types()
+_SCHEMA_VALIDATION_FAILURE_MARKERS = (
+    "doesn't match expected schema",
+    "does not match expected schema",
+    "validation error",
+    "validationerror",
+    "failed to validate",
+)
+
+
+def _as_format_dict(fmt: Any) -> dict[str, Any]:
+    """Normalize a format item (pydantic model or plain dict) to a dict.
+
+    The adcp client may return parsed library models or raw dicts depending on
+    the response shape; the tolerant validator needs one uniform input.
+    """
+    if isinstance(fmt, dict):
+        return fmt
+    model_dump = getattr(fmt, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+    raise AdCPAdapterError(
+        f"Unexpected format item type from creative agent: {type(fmt)!r}",
+        recovery="terminal",
+    )
+
+
+def _unknown_asset_types(fmt_data: dict[str, Any]) -> set[str]:
+    """Asset-type values in a format dict that adcp's closed union does not model."""
+    unknown: set[str] = set()
+    for asset in fmt_data.get("assets") or []:
+        if isinstance(asset, dict):
+            asset_type = asset.get("asset_type")
+            if isinstance(asset_type, str) and asset_type not in _KNOWN_ASSET_TYPES:
+                unknown.add(asset_type)
+    return unknown
+
+
+def _is_purely_additive_asset_type(fmt_data: dict[str, Any], unknown_types: set[str]) -> bool:
+    """True iff the ONLY reason fmt_data fails validation is an unknown additive asset_type.
+
+    Strategy (value-agnostic, robust to adcp's many-armed discriminated union):
+    substitute every unknown asset_type with a known sentinel and re-validate. If
+    it then validates cleanly, the format is well-formed apart from AdCP-additive
+    enum growth → safe to drop. If it still fails, there is a genuine structural
+    defect (or a mixed error) that must NOT be masked.
+    """
+    if not unknown_types:
+        return False
+    patched = copy.deepcopy(fmt_data)
+    for asset in patched.get("assets") or []:
+        if isinstance(asset, dict) and asset.get("asset_type") in unknown_types:
+            asset["asset_type"] = "image"  # known sentinel arm
+    try:
+        Format.model_validate(patched)
+    except ValidationError:
+        return False
+    return True
+
+
+def _validate_formats_tolerant(format_dicts: list[dict[str, Any]], logger: logging.Logger) -> list[Format]:
+    """Validate formats independently; tolerate ONLY AdCP-additive asset_type growth.
+
+    Postel / asymmetric strictness: strict on what we emit (adcp Literal untouched),
+    liberal on peer responses. A format whose sole defect is an unrecognized additive
+    asset_type is DROPPED (never mis-represented — we never model a creative we
+    cannot fully understand), aggregated into ONE structured WARNING. Any other
+    ValidationError still fails LOUD so real contract breakage is not masked.
+    """
+    validated: list[Format] = []
+    skipped_count = 0
+    skipped_asset_types: set[str] = set()
+    for fmt_data in format_dicts:
+        try:
+            validated.append(Format.model_validate(fmt_data))
+        except ValidationError:
+            unknown_types = _unknown_asset_types(fmt_data)
+            if unknown_types and _is_purely_additive_asset_type(fmt_data, unknown_types):
+                skipped_count += 1
+                skipped_asset_types.update(unknown_types)
+                continue
+            raise
+    if skipped_count:
+        logger.warning(
+            "Skipped %d creative format(s) using unsupported additive asset_type(s) %s "
+            "(not modeled by the pinned adcp schema); returning the %d compatible format(s).",
+            skipped_count,
+            sorted(skipped_asset_types),
+            len(validated),
+        )
+    return validated
 
 
 @dataclass
@@ -49,33 +169,32 @@ class FormatFetchResult:
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
 
 
-def _create_mock_format(format_id_str: str, name: str, format_type: FormatType, asset_type: str) -> Format:
+def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Format:
     """Create a single mock format with proper typing for testing."""
-    from adcp.types.generated_poc.core.format import Assets5
+    from adcp.types import VideoFormatAsset
 
-    # adcp 3.6.0: Assets classes are type-discriminated with Literal asset_type fields.
-    # Assets = image, Assets5 = video. Pass asset_type as plain string (not enum).
+    # adcp 4.3.0: Assets classes are type-discriminated with Literal asset_type fields.
+    # ImageFormatAsset = image, VideoFormatAsset = video. Pass asset_type as plain string (not enum).
     if asset_type == "video":
-        asset_item: Assets | Assets5 = Assets5(
+        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(
             item_type="individual",
             asset_id="primary",
             asset_type="video",
             required=True,
         )
     else:
-        asset_item = Assets(
+        asset_item = ImageFormatAsset(
             item_type="individual",
             asset_id="primary",
             asset_type="image",
             required=True,
         )
-    assets: list[Assets | Assets5] = [asset_item]
+    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]
     # Use Format (our extended class) instead of AdcpFormat to include is_standard field
     # Explicitly pass None for optional internal fields to satisfy mypy
     return Format(
         format_id=FormatId(id=format_id_str, agent_url=url("https://creative.adcontextprotocol.org")),
         name=name,
-        type=format_type,
         assets=assets,
         is_standard=True,  # Mock formats are standard formats
         platform_config=None,
@@ -94,17 +213,17 @@ def _get_mock_formats() -> list[Format]:
     """
     # Create mock formats using our Format class (which includes is_standard field)
     return [
-        _create_mock_format("display_300x250_image", "Medium Rectangle", FormatType.display, "image"),
-        _create_mock_format("display_728x90_image", "Leaderboard", FormatType.display, "image"),
-        _create_mock_format("display_300x600_image", "Half Page", FormatType.display, "image"),
-        _create_mock_format("display_160x600_image", "Wide Skyscraper", FormatType.display, "image"),
-        _create_mock_format("display_320x50_image", "Mobile Leaderboard", FormatType.display, "image"),
-        _create_mock_format("video_standard", "Standard Video", FormatType.video, "video"),
-        _create_mock_format("video_standard_30s", "Standard Video 30s", FormatType.video, "video"),
-        _create_mock_format("video_vast", "VAST Video", FormatType.video, "video"),
-        _create_mock_format("display_image", "Display Image", FormatType.display, "image"),
-        _create_mock_format("display_html", "Display HTML", FormatType.display, "image"),
-        _create_mock_format("display_js", "Display JavaScript", FormatType.display, "image"),
+        _create_mock_format("display_300x250_image", "Medium Rectangle", "image"),
+        _create_mock_format("display_728x90_image", "Leaderboard", "image"),
+        _create_mock_format("display_300x600_image", "Half Page", "image"),
+        _create_mock_format("display_160x600_image", "Wide Skyscraper", "image"),
+        _create_mock_format("display_320x50_image", "Mobile Leaderboard", "image"),
+        _create_mock_format("video_standard", "Standard Video", "video"),
+        _create_mock_format("video_standard_30s", "Standard Video 30s", "video"),
+        _create_mock_format("video_vast", "VAST Video", "video"),
+        _create_mock_format("display_image", "Display Image", "image"),
+        _create_mock_format("display_html", "Display HTML", "image"),
+        _create_mock_format("display_js", "Display JavaScript", "image"),
     ]
 
 
@@ -272,12 +391,9 @@ class CreativeAgentRegistry:
             if asset_types:
                 typed_asset_types = [AssetType(at) for at in asset_types]
 
-            # Convert string type_filter to FormatType enum
-            typed_format_type: FormatType | None = None
-            if type_filter:
-                typed_format_type = FormatType(type_filter)
-
             # Build request parameters
+            # Note: type_filter (FormatCategory) removed in adcp 3.12 — formats are
+            # categorized structurally via assets[].asset_type, not a top-level enum.
             request = ListCreativeFormatsRequest(
                 max_width=max_width,
                 max_height=max_height,
@@ -286,7 +402,6 @@ class CreativeAgentRegistry:
                 is_responsive=is_responsive,
                 asset_types=typed_asset_types,
                 name_search=name_search,
-                type=typed_format_type,
             )
 
             # Call agent using adcp library
@@ -298,26 +413,32 @@ class CreativeAgentRegistry:
             if result.status == "completed":
                 formats_data = result.data
                 if formats_data is None:
-                    raise AdCPAdapterError("Completed status but no data in response")
+                    raise AdCPAdapterError(
+                        "Completed status but no data in response",
+                        recovery="terminal",
+                    )
 
                 logger.info(
                     f"_fetch_formats_from_agent: Got response with {len(formats_data.formats) if hasattr(formats_data, 'formats') else 'N/A'} formats"
                 )
 
-                # Convert to Format objects
-                # Note: Format now extends adcp library's Format class.
-                # fmt_data is a library Format with format_id.agent_url already set per spec.
-                # We convert to our Format subclass to get any additional internal fields.
-                formats = []
-                for fmt_data in formats_data.formats:
-                    # Convert library Format to our local Format subclass
-                    # from_attributes=True allows accepting parent class instances
-                    formats.append(Format.model_validate(fmt_data, from_attributes=True))
-
-                return formats
+                # Convert to Format objects via the tolerant per-format validator.
+                # adcp has already parsed the response wholesale to reach
+                # status="completed", so additive asset_type growth normally
+                # surfaces via the raw-MCP fallback path instead — but routing
+                # both ingestion points through the same helper keeps a single
+                # validation contract (DRY) and is defensive for the completed
+                # path too. The adcp client may hand back either parsed library
+                # models or plain dicts; normalize to one dict shape so the
+                # shared helper has a uniform input.
+                format_dicts = [_as_format_dict(fmt) for fmt in formats_data.formats]
+                return _validate_formats_tolerant(format_dicts, logger)
 
             elif result.status == "submitted":
-                raise AdCPAdapterError(f"Unexpected submitted status for list_creative_formats from {agent.name}")
+                raise AdCPAdapterError(
+                    f"Unexpected submitted status for list_creative_formats from {agent.name}",
+                    recovery="terminal",
+                )
 
             elif result.status == "failed":
                 # Log detailed error information for debugging
@@ -330,14 +451,25 @@ class CreativeAgentRegistry:
                 # return TextContent with JSON. Also falls back when the SDK fails
                 # with generic errors (e.g., "no running event loop" → "No error
                 # details provided") that indicate an SDK-level transport issue.
+                error_text = str(error_msg)
                 sdk_transport_error = (
-                    "structuredContent" in str(error_msg)
-                    or "No error details provided" in str(error_msg)
-                    or "no running event loop" in str(error_msg)
-                    or "Failed to connect" in str(error_msg)
+                    "structuredContent" in error_text
+                    or "No error details provided" in error_text
+                    or "no running event loop" in error_text
+                    or "Failed to connect" in error_text
                 )
-                if sdk_transport_error:
-                    logger.warning(f"adcp SDK transport issue, falling back to raw HTTP: {error_msg}")
+                # Wholesale schema-validation FAILED (e.g. one AdCP-additive
+                # asset_type fails the closed Literal union → "doesn't match
+                # expected schema ListCreativeFormatsResponse" with thousands of
+                # errors). Route to the raw-MCP path where per-format tolerant
+                # ingestion can salvage the compatible formats instead of
+                # discarding the entire catalog. (salesagent-w8yn)
+                schema_validation_failure = any(
+                    marker in error_text.lower() for marker in _SCHEMA_VALIDATION_FAILURE_MARKERS
+                )
+                if sdk_transport_error or schema_validation_failure:
+                    reason = "schema-validation failure" if schema_validation_failure else "SDK transport issue"
+                    logger.warning(f"adcp {reason}, falling back to raw HTTP: {error_msg}")
                     return await self._fetch_formats_raw_mcp(agent)
 
                 logger.error(f"Creative agent {agent.name} returned FAILED status. Error: {error_msg}")
@@ -347,20 +479,23 @@ class CreativeAgentRegistry:
                 raise AdCPAdapterError(f"Creative agent format fetch failed: {error_msg}")
 
             else:
-                raise AdCPAdapterError(f"Unexpected result status from {agent.name}: {result.status}")
+                raise AdCPAdapterError(
+                    f"Unexpected result status from {agent.name}: {result.status}",
+                    recovery="terminal",
+                )
 
         except ADCPAuthenticationError as e:
             logger.error(f"Authentication failed for creative agent {agent.name}: {e.message}")
-            raise RuntimeError(f"Authentication failed: {e.message}") from e
+            raise AdCPAuthenticationError(f"Authentication failed: {e.message}") from e
         except ADCPTimeoutError as e:
             logger.error(f"Request to creative agent {agent.name} timed out: {e.message}")
-            raise RuntimeError(f"Request timed out: {e.message}") from e
+            raise AdCPServiceUnavailableError(f"Request timed out: {e.message}") from e
         except ADCPConnectionError as e:
             logger.error(f"Failed to connect to creative agent {agent.name}: {e.message}")
-            raise RuntimeError(f"Connection failed: {e.message}") from e
+            raise AdCPServiceUnavailableError(f"Connection failed: {e.message}") from e
         except ADCPError as e:
             logger.error(f"AdCP error with creative agent {agent.name}: {e.message}")
-            raise RuntimeError(str(e.message)) from e
+            raise AdCPAdapterError(str(e.message)) from e
 
     async def _fetch_formats_raw_mcp(self, agent: CreativeAgent) -> list[Format]:
         """Fallback: fetch formats via raw HTTP when adcp SDK rejects TextContent.
@@ -414,7 +549,23 @@ class CreativeAgentRegistry:
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
-                raise RuntimeError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
+                if exc.response.status_code == 429:
+                    raise AdCPRateLimitError(
+                        f"Creative agent rate-limited: {mcp_url}",
+                        details={"retry_after": exc.response.headers.get("Retry-After")},
+                    ) from exc
+                if exc.response.status_code >= 500:
+                    raise AdCPServiceUnavailableError(
+                        f"Creative agent unavailable (HTTP {exc.response.status_code}): {mcp_url}"
+                    ) from exc
+                # 4xx non-429 from an external agent is a buyer-side error
+                # (bad request, unauthorized, not found, etc.); retrying the
+                # same request won't help, so override the class default
+                # ``transient`` with ``terminal``.
+                raise AdCPAdapterError(
+                    f"Creative agent HTTP error: {exc.response.status_code}",
+                    recovery="terminal",
+                ) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < max_retries - 1:
@@ -422,13 +573,13 @@ class CreativeAgentRegistry:
                     await asyncio.sleep(2**attempt)
                     continue
                 logger.error(f"Creative agent fallback timed out: {mcp_url}")
-                raise RuntimeError(f"Request timed out: {mcp_url}") from exc
+                raise AdCPServiceUnavailableError(f"Request timed out: {mcp_url}") from exc
             except httpx.RequestError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
-                raise RuntimeError(f"Connection failed: {mcp_url} — {exc}") from exc
+                raise AdCPServiceUnavailableError(f"Connection failed: {mcp_url} — {exc}") from exc
         else:
-            raise RuntimeError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
+            raise AdCPServiceUnavailableError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
 
         # Parse SSE or JSON response
         content_type = response.headers.get("content-type", "")
@@ -443,7 +594,10 @@ class CreativeAgentRegistry:
             if "result" in data:
                 return self._parse_mcp_tool_result(data["result"], logger)
 
-        raise AdCPAdapterError(f"No parseable result in MCP response from {agent.agent_url}")
+        raise AdCPAdapterError(
+            f"No parseable result in MCP response from {agent.agent_url}",
+            recovery="terminal",
+        )
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
         """Parse formats from an MCP tools/call result."""
@@ -454,10 +608,13 @@ class CreativeAgentRegistry:
             if item.get("type") == "text" and item.get("text"):
                 data = json.loads(item["text"])
                 formats_list = data.get("formats", [])
-                formats = [Format.model_validate(fmt_data) for fmt_data in formats_list]
+                formats = _validate_formats_tolerant(formats_list, logger)
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
-        raise AdCPAdapterError("No text content in MCP tool result")
+        raise AdCPAdapterError(
+            "No text content in MCP tool result",
+            recovery="terminal",
+        )
 
     async def get_formats_for_agent(
         self,
@@ -694,10 +851,6 @@ class CreativeAgentRegistry:
                 or query_lower in fmt.name.lower()
                 or (fmt.description and query_lower in fmt.description.lower())
             ):
-                # Apply type filter if provided
-                if type_filter and fmt.type != type_filter:
-                    continue
-
                 results.append(fmt)
 
         return results

@@ -20,9 +20,9 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.app import app
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
     tenant_id="test-tenant",
     tenant={"tenant_id": "test-tenant"},
@@ -63,24 +63,16 @@ AUTH_REQUIRED_SKILLS = [s for s in ALL_SKILLS if s not in DISCOVERY_SKILLS]
 
 
 def _build_jsonrpc(skill: str, params: dict | None = None, request_id: str | None = None) -> dict:
-    """Build a JSON-RPC 2.0 message/send request with explicit skill invocation."""
+    """Build a JSON-RPC 2.0 SendMessage request with explicit skill invocation."""
     return {
         "jsonrpc": "2.0",
         "id": request_id or str(uuid.uuid4()),
-        "method": "message/send",
+        "method": "SendMessage",
         "params": {
             "message": {
                 "messageId": str(uuid.uuid4()),
-                "role": "user",
-                "parts": [
-                    {
-                        "kind": "data",
-                        "data": {
-                            "skill": skill,
-                            "parameters": params or {},
-                        },
-                    }
-                ],
+                "role": "ROLE_USER",
+                "parts": [{"data": {"skill": skill, "parameters": params or {}}}],
             }
         },
     }
@@ -101,12 +93,18 @@ def _extract_jsonrpc_error(response) -> dict:
 
 
 def _extract_artifact_data(result: dict) -> dict:
-    """Extract data from the first artifact's DataPart."""
-    artifacts = result.get("artifacts", [])
+    """Extract data from the first artifact's DataPart.
+
+    a2a-sdk 1.0 protobuf format: result is {"task": {...}} or {"message": {...}}.
+    Parts use oneof: {"data": {...}} or {"text": "..."} (no "kind" field).
+    """
+    # Unwrap task envelope if present
+    task = result.get("task", result)
+    artifacts = task.get("artifacts", [])
     if not artifacts:
         return {}
     for part in artifacts[0].get("parts", []):
-        if part.get("kind") == "data" and "data" in part:
+        if "data" in part:
             return part["data"]
     return {}
 
@@ -127,16 +125,13 @@ def client():
 @pytest.fixture
 def auth_headers():
     """Headers with a valid Bearer token."""
-    return {
-        "Authorization": "Bearer test-transport-token",
-        "Content-Type": "application/json",
-    }
+    return {"Authorization": "Bearer test-transport-token", "Content-Type": "application/json", "A2A-Version": "1.0"}
 
 
 @pytest.fixture
 def no_auth_headers():
     """Headers without authentication."""
-    return {"Content-Type": "application/json"}
+    return {"Content-Type": "application/json", "A2A-Version": "1.0"}
 
 
 # ---------------------------------------------------------------------------
@@ -159,12 +154,15 @@ class TestA2ARouteExistence:
         assert response.status_code == 200
 
     def test_agent_card_has_required_fields(self, client):
-        """Agent card must have name, url, skills, capabilities."""
+        """Agent card must have name, supportedInterfaces, skills, capabilities."""
         response = client.get("/.well-known/agent-card.json")
         card = response.json()
-        for field in ["name", "url", "skills", "capabilities"]:
+        for field in ["name", "supportedInterfaces", "skills", "capabilities"]:
             assert field in card, f"Agent card missing '{field}'"
         assert card["name"] == "Prebid Sales Agent"
+        # a2a-sdk 1.0: URL is inside supportedInterfaces, not top-level
+        assert len(card["supportedInterfaces"]) > 0
+        assert "url" in card["supportedInterfaces"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -218,12 +216,7 @@ class TestA2AJsonRpcProtocol:
 
     def test_invalid_method_returns_error(self, client, auth_headers):
         """Unknown JSON-RPC method should return method-not-found error."""
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "test-1",
-            "method": "nonexistent/method",
-            "params": {},
-        }
+        payload = {"jsonrpc": "2.0", "id": "test-1", "method": "nonexistent/method", "params": {}}
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
         assert "error" in body, "Unknown method should return JSON-RPC error"
@@ -254,14 +247,8 @@ class TestA2AJsonRpcProtocol:
         payload = {
             "jsonrpc": "2.0",
             "id": 42,
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "messageId": "msg-1",
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": "hello"}],
-                }
-            },
+            "method": "SendMessage",
+            "params": {"message": {"messageId": "msg-1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}},
         }
         response = client.post("/a2a", json=payload, headers=auth_headers)
         # Should not crash with TypeError
@@ -294,7 +281,7 @@ class TestA2AResponseShape:
 
         if "result" in body:
             result = body["result"]
-            assert result.get("kind") == "task"
+            assert "task" in result, "SendMessage result must contain 'task'"
             data = _extract_artifact_data(result)
             assert "products" in data, "get_products response must have 'products' field"
             assert isinstance(data["products"], list)
@@ -307,7 +294,6 @@ class TestA2AResponseShape:
 
         mock_impl.return_value = CreateMediaBuySuccessResponse(
             media_buy_id="mb-test-1",
-            buyer_ref="buyer-ref-1",
             packages=[],
         )
 
@@ -315,7 +301,7 @@ class TestA2AResponseShape:
             "create_media_buy",
             {
                 "brand": {"domain": "testbrand.com"},
-                "packages": [{"buyer_ref": "pkg1", "product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm"}],
+                "packages": [{"product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm"}],
                 "start_time": "2026-03-01T00:00:00Z",
                 "end_time": "2026-03-31T00:00:00Z",
             },
@@ -326,7 +312,7 @@ class TestA2AResponseShape:
         if "result" in body:
             data = _extract_artifact_data(body["result"])
             assert "media_buy_id" in data, "create_media_buy response must have 'media_buy_id'"
-            assert "buyer_ref" in data, "create_media_buy response must have 'buyer_ref'"
+            # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
 
     def test_error_format_is_jsonrpc(self, client, auth_headers):
         """Error responses must use JSON-RPC error envelope, not {success: false}."""
@@ -389,7 +375,6 @@ class TestA2AResponseShape:
 
         mock_impl.return_value = UpdateMediaBuySuccessResponse(
             media_buy_id="mb-test-1",
-            buyer_ref="buyer-ref-1",
             affected_packages=[],
         )
 

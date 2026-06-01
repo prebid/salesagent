@@ -179,9 +179,9 @@ class TestFunctionCallIntegration:
 
     def test_tool_context_creation_does_not_fail(self):
         """Test that _make_tool_context creates ToolContext from identity without errors."""
-        from src.core.resolved_identity import ResolvedIdentity
+        from tests.factories.principal import PrincipalFactory
 
-        mock_identity = ResolvedIdentity(
+        mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},

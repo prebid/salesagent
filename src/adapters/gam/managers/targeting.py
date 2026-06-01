@@ -819,7 +819,8 @@ class GAMTargetingManager:
                     logger.error(f"Failed to resolve custom targeting key '{key_name}': {e}")
                     raise
 
-        # AXE segment targeting (AdCP 3.0.3 axe_include_segment/axe_exclude_segment)
+        # AXE segment targeting (AdCP pre-3.0 axe_include_segment/axe_exclude_segment;
+        # deprecated in 3.0.x in favor of TMP provider fields)
         # Per AdCP spec, three separate keys are required for include, exclude, and macro segments
         if targeting_overlay.axe_include_segment:
             if not self.axe_include_key:

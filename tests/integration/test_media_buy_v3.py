@@ -17,13 +17,13 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
-from sqlalchemy import select
+from adcp.types import MediaBuyStatus
+from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.exceptions import AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
@@ -215,22 +215,19 @@ class TestCreateMediaBuyCurrencyValidation:
             packages=[
                 {
                     "product_id": "eur_display",
-                    "buyer_ref": "eur-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_eur_fixed",
                 }
             ],
         )
 
-        result = await _create_media_buy_impl(req=req, identity=identity)
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await _create_media_buy_impl(req=req, identity=identity)
 
-        assert result.status == "failed"
-        assert result.response is not None
-        assert hasattr(result.response, "errors")
-        errors = result.response.errors
-        assert len(errors) > 0
-        error_messages = " ".join(e.message.lower() for e in errors)
-        assert "currency" in error_messages or "eur" in error_messages.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        msg = exc.message.lower()
+        assert "currency" in msg or "eur" in msg
 
 
 class TestCreateMediaBuyManualApproval:
@@ -256,7 +253,6 @@ class TestCreateMediaBuyManualApproval:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "approval-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -290,13 +286,10 @@ class TestCreateMediaBuyManualApproval:
             tenant_id=mb_tenant_with_approval["tenant_id"],
             tenant=mb_tenant_with_approval,
         )
-        buyer_ref = f"raw-req-test-{uuid.uuid4().hex[:8]}"
         req = _make_create_request(
-            buyer_ref=buyer_ref,
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "raw-pkg-1",
                     "budget": 3000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -307,10 +300,9 @@ class TestCreateMediaBuyManualApproval:
         assert result.status == "submitted"
 
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.buyer_ref == buyer_ref)).first()
+            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
             assert mb is not None, "Media buy record should exist in DB"
             assert mb.raw_request is not None, "raw_request should be stored"
-            assert mb.raw_request.get("buyer_ref") == buyer_ref
 
     @pytest.mark.asyncio
     async def test_execute_approved_calls_adapter(self, mb_tenant_with_approval, mb_principal, mb_products):
@@ -330,13 +322,10 @@ class TestCreateMediaBuyManualApproval:
             tenant_id=mb_tenant_with_approval["tenant_id"],
             tenant=mb_tenant_with_approval,
         )
-        buyer_ref = f"approve-test-{uuid.uuid4().hex[:8]}"
         req = _make_create_request(
-            buyer_ref=buyer_ref,
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "approve-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -346,10 +335,7 @@ class TestCreateMediaBuyManualApproval:
         result = await _create_media_buy_impl(req=req, identity=identity)
         assert result.status == "submitted"
 
-        with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.buyer_ref == buyer_ref)).first()
-            assert mb is not None
-            media_buy_id = mb.media_buy_id
+        media_buy_id = result.response.media_buy_id
 
         success, error = execute_approved_media_buy(
             media_buy_id=media_buy_id,
@@ -375,13 +361,10 @@ class TestCreateMediaBuyAdapterAtomicity:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        buyer_ref = f"atomicity-ok-{uuid.uuid4().hex[:8]}"
         req = _make_create_request(
-            buyer_ref=buyer_ref,
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "atom-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -393,14 +376,18 @@ class TestCreateMediaBuyAdapterAtomicity:
         assert result.status == "completed", f"Expected completed, got {result.status}. Response: {result.response}"
 
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.buyer_ref == buyer_ref)).first()
+            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
             assert mb is not None, "Media buy should be persisted in DB"
             assert mb.media_buy_id is not None
-            # Mock adapter flow results in pending_activation (creatives not yet approved)
-            # The important assertion is that a record EXISTS (atomicity: success -> persisted)
-            assert mb.status in ("active", "pending_activation"), (
-                f"Expected active or pending_activation, got {mb.status}"
-            )
+            # Mock adapter flow results in pending_creatives (creatives not yet assigned/approved).
+            # The important assertion is that a record EXISTS (atomicity: success -> persisted).
+            # AdCP MediaBuyStatus distinguishes pending_creatives (missing/unapproved creatives)
+            # from pending_start (manual approval / scheduled future start).
+            assert mb.status in (
+                "active",
+                "pending_creatives",
+                "pending_start",
+            ), f"Expected active/pending_creatives/pending_start, got {mb.status}"
 
             packages = session.scalars(
                 select(DBMediaPackage).where(DBMediaPackage.media_buy_id == mb.media_buy_id)
@@ -423,8 +410,13 @@ class TestCreateMediaBuyAdapterAtomicity:
         from src.core.exceptions import AdCPAdapterError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        buyer_ref = f"atomicity-fail-{uuid.uuid4().hex[:8]}"
-        req = _make_create_request(buyer_ref=buyer_ref)
+        # Count existing media buys before the attempt
+        with get_db_session() as session:
+            count_before = session.scalar(
+                select(func.count()).select_from(MediaBuy).where(MediaBuy.tenant_id == mb_identity.tenant_id)
+            )
+
+        req = _make_create_request()
 
         # Mock the adapter to raise an exception
         with patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_adapter_call:
@@ -435,11 +427,12 @@ class TestCreateMediaBuyAdapterAtomicity:
 
         # Verify NO media buy record persisted (workflow step may exist, that's OK)
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.buyer_ref == buyer_ref)).first()
-            if mb is not None:
+            count_after = session.scalar(
+                select(func.count()).select_from(MediaBuy).where(MediaBuy.tenant_id == mb_identity.tenant_id)
+            )
+            if count_after > count_before:
                 pytest.fail(
-                    f"Atomicity violation: media buy {mb.media_buy_id} persisted "
-                    f"despite adapter failure (status={mb.status})"
+                    f"Atomicity violation: {count_after - count_before} media buy(s) persisted despite adapter failure"
                 )
 
 
@@ -463,13 +456,10 @@ class TestUpdateMediaBuyCreativeAssignments:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        buyer_ref = f"ca-weights-{uuid.uuid4().hex[:8]}"
         create_req = _make_create_request(
-            buyer_ref=buyer_ref,
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "ca-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -508,8 +498,7 @@ class TestUpdateMediaBuyCreativeAssignments:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        buyer_ref = f"placement-{uuid.uuid4().hex[:8]}"
-        create_req = _make_create_request(buyer_ref=buyer_ref)
+        create_req = _make_create_request()
         create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
         assert create_result.status == "completed"
 
@@ -557,13 +546,10 @@ class TestGetMediaBuysResponseFields:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
-        buyer_ref = f"snapshot-{uuid.uuid4().hex[:8]}"
         create_req = _make_create_request(
-            buyer_ref=buyer_ref,
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "snap-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -574,10 +560,11 @@ class TestGetMediaBuysResponseFields:
         media_buy_id = create_result.response.media_buy_id
 
         # Use explicit status_filter to include all statuses — newly created media buys
-        # may be pending_activation (start_date in the future), not active
+        # may be pending_creatives (no creatives) or pending_start (future start), not active
         all_statuses = [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_creatives,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.completed,
             MediaBuyStatus.paused,
         ]
@@ -618,13 +605,10 @@ class TestGetMediaBuysResponseFields:
         from src.core.tools.media_buy_list import _get_media_buys_impl
         from tests.helpers.adcp_factories import create_test_format
 
-        buyer_ref = f"approvals-{uuid.uuid4().hex[:8]}"
         create_req = _make_create_request(
-            buyer_ref=buyer_ref,
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "approval-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -666,10 +650,11 @@ class TestGetMediaBuysResponseFields:
             )
 
         # Use explicit status_filter to include all statuses — newly created media buys
-        # may be pending_activation (start_date in the future), not active
+        # may be pending_creatives (no creatives) or pending_start (future start), not active
         all_statuses = [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_creatives,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.completed,
             MediaBuyStatus.paused,
         ]
@@ -700,6 +685,90 @@ class TestGetMediaBuysResponseFields:
         assert len(target_pkg.creative_approvals) >= 1
         approval_ids = {a.creative_id for a in target_pkg.creative_approvals}
         assert "c_approval_test" in approval_ids
+
+    @pytest.mark.parametrize(
+        ("persisted_status", "expected"),
+        [
+            ("completed", MediaBuyStatus.completed),
+            ("paused", MediaBuyStatus.paused),
+            ("rejected", MediaBuyStatus.rejected),
+            ("canceled", MediaBuyStatus.canceled),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_persisted_status_authoritative_over_flight_window(
+        self, mb_tenant, mb_principal, mb_products, mb_identity, persisted_status, expected
+    ):
+        """Regression (salesagent-36d): list_media_buys must report the persisted
+        MediaBuy.status for terminal/explicit lifecycle states even when the
+        media buy's flight window covers today.
+
+        Identical defect to salesagent-18h.1 (fixed in _get_target_media_buys):
+        terminal states are lifecycle decisions and cannot be re-derived from
+        flight dates. Before the fix, _compute_status recomputed status purely
+        from dates, so a completed/paused/rejected/canceled buy whose flight
+        window spans today was incorrectly reported as 'active'.
+        """
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+
+        create_req = _make_create_request(
+            start_time=_future(1),
+            end_time=_future(8),
+            packages=[
+                {
+                    "product_id": "guaranteed_display",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                }
+            ],
+        )
+        create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
+        assert create_result.status == "completed", f"Create failed: {create_result.response}"
+        media_buy_id = create_result.response.media_buy_id
+
+        # Persist a terminal/explicit lifecycle status AND a flight window that
+        # spans "today" (started yesterday, ends in a week). Date-derivation
+        # would report this buy as 'active'; the persisted status must win.
+        now = datetime.now(UTC)
+        with MediaBuyUoW(mb_identity.tenant_id) as uow:
+            assert uow.media_buys is not None
+            updated = uow.media_buys.update_fields(
+                media_buy_id,
+                status=persisted_status,
+                start_date=(now - timedelta(days=1)).date(),
+                end_date=(now + timedelta(days=7)).date(),
+                start_time=now - timedelta(days=1),
+                end_time=now + timedelta(days=7),
+            )
+            assert updated is not None
+        # MediaBuyUoW auto-commits on clean context exit.
+
+        get_req = GetMediaBuysRequest(
+            media_buy_ids=[media_buy_id],
+            status_filter=[
+                MediaBuyStatus.active,
+                MediaBuyStatus.pending_creatives,
+                MediaBuyStatus.pending_start,
+                MediaBuyStatus.completed,
+                MediaBuyStatus.paused,
+                MediaBuyStatus.rejected,
+                MediaBuyStatus.canceled,
+            ],
+        )
+        response = _get_media_buys_impl(get_req, identity=mb_identity)
+
+        assert len(response.media_buys) == 1, (
+            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
+        )
+        mb_response = response.media_buys[0]
+        assert mb_response.media_buy_id == media_buy_id
+        assert mb_response.status == expected, (
+            f"Persisted status {persisted_status!r} must be authoritative; "
+            f"got {mb_response.status} for a buy whose flight window covers today"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -744,18 +813,15 @@ class TestCreateMediaBuyFullRoundtrip:
         """Create a media buy and verify all fields persisted in DB."""
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        buyer_ref = f"roundtrip-{uuid.uuid4().hex[:8]}"
         start = _future(2)
         end = _future(10)
         req = _make_create_request(
-            buyer_ref=buyer_ref,
             brand={"domain": "roundtrip.test.com"},
             start_time=start,
             end_time=end,
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "rt-pkg-1",
                     "budget": 7500.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -769,13 +835,11 @@ class TestCreateMediaBuyFullRoundtrip:
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None
-            assert mb.buyer_ref == buyer_ref
             assert mb.principal_id == mb_principal["principal_id"]
             assert mb.tenant_id == mb_tenant["tenant_id"]
             assert mb.currency == "USD"
             assert mb.budget == 7500.0
             assert mb.raw_request is not None
-            assert mb.raw_request.get("buyer_ref") == buyer_ref
 
             packages = session.scalars(select(DBMediaPackage).where(DBMediaPackage.media_buy_id == media_buy_id)).all()
             assert len(packages) == 1
@@ -798,8 +862,7 @@ class TestUpdateMediaBuyOwnership:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        buyer_ref = f"ownership-{uuid.uuid4().hex[:8]}"
-        req = _make_create_request(buyer_ref=buyer_ref)
+        req = _make_create_request()
         result = await _create_media_buy_impl(req=req, identity=mb_identity)
         assert result.status == "completed"
         media_buy_id = result.response.media_buy_id
@@ -847,8 +910,7 @@ class TestUpdateMediaBuyAdapterError:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        buyer_ref = f"adapter-err-{uuid.uuid4().hex[:8]}"
-        req = _make_create_request(buyer_ref=buyer_ref)
+        req = _make_create_request()
         result = await _create_media_buy_impl(req=req, identity=mb_identity)
         assert result.status == "completed"
         media_buy_id = result.response.media_buy_id
@@ -889,5 +951,5 @@ class TestDeliveryIdentityValidation:
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_nonexistent"])
-        with pytest.raises(AdCPValidationError):
+        with pytest.raises(AdCPAuthenticationError):
             _get_media_buy_delivery_impl(req, identity=None)

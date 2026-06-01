@@ -11,11 +11,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # Import types from adcp library - use public API when available
-from adcp import BrandManifest, Format, Property
-from adcp.types import CreativeAsset, FormatId, Product
+from adcp import Format, Property
+from adcp.types import CreativeAsset, FormatId
+from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url
+from src.core.schemas.product import Product
 
 
 def create_test_product(
@@ -89,6 +91,10 @@ def create_test_product(
     # Must be proper discriminated union (CpmFixedRatePricingOption, etc.)
     if pricing_options is None:
         pricing_options = [create_test_cpm_pricing_option()]
+
+    # Default reporting_capabilities if not provided (required in adcp 4.3)
+    if "reporting_capabilities" not in kwargs:
+        kwargs["reporting_capabilities"] = {"metrics": ["impressions", "clicks"]}
 
     return Product(
         product_id=product_id,
@@ -414,7 +420,6 @@ def create_test_package(
 
 def create_test_package_request(
     product_id: str = "test_product",
-    buyer_ref: str | None = None,
     budget: float | None = None,
     pricing_option_id: str = "test_pricing_option",
     **kwargs,
@@ -423,7 +428,6 @@ def create_test_package_request(
 
     Args:
         product_id: Product ID for the package (REQUIRED per adcp PackageRequest)
-        buyer_ref: Buyer reference for the package (REQUIRED per adcp PackageRequest)
         budget: Budget allocation (REQUIRED per adcp PackageRequest)
         pricing_option_id: Pricing option ID (REQUIRED per adcp PackageRequest)
         **kwargs: Additional optional fields (creative_ids, format_ids, targeting_overlay, etc.)
@@ -438,20 +442,16 @@ def create_test_package_request(
         # Custom package request
         pkg_request = create_test_package_request(
             product_id="prod_video",
-            buyer_ref="buyer_pkg_001",
             budget=5000.0,
             creative_ids=["creative_1", "creative_2"]
         )
     """
     # Set defaults for required fields if not provided
-    if buyer_ref is None:
-        buyer_ref = f"buyer_pkg_{product_id}"
     if budget is None:
         budget = 1000.0
 
     return PackageRequest(
         product_id=product_id,
-        buyer_ref=buyer_ref,
         budget=budget,
         pricing_option_id=pricing_option_id,
         **kwargs,
@@ -493,34 +493,40 @@ def create_test_creative_asset(
     return CreativeAsset(creative_id=creative_id, name=name, format_id=format_id, assets=assets, **kwargs)
 
 
-def create_test_brand_manifest(
+def create_test_brand(
     name: str = "Test Brand",
     tagline: str | None = None,
     **kwargs,
-) -> BrandManifest:
-    """Create a test BrandManifest object.
+) -> Brand:
+    """Create a test Brand object (adcp 3.12 — replaces BrandManifest).
 
     Args:
-        name: Brand name (required by library BrandManifest)
+        name: Brand name
         tagline: Optional brand tagline
-        **kwargs: Additional optional fields (tone, industry, url, etc.)
+        **kwargs: Additional optional fields
 
     Returns:
-        AdCP-compliant BrandManifest object
+        AdCP-compliant Brand object
 
     Example:
-        brand = create_test_brand_manifest(
+        brand = create_test_brand(
             name="Acme Corp",
             tagline="Best widgets in the world",
-            industry="technology"
         )
     """
-    manifest_kwargs: dict[str, Any] = {"name": name}
+    brand_kwargs: dict[str, Any] = {
+        "id": kwargs.pop("id", "brand_test"),
+        "names": [{"en": name}],
+    }
     if tagline:
-        manifest_kwargs["tagline"] = tagline
-    manifest_kwargs.update(kwargs)
+        brand_kwargs["tagline"] = tagline
+    brand_kwargs.update(kwargs)
 
-    return BrandManifest(**manifest_kwargs)
+    return Brand(**brand_kwargs)
+
+
+# Backward compat alias
+create_test_brand_manifest = create_test_brand
 
 
 def create_test_cpm_pricing_option(
@@ -583,7 +589,6 @@ def create_test_pricing_option(pricing_model: str = "cpm", currency: str = "USD"
 
 
 def create_test_media_buy_request_dict(
-    buyer_ref: str = "test_buyer_ref",
     product_ids: list[str] | None = None,
     total_budget: float = 10000.0,
     start_time: str | None = None,
@@ -600,7 +605,6 @@ def create_test_media_buy_request_dict(
     As of adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with required domain).
 
     Args:
-        buyer_ref: Buyer reference identifier
         product_ids: List of product IDs to create packages from. Defaults to ["test_product"]
                      Note: Creates one package per product_id. Use packages kwarg for custom package structure.
         total_budget: Total budget for the campaign (divided equally among packages)
@@ -620,7 +624,6 @@ def create_test_media_buy_request_dict(
 
         # Custom request with multiple products (creates multiple packages)
         request = create_test_media_buy_request_dict(
-            buyer_ref="buyer_001",
             product_ids=["prod_1", "prod_2"],
             total_budget=50000.0,
             start_time="2025-11-01T00:00:00Z",
@@ -652,9 +655,8 @@ def create_test_media_buy_request_dict(
     # Build request dict with AdCP-compliant PackageRequest structure
     # One package per product_id (per AdCP spec, each package has one product_id)
     packages = []
-    for idx, product_id in enumerate(product_ids, 1):
+    for product_id in product_ids:
         package = {
-            "buyer_ref": f"{buyer_ref}_pkg_{idx}",
             "product_id": product_id,
             "pricing_option_id": pricing_option_id,
             "budget": per_package_budget,
@@ -662,12 +664,10 @@ def create_test_media_buy_request_dict(
         packages.append(package)
 
     request = {
-        "buyer_ref": buyer_ref,
         "brand": brand,
         "packages": packages,
         "start_time": start_time,
         "end_time": end_time,
-        "budget": total_budget,  # Top-level budget
     }
 
     # Handle targeting_overlay specially (goes in all packages, not top-level)
@@ -684,7 +684,6 @@ def create_test_media_buy_request_dict(
 
 def create_test_media_buy_dict(
     media_buy_id: str = "test_media_buy_001",
-    buyer_ref: str = "test_buyer_ref",
     status: str = "active",
     promoted_offering: str = "Test Product",
     total_budget: float = 10000.0,
@@ -697,7 +696,6 @@ def create_test_media_buy_dict(
 
     Args:
         media_buy_id: Media buy identifier
-        buyer_ref: Buyer reference identifier
         status: Media buy status ("active", "paused", "completed", etc.)
         promoted_offering: What is being promoted
         total_budget: Total budget for the campaign
@@ -720,7 +718,6 @@ def create_test_media_buy_dict(
         packages = [
             {
                 "package_id": "test_package",
-                "buyer_ref": "test_package_ref",
                 "status": "active",
                 "products": ["test_product"],
                 "budget": total_budget,
@@ -729,7 +726,6 @@ def create_test_media_buy_dict(
 
     return {
         "media_buy_id": media_buy_id,
-        "buyer_ref": buyer_ref,
         "status": status,
         "promoted_offering": promoted_offering,
         "total_budget": total_budget,
@@ -739,7 +735,6 @@ def create_test_media_buy_dict(
 
 
 def create_test_package_request_dict(
-    buyer_ref: str = "test_package_ref",
     product_id: str = "test_product",
     pricing_option_id: str = "cpm_option_1",
     budget: float = 10000.0,
@@ -748,7 +743,6 @@ def create_test_package_request_dict(
     """Create a test package request dict for use in media buy requests.
 
     Args:
-        buyer_ref: Package reference identifier (REQUIRED per AdCP PackageRequest)
         product_id: Product ID for the package (REQUIRED per AdCP PackageRequest)
         pricing_option_id: Pricing option ID (REQUIRED per AdCP PackageRequest)
         budget: Package budget (REQUIRED per AdCP PackageRequest)
@@ -759,7 +753,6 @@ def create_test_package_request_dict(
 
     Example:
         pkg = create_test_package_request_dict(
-            buyer_ref="pkg_001",
             product_id="prod_1",
             pricing_option_id="cpm_option_1",
             budget=25000.0,
@@ -767,7 +760,6 @@ def create_test_package_request_dict(
         )
     """
     return {
-        "buyer_ref": buyer_ref,
         "product_id": product_id,
         "pricing_option_id": pricing_option_id,
         "budget": budget,
@@ -929,3 +921,177 @@ def create_test_db_product_with_pricing(
     )
 
     return product, pricing
+
+
+def setup_error_test_tenant_chain(
+    session: Any,
+    *,
+    tenant_id: str,
+    principal_id: str,
+    access_token: str,
+    product_id: str,
+    subdomain: str,
+    tenant_name: str = "Error Test Tenant",
+    advertiser_id: str = "mock_adv",
+    format_id: str = "display_300x250",
+) -> dict[str, Any]:
+    """Create the full tenant/principal/product chain for error-emission tests.
+
+    Shared helper used by integration tests that exercise the error pipeline
+    (test_a2a_error_responses, test_mcp_error_envelope, etc.). Replaces ad-hoc
+    setup blocks that violated the DRY invariant. Wipes any prior state for
+    the given tenant_id, then creates a fresh tenant, principal, product,
+    pricing option, and required setup data (currency limit, property tag,
+    etc.).
+
+    Args:
+        session: Active SQLAlchemy session (caller owns commit/rollback).
+        tenant_id: Tenant identifier.
+        principal_id: Principal identifier.
+        access_token: Auth token for the principal.
+        product_id: Product identifier.
+        subdomain: Tenant subdomain.
+        tenant_name: Human-readable tenant name.
+        advertiser_id: Mock advertiser_id for platform_mappings.
+        format_id: Format ID for the product (paired with test agent_url).
+
+    Returns:
+        Dict with shape ``{"tenant": <Tenant>, "principal": <Principal>,
+        "product": <Product>, "tenant_dict": <dict>}``. ``tenant_dict`` is
+        ready to pass to ``set_current_tenant()``.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import delete
+
+    from src.core.database.models import CurrencyLimit, PricingOption
+    from src.core.database.models import Principal as ModelPrincipal
+    from src.core.database.models import Product as ModelProduct
+    from src.core.database.models import Tenant as ModelTenant
+    from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
+
+    now = datetime.now(UTC)
+
+    # Wipe prior state for this tenant_id (idempotent setup)
+    session.execute(delete(PricingOption).where(PricingOption.tenant_id == tenant_id))
+    session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == tenant_id))
+    session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == tenant_id))
+    session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == tenant_id))
+    session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == tenant_id))
+    session.commit()
+
+    # Tenant — human_review_required=False so synchronous flows reach the validators
+    tenant = ModelTenant(
+        tenant_id=tenant_id,
+        name=tenant_name,
+        subdomain=subdomain,
+        ad_server="mock",
+        is_active=True,
+        human_review_required=False,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(tenant)
+    session.flush()
+
+    add_required_setup_data(session, tenant_id)
+
+    product = create_test_product_with_pricing(
+        session=session,
+        tenant_id=tenant_id,
+        product_id=product_id,
+        name=f"{tenant_name} Product",
+        description="Product for error-emission tests",
+        pricing_model="CPM",
+        rate="10.0",
+        is_fixed=True,
+        min_spend_per_package="1000.0",
+        format_ids=[{"id": format_id, "agent_url": "https://test.example.com"}],
+        delivery_type="guaranteed",
+        targeting_template={},
+    )
+
+    principal = ModelPrincipal(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        name=f"{tenant_name} Principal",
+        access_token=access_token,
+        platform_mappings={"mock": {"advertiser_id": advertiser_id}},
+    )
+    session.add(principal)
+    session.commit()
+
+    tenant_dict = {
+        "tenant_id": tenant_id,
+        "name": tenant_name,
+        "subdomain": subdomain,
+        "ad_server": "mock",
+        "human_review_required": False,
+    }
+    return {
+        "tenant": tenant,
+        "principal": principal,
+        "product": product,
+        "tenant_dict": tenant_dict,
+    }
+
+
+def make_real_tenant_identity(
+    *,
+    tenant_id: str,
+    principal_id: str,
+    access_token: str,
+    product_id: str,
+    subdomain: str,
+    tenant_name: str = "Error Test Tenant",
+    advertiser_id: str = "mock_adv",
+    protocol: str = "mcp",
+):
+    """Build a fully-resolved real-DB ``ResolvedIdentity`` for error-emission tests.
+
+    Convenience wrapper that opens a DB session, calls
+    ``setup_error_test_tenant_chain``, sets the current tenant context,
+    constructs a ``ResolvedIdentity`` bound to the seeded principal, and
+    yields it. Intended to be the body of test fixtures so they can be
+    one-liners.
+
+    Yields:
+        ``ResolvedIdentity`` instance pointing at the freshly-seeded tenant.
+
+    Example:
+        @pytest.fixture
+        def my_tenant_setup(integration_db):
+            yield from make_real_tenant_identity(
+                tenant_id="my_test",
+                principal_id="my_principal",
+                access_token="my_token",
+                product_id="my_product",
+                subdomain="my",
+            )
+    """
+    from src.core.config_loader import set_current_tenant
+    from src.core.database.database_session import get_db_session
+    from src.core.resolved_identity import ResolvedIdentity
+
+    with get_db_session() as session:
+        result = setup_error_test_tenant_chain(
+            session,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            access_token=access_token,
+            product_id=product_id,
+            subdomain=subdomain,
+            tenant_name=tenant_name,
+            advertiser_id=advertiser_id,
+        )
+
+        set_current_tenant(result["tenant_dict"])
+
+        identity = ResolvedIdentity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            tenant=result["tenant_dict"],
+            auth_token=access_token,
+            protocol=protocol,
+        )
+        yield identity

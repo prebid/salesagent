@@ -41,7 +41,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -89,7 +89,7 @@ class _DataPreservationEnv(IntegrationEnv):
 
 def _make_format_id(agent_url: str, format_id: str):
     """Create a proper FormatId model for test mocks."""
-    from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+    from adcp.types import FormatId as LibraryFormatId
 
     return LibraryFormatId(agent_url=agent_url, id=format_id)
 
@@ -288,9 +288,10 @@ class TestCreativeSyncDataPreservation:
                 }
             )
 
-            # User-provided assets (ImageAsset adds alt_text/format/provenance defaults after parsing)
+            # User-provided assets (ImageAsset adds asset_type/alt_text/format/provenance defaults after parsing)
             user_assets = {
                 "banner_image": {
+                    "asset_type": "image",
                     "url": "https://user-creative.example.com/banner.png",
                     "width": 300,
                     "height": 250,

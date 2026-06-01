@@ -24,6 +24,13 @@ DEFAULT_AGENT_URL = "https://creative.test.example.com"
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
+def _error_messages(errors: list | None) -> list[str]:
+    """Extract message strings from Error objects or plain strings."""
+    if not errors:
+        return []
+    return [e.message if hasattr(e, "message") else str(e) for e in errors]
+
+
 def _creative(**overrides) -> dict:
     """Minimal creative dict for testing."""
     defaults = {
@@ -349,7 +356,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
 
             creative_result = result.creatives[0]
             assert creative_result.action == CreativeAction.failed
-            assert any("GEMINI_API_KEY" in e for e in creative_result.errors)
+            assert any("GEMINI_API_KEY" in e for e in _error_messages(creative_result.errors))
 
 
 # ── Approval Mode UPDATE Tests (covers lines 97-139) ──────────────────────
@@ -437,7 +444,7 @@ class TestStaticPreviewUpdate:
 
     def _setup_static_format(self, env):
         """Set up a static format in all_formats so preview_creative is called."""
-        from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+        from adcp.types import FormatId as LibraryFormatId
 
         mock_format = MagicMock()
         mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
@@ -473,7 +480,10 @@ class TestStaticPreviewUpdate:
 
             creative_result = result.creatives[0]
             assert creative_result.action == CreativeAction.failed
-            assert any("no previews" in e.lower() or "no media_url" in e.lower() for e in creative_result.errors)
+            assert any(
+                "no previews" in e.lower() or "no media_url" in e.lower()
+                for e in _error_messages(creative_result.errors)
+            )
 
     def test_update_no_format_with_url_succeeds(self, integration_db):
         """Update creative: no matching format BUT has media_url → succeeds.
@@ -532,7 +542,9 @@ class TestStaticPreviewUpdate:
 
             creative_result = result.creatives[0]
             assert creative_result.action == CreativeAction.failed
-            assert any("unreachable" in e.lower() or "retry" in e.lower() for e in creative_result.errors)
+            assert any(
+                "unreachable" in e.lower() or "retry" in e.lower() for e in _error_messages(creative_result.errors)
+            )
 
 
 class TestStaticPreviewDimensionExtraction:
@@ -542,7 +554,7 @@ class TestStaticPreviewDimensionExtraction:
     """
 
     def _setup_static_format(self, env):
-        from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+        from adcp.types import FormatId as LibraryFormatId
 
         mock_format = MagicMock()
         mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")

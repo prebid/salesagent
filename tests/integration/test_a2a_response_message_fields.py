@@ -20,13 +20,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.a2a_response_validator import assert_valid_skill_response
 from tests.helpers.external_service import is_external_service_exception
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test_principal",
     tenant_id="test_tenant",
     tenant={"tenant_id": "test_tenant"},
@@ -57,7 +57,7 @@ class TestA2AMessageFieldValidation:
         """
         from src.core.tenant_context import LazyTenantContext
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=sample_principal["principal_id"],
             tenant_id=sample_tenant["tenant_id"],
             tenant=LazyTenantContext(sample_tenant["tenant_id"]),
@@ -87,17 +87,19 @@ class TestA2AMessageFieldValidation:
             start_date = datetime.now(UTC) + timedelta(days=1)
             end_date = start_date + timedelta(days=30)
 
+            # Per AdCP v2.2.0 spec, budget is at the PACKAGE level, not top level.
+            # The previous top-level ``budget`` field was tolerated by an older code
+            # path that swallowed Pydantic ValidationError into a dict-return; now
+            # CreateMediaBuyRequest validates strictly.
             params = {
                 "brand": {"domain": "testbrand.com"},
                 "packages": [
                     {
-                        "buyer_ref": f"pkg_{sample_products[0]}",
                         "product_id": sample_products[0],
                         "pricing_option_id": "cpm_usd_fixed",
                         "budget": 10000.0,
                     }
                 ],
-                "budget": {"total": 10000.0, "currency": "USD"},
                 "start_time": start_date.isoformat(),
                 "end_time": end_date.isoformat(),
             }
@@ -125,7 +127,14 @@ class TestA2AMessageFieldValidation:
                         "creative_id": "creative_test_001",  # Changed from buyer_ref to creative_id per adcp library
                         "format_id": "display_300x250",
                         "name": "Test Creative",
-                        "assets": {"main_image": {"asset_type": "image", "url": "https://example.com/image.jpg"}},
+                        "assets": {
+                            "main_image": {
+                                "asset_type": "image",
+                                "url": "https://example.com/image.jpg",
+                                "width": 300,
+                                "height": 250,
+                            }
+                        },
                     }
                 ],
                 "validation_mode": "strict",
@@ -169,7 +178,6 @@ class TestA2AMessageFieldValidation:
         """Test list_creatives returns a valid message field."""
         with mock_auth_context(handler):
             params = {
-                "buyer_ref": "test_creative",
                 "page": 1,
                 "limit": 10,
             }
@@ -225,7 +233,6 @@ class TestA2AResponseDictConstruction:
         from src.core.schemas import CreateMediaBuySuccess
 
         response = CreateMediaBuySuccess(
-            buyer_ref="test-123",
             media_buy_id="mb-456",
             packages=[],  # Required field in adcp v1.2.1
         )

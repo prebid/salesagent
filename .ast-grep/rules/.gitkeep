@@ -1,0 +1,7 @@
+# Placeholder: AST-grep rule directory for BDD step guards.
+#
+# Pre-commit hook entry: `ast-grep scan --rule .ast-grep/rules/`. ast-grep
+# requires at least one rule file to scan a directory; this stub prevents
+# the hook from failing with "Cannot read rule .ast-grep/rules/" on a fresh
+# checkout. Real BDD-step structural guards will be added as .yml files
+# alongside this placeholder.

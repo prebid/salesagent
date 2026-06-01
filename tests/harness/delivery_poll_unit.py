@@ -88,8 +88,14 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         currency: str = "USD",
         raw_request: dict[str, Any] | None = None,
         is_paused: bool = False,
+        status: str = "active",
     ) -> MagicMock:
         """Add a mock MediaBuy to the repository.
+
+        ``status`` is the persisted lifecycle status. It defaults to the
+        generic "active" serving state, which ``_get_target_media_buys``
+        refines against the flight window so date-only callers still resolve
+        to ready/active/completed.
 
         Returns the mock buy for further customization if needed.
         """
@@ -103,6 +109,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         buy.budget = budget
         buy.currency = currency
         buy.is_paused = is_paused
+        buy.status = status
         buy.raw_request = raw_request or {
             "buyer_ref": buyer_ref,
             "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],

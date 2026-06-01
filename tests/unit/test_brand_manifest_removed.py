@@ -30,6 +30,7 @@ def _make_request(domain: str = "nike.com", brand_id: str | None = None):
         brand["brand_id"] = brand_id
     return LibraryCreateMediaBuyRequest(
         buyer_ref="TEST-001",
+        idempotency_key="test-idempotency-key-0001",
         account={"account_id": "acc_test"},
         brand=brand,
         packages=[

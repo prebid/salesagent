@@ -30,19 +30,48 @@ CONTAINER_NAME="agent-pg-${WORKTREE_ID}"
 # State file (in the worktree, not shared)
 STATE_FILE="${PROJECT_DIR}/.agent-db.env"
 
+# Port allocation hardened for parallel worktree execution
+# (salesagent-18h.12). Mirrors tests/e2e/conftest.py:find_free_port /
+# port_scan_start and scripts/test-stack.sh:find_ports EXACTLY -- keep all
+# implementations in sync:
+#   * scan origin scattered by PID so parallel agents diverge instead of
+#     converging on the same lowest free port,
+#   * probe binds the all-interfaces address (the same way Docker
+#     publishes -p host:container) so a port already taken by another
+#     stack on 0.0.0.0 is detected,
+#   * wrap-around scan so the full range is still searched.
 find_port() {
     python3 -c "
-import socket
-for p in range(50000, 60000):
+import os, socket
+lo, hi = 50000, 60000
+span = hi - lo
+origin = lo + (os.getpid() % span)
+for i in range(span):
+    p = lo + ((origin - lo + i) % span)
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
     try:
-        s = socket.socket()
-        s.bind(('127.0.0.1', p))
-        s.close()
+        s.bind(('', p))
         print(p)
         break
     except OSError:
+        pass
+    finally:
         s.close()
 "
+}
+
+# Reap stopped per-agent Postgres containers left by removed/abandoned
+# worktrees (e.g. agent-pg-<id> in 'Exited' state). They hold no port
+# while stopped but accumulate and can mask a name clash; a running one
+# from a live worktree is never touched (different name, still up).
+reap_stopped_agent_dbs() {
+    docker ps -a --filter "name=agent-pg-" --filter "status=exited" \
+        --format '{{.Names}}' 2>/dev/null | while read -r name; do
+            [ -z "$name" ] && continue
+            [ "$name" = "$CONTAINER_NAME" ] && continue
+            docker rm -f "$name" >/dev/null 2>&1 || true
+        done
 }
 
 wait_ready() {
@@ -69,24 +98,48 @@ cmd_up() {
         rm -f "$STATE_FILE"
     fi
 
-    # Remove any leftover container
+    # Remove any leftover container, then reap exited siblings.
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    reap_stopped_agent_dbs
 
-    local port=$(find_port)
-    if [ -z "$port" ]; then
-        echo "ERROR: Could not find free port in 50000-60000 range" >&2
+    # Bounded retry on port-collision: a sibling worktree can grab a probed
+    # port in the TOCTOU window before `docker run` publishes it. PID
+    # scatter keeps the next attempt diverging (salesagent-18h.12).
+    local port started=false attempt
+    for attempt in 1 2 3 4 5; do
+        port=$(find_port)
+        if [ -z "$port" ]; then
+            echo "ERROR: Could not find free port in 50000-60000 range" >&2
+            exit 1
+        fi
+        if docker run -d \
+            --name "$CONTAINER_NAME" \
+            -p "127.0.0.1:${port}:5432" \
+            -e POSTGRES_USER="$PG_USER" \
+            -e POSTGRES_PASSWORD="$PG_PASS" \
+            -e POSTGRES_DB="$PG_DB" \
+            "$PG_IMAGE" \
+            >/dev/null 2>/tmp/agent-db-run.$$; then
+            started=true
+            break
+        fi
+        if grep -qiE "port is already allocated|address already in use|bind.*failed" /tmp/agent-db-run.$$ 2>/dev/null; then
+            echo "# Port ${port} collided (attempt ${attempt}) — retrying" >&2
+            docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+            rm -f /tmp/agent-db-run.$$
+            continue
+        fi
+        echo "ERROR: docker run failed (non-port error):" >&2
+        cat /tmp/agent-db-run.$$ >&2
+        rm -f /tmp/agent-db-run.$$
+        docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+        exit 1
+    done
+    rm -f /tmp/agent-db-run.$$
+    if [ "$started" != true ]; then
+        echo "ERROR: Could not start Postgres after 5 port attempts" >&2
         exit 1
     fi
-
-    # Start bare Postgres — no volumes, no compose, minimal config
-    docker run -d \
-        --name "$CONTAINER_NAME" \
-        -p "127.0.0.1:${port}:5432" \
-        -e POSTGRES_USER="$PG_USER" \
-        -e POSTGRES_PASSWORD="$PG_PASS" \
-        -e POSTGRES_DB="$PG_DB" \
-        "$PG_IMAGE" \
-        >/dev/null
 
     if ! wait_ready "$port"; then
         echo "ERROR: Postgres failed to start within 30s" >&2

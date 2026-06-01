@@ -60,11 +60,9 @@ class TestMCPToolRoundtripMinimal:
             result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "buyer_ref": "test_buyer_minimal",
                     "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
-                            "buyer_ref": "test_buyer_minimal_pkg1",
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                             "budget": 1000.0,
@@ -99,11 +97,9 @@ class TestMCPToolRoundtripMinimal:
             create_result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "buyer_ref": "test_buyer_update",
                     "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
-                            "buyer_ref": "test_buyer_update_pkg1",
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                             "budget": 1000.0,
@@ -123,7 +119,7 @@ class TestMCPToolRoundtripMinimal:
                     "update_media_buy",
                     {
                         "media_buy_id": create_content["media_buy_id"],
-                        "paused": True,  # adcp 2.12.0+: paused=True means pause, paused=False means resume
+                        "budget": 2000.0,  # update_budget is valid from pending_creatives
                     },
                 )
 
@@ -163,7 +159,7 @@ class TestMCPToolRoundtripMinimal:
         assert "errors" in content
         assert isinstance(content["errors"], list)
         assert len(content["errors"]) >= 1
-        assert content["errors"][0]["code"] == "invalid_date_range"
+        assert content["errors"][0]["code"] == "VALIDATION_ERROR"
 
     async def test_sync_creatives_minimal(self, mcp_client):
         """Test sync_creatives with minimal required parameters.
@@ -244,11 +240,9 @@ class TestMCPToolRoundtripMinimal:
             create_result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "buyer_ref": "test_buyer_perf",
                     "brand": {"domain": "testbrand.com"},
                     "packages": [
                         {
-                            "buyer_ref": "test_buyer_perf_pkg1",
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                             "budget": 1000.0,

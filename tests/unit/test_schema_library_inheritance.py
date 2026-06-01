@@ -52,9 +52,7 @@ class TestSchemaLibraryInheritance:
         from adcp.types import Measurement as LibraryMeasurement
 
         # adcp 3.6.0: Pagination moved to core.pagination_response as PaginationResponse
-        from adcp.types.generated_poc.core.pagination_response import (
-            PaginationResponse as LibraryResponsePagination,
-        )
+        from adcp.types import PaginationResponse as LibraryResponsePagination
 
         from src.core.schemas import AggregatedTotals, DeliveryMeasurement, Measurement, Pagination
 
@@ -65,15 +63,6 @@ class TestSchemaLibraryInheritance:
         assert issubclass(AggregatedTotals, LibraryAggregatedTotals), "AggregatedTotals must extend library type."
         # Pagination for list responses uses page-based pagination (has_more, cursor, total_count)
         assert issubclass(Pagination, LibraryResponsePagination), "Pagination must extend library response pagination."
-
-    def test_brand_manifest_is_library_type(self):
-        """BrandManifest must be the library type directly."""
-        from adcp.types import BrandManifest as LibraryBrandManifest
-
-        from src.core.schemas import BrandManifest
-
-        # BrandManifest should be the exact library type (alias, not subclass)
-        assert BrandManifest is LibraryBrandManifest, "BrandManifest must be the library type directly."
 
     def test_property_is_library_type(self):
         """Property must be the library type directly."""
@@ -90,7 +79,9 @@ class TestSchemaLibraryInheritance:
         V3 Migration: Property class requires property-specific Identifier from
         adcp.types.generated_poc.core.property.Identifier, not generic Identifier.
         """
-        from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
+        from adcp.types.generated_poc.core.property import (
+            Identifier as PropertySpecificIdentifier,
+        )  # TODO: no stable alias (property-specific, different from adcp.types.Identifier)
 
         from src.core.schemas import PropertyIdentifier
 

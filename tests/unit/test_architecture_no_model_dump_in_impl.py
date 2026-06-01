@@ -24,36 +24,43 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto).
-# Line numbers reflect FIXME comment restored in media_buy_update.py (PR04 review item 1).
+# FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto;
+# 1 retired in PR #1276 round-5 by switching property_targeting validation
+# to `raise AdCPValidationError` — boundary now handles the audit write).
+# Line numbers reflect merged state after the property_targeting validation
+# refactor (raise instead of return-envelope) + the
+# _property_list_unsupported_advisories helper hoist above _update_media_buy_impl.
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 22 violations (workflow step response_data)
-    ("media_buy_update.py", 224),
-    ("media_buy_update.py", 279),
-    ("media_buy_update.py", 280),
-    ("media_buy_update.py", 334),
-    ("media_buy_update.py", 391),
-    ("media_buy_update.py", 415),
-    ("media_buy_update.py", 449),
-    ("media_buy_update.py", 477),
-    ("media_buy_update.py", 494),
-    ("media_buy_update.py", 549),
-    ("media_buy_update.py", 580),
-    ("media_buy_update.py", 600),
-    ("media_buy_update.py", 626),
-    ("media_buy_update.py", 806),
-    ("media_buy_update.py", 834),
-    ("media_buy_update.py", 863),
-    ("media_buy_update.py", 1035),
-    ("media_buy_update.py", 1053),
-    ("media_buy_update.py", 1104),
-    ("media_buy_update.py", 1198),
-    ("media_buy_update.py", 1230),
-    ("media_buy_update.py", 1292),
+    # _update_media_buy_impl: 22 violations (workflow step response_data).
+    # Line numbers regenerated from the AST after merge with origin/main.
+    # Regenerate from the current AST, don't hand-edit —
+    # see feedback_precommit_black_shifts_line_allowlists.
+    ("media_buy_update.py", 309),
+    ("media_buy_update.py", 413),
+    ("media_buy_update.py", 414),
+    ("media_buy_update.py", 471),
+    ("media_buy_update.py", 528),
+    ("media_buy_update.py", 551),
+    ("media_buy_update.py", 594),
+    ("media_buy_update.py", 623),
+    ("media_buy_update.py", 640),
+    ("media_buy_update.py", 696),
+    ("media_buy_update.py", 726),
+    ("media_buy_update.py", 743),
+    ("media_buy_update.py", 769),
+    ("media_buy_update.py", 947),
+    ("media_buy_update.py", 976),
+    ("media_buy_update.py", 1006),
+    ("media_buy_update.py", 1178),
+    ("media_buy_update.py", 1196),
+    ("media_buy_update.py", 1249),
+    ("media_buy_update.py", 1342),
+    ("media_buy_update.py", 1376),
+    ("media_buy_update.py", 1438),
     # _get_products_impl: 1 violation (logging)
-    ("products.py", 637),
+    ("products.py", 622),
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 153),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 143),  # filters.model_dump(exclude_none=True)
 }
 
 

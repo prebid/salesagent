@@ -11,7 +11,14 @@ from typing import Any
 import factory
 from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
-from src.core.database.models import AdapterConfig, CurrencyLimit, PropertyTag, PublisherPartner, Tenant, User
+from src.core.database.models import (
+    AdapterConfig,
+    CurrencyLimit,
+    GAMInventory,
+    PropertyTag,
+    PublisherPartner,
+    Tenant,
+)
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -90,19 +97,27 @@ class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     adapter_type = "mock"
 
 
-class UserFactory(factory.alchemy.SQLAlchemyModelFactory):
+class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
-        model = User
+        model = GAMInventory
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
     tenant = SubFactory(TenantFactory)
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
-    user_id = Sequence(lambda n: f"user_{n:04d}")
-    email = Sequence(lambda n: f"user{n}@example.com")
-    name = LazyAttribute(lambda o: o.email.split("@")[0].title())
-    role = "admin"
-    is_active = True
+    inventory_type = "ad_unit"
+    inventory_id = Sequence(lambda n: f"au_{n:04d}")
+    name = LazyAttribute(lambda o: f"Ad Unit {o.inventory_id}")
+    path = LazyAttribute(lambda o: [o.name])
+    status = "ACTIVE"
+    inventory_metadata = LazyAttribute(
+        lambda o: {
+            "parent_id": None,
+            "has_children": False,
+            "ad_unit_code": f"code_{o.inventory_id}",
+            "sizes": [{"width": 300, "height": 250}],
+        }
+    )
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):

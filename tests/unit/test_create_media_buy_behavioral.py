@@ -38,7 +38,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPAdapterError, AdCPBudgetTooLowError, AdCPNotFoundError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -63,18 +63,16 @@ def _future(days: int = 7) -> str:
 def _make_request(**overrides) -> CreateMediaBuyRequest:
     """Build a minimal valid CreateMediaBuyRequest.
 
-    Defaults: one package with product_id, pricing_option_id, budget, buyer_ref.
+    Defaults: one package with product_id, pricing_option_id, budget.
     Start 1 day ahead, end 8 days ahead.
     """
     defaults = {
-        "buyer_ref": "test-buyer",
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
         "packages": [
             {
                 "product_id": "prod_1",
-                "buyer_ref": "pkg-1",
                 "budget": 5000.0,
                 "pricing_option_id": "cpm_usd_fixed",
             }
@@ -86,9 +84,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
 
 def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
     """Create a mock DB Product with pricing_options."""
-    pricing_option = MagicMock(
-        spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "root"],
-    )
+    pricing_option = MagicMock(spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "root"])
     pricing_option.pricing_model = "cpm"
     pricing_option.currency = currency
     pricing_option.is_fixed = True
@@ -104,8 +100,7 @@ def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMoc
 
 
 def _mock_currency_limit(
-    max_daily_package_spend: Decimal | None = None,
-    min_package_budget: Decimal | None = None,
+    max_daily_package_spend: Decimal | None = None, min_package_budget: Decimal | None = None
 ) -> MagicMock:
     """Create a mock CurrencyLimit row."""
     cl = MagicMock()
@@ -215,6 +210,7 @@ class _PatchContext:
         mock_uow.session = self.db_session
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []  # no duplicate buyer_refs
+        mock_media_buys.get_packages.return_value = []
         mock_uow.media_buys = mock_media_buys
 
         self._p_uow = patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow)
@@ -251,13 +247,11 @@ class TestProductNotFound:
             packages=[
                 {
                     "product_id": "prod_exists",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
                 {
                     "product_id": "prod_missing",
-                    "buyer_ref": "pkg-2",
                     "budget": 3000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -268,16 +262,16 @@ class TestProductNotFound:
         existing_product = _mock_product("prod_exists")
 
         with _PatchContext(products=[existing_product]) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") is converted by
+            # the _impl boundary catch into AdCPValidationError with error_code
+            # "PRODUCT_NOT_FOUND" (richer than the base NOT_FOUND default).
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        errors = result.response.errors
-        assert len(errors) == 1
-        assert errors[0].code == "validation_error"
-        assert "prod_missing" in errors[0].message
-        assert "not found" in errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "PRODUCT_NOT_FOUND"
+        assert "prod_missing" in exc.message
+        assert "not found" in exc.message.lower()
 
 
 class TestMaxDailySpendExceeded:
@@ -297,7 +291,6 @@ class TestMaxDailySpendExceeded:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 7000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -308,15 +301,12 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        errors = result.response.errors
-        assert len(errors) == 1
-        assert errors[0].code == "validation_error"
-        assert "daily" in errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "daily" in exc.message.lower()
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_within_cap_passes_validation(self):
@@ -335,7 +325,6 @@ class TestMaxDailySpendExceeded:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 3500.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -350,8 +339,7 @@ class TestMaxDailySpendExceeded:
             # daily spend validation (any error beyond it is fine)
             with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
                 mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=["create_media_buy"],
+                    manual_approval_required=False, manual_approval_operations=["create_media_buy"]
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -380,7 +368,6 @@ class TestMaxDailySpendExceeded:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 600.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -391,12 +378,12 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        assert "daily" in result.response.errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "daily" in exc.message.lower()
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_no_cap_configured(self):
@@ -411,7 +398,6 @@ class TestMaxDailySpendExceeded:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 999999.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -424,8 +410,7 @@ class TestMaxDailySpendExceeded:
         with _PatchContext(products=[product], currency_limit=cl) as pc:
             with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
                 mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=["create_media_buy"],
+                    manual_approval_required=False, manual_approval_operations=["create_media_buy"]
                 )
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -542,7 +527,6 @@ class TestCreativeUploadFailure:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creative_ids": ["creative_no_platform"],
@@ -590,10 +574,10 @@ class TestCreativeUploadFailure:
 
         with _PatchContext(products=[product]) as pc:
             # Override the scalars chain to handle multiple .all() and .first() calls.
-            # .all() call 1 (products query at line 1464) -> [product]
-            # .all() call 2 (creatives query at line 2954) -> [mock_creative]
-            # .first() calls: currency_limit (1554), adapter_config=None (1569),
-            #   package_record=None (2919), product_format_check=None (2986)
+            # .all() call 1 (products query) -> [product]
+            # .all() call 2 (creatives query) -> [mock_creative]
+            # platform_order_id persistence uses media_buys.get_packages() (not scalars)
+            # .first() calls: currency_limit, adapter_config=None, package_record=None, etc.
             all_results = iter([[product], [mock_creative]])
             first_results = iter([_mock_currency_limit(), None, None, None, None, None])
             scalars_mock = MagicMock()
@@ -682,7 +666,6 @@ class TestInlineCreativesProcessedBeforeApproval:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creatives": [
@@ -799,11 +782,7 @@ class TestPricingOptionXOR:
         """
         with pytest.raises(ValidationError) as exc_info:
             PricingOption(
-                pricing_option_id="cpm_usd_both",
-                pricing_model="cpm",
-                currency="USD",
-                fixed_price=5.0,
-                floor_price=2.0,
+                pricing_option_id="cpm_usd_both", pricing_model="cpm", currency="USD", fixed_price=5.0, floor_price=2.0
             )
 
         # Pydantic wraps the ValueError from model_validator
@@ -827,24 +806,14 @@ class TestPricingOptionXOR:
 
     def test_fixed_price_only_accepted(self):
         """PricingOption with only fixed_price is valid."""
-        po = PricingOption(
-            pricing_option_id="cpm_usd_fixed",
-            pricing_model="cpm",
-            currency="USD",
-            fixed_price=5.0,
-        )
+        po = PricingOption(pricing_option_id="cpm_usd_fixed", pricing_model="cpm", currency="USD", fixed_price=5.0)
         assert po.fixed_price == 5.0
         assert po.floor_price is None
         assert po.is_fixed is True
 
     def test_floor_price_only_accepted(self):
         """PricingOption with only floor_price is valid."""
-        po = PricingOption(
-            pricing_option_id="cpm_usd_auction",
-            pricing_model="cpm",
-            currency="USD",
-            floor_price=2.0,
-        )
+        po = PricingOption(pricing_option_id="cpm_usd_auction", pricing_model="cpm", currency="USD", floor_price=2.0)
         assert po.floor_price == 2.0
         assert po.fixed_price is None
         assert po.is_fixed is False
@@ -877,7 +846,6 @@ class TestCreativeIdsNotFound:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creative_ids": ["creative_exists", "creative_missing_1", "creative_missing_2"],
@@ -918,8 +886,9 @@ class TestCreativeIdsNotFound:
 
         with _PatchContext(products=[product]) as pc:
             # Override the scalars chain to handle multiple .all() and .first() calls.
-            # .all() call 1 (products query at line 1464) -> [product]
-            # .all() call 2 (creatives query at line 2954) -> [mock_creative] (only 1 of 3)
+            # .all() call 1 (products query) -> [product]
+            # .all() call 2 (creatives query) -> [mock_creative] (only 1 of 3)
+            # platform_order_id persistence uses media_buys.get_packages() (not scalars)
             # .first() returns currency_limit then None for subsequent calls
             all_results = iter([[product], [mock_creative]])
             first_results = iter([_mock_currency_limit(), None, None, None, None, None])
@@ -945,7 +914,7 @@ class TestCreativeIdsNotFound:
                 with pytest.raises(AdCPNotFoundError) as exc_info:
                     await _create_media_buy_impl(req=req, identity=pc.identity)
 
-                assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
+                assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
                 assert "creative_missing_1" in str(exc_info.value)
                 assert "creative_missing_2" in str(exc_info.value)
 
@@ -971,9 +940,9 @@ class TestCreativeIdsNotFound:
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
             with pytest.raises(AdCPNotFoundError) as exc_info:
-                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVES_NOT_FOUND"})
+                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVE_REJECTED"})
 
-            assert exc_info.value.details.get("error_code") == "CREATIVES_NOT_FOUND"
+            assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 
@@ -1039,17 +1008,8 @@ class TestMainFlowObligations:
 
                 from src.core.schemas import Package as RespPkg
 
-                resp_pkg = RespPkg(
-                    package_id="pkg_prod_1_abc_1",
-                    product_id="prod_1",
-                    budget=5000.0,
-                    buyer_ref="pkg-1",
-                )
-                mock_success = CreateMediaBuySuccess(
-                    buyer_ref="test-buyer",
-                    media_buy_id="mb_test123",
-                    packages=[resp_pkg],
-                )
+                resp_pkg = RespPkg(package_id="pkg_prod_1_abc_1", product_id="prod_1", budget=5000.0)
+                mock_success = CreateMediaBuySuccess(media_buy_id="mb_test123", packages=[resp_pkg])
                 mock_exec.return_value = mock_success
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -1057,7 +1017,6 @@ class TestMainFlowObligations:
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.media_buy_id is not None
-        assert result.response.buyer_ref == "test-buyer"
 
     @pytest.mark.asyncio
     async def test_authentication_extracts_principal_id(self):
@@ -1194,7 +1153,6 @@ class TestMainFlowObligations:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "targeting_overlay": {"geo_countries": ["US"]},
@@ -1260,10 +1218,8 @@ class TestMainFlowObligations:
 
                 from src.core.schemas import Package as RespPkg
 
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0, buyer_ref="pkg-1")
-                mock_exec.return_value = CreateMediaBuySuccess(
-                    buyer_ref="test-buyer", media_buy_id="mb_auto", packages=[resp_pkg]
-                )
+                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
+                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_auto", packages=[resp_pkg])
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
@@ -1282,9 +1238,7 @@ class TestMainFlowObligations:
         # Plain string format ID should be rejected
         with pytest.raises(AdCPValidationError) as exc_info:
             await _validate_and_convert_format_ids(
-                format_ids=["banner_300x250"],
-                tenant_id="test_tenant",
-                package_idx=0,
+                format_ids=["banner_300x250"], tenant_id="test_tenant", package_idx=0
             )
 
         assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
@@ -1327,10 +1281,8 @@ class TestMainFlowObligations:
 
                 from src.core.schemas import Package as RespPkg
 
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0, buyer_ref="pkg-1")
-                mock_exec.return_value = CreateMediaBuySuccess(
-                    buyer_ref="test-buyer", media_buy_id="mb_persist", packages=[resp_pkg]
-                )
+                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
+                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_persist", packages=[resp_pkg])
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
@@ -1358,12 +1310,13 @@ class TestPreconditionObligations:
 
         Covers: UC-002-PRECOND-02
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
 
@@ -1408,10 +1361,8 @@ class TestAsapStartTimingObligations:
 
                 from src.core.schemas import Package as RespPkg
 
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0, buyer_ref="pkg-1")
-                mock_exec.return_value = CreateMediaBuySuccess(
-                    buyer_ref="test-buyer", media_buy_id="mb_asap", packages=[resp_pkg]
-                )
+                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
+                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_asap", packages=[resp_pkg])
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
@@ -1438,7 +1389,6 @@ class TestAsapStartTimingObligations:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 7000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -1716,7 +1666,6 @@ class TestInlineCreativeObligations:
             packages=[
                 {
                     "product_id": "prod_1",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creatives": [
@@ -1770,9 +1719,7 @@ class TestInlineCreativeObligations:
         # Missing fields in FormatId should be rejected
         with pytest.raises(AdCPValidationError) as exc_info:
             await _validate_and_convert_format_ids(
-                format_ids=[{"agent_url": "", "id": ""}],
-                tenant_id="test_tenant",
-                package_idx=0,
+                format_ids=[{"agent_url": "", "id": ""}], tenant_id="test_tenant", package_idx=0
             )
 
         assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
@@ -1797,8 +1744,8 @@ class TestInlineCreativeObligations:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=8),
         )
-        # Unapproved creatives -> pending_activation (waiting for creative approval)
-        assert status == "pending_activation"
+        # Unapproved creatives -> pending_creatives (waiting for creative approval)
+        assert status == "pending_creatives"
 
 
 class TestProposalBasedObligations:
@@ -1845,13 +1792,10 @@ class TestProposalBasedObligations:
         """
         # proposal_id and total_budget coexist on the schema
         req = CreateMediaBuyRequest(
-            buyer_ref="test",
             brand={"domain": "test.com"},
             start_time=_future(1),
             end_time=_future(8),
-            packages=[
-                {"product_id": "p1", "buyer_ref": "pkg1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
-            ],
+            packages=[{"product_id": "p1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
             proposal_id="prop_abc",
             total_budget={"amount": 10000.0, "currency": "USD"},
         )
@@ -1874,7 +1818,6 @@ class TestProposalBasedObligations:
             packages=[
                 {
                     "product_id": "nonexistent_product",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 },
@@ -1884,10 +1827,16 @@ class TestProposalBasedObligations:
         with _PatchContext(products=[]) as pc:
             # No products in DB -> products not found
             pc.db_session.scalars.return_value.all.return_value = []
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") is converted by
+            # the _impl boundary catch into AdCPValidationError with the richer
+            # PRODUCT_NOT_FOUND error_code (not the base NOT_FOUND default).
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert any("not found" in e.message.lower() for e in result.response.errors)
+        exc = excinfo.value
+        assert exc.error_code == "PRODUCT_NOT_FOUND"
+        assert "not found" in exc.message.lower()
+        assert "nonexistent_product" in exc.message
 
 
 class TestCrossCuttingObligations:
@@ -1902,7 +1851,7 @@ class TestCrossCuttingObligations:
         from src.core.schemas import Package as RespPkg
 
         success = CreateMediaBuySuccess(
-            buyer_ref="test", media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)]
+            media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)]
         )
         success_result = CreateMediaBuyResult(response=success, status="completed")
 
@@ -1912,7 +1861,7 @@ class TestCrossCuttingObligations:
         # Error response has no media_buy_id
         from src.core.schemas import Error
 
-        error = CreateMediaBuyError(errors=[Error(code="validation_error", message="test error")])
+        error = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="test error")])
         error_result = CreateMediaBuyResult(response=error, status="failed")
 
         assert isinstance(error_result.response, CreateMediaBuyError)
@@ -1996,10 +1945,12 @@ class TestExtensionObligations:
         cl = _mock_currency_limit()
 
         with _PatchContext(products=[product], currency_limit=cl, adapter_config=adapter_config) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        error_msg = result.response.errors[0].message.lower()
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        error_msg = exc.message.lower()
         assert "not supported" in error_msg
         assert "gam" in error_msg
 
@@ -2099,16 +2050,16 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-I-03
         """
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
         # Identity with no principal_id -> requires authentication
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity_no_principal = ResolvedIdentity(
             principal_id=None,
@@ -2162,7 +2113,7 @@ class TestExtensionObligations:
                 # Adapter returns error
                 from src.core.schemas import Error
 
-                adapter_error = CreateMediaBuyError(errors=[Error(code="adapter_error", message="GAM API error")])
+                adapter_error = CreateMediaBuyError(errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")])
                 mock_exec.return_value = adapter_error
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
@@ -2180,9 +2131,7 @@ class TestExtensionObligations:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request(
-            packages=[
-                {"product_id": "prod_1", "buyer_ref": "pkg-1", "budget": 999999.0, "pricing_option_id": "cpm_usd_fixed"}
-            ]
+            packages=[{"product_id": "prod_1", "budget": 999999.0, "pricing_option_id": "cpm_usd_fixed"}]
         )
         product = _mock_product("prod_1")
         cl = _mock_currency_limit(max_daily_package_spend=None)
@@ -2244,16 +2193,18 @@ class TestExtensionObligations:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Zero budget should fail validation
-        req = _make_request(
-            packages=[{"product_id": "prod_1", "buyer_ref": "pkg-1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}]
-        )
+        # Zero budget triggers the typed AdCPBudgetTooLowError raise at
+        # media_buy_create.py:1758 directly — propagates through the boundary
+        # catch unchanged (typed AdCPError raised directly).
+        req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
         with _PatchContext() as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPBudgetTooLowError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert any("budget" in e.message.lower() for e in result.response.errors)
+        exc = excinfo.value
+        assert exc.error_code == "BUDGET_TOO_LOW"
+        assert "budget" in exc.message.lower()
 
     def test_proposal_currency_mismatch_error_code(self):
         """CURRENCY_MISMATCH error code exists for proposal currency mismatch.
@@ -2264,8 +2215,7 @@ class TestExtensionObligations:
         This test verifies the error code pattern.
         """
         error = AdCPValidationError(
-            "Currency EUR does not match proposal currency USD",
-            details={"error_code": "CURRENCY_MISMATCH"},
+            "Currency EUR does not match proposal currency USD", details={"error_code": "CURRENCY_MISMATCH"}
         )
         assert error.details["error_code"] == "CURRENCY_MISMATCH"
 
@@ -2283,10 +2233,16 @@ class TestExtensionObligations:
         product.pricing_options = []  # No pricing options
 
         with _PatchContext(products=[product]) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Should fail since pricing_option_id can't be resolved
-        assert isinstance(result.response, CreateMediaBuyError)
+        # Pricing-error sites in _validate_pricing_model_selection tag the error
+        # via details={"error_code": "PRICING_ERROR"} while the wire code stays
+        # VALIDATION_ERROR — verify both layers so we don't regress either one.
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.details == {"error_code": "PRICING_ERROR"}
+        assert "pricing_options" in exc.message
 
     @pytest.mark.asyncio
     async def test_creative_ids_not_in_database(self):
@@ -2297,20 +2253,16 @@ class TestExtensionObligations:
         # This is covered by TestCreativeIdsNotFound above.
         # Verify the error code pattern.
         error = AdCPNotFoundError(
-            "Creative IDs not found: creative_missing",
-            details={"error_code": "CREATIVES_NOT_FOUND"},
+            "Creative IDs not found: creative_missing", details={"error_code": "CREATIVE_REJECTED"}
         )
-        assert error.details["error_code"] == "CREATIVES_NOT_FOUND"
+        assert error.details["error_code"] == "CREATIVE_REJECTED"
 
     def test_creative_upload_failed_error_code(self):
         """CREATIVE_UPLOAD_FAILED error code is used for upload failures.
 
         Covers: UC-002-EXT-Q-01
         """
-        error = AdCPAdapterError(
-            "Failed to upload creative to GAM",
-            details={"error_code": "CREATIVE_UPLOAD_FAILED"},
-        )
+        error = AdCPAdapterError("Failed to upload creative to GAM", details={"error_code": "CREATIVE_UPLOAD_FAILED"})
         assert error.details["error_code"] == "CREATIVE_UPLOAD_FAILED"
 
     def test_partial_execution_state_on_creative_upload_failure(self):
@@ -2323,8 +2275,7 @@ class TestExtensionObligations:
         The error is CREATIVE_UPLOAD_FAILED, not a rollback.
         """
         error = AdCPAdapterError(
-            "Failed to upload creative cr_1 to GAM: timeout",
-            details={"error_code": "CREATIVE_UPLOAD_FAILED"},
+            "Failed to upload creative cr_1 to GAM: timeout", details={"error_code": "CREATIVE_UPLOAD_FAILED"}
         )
         # Partial execution: error is about upload, not about the order
         assert "CREATIVE_UPLOAD_FAILED" == error.details["error_code"]
@@ -2347,20 +2298,23 @@ class TestPostconditionObligations:
             packages=[
                 {
                     "product_id": "nonexistent_prod",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ]
         )
 
+        # Default _PatchContext mocks one product with id "prod_1"; req asks
+        # for "nonexistent_prod" so the validation block hits the not-found
+        # branch. AdCPValidationError(error_code="PRODUCT_NOT_FOUND") becomes
+        # AdCPValidationError(error_code="PRODUCT_NOT_FOUND") via the _impl
+        # boundary catch and propagates to the transport boundary.
         with _PatchContext() as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPValidationError):
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Validation failure -> error response, no DB records created
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        # UoW session.add should NOT have been called (no records created)
+        # Postcondition: the typed raise happens BEFORE any session.add() —
+        # no MediaBuy/Package rows are inserted on the failure path.
         pc.db_session.add.assert_not_called()
 
     @pytest.mark.asyncio
@@ -2376,7 +2330,6 @@ class TestPostconditionObligations:
             packages=[
                 {
                     "product_id": "nonexistent_prod",
-                    "buyer_ref": "pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }
@@ -2385,34 +2338,40 @@ class TestPostconditionObligations:
 
         with _PatchContext(products=[]) as pc:
             pc.db_session.scalars.return_value.all.return_value = []
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
+            # which the _impl boundary catch converts to AdCPValidationError with
+            # error_code="PRODUCT_NOT_FOUND" (richer than the base NOT_FOUND default).
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        error_msg = result.response.errors[0].message
-        # Message should identify which product was not found
-        assert "nonexistent_prod" in error_msg
+        exc = excinfo.value
+        # Recovery guidance lives on the typed exception itself: the
+        # exception's message must identify the unknown product so the buyer
+        # knows exactly what to correct on retry, and the typed error_code
+        # ("PRODUCT_NOT_FOUND") gives the buyer a machine-readable classification.
+        assert "nonexistent_prod" in exc.message
+        assert exc.error_code == "PRODUCT_NOT_FOUND"
 
 
 class TestUpgradeObligations:
     """3.6 upgrade boundary field propagation tests."""
 
-    def test_buyer_campaign_ref_accepted(self):
-        """buyer_campaign_ref is accepted in request schema.
+    def test_buyer_campaign_ref_rejected_in_strict_mode(self):
+        """buyer_campaign_ref is no longer in the AdCP spec (removed in 3.12).
 
         Covers: UC-002-UPG-01
         """
-        req = _make_request(buyer_campaign_ref="CAMP-2024-Q1")
-        assert req.buyer_campaign_ref == "CAMP-2024-Q1"
+        with pytest.raises(ValidationError, match="buyer_campaign_ref"):
+            _make_request(buyer_campaign_ref="CAMP-2024-Q1")
 
-    def test_buyer_campaign_ref_roundtrip(self):
-        """buyer_campaign_ref is preserved on the request for later retrieval.
+    def test_ext_field_carries_custom_data(self):
+        """ext field can carry buyer_campaign_ref as custom extension data.
 
         Covers: UC-002-UPG-02
         """
-        req = _make_request(buyer_campaign_ref="CAMP-2024-Q1")
-        # buyer_campaign_ref should be serializable via model_dump
+        req = _make_request(ext={"buyer_campaign_ref": "CAMP-2024-Q1"})
         dumped = req.model_dump()
-        assert dumped["buyer_campaign_ref"] == "CAMP-2024-Q1"
+        assert dumped["ext"]["buyer_campaign_ref"] == "CAMP-2024-Q1"
 
     def test_ext_field_accepted(self):
         """ext field (ExtensionObject) is accepted in request.
@@ -2433,7 +2392,6 @@ class TestUpgradeObligations:
 
         # Verify account can be set on success
         resp = CreateMediaBuySuccess(
-            buyer_ref="test",
             media_buy_id="mb_1",
             packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
             account=None,  # Optional
@@ -2450,9 +2408,6 @@ class TestUpgradeObligations:
         from src.core.schemas import Package as RespPkg
 
         resp = CreateMediaBuySuccess(
-            buyer_ref="test",
-            media_buy_id="mb_1",
-            packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
-            sandbox=True,
+            media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)], sandbox=True
         )
         assert resp.sandbox is True

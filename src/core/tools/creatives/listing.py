@@ -3,11 +3,10 @@
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from adcp import CreativeFilters
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.pagination_request import PaginationRequest
+from adcp.types import ContextObject, PaginationRequest
 from adcp.types.generated_poc.creative.list_creatives_request import (
     Field1 as FieldModel,
 )
@@ -16,6 +15,7 @@ from adcp.types.generated_poc.creative.list_creatives_request import (
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field as PydanticField
 from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
@@ -37,8 +37,6 @@ logger = logging.getLogger(__name__)
 def _list_creatives_impl(
     media_buy_id: str | None = None,
     media_buy_ids: list[str] | None = None,
-    buyer_ref: str | None = None,
-    buyer_refs: list[str] | None = None,
     status: str | None = None,
     format: str | None = None,
     tags: list[str] | None = None,
@@ -65,8 +63,6 @@ def _list_creatives_impl(
     Args:
         media_buy_id: Filter by single media buy ID (optional, backward compat)
         media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5, optional)
-        buyer_ref: Filter by single buyer reference (optional, backward compat)
-        buyer_refs: Filter by multiple buyer references (AdCP 2.5, optional)
         status: Filter by creative status (pending, approved, rejected) (optional)
         format: Filter by creative format (optional)
         tags: Filter by tags (optional)
@@ -89,7 +85,7 @@ def _list_creatives_impl(
         ListCreativesResponse with filtered creative assets and pagination info
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
-    from adcp.types.generated_poc.core.pagination_request import PaginationRequest as LibraryPagination
+    from adcp.types import PaginationRequest as LibraryPagination
     from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
 
     from src.core.schemas import ListCreativesRequest
@@ -135,18 +131,12 @@ def _list_creatives_impl(
     if search:
         filters_dict["name_contains"] = search
 
-    # Build media_buy_ids and buyer_refs filter arrays
+    # Build media_buy_ids filter array
     effective_media_buy_ids = list(media_buy_ids) if media_buy_ids else []
     if media_buy_id and media_buy_id not in effective_media_buy_ids:
         effective_media_buy_ids.append(media_buy_id)
     if effective_media_buy_ids:
         filters_dict["media_buy_ids"] = effective_media_buy_ids
-
-    effective_buyer_refs = list(buyer_refs) if buyer_refs else []
-    if buyer_ref and buyer_ref not in effective_buyer_refs:
-        effective_buyer_refs.append(buyer_ref)
-    if effective_buyer_refs:
-        filters_dict["buyer_refs"] = effective_buyer_refs
 
     # Merge structured filters with flat params (flat params take precedence)
     if filters:
@@ -213,7 +203,6 @@ def _list_creatives_impl(
             created_before=created_before_dt,
             search=search,
             media_buy_ids=effective_media_buy_ids or None,
-            buyer_refs=effective_buyer_refs or None,
             sort_by=sort_by,
             sort_order=valid_sort_order,
             offset=offset,
@@ -316,8 +305,6 @@ def _list_creatives_impl(
     if req.filters:
         if req.filters.media_buy_ids:
             filters_applied.append(f"media_buy_ids={','.join(req.filters.media_buy_ids)}")
-        if req.filters.buyer_refs:
-            filters_applied.append(f"buyer_refs={','.join(req.filters.buyer_refs)}")
         if req.filters.statuses:
             filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
         if req.filters.format_ids:
@@ -387,28 +374,41 @@ def _list_creatives_impl(
 
 
 async def list_creatives(
-    media_buy_id: str = None,
+    media_buy_id: Annotated[str | None, PydanticField(description="Filter creatives by a single media buy ID")] = None,
     media_buy_ids: list[str] = None,
-    buyer_ref: str = None,
-    buyer_refs: list[str] = None,
-    status: str = None,
-    format: str = None,
+    status: Annotated[
+        str | None, PydanticField(description="Filter by creative status (e.g. 'approved', 'pending', 'rejected')")
+    ] = None,
+    format: Annotated[str | None, PydanticField(description="Filter by creative format ID")] = None,
     tags: list[str] = None,
-    created_after: str = None,
-    created_before: str = None,
-    search: str = None,
+    created_after: Annotated[
+        str, PydanticField(description="Filter creatives created after this ISO 8601 datetime")
+    ] = None,
+    created_before: Annotated[
+        str, PydanticField(description="Filter creatives created before this ISO 8601 datetime")
+    ] = None,
+    search: Annotated[
+        str | None, PydanticField(description="Free-text search across creative name and metadata")
+    ] = None,
     filters: CreativeFilters | None = None,
     sort: Sort | None = None,
     pagination: PaginationRequest | None = None,
     fields: list[FieldModel | str] | None = None,
-    include_performance: bool = False,
-    include_assignments: bool = False,
-    include_sub_assets: bool = False,
-    page: int = 1,
-    limit: int = 50,
-    sort_by: str = "created_date",
-    sort_order: str = "desc",
-    webhook_url: str | None = None,
+    include_performance: Annotated[
+        bool, PydanticField(description="Include performance metrics for each creative")
+    ] = False,
+    include_assignments: Annotated[
+        bool, PydanticField(description="Include package assignment details for each creative")
+    ] = False,
+    include_sub_assets: Annotated[
+        bool, PydanticField(description="Include sub-assets (e.g. individual sizes in a responsive creative)")
+    ] = False,
+    page: Annotated[int, PydanticField(description="Page number for pagination (1-based)")] = 1,
+    limit: Annotated[int, PydanticField(description="Maximum number of creatives per page")] = 50,
+    sort_by: Annotated[
+        str, PydanticField(description="Field to sort by (e.g. 'created_date', 'name')")
+    ] = "created_date",
+    sort_order: Annotated[str, PydanticField(description="Sort direction: 'asc' or 'desc'")] = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):
@@ -422,8 +422,6 @@ async def list_creatives(
     Args:
         media_buy_id: Filter by single media buy ID (backward compat)
         media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5)
-        buyer_ref: Filter by single buyer reference (backward compat)
-        buyer_refs: Filter by multiple buyer references (AdCP 2.5)
 
     Returns:
         ToolResult with ListCreativesResponse data
@@ -433,11 +431,20 @@ async def list_creatives(
     # Pass typed Pydantic models directly (no model_dump conversion needed)
     fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None
 
+    # Structured sort and pagination are AdCP spec params; _impl is built around flat
+    # equivalents (sort_by/sort_order, page/limit). Coerce structured forms to flat
+    # at the boundary so spec-compliant payloads are honored instead of silently dropped.
+    if sort is not None:
+        if sort.field is not None:
+            sort_by = sort.field.value if hasattr(sort.field, "value") else str(sort.field)
+        if sort.direction is not None:
+            sort_order = sort.direction.value if hasattr(sort.direction, "value") else str(sort.direction)
+    if pagination is not None and pagination.max_results is not None:
+        limit = pagination.max_results
+
     response = _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
-        buyer_ref=buyer_ref,
-        buyer_refs=buyer_refs,
         status=status,
         format=format,
         tags=tags,
@@ -462,8 +469,6 @@ async def list_creatives(
 def list_creatives_raw(
     media_buy_id: str = None,
     media_buy_ids: list[str] = None,
-    buyer_ref: str = None,
-    buyer_refs: list[str] = None,
     status: str = None,
     format: str = None,
     tags: list[str] = None,
@@ -479,7 +484,7 @@ def list_creatives_raw(
     limit: int = 50,
     sort_by: str = "created_date",
     sort_order: str = "desc",
-    context: dict | None = None,  # Application level context per adcp spec
+    context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -490,8 +495,6 @@ def list_creatives_raw(
     Args:
         media_buy_id: Filter by single media buy ID (backward compat)
         media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5)
-        buyer_ref: Filter by single buyer reference (backward compat)
-        buyer_refs: Filter by multiple buyer references (AdCP 2.5)
         status: Filter by status (optional)
         format: Filter by creative format (optional)
         tags: Filter by creative group tags (optional)
@@ -522,8 +525,6 @@ def list_creatives_raw(
     return _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
-        buyer_ref=buyer_ref,
-        buyer_refs=buyer_refs,
         status=status,
         format=format,
         tags=tags,

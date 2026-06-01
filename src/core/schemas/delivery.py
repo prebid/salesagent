@@ -5,7 +5,7 @@ from ``src.core.schemas`` for backward compatibility.
 """
 
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from adcp.types import AggregatedTotals as LibraryAggregatedTotals
@@ -18,7 +18,11 @@ from adcp.types import (
 from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
+from adcp.types import ReportingFrequency as LibraryReportingFrequency
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+    ByGeoItem as LibraryByGeoItem,
+)  # TODO: no stable alias in adcp.types
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
@@ -39,7 +43,7 @@ class DeliveryMeasurement(LibraryDeliveryMeasurement):
     pass  # All fields inherited from library
 
 
-class DeliveryType(str, Enum):
+class DeliveryType(StrEnum):
     """Valid delivery types per AdCP spec."""
 
     GUARANTEED = "guaranteed"
@@ -62,7 +66,7 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     Examples:
     - Single buy: media_buy_ids=["buy_123"]
-    - Multiple buys: buyer_refs=["ref_123", "ref_456"]
+    - Multiple buys: media_buy_ids=["buy_123", "buy_456"]
     - All active buys: status_filter="active"
     - All buys: status_filter="all"
     - Date range: start_date="2025-01-01", end_date="2025-01-31"
@@ -80,6 +84,29 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
     include_package_daily_breakdown: bool | None = Field(
         None,
         description="Include daily_breakdown arrays within each package (salesagent extension, not in adcp spec)",
+    )
+
+    # --- AdCP spec fields the adcp Python library lags on (gh-#1299) ---
+    # Defined in /schemas/latest/media-buy/get-media-buy-delivery-request.json but
+    # not yet in the adcp library's GetMediaBuyDeliveryRequest. Declared here so
+    # spec-compliant clients are accepted (Pattern #1: extend library type).
+    time_granularity: LibraryReportingFrequency | None = Field(
+        None,
+        description=(
+            "Per-window slice granularity for the pull, using the same vocabulary "
+            "as reporting_webhook.reporting_frequency. When set, the seller returns "
+            "per-window delivery slices over the date range. Capability-scoped: the "
+            "value MUST be one of the seller's declared "
+            "reporting_capabilities.windowed_pull_granularities."
+        ),
+    )
+    include_window_breakdown: bool = Field(
+        default=False,
+        description=(
+            "When true, the response includes media_buy_deliveries[].windows[] — "
+            "per-window delivery slices over the date range at the requested "
+            "time_granularity. Ignored when time_granularity is omitted."
+        ),
     )
 
 
@@ -124,6 +151,18 @@ class PlacementBreakdown(SalesAgentBaseModel):
     clicks: float | None = Field(None, ge=0, description="Placement clicks")
 
 
+class GeoBreakdown(LibraryByGeoItem):
+    """Geographic delivery breakdown entry (extends library ByGeoItem).
+
+    Library provides geo_level, system, geo_code, geo_name plus the full
+    DeliveryMetrics surface. For metro/postal_area levels the ``system``
+    field carries the classification system the seller used (BR-RULE-091
+    INV-5, e.g. 'nielsen_dma', 'us_zip').
+    """
+
+    pass  # All fields inherited from library ByGeoItem
+
+
 class PackageDelivery(SalesAgentBaseModel):
     """Metrics broken down by package.
 
@@ -131,7 +170,6 @@ class PackageDelivery(SalesAgentBaseModel):
     """
 
     package_id: str = Field(description="Publisher's package identifier")
-    buyer_ref: str | None = Field(None, description="Buyer's reference identifier for this package")
     impressions: float = Field(ge=0, description="Package impressions")
     spend: float = Field(ge=0, description="Package spend")
     clicks: float | None = Field(None, ge=0, description="Package clicks")
@@ -156,6 +194,11 @@ class PackageDelivery(SalesAgentBaseModel):
     by_placement: list[PlacementBreakdown] | None = Field(
         None,
         description="Placement-level delivery breakdown (populated when reporting_dimensions includes 'placement')",
+    )
+    by_geo: list[GeoBreakdown] | None = Field(
+        None,
+        description="Geographic delivery breakdown (populated when reporting_dimensions includes 'geo'). "
+        "For metro/postal_area levels each entry declares the classification 'system' used.",
     )
 
 
@@ -183,12 +226,11 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
     """
 
     media_buy_id: str = Field(description="Publisher's media buy identifier")
-    buyer_ref: str | None = Field(None, description="Buyer's reference identifier for this media buy")
-    # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_activation``
+    # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_start``
     # where salesagent uses ``ready``. Align naming to spec when updating
     # _compute_media_buy_status and all status references.
     status: Literal["ready", "active", "paused", "completed", "failed", "reporting_delayed"] = Field(
-        description="Current media buy status. 'ready' means scheduled to go live at flight start date (spec: pending_activation)."
+        description="Current media buy status. 'ready' means scheduled to go live at flight start date (spec: pending_start)."
     )
     expected_availability: str | None = Field(
         default=None,
@@ -360,7 +402,7 @@ class GetCreativeDeliveryRequest(SalesAgentBaseModel):
 
     Flattened from the adcp library's union-based GetCreativeDeliveryRequest
     (RootModel of 3 variants). At least one scoping filter is required:
-    media_buy_ids, media_buy_buyer_refs, or creative_ids.
+    media_buy_ids or creative_ids.
 
     All fields mirror the adcp spec; this flat model is easier to work with
     for MCP parameter expansion and validation.
@@ -372,11 +414,6 @@ class GetCreativeDeliveryRequest(SalesAgentBaseModel):
         None,
         min_length=1,
         description="Filter to specific media buys by publisher ID.",
-    )
-    media_buy_buyer_refs: list[str] | None = Field(
-        None,
-        min_length=1,
-        description="Filter to specific media buys by buyer reference ID.",
     )
     creative_ids: list[str] | None = Field(
         None,
@@ -434,7 +471,7 @@ class GetCreativeDeliveryResponse(NestedModelSerializerMixin, LibraryGetCreative
     """Extends library GetCreativeDeliveryResponse.
 
     Library provides: reporting_period, currency, creatives, errors,
-    pagination, media_buy_id, media_buy_buyer_ref, context, ext.
+    pagination, media_buy_id, context, ext.
 
     Local override:
     - creatives: Uses local CreativeDeliveryData for consistent serialization

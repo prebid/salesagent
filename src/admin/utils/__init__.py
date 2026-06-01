@@ -5,6 +5,8 @@ from src.admin.utils.audit_decorator import log_admin_action
 
 # Export all helper functions (previously in utils.py)
 from src.admin.utils.helpers import (
+    LimitedResult,
+    execute_limited,
     get_custom_targeting_mappings,
     get_tenant_config_from_db,
     is_admin_production,
@@ -34,4 +36,7 @@ __all__ = [
     "validate_gam_user_response",
     "get_custom_targeting_mappings",
     "translate_custom_targeting",
+    # Query helpers
+    "LimitedResult",
+    "execute_limited",
 ]

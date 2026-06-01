@@ -70,7 +70,6 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         # Forward all request fields that the REST body accepts
         _BODY_FIELDS = (
             "media_buy_ids",
-            "buyer_refs",
             "status_filter",
             "start_date",
             "end_date",

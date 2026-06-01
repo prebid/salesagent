@@ -29,8 +29,6 @@ _ALLOWLIST: set[tuple[str, str]] = {
     # AccountSyncEnv can't dispatch list_accounts requests
     ("uc011_accounts", "when_list_accounts_unfiltered"),
     ("uc011_accounts", "when_list_sandbox_filter"),
-    # FIXME(salesagent-ec0): circuit breaker is unit-only harness
-    ("uc004_delivery", "when_evaluate_circuit_breaker"),
 }
 
 

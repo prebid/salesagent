@@ -8,11 +8,7 @@ beads: salesagent-8n4
 
 from __future__ import annotations
 
-from adcp.types.generated_poc.core.account_ref import (
-    AccountReference,
-    AccountReference1,
-    AccountReference2,
-)
+from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
 
 from src.core.database.repositories.account import AccountRepository
 from src.core.exceptions import (
@@ -35,8 +31,8 @@ def resolve_account(
     """Resolve an AccountReference to a validated account_id.
 
     Handles both variants of the AdCP AccountReference union:
-    - AccountReference1: lookup by explicit account_id, verify agent access
-    - AccountReference2: lookup by natural key (brand + operator + sandbox)
+    - AccountReferenceById: lookup by explicit account_id, verify agent access
+    - AccountReferenceByNaturalKey: lookup by natural key (brand + operator + sandbox)
 
     Args:
         account_ref: AccountReference from the request payload.
@@ -56,10 +52,10 @@ def resolve_account(
     """
     inner = account_ref.root
 
-    if isinstance(inner, AccountReference1):
+    if isinstance(inner, AccountReferenceById):
         return _resolve_by_id(inner.account_id, identity, repo)
 
-    if isinstance(inner, AccountReference2):
+    if isinstance(inner, AccountReferenceByNaturalKey):
         return _resolve_by_natural_key(inner, identity, repo)
 
     raise AdCPNotFoundError(f"Unsupported AccountReference variant: {type(inner)}")
@@ -110,7 +106,7 @@ def _resolve_by_id(
 
 
 def _resolve_by_natural_key(
-    ref: AccountReference2,
+    ref: AccountReferenceByNaturalKey,
     identity: ResolvedIdentity,
     repo: AccountRepository,
 ) -> str:

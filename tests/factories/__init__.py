@@ -16,10 +16,10 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.core import (
     AdapterConfigFactory,
     CurrencyLimitFactory,
+    GAMInventoryFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
     TenantFactory,
-    UserFactory,
 )
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 from tests.factories.creative_asset import CreativeAssetFactory
@@ -29,6 +29,12 @@ from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.targeting import (
+    CollectionListReferenceFactory,
+    PropertyListReferenceFactory,
+    TargetingFactory,
+)
+from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory
 
 ALL_FACTORIES = [
@@ -37,9 +43,9 @@ ALL_FACTORIES = [
     AgentAccountAccessFactory,
     AdapterConfigFactory,
     CurrencyLimitFactory,
+    GAMInventoryFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
-    UserFactory,
     PrincipalFactory,
     InventoryProfileFactory,
     ProductFactory,
@@ -50,6 +56,8 @@ ALL_FACTORIES = [
     CreativeFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
+    UserFactory,
+    TenantAuthConfigFactory,
 ]
 
 __all__ = [
@@ -57,6 +65,7 @@ __all__ = [
     "AccountFactory",
     "AdapterConfigFactory",
     "AgentAccountAccessFactory",
+    "CollectionListReferenceFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
@@ -64,15 +73,19 @@ __all__ = [
     "FormatIdFactory",
     "InventoryProfileFactory",
     "CurrencyLimitFactory",
+    "GAMInventoryFactory",
     "FormatPerformanceMetricsFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
     "PricingOptionFactory",
     "PrincipalFactory",
     "ProductFactory",
+    "PropertyListReferenceFactory",
     "PropertyTagFactory",
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
+    "TargetingFactory",
+    "TenantAuthConfigFactory",
     "TenantFactory",
     "UserFactory",
 ]

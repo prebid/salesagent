@@ -54,9 +54,8 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import CreativeAction, CreativeAsset
+from adcp.types import FormatId as AdcpFormatId
 
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError
 from src.core.schemas import (
@@ -159,7 +158,7 @@ class TestCreativeSchemaCompliance:
         library type at adcp-client-python media_buy/list_creatives_response.py.
         Existing: test_architecture_schema_inheritance.py (structural guard)
         """
-        from adcp.types.generated_poc.creative.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as ListingCreative,
         )
 
@@ -377,7 +376,7 @@ class TestSyncCreativesResponseSchema:
             creatives=[
                 SyncCreativeResult(creative_id="c_1", action="created"),
                 SyncCreativeResult(creative_id="c_2", action="updated"),
-                SyncCreativeResult(creative_id="c_3", action="failed", errors=["bad"]),
+                SyncCreativeResult(creative_id="c_3", action="failed", errors=[{"code": "invalid", "message": "bad"}]),
             ],
         )
         msg = str(response)
@@ -492,7 +491,9 @@ class TestSyncCreativesRequestSchema:
         assignments as optional list of Assignment objects (creative_id + package_id).
         Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
         """
-        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+        from adcp.types.generated_poc.creative.sync_creatives_request import (
+            Assignment,
+        )  # TODO: no stable alias in adcp.types
 
         creative = _make_creative()
         req = SyncCreativesRequest(
@@ -552,14 +553,12 @@ class TestListCreativeFormatsResponseSchema:
 
     @staticmethod
     def _make_format(fmt_id: str = "fmt_1", name: str = "Test Format"):
-        from adcp.types.generated_poc.enums.format_category import FormatCategory
-
         from src.core.schemas import Format
 
         return Format(
             format_id=_format_id(fmt_id),
             name=name,
-            type=FormatCategory.display,
+            type="display",
             is_standard=True,
         )
 
@@ -800,7 +799,7 @@ class TestCrossPrincipalIsolation:
             mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
-            from adcp.types.generated_poc.enums.creative_action import CreativeAction
+            from adcp.types import CreativeAction
 
             mock_create.return_value = (
                 SyncCreativeResult(creative_id="c_shared", action=CreativeAction.created),
@@ -1512,7 +1511,9 @@ class TestListCreativesRawBoundaryCompleteness:
 
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = ListCreativesResponse(
-                creatives=[], pagination=Pagination(has_more=False), query_summary=QuerySummary()
+                creatives=[],
+                pagination=Pagination(has_more=False),
+                query_summary=QuerySummary(returned=0, total_matching=0),
             )
             list_creatives_raw(filters=test_filters, identity=identity)
             mock_impl.assert_called_once()
@@ -1531,7 +1532,9 @@ class TestListCreativesRawBoundaryCompleteness:
 
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = ListCreativesResponse(
-                creatives=[], pagination=Pagination(has_more=False), query_summary=QuerySummary()
+                creatives=[],
+                pagination=Pagination(has_more=False),
+                query_summary=QuerySummary(returned=0, total_matching=0),
             )
             list_creatives_raw(include_performance=True, identity=identity)
             mock_impl.assert_called_once()
@@ -1550,7 +1553,9 @@ class TestListCreativesRawBoundaryCompleteness:
 
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = ListCreativesResponse(
-                creatives=[], pagination=Pagination(has_more=False), query_summary=QuerySummary()
+                creatives=[],
+                pagination=Pagination(has_more=False),
+                query_summary=QuerySummary(returned=0, total_matching=0),
             )
             list_creatives_raw(include_assignments=True, identity=identity)
             mock_impl.assert_called_once()
@@ -1696,20 +1701,18 @@ class TestListCreativeFormatsFiltering:
         Existing: test_creative_formats_behavioral.py
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
         """
-        from adcp.types.generated_poc.enums.format_category import FormatCategory
-
         from src.core.schemas import Format
 
         fmt1 = Format(
             format_id=_format_id("fmt_1"),
             name="Banner A",
-            type=FormatCategory.display,
+            type="display",
             is_standard=True,
         )
         fmt2 = Format(
             format_id=_format_id("fmt_2"),
             name="Video A",
-            type=FormatCategory.video,
+            type="video",
             is_standard=True,
         )
 
@@ -1723,27 +1726,23 @@ class TestListCreativeFormatsFiltering:
         Existing: test_creative_formats_behavioral.py
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
         """
-        from adcp.types.generated_poc.enums.format_category import FormatCategory
-
         from src.core.schemas import Format
 
         display = Format(
             format_id=_format_id("d1"),
             name="Display",
-            type=FormatCategory.display,
             is_standard=True,
         )
         video = Format(
             format_id=_format_id("v1"),
             name="Video",
-            type=FormatCategory.video,
             is_standard=True,
         )
 
-        req = ListCreativeFormatsRequest(type="video")
+        # type filter removed in adcp 3.12, returns all formats
+        req = ListCreativeFormatsRequest()
         result = self._call_impl([display, video], req)
-        assert len(result) == 1
-        assert result[0].name == "Video"
+        assert len(result) == 2
 
     def test_name_search_case_insensitive(self):
         """Name search is case-insensitive partial match.
@@ -1752,14 +1751,12 @@ class TestListCreativeFormatsFiltering:
         The spec defines format name as a string; search behavior is platform-defined.
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
         """
-        from adcp.types.generated_poc.enums.format_category import FormatCategory
-
         from src.core.schemas import Format
 
         fmt = Format(
             format_id=_format_id("banner"),
             name="Standard Banner 728x90",
-            type=FormatCategory.display,
+            type="display",
             is_standard=True,
         )
 
@@ -1835,10 +1832,7 @@ class TestGenerativeCreativeBuild:
             mock_run_async.return_value = {
                 "status": "draft",
                 "context_id": "ctx_1",
-                "creative_output": {
-                    "assets": {},
-                    "output_format": {"url": "https://ai.example.com/output.png"},
-                },
+                "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
             creative = _make_creative_asset(assets={"message": {"content": "Create a banner ad"}})
@@ -1890,10 +1884,7 @@ class TestGenerativeCreativeBuild:
             mock_run_async.return_value = {
                 "status": "draft",
                 "context_id": "ctx_1",
-                "creative_output": {
-                    "assets": {},
-                    "output_format": {"url": "https://ai.example.com/output.png"},
-                },
+                "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
             creative = _make_creative_asset(
@@ -1951,10 +1942,7 @@ class TestGenerativeCreativeBuild:
             mock_run_async.return_value = {
                 "status": "draft",
                 "context_id": "ctx_1",
-                "creative_output": {
-                    "assets": {},
-                    "output_format": {"url": "https://ai.example.com/output.png"},
-                },
+                "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
             # Only 'brief' role, no 'message'
@@ -2004,10 +1992,7 @@ class TestGenerativeCreativeBuild:
             mock_run_async.return_value = {
                 "status": "draft",
                 "context_id": "ctx_1",
-                "creative_output": {
-                    "assets": {},
-                    "output_format": {"url": "https://ai.example.com/output.png"},
-                },
+                "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
             # Only 'prompt' role -- no message or brief
@@ -2057,10 +2042,7 @@ class TestGenerativeCreativeBuild:
             mock_run_async.return_value = {
                 "status": "draft",
                 "context_id": "ctx_1",
-                "creative_output": {
-                    "assets": {},
-                    "output_format": {"url": "https://ai.example.com/output.png"},
-                },
+                "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
             # No message/brief/prompt in assets; provide inputs instead
@@ -2115,10 +2097,7 @@ class TestGenerativeCreativeBuild:
             mock_run_async.return_value = {
                 "status": "draft",
                 "context_id": "ctx_1",
-                "creative_output": {
-                    "assets": {},
-                    "output_format": {"url": "https://ai.example.com/output.png"},
-                },
+                "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
             # No message/brief/prompt in assets, no inputs -- falls back to name
@@ -2315,7 +2294,7 @@ class TestGenerativeCreativeBuild:
             if hasattr(action_val, "value"):
                 action_val = action_val.value
             assert action_val == "failed"
-            assert any("GEMINI_API_KEY" in e for e in (result.errors or []))
+            assert any("GEMINI_API_KEY" in e.message for e in (result.errors or []))
 
 
 # ============================================================================
@@ -2670,10 +2649,7 @@ class TestCreativeWebhookDelivery:
         """
         from src.core.tools.creatives._workflow import _send_creative_notifications
 
-        tenant = {
-            "tenant_id": "t1",
-            "slack_webhook_url": "https://hooks.slack.com/test",
-        }
+        tenant = {"tenant_id": "t1", "slack_webhook_url": "https://hooks.slack.com/test"}
         creatives_needing_approval = [
             {"creative_id": "c1", "format": "display_300x250_image", "name": "Banner", "status": "pending_review"},
         ]
@@ -2921,10 +2897,10 @@ class TestCreativeWrongBaseClass:
     def test_creative_extends_listing_base_not_delivery(self):
         """Creative base class should be the listing Creative (13 fields),
         not the delivery Creative (6 fields)."""
-        from adcp.types.generated_poc.creative.get_creative_delivery_response import (
+        from adcp.types.generated_poc.creative.get_creative_delivery_response import (  # TODO: no stable alias in adcp.types
             Creative as DeliveryCreative,
         )
-        from adcp.types.generated_poc.creative.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as ListingCreative,
         )
 
@@ -4303,7 +4279,7 @@ class TestExtensionGaps:
                 creative_result.action.value if hasattr(creative_result.action, "value") else creative_result.action
             )
             assert action_val == "failed"
-            assert any("list_creative_formats" in e for e in (creative_result.errors or []))
+            assert any("list_creative_formats" in e.message for e in (creative_result.errors or []))
 
     def test_ext_g_unreachable_agent_retry(self):
         """Agent unreachable => action=failed with 'try again later' suggestion.
@@ -4356,7 +4332,10 @@ class TestExtensionGaps:
                 creative_result.action.value if hasattr(creative_result.action, "value") else creative_result.action
             )
             assert action_val == "failed"
-            assert any("unreachable" in e.lower() for e in (creative_result.errors or []))
+            assert any(
+                "unreachable" in (e.message if hasattr(e, "message") else str(e)).lower()
+                for e in (creative_result.errors or [])
+            )
 
     def test_ext_j_package_not_found_lenient(self):
         """Lenient mode: missing package logged in assignment_errors, others continue.
@@ -4665,7 +4644,8 @@ class TestA2ATransportGaps:
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
         )
-        req = ListCreativeFormatsRequest(type="display")
+        # type filter removed in adcp 3.12
+        req = ListCreativeFormatsRequest()
 
         with patch("src.core.tools.creative_formats._list_creative_formats_impl") as mock_impl:
             mock_impl.return_value = MagicMock()
@@ -4690,7 +4670,7 @@ class TestAsyncLifecycle:
 
     def test_async_submitted_response(self):
         """Async submitted acknowledgment conforms to adcp 3.6.0 schema."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
             SyncCreativesSubmitted,
         )
 
@@ -4705,7 +4685,7 @@ class TestAsyncLifecycle:
 
     def test_async_working_response(self):
         """Async working response includes progress percentage and counts."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
             SyncCreativesWorking,
         )
 
@@ -4725,7 +4705,7 @@ class TestAsyncLifecycle:
 
     def test_async_input_required_response(self):
         """Async input-required response indicates what input is needed."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
             Reason,
             SyncCreativesInputRequired,
         )
@@ -5040,10 +5020,7 @@ class TestProvenanceModel:
         from src.core.schemas import DigitalSourceType
 
         creative = _make_creative(
-            provenance={
-                "digital_source_type": DigitalSourceType.digital_creation,
-                "ai_tool": "Stable Diffusion",
-            }
+            provenance={"digital_source_type": DigitalSourceType.digital_creation, "ai_tool": "Stable Diffusion"}
         )
         assert creative.provenance is not None
         assert creative.provenance.digital_source_type == DigitalSourceType.digital_creation
@@ -5143,10 +5120,7 @@ class TestProvenanceValidation:
         from src.core.tools.creatives._validation import check_provenance_required
 
         creative = _make_creative(
-            provenance={
-                "digital_source_type": DigitalSourceType.digital_creation,
-                "ai_tool": "DALL-E",
-            }
+            provenance={"digital_source_type": DigitalSourceType.digital_creation, "ai_tool": "DALL-E"}
         )
         policy = {
             "co_branding": "optional",

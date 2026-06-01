@@ -128,7 +128,7 @@ class TestPrecondSchemaObligations:
             response = await env.call_impl(
                 brief="test",
                 brand={"domain": "test.com"},
-                product_selectors={"product_id": "prod_001"},
+                product_selectors={"type": "product", "ids": ["prod_001"]},
             )
 
             # Verify request with both brand and product_selectors is accepted
@@ -384,12 +384,7 @@ class TestProposalGeneration:
         proposal = {
             "proposal_id": "prop_1",
             "name": "Test Proposal",
-            "allocations": [
-                {
-                    "product_id": "prod_1",
-                    "allocation_percentage": 100,
-                }
-            ],
+            "allocations": [{"product_id": "prod_1", "allocation_percentage": 100}],
         }
         resp = GetProductsResponse(products=[product], proposals=[proposal])
         assert len(resp.proposals) == 1
@@ -893,12 +888,7 @@ class TestFilteredDiscoverySchema:
 
             response = await env.call_impl(
                 brief="test",
-                filters={
-                    "required_features": {
-                        "guaranteed_delivery": True,
-                        "real_time_bidding": False,
-                    }
-                },
+                filters={"required_features": {"guaranteed_delivery": True, "real_time_bidding": False}},
             )
 
             # Filter accepted by request schema; only true values should be used for filtering
@@ -914,9 +904,7 @@ class TestFilteredDiscoverySchema:
 
             response = await env.call_impl(
                 brief="test",
-                filters={
-                    "required_geo_targeting": [{"level": "country"}],
-                },
+                filters={"required_geo_targeting": [{"level": "country"}]},
             )
 
             # Filter accepted by request schema; impl does not filter by geo targeting yet
@@ -950,11 +938,11 @@ class TestFilteredDiscoverySchema:
         filters = ProductFilters(
             delivery_type="guaranteed",
             countries=["US"],
-            format_types=["video"],
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard"}],
         )
         assert filters.delivery_type is not None
         assert filters.countries is not None
-        assert filters.format_types is not None
+        assert filters.format_ids is not None
 
     def test_filter_min_exposures_guaranteed_with_forecast(self):
         """Guaranteed product with sufficient forecast passes min_exposures.
@@ -1079,14 +1067,8 @@ class TestProposalSchemaObligations:
             "proposal_id": "prop_1",
             "name": "Test Proposal",
             "allocations": [
-                {
-                    "product_id": "prod_1",
-                    "allocation_percentage": 60,
-                },
-                {
-                    "product_id": "prod_2",
-                    "allocation_percentage": 40,
-                },
+                {"product_id": "prod_1", "allocation_percentage": 60},
+                {"product_id": "prod_2", "allocation_percentage": 40},
             ],
         }
         defaults.update(overrides)
@@ -1144,12 +1126,7 @@ class TestProposalSchemaObligations:
         """
         product = create_test_product(product_id="prod_1")
         proposal = self._make_proposal(
-            total_budget_guidance={
-                "min": 5000,
-                "recommended": 10000,
-                "max": 20000,
-                "currency": "USD",
-            }
+            total_budget_guidance={"min": 5000, "recommended": 10000, "max": 20000, "currency": "USD"}
         )
         resp = GetProductsResponse(products=[product], proposals=[proposal])
         assert resp.proposals[0].total_budget_guidance is not None
@@ -1178,11 +1155,7 @@ class TestProposalSchemaObligations:
             # Build proposal with pricing_option_id referencing product's pricing
             proposal = self._make_proposal(
                 allocations=[
-                    {
-                        "product_id": "prod_1",
-                        "allocation_percentage": 100,
-                        "pricing_option_id": "cpm_usd_fixed",
-                    }
+                    {"product_id": "prod_1", "allocation_percentage": 100, "pricing_option_id": "cpm_usd_fixed"}
                 ]
             )
             resp = GetProductsResponse(products=response.products, proposals=[proposal])
@@ -1496,14 +1469,13 @@ class TestGetProductsRequestSchema:
             brief="video ads for sports fans",
             brand={"domain": "nike.com"},
             account={"account_id": "acct_001"},
-            buyer_campaign_ref="camp_ref_001",
             filters={"delivery_type": "guaranteed"},
             pagination={"max_results": 10},
         )
         assert req.brief == "video ads for sports fans"
         assert req.brand is not None
         assert req.account is not None
-        assert req.buyer_campaign_ref == "camp_ref_001"
+        # buyer_campaign_ref removed from GetProductsRequest in adcp 3.12
         assert req.filters is not None
         assert req.pagination is not None
 
@@ -1623,10 +1595,7 @@ class TestProtocolEnvelopeConstraints:
         envelope = ProtocolEnvelope.wrap(
             payload=GetProductsResponse(products=[]),
             status="submitted",
-            push_notification_config={
-                "url": "https://buyer.example.com/webhook",
-                "token": "secret",
-            },
+            push_notification_config={"url": "https://buyer.example.com/webhook", "token": "secret"},
         )
         assert envelope.push_notification_config is not None
         assert envelope.push_notification_config["url"] == "https://buyer.example.com/webhook"
@@ -1679,11 +1648,7 @@ class TestPublisherDomainsPortfolio:
                     "property_tags": ["all_inventory"],
                     "selection_type": "by_tag",
                 },
-                {
-                    "publisher_domain": "news.example.com",
-                    "property_tags": ["premium"],
-                    "selection_type": "by_tag",
-                },
+                {"publisher_domain": "news.example.com", "property_tags": ["premium"], "selection_type": "by_tag"},
             ],
         )
         # Extract domains from publisher_properties (portfolio assembly logic)
