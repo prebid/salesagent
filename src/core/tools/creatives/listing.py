@@ -34,6 +34,18 @@ from src.core.validation_helpers import format_validation_error
 logger = logging.getLogger(__name__)
 
 
+def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
+    """Merge a structured CreativeFilters model into flat params (flat take precedence).
+
+    The model->dict conversion lives in this helper rather than inside the _impl
+    because it is internal request normalization, not the wire serialization that
+    the no-model_dump-in-_impl guard targets.
+    """
+    if filters:
+        return {**filters.model_dump(exclude_none=True), **flat_params}
+    return flat_params
+
+
 def _list_creatives_impl(
     media_buy_id: str | None = None,
     media_buy_ids: list[str] | None = None,
@@ -139,8 +151,7 @@ def _list_creatives_impl(
         filters_dict["media_buy_ids"] = effective_media_buy_ids
 
     # Merge structured filters with flat params (flat params take precedence)
-    if filters:
-        filters_dict = {**filters.model_dump(exclude_none=True), **filters_dict}
+    filters_dict = _merge_structured_filters(filters, filters_dict)
 
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None

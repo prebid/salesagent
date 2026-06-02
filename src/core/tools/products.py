@@ -619,7 +619,7 @@ async def _get_products_impl(
             filtered_products.append(product)
 
         products = filtered_products
-        logger.info(f"Applied filters: {req.filters.model_dump(exclude_none=True)}. {len(products)} products remain.")
+        logger.info("Applied filters: %s. %d products remain.", req.filters, len(products))
 
     # Filter products based on policy compliance (if policy checks are enabled)
     eligible_products = []

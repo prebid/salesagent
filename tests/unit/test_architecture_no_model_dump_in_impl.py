@@ -24,15 +24,11 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# _update_media_buy_impl's workflow-step result persistence moved its
-# serialization into ContextManager.audit_workflow_step_result, so the only
-# remaining entries are unrelated to workflow-step persistence.
-KNOWN_VIOLATIONS = {
-    # _get_products_impl: 1 violation (logging)
-    ("products.py", 622),
-    # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 143),  # filters.model_dump(exclude_none=True)
-}
+# Now EMPTY: _update_media_buy_impl moved workflow-step serialization into
+# ContextManager.audit_workflow_step_result; _get_products_impl logs the model
+# directly (no model_dump); _list_creatives_impl's internal filter merge moved
+# into the module-level _merge_structured_filters helper.
+KNOWN_VIOLATIONS: set[tuple[str, int]] = set()
 
 
 def _find_model_dump_in_impl() -> list[tuple[str, int, str, str]]:
