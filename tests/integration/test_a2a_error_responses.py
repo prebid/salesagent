@@ -18,14 +18,10 @@ from a2a.server.routes.common import ServerCallContext
 from a2a.types import Message, SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.database.database_session import get_db_session
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
-from tests.helpers.adcp_factories import (
-    create_active_media_buy,
-    create_test_package_request_dict,
-    setup_error_test_tenant_chain,
-)
+from tests.helpers.adcp_factories import create_test_package_request_dict
+from tests.integration.conftest import seed_error_test_tenant
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -42,17 +38,18 @@ class TestA2AErrorPropagation:
     """Test that errors from core tools are properly propagated through A2A handlers."""
 
     @pytest.fixture
-    def test_tenant(self, integration_db):
-        """Create test tenant + principal + product via the shared error-test chain helper.
+    def _seeded(self, integration_db):
+        """Seed the A2A error-test tenant/principal/product via factories.
 
-        Note: human_review_required=False ensures media buy runs immediately
-        rather than going to approval workflow (needed for response field tests).
+        Opens a single ``IntegrationEnv`` (factory session binding) for the test's
+        lifetime so dependent fixtures (test_tenant, test_principal, active_media_buy)
+        share it without nesting. ``human_review_required=False`` lets media buys run
+        immediately rather than entering the approval workflow.
         """
-        from src.core.config_loader import set_current_tenant
+        from tests.harness._base import IntegrationEnv
 
-        with get_db_session() as session:
-            result = setup_error_test_tenant_chain(
-                session,
+        with IntegrationEnv():
+            yield seed_error_test_tenant(
                 tenant_id="a2a_error_test",
                 principal_id="a2a_error_principal",
                 access_token="a2a_error_token_123",
@@ -60,16 +57,20 @@ class TestA2AErrorPropagation:
                 subdomain="a2aerror",
                 tenant_name="A2A Error Test Tenant",
                 advertiser_id="mock_adv_123",
+                protocol="a2a",
             )
-            set_current_tenant(result["tenant_dict"])
-            yield result["tenant_dict"]
 
     @pytest.fixture
-    def test_principal(self, integration_db, test_tenant):
-        """Test principal info (created by the shared chain helper in test_tenant)."""
-        yield {
-            "principal_id": "a2a_error_principal",
-            "access_token": "a2a_error_token_123",
+    def test_tenant(self, _seeded):
+        """Tenant dict for the A2A error-test chain (current tenant already set)."""
+        return _seeded["tenant_dict"]
+
+    @pytest.fixture
+    def test_principal(self, _seeded):
+        """Principal info created by the shared seed helper."""
+        return {
+            "principal_id": _seeded["principal_id"],
+            "access_token": _seeded["access_token"],
             "name": "A2A Error Test Principal",
         }
 
@@ -494,22 +495,33 @@ class TestA2AErrorPropagation:
         )
 
     @pytest.fixture
-    def active_media_buy(self, test_tenant, test_principal):
-        """Persist an active media buy for the chain tenant/principal.
+    def active_media_buy(self, _seeded):
+        """Persist an active media buy for the chain tenant/principal via MediaBuyFactory.
 
         The financial validators in ``_update_media_buy_impl`` run only after the
         media-buy lookup succeeds; an active (non-terminal) buy lets the
         budget-update path reach them rather than short-circuiting on
-        MEDIA_BUY_NOT_FOUND. Delegates persistence to ``create_active_media_buy``.
-        Returns the media_buy_id.
+        MEDIA_BUY_NOT_FOUND. Returns the media_buy_id.
         """
-        with get_db_session() as session:
-            return create_active_media_buy(
-                session,
-                tenant_id=test_tenant["tenant_id"],
-                principal_id=test_principal["principal_id"],
-                media_buy_id="mb_a2a_budget_wire",
-            )
+        from datetime import UTC, datetime, timedelta
+        from decimal import Decimal
+
+        from tests.factories import MediaBuyFactory
+
+        now = datetime.now(UTC)
+        media_buy = MediaBuyFactory(
+            tenant=_seeded["tenant"],
+            principal=_seeded["principal"],
+            media_buy_id="mb_a2a_budget_wire",
+            status="active",
+            budget=Decimal("1000.0"),
+            currency="USD",
+            start_date=now.date(),
+            end_date=(now + timedelta(days=30)).date(),
+            start_time=now,
+            end_time=now + timedelta(days=30),
+        )
+        return media_buy.media_buy_id
 
     async def test_update_media_buy_campaign_budget_exceeded_wire_envelope(
         self, handler, test_tenant, test_principal, active_media_buy

@@ -34,7 +34,6 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/bdd/steps/domain/uc004_delivery.py": 2,
     "tests/bdd/steps/domain/uc011_accounts.py": 2,
     "tests/factories/principal.py": 1,
-    "tests/helpers/adcp_factories.py": 1,
     "tests/integration/conftest.py": 1,
     "tests/integration/test_account_resolution_error_codes.py": 1,
     "tests/integration/test_create_media_buy_v24.py": 5,
