@@ -411,9 +411,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_upsert_existing_creative"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_media_buy_assignments"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_validate_creatives_missing_required_fields"),
-    # tests/integration/test_error_paths.py
-    ("tests/integration/test_error_paths.py", "test_tenant_minimal"),
-    ("tests/integration/test_error_paths.py", "test_tenant_with_principal"),
     # tests/integration/test_gam_automation_focused.py
     ("tests/integration/test_gam_automation_focused.py", "test_tenant_data"),
     # tests/integration/test_get_products_database_integration.py — migrated to factories

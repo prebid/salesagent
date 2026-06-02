@@ -194,6 +194,99 @@ class TestA2AErrorPropagation:
             message_substr="not found",
         )
 
+    async def test_create_media_buy_end_before_start_wire_envelope(self, handler, test_tenant, test_principal):
+        """end_time before start_time surfaces INVALID_REQUEST on the A2A wire.
+
+        Drives the production date-order validator through the real on_message_send
+        pipeline and asserts the two-layer DataPart envelope, not a raw-shim
+        exception. INVALID_REQUEST is a STANDARD code (passthrough); recovery=correctable.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        start = datetime.now(UTC) + timedelta(days=7)
+        end = start - timedelta(days=1)  # end before start
+        skill_params = {
+            "brand": {"domain": "testbrand.com"},
+            "packages": [
+                create_test_package_request_dict(
+                    product_id="a2a_error_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=5000.0,
+                )
+            ],
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        }
+        message = self.create_message_with_skill("create_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "INVALID_REQUEST", recovery="correctable")
+
+    async def test_create_media_buy_negative_budget_wire_envelope(self, handler, test_tenant, test_principal):
+        """A negative package budget surfaces VALIDATION_ERROR on the A2A wire.
+
+        The Pydantic ``ge=0`` budget constraint fails when the create_media_buy skill
+        builds CreateMediaBuyRequest; the boundary converts that Pydantic
+        ValidationError to AdCPValidationError (VALIDATION_ERROR) and emits the
+        two-layer envelope. Drives on_message_send, not the raw shim.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        skill_params = {
+            "brand": {"domain": "testbrand.com"},
+            "packages": [
+                create_test_package_request_dict(
+                    product_id="a2a_error_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=-1000.0,  # fails Pydantic ge=0 budget constraint
+                )
+            ],
+            "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            "end_time": (datetime.now(UTC) + timedelta(days=31)).isoformat(),
+        }
+        message = self.create_message_with_skill("create_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="budget")
+
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
         identity = PrincipalFactory.make_identity(
