@@ -2558,8 +2558,8 @@ class TestAdCPContract:
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
         )
 
-        # Verify asap is accepted (library wraps in StartTiming)
-        if hasattr(request.start_time, "root"):
+        # Verify asap is accepted (library wraps in StartTiming on some SDK versions)
+        if hasattr(request.start_time, "root"):  # noqa: rootmodel — SDK-version polymorphism
             assert request.start_time.root == "asap"
         else:
             assert request.start_time == "asap"
@@ -2600,8 +2600,8 @@ class TestAdCPContract:
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
         )
 
-        # Verify datetime is still accepted (library wraps in StartTiming)
-        if hasattr(request.start_time, "root"):
+        # Verify datetime is still accepted (library wraps in StartTiming on some SDK versions)
+        if hasattr(request.start_time, "root"):  # noqa: rootmodel — SDK-version polymorphism
             assert isinstance(request.start_time.root, datetime)
             assert request.start_time.root == start_date
         else:
@@ -2702,9 +2702,11 @@ class TestAdCPContract:
 
         # Verify brand fields
         assert request.brand.domain == "nike.com"
-        # brand_id is wrapped in a BrandId RootModel
+        # brand_id is wrapped in a BrandId RootModel on some SDK versions
         brand_id = request.brand.brand_id
-        brand_id_val = brand_id.root if hasattr(brand_id, "root") else brand_id
+        # noqa applied on the hasattr line for the rootmodel guard.
+        has_root = hasattr(brand_id, "root")  # noqa: rootmodel — SDK-version polymorphism
+        brand_id_val = brand_id.root if has_root else brand_id
         assert brand_id_val == "brand_nike_001"
 
     def test_get_signals_response_adcp_compliance(self):

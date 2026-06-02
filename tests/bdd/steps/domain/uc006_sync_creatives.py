@@ -3769,10 +3769,7 @@ def given_asset_with_provenance_source_type(ctx: dict, source_type: str) -> None
 
 
 @then(
-    parsers.re(
-        r'the asset should have provenance "(?P<expected>[^"]+)" '
-        r'\(not inherited "(?P<inherited>[^"]+)"\)'
-    )
+    parsers.re(r'the asset should have provenance "(?P<expected>[^"]+)" ' r'\(not inherited "(?P<inherited>[^"]+)"\)')
 )
 def then_asset_has_provenance_not_inherited(ctx: dict, expected: str, inherited: str) -> None:
     """Assert asset-level provenance replaces creative-level (INV-5, BR-RULE-094).
@@ -4161,9 +4158,10 @@ def then_valid_not_affected_by_invalid(ctx: dict) -> None:
     valid_result = _get_creative_result_by_id(ctx, ctx["valid_creative_id"])
     assert valid_result is not None, "Valid creative result missing from response"
     action_str = str(getattr(getattr(valid_result, "action", None), "value", getattr(valid_result, "action", None)))
-    assert action_str in ("created", "updated"), (
-        f"Valid creative should have succeeded (created/updated), got '{action_str}'"
-    )
+    assert action_str in (
+        "created",
+        "updated",
+    ), f"Valid creative should have succeeded (created/updated), got '{action_str}'"
 
 
 # ═══════════════════════════════════════════════════════════════════════

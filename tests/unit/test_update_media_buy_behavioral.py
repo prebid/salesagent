@@ -1811,30 +1811,44 @@ class TestUC003UpdateTargetingOverlay:
         assert exc.details is not None
         assert "violations" in exc.details
 
-        # Reviewer-flagged P1 fence: the outer try/except wrapper added in
-        # round-5-follow-up marks the workflow step failed BEFORE re-raising,
-        # which fires the buyer-facing push notification at
+        # The outer ``audit_step_failure(lambda: step)`` context manager
+        # marks the workflow step failed BEFORE re-raising, which fires the
+        # buyer-facing push notification at
         # context_manager.update_workflow_step:330-332. Without this fence,
-        # the step would orphan in `in_progress` and the buyer's poller would
-        # hang forever. Asserting here so any future raise added to
-        # _update_media_buy_impl that escapes the wrapper gets caught.
-        # Round-7: the wrapper now calls ``fail_workflow_step_for_exception``
-        # which threads a two-layer envelope into response_data so async
-        # webhook subscribers see the same wire shape as the synchronous
-        # caller. Asserting on the new method's call args here so any future
-        # regression to ``update_workflow_step(..., error_message=...)`` (no
-        # response_data) gets caught — that would silently lose the
-        # structured payload on the webhook path.
-        fail_calls = standard_mocks["ctx_mgr_instance"].fail_workflow_step_for_exception.call_args_list
-        assert len(fail_calls) == 1, (
-            f"Expected exactly one fail_workflow_step_for_exception call on raise, got {len(fail_calls)}"
+        # the step would orphan in ``in_progress`` and the buyer's poller
+        # would hang forever. The CM's __exit__ receives the propagating
+        # exception and calls ``audit_step_failure_if_present(step, exc)``
+        # internally — that helper threads a two-layer envelope into
+        # response_data so async webhook subscribers see the same wire
+        # shape as the synchronous caller.
+        #
+        # Two assertions pin the contract:
+        #   1. The CM was entered with a step-resolver lambda that resolves
+        #      to the current step (covers wrapper-bypass regressions).
+        #   2. The CM's __exit__ received the typed AdCPValidationError
+        #      carrying the expected violation in its message (covers
+        #      type-mismatch and message-content regressions, plus the
+        #      ``update_workflow_step(..., error_message=...)`` shape that
+        #      would silently lose response_data on the webhook path).
+        audit_cm_calls = standard_mocks["ctx_mgr_instance"].audit_step_failure.call_args_list
+        assert len(audit_cm_calls) == 1, (
+            f"Expected exactly one audit_step_failure context manager entry on raise, got {len(audit_cm_calls)}"
         )
-        fail_call = fail_calls[0]
-        # Positional args: (step_id, exception)
-        assert fail_call.args[0] == standard_mocks["step"].step_id
-        raised_exc = fail_call.args[1]
-        assert isinstance(raised_exc, AdCPValidationError)
-        assert "property_targeting_allowed" in raised_exc.message
+        get_step = audit_cm_calls[0].args[0]
+        assert get_step() is standard_mocks["step"]
+
+        cm_return = standard_mocks["ctx_mgr_instance"].audit_step_failure.return_value
+        exit_calls = cm_return.__exit__.call_args_list
+        assert len(exit_calls) == 1, (
+            f"Expected exactly one __exit__ on the audit_step_failure CM, got {len(exit_calls)}"
+        )
+        # __exit__(exc_type, exc_val, exc_tb) — pin both the class and the message.
+        exit_args = exit_calls[0].args
+        assert exit_args[0] is AdCPValidationError, (
+            f"Expected AdCPValidationError to escape the audit_step_failure CM, got {exit_args[0]}"
+        )
+        assert isinstance(exit_args[1], AdCPValidationError)
+        assert "property_targeting_allowed" in exit_args[1].message
 
     def test_collection_list_update_skips_property_targeting_check(self, standard_mocks):
         """Update with only collection_list does not trigger the property_list-specific
@@ -2025,14 +2039,16 @@ class TestUC003ExtA:
     """Authentication error obligations."""
 
     def test_no_principal_in_context(self, standard_mocks):
-        """Missing principal_id raises ValueError.
+        """Missing principal_id raises typed AdCPAuthRequiredError.
 
         Covers: UC-003-EXT-A-01
         """
+        from src.core.exceptions import AdCPAuthRequiredError
+
         identity = _make_identity(principal_id=None)
         req = UpdateMediaBuyRequest(media_buy_id="mb_no_auth")
 
-        with pytest.raises(ValueError, match="principal_id is required"):
+        with pytest.raises(AdCPAuthRequiredError, match="principal_id missing"):
             _update_media_buy_impl(req=req, identity=identity)
 
     def test_principal_not_found_in_database(self, standard_mocks):

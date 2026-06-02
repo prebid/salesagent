@@ -2669,7 +2669,7 @@ def given_request_correctable_error(ctx: dict) -> None:
     """Set up a request that triggers a correctable validation error.
 
     Uses a nonexistent product_id to trigger PRODUCT_NOT_FOUND, which is a
-    _StructuredValidationError with recovery="correctable" and a suggestion.
+    AdCPValidationError with recovery="correctable" and a suggestion.
     """
     _ensure_request_defaults(ctx)
     for pkg in ctx["request_kwargs"].get("packages", []):

@@ -1002,11 +1002,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
 
-        # UC-004 date range: custom dates partially work
+        # UC-004 date range strict=False entry from main covers T-UC-004-daterange
+        # (custom dates partially applied). T-UC-004-daterange-end-only is
+        # promoted to strict=True in _UC004_GENUINE_XFAIL_ROWS below (debt C7).
         _UC004_DATE_SELECTIVE: list[tuple[str, set[str], str]] = [
             ("T-UC-004-daterange", set(), "custom date range partially applied"),
-            # Graduated: T-UC-004-daterange-start-only (all 4 transports pass)
-            ("T-UC-004-daterange-end-only", set(), "end-only date range not applied"),
         ]
         if any(t.startswith("T-UC-004-daterange") for t in marker_names):
             for tag, substrings, reason in _UC004_DATE_SELECTIVE:
@@ -1014,6 +1014,361 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     if not substrings or any(s in nodeid for s in substrings):
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
+
+        # Per-row strict=True xfails for partition/boundary scenarios where
+        # blanket markers were removed and production gaps are real and named
+        # (see docs/test-debt-bdd-strict-markers.md). strict=True forces marker
+        # removal the moment the underlying gap closes.
+        _UC004_GENUINE_XFAIL_ROWS: list[tuple[str, set[str], str]] = [
+            (
+                "T-UC-004-partition-reporting-dims",
+                {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
+                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-partition-attribution",
+                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
+                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-reporting-dims",
+                {"geo with geo_level=metro but no system"},
+                "AdCP spec defines metro/postal_area system requirement only in field description; no validator. See docs/test-debt-bdd-strict-markers.md item C10.",
+            ),
+            (
+                "T-UC-004-boundary-attribution",
+                {"unit=campaign with interval=2"},
+                "AdCP Duration spec defines 'interval=1 when unit=campaign' only in description; no validator. Same gap as T-UC-004-attr-campaign-invalid. See docs/test-debt-bdd-strict-markers.md item C10.",
+            ),
+            # reporting-dims / attribution boundary invalid-rows: Pydantic DOES
+            # reject these (missing geo_level / limit>=1 / enum), but the
+            # error is not normalized to AdCPError(INVALID_REQUEST) at the
+            # transport boundary — a2a wraps ValidationError in a bare
+            # RuntimeError, rest returns a 422 detail dict — so the BDD
+            # outcome assertion (expects AdCPError/ValidationError) fails.
+            # Same C4 transport-boundary error-normalization gap. These rows
+            # were previously covered by the blanket _UC004_BOUNDARY_TAGS
+            # strict=False, which 18h.10 Phase-2 (salesagent-04zf et al.)
+            # emptied; restored here as PRECISE strict=True tied to the real
+            # gap (no vacuous blanket). Forces marker removal when the
+            # transport-boundary error translator lands.
+            # Transport-scoped: impl genuinely PASSES these (production raises
+            # a bare ValidationError the outcome assertion accepts as a real
+            # rejection). Only a2a (RuntimeError-wrap) / mcp / rest (422 detail)
+            # fail the AdCPError/ValidationError type check — so xfail only
+            # those three, never impl.
+            (
+                "T-UC-004-boundary-reporting-dims",
+                {
+                    "a2a-geo without geo_level",
+                    "mcp-geo without geo_level",
+                    "rest-geo without geo_level",
+                    "a2a-limit=0 (below minimum)",
+                    "mcp-limit=0 (below minimum)",
+                    "rest-limit=0 (below minimum)",
+                    "a2a-limit negative",
+                    "mcp-limit negative",
+                    "rest-limit negative",
+                },
+                "Pydantic rejects (missing geo_level / limit>=1) but error not normalized to "
+                "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
+                "(a2a RuntimeError-wrap, rest 422 detail). impl passes. "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-attribution",
+                {
+                    "a2a-interval=0 (below minimum)",
+                    "mcp-interval=0 (below minimum)",
+                    "rest-interval=0 (below minimum)",
+                    "a2a-unit=weeks (not in enum)",
+                    "mcp-unit=weeks (not in enum)",
+                    "rest-unit=weeks (not in enum)",
+                    "a2a-model=last_click (not in enum)",
+                    "mcp-model=last_click (not in enum)",
+                    "rest-model=last_click (not in enum)",
+                },
+                "Pydantic rejects (interval>=1 / unit enum / model enum) but error not normalized to "
+                "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
+                "(a2a RuntimeError-wrap, rest 422 detail). impl passes. "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # C11 retired (salesagent-18h.1): the "production ignores buyer
+            # start_date" failure was an artefact of the greedy with-params
+            # step shadowing when_request_date_range and mis-parsing the
+            # request. With correct step routing, production echoes the
+            # buyer-supplied start_date/end_date in response.reporting_period,
+            # so T-UC-004-daterange now genuinely passes (no strict xfail).
+            #
+            # date-range partition/boundary (salesagent-04zf, 18h.10 Phase-2):
+            # when_partition/boundary_date_range now translate the descriptor
+            # into real start_date/end_date (previously the axis name was sent
+            # as a literal request field and rejected by extra=forbid, so the
+            # blanket _UC004_{PARTITION,BOUNDARY}_TAGS strict=False masked a
+            # broken step). With real wiring: the "valid" rows
+            # (start_before_end / dates_omitted) genuinely PASS on all 4
+            # transports (no marker). Only the "invalid" rows genuinely fail —
+            # production does not reject start>=end (same real gap as
+            # T-UC-004-daterange-invalid / -equal). strict=True forces marker
+            # removal the moment start>=end validation lands. See
+            # docs/test-debt-bdd-strict-markers.md item C4.
+            (
+                "T-UC-004-partition-date-range",
+                {"start_after_end", "start_equals_end"},
+                "production does not validate start_date>=end_date (same gap as "
+                "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # Transport-scoped: impl genuinely PASSES start>=end on the _impl
+            # path now. a2a/mcp/rest still don't enforce the gap.
+            (
+                "T-UC-004-boundary-date-range",
+                {
+                    "a2a-start_date after end_date",
+                    "mcp-start_date after end_date",
+                    "rest-start_date after end_date",
+                    "a2a-start_date equals end_date",
+                    "mcp-start_date equals end_date",
+                    "rest-start_date equals end_date",
+                },
+                "production does not validate start_date>=end_date on a2a/mcp/rest "
+                "(impl passes). Same gap as T-UC-004-daterange-invalid/-equal. "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # end-only date_range default (salesagent-losz / debt C7, Gap G40):
+            # when only end_date is provided, the spec says start_date defaults
+            # to MediaBuy.created_at but production sets start = today-30d
+            # (src/core/tools/media_buy_delivery.py:162-165). The scenario's
+            # Then-step asserts the exact creation-date (2025-12-01), so the
+            # row genuinely fails today — upgraded from the former vacuous
+            # strict=False in _UC004_DATE_SELECTIVE to strict=True here.
+            (
+                "T-UC-004-daterange-end-only",
+                set(),
+                "production defaults start_date to today-30d when only end_date is given; "
+                "spec says default to MediaBuy.created_at. See docs/test-debt-bdd-strict-markers.md item C7.",
+            ),
+            # ---- 18h.10 Phase-2: 7 more UC-004 fields reconciled ----
+            # Each field's when_partition/boundary_<field> now translates the
+            # Gherkin descriptor into the real request kwargs/setup it
+            # represents (mirroring the typed when_request_* steps) instead of
+            # routing the axis name through _dispatch_partition. With real
+            # wiring the "valid" descriptors genuinely PASS (no marker); only
+            # the descriptors below genuinely fail for a real, named
+            # production gap, so they carry strict=True (forces marker removal
+            # the moment the gap closes). See docs/test-debt-bdd-strict-markers.md.
+            #
+            # daily-breakdown (salesagent-1pl): include_package_daily_breakdown
+            # is a real bool field; production lax-coerces non-boolean strings
+            # ("yes"/"true" → True) instead of raising INVALID_REQUEST.
+            (
+                "T-UC-004-partition-daily-breakdown",
+                {"non_boolean"},
+                "production lax-coerces non-boolean strings to bool (no strict-bool "
+                "validation, no AdCPError(INVALID_REQUEST)). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-daily-breakdown",
+                {"string 'true' (non-boolean type)"},
+                "production lax-coerces non-boolean strings to bool (no strict-bool "
+                "validation). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # account (salesagent-8n9): only the omitted/(field absent) rows
+            # pass on every transport. The other rows fail transport-asym-
+            # metrically — a2a/mcp/rest never parse/resolve AccountReference
+            # at the boundary (resolve_account does account_ref.root on a raw
+            # dict → RuntimeError); the invalid-account rows raise Pydantic
+            # ValidationError instead of AdCPError(INVALID_REQUEST/
+            # ACCOUNT_NOT_FOUND). Substrings are transport-prefixed so only
+            # the genuinely-failing rows are marked (impl valid rows pass).
+            (
+                "T-UC-004-partition-account",
+                {
+                    "impl-invalid_oneOf_both",
+                    "impl-account_not_found",
+                    "impl-empty_object",
+                    "a2a-explicit_account_id",
+                    "a2a-natural_key",
+                    "a2a-invalid_oneOf_both",
+                    "a2a-account_not_found",
+                    "a2a-empty_object",
+                    "mcp-explicit_account_id",
+                    "mcp-natural_key",
+                    "mcp-invalid_oneOf_both",
+                    "mcp-empty_object",
+                    "rest-explicit_account_id",
+                    "rest-natural_key",
+                    "rest-invalid_oneOf_both",
+                    "rest-empty_object",
+                },
+                "a2a/mcp/rest do not parse/resolve AccountReference at the transport "
+                "boundary; invalid-account rows raise ValidationError not AdCPError. "
+                "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
+            ),
+            (
+                "T-UC-004-boundary-account",
+                {
+                    "impl-account_id present + not found",
+                    "a2a-account_id present + account exists",
+                    "a2a-brand + operator present",
+                    "a2a-both account_id and brand/operator",
+                    "a2a-account_id present + not found",
+                    "a2a-empty object {}",
+                    "mcp-account_id present + account exists",
+                    "mcp-brand + operator present",
+                    "mcp-both account_id and brand/operator",
+                    # mcp-account_id present + not found genuinely passes
+                    # (ValidationError satisfies 'invalid') — NOT marked.
+                    "mcp-empty object {}",
+                    "rest-account_id present + account exists",
+                    "rest-brand + operator present",
+                },
+                "a2a/mcp/rest do not parse/resolve AccountReference at the transport "
+                "boundary; invalid-account rows raise ValidationError not AdCPError. "
+                "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
+            ),
+            # sampling (salesagent-03q): sampling_method is NOT a
+            # GetMediaBuyDeliveryRequest field — the artifact-sampling feature
+            # is entirely unimplemented. Only (omitted)/not_provided genuinely
+            # pass; rest silently drops the unknown param so its named-method
+            # rows accidentally "pass" (must NOT be marked). impl/a2a/mcp
+            # named-method + every unknown_value/systematic row fails.
+            (
+                "T-UC-004-partition-sampling",
+                {
+                    "impl-random-random",
+                    "impl-stratified",
+                    "impl-recent",
+                    "impl-failures_only",
+                    "impl-unknown_value-systematic",
+                    "a2a-random-random",
+                    "a2a-stratified",
+                    "a2a-recent",
+                    "a2a-failures_only",
+                    "a2a-unknown_value-systematic",
+                    "mcp-random-random",
+                    "mcp-stratified",
+                    "mcp-recent",
+                    "mcp-failures_only",
+                    "mcp-unknown_value-systematic",
+                    "rest-unknown_value-systematic",
+                },
+                "sampling_method is unimplemented in get_media_buy_delivery (no schema "
+                "field); ValidationError not AdCPError (rest silently drops it). "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-sampling",
+                {
+                    "impl-random (first enum value)",
+                    "impl-failures_only (last enum value)",
+                    "a2a-random (first enum value)",
+                    "a2a-failures_only (last enum value)",
+                    "a2a-Unknown string not in enum",
+                    "mcp-random (first enum value)",
+                    "mcp-failures_only (last enum value)",
+                    "mcp-Unknown string not in enum",
+                    "rest-Unknown string not in enum",
+                },
+                "sampling_method is unimplemented in get_media_buy_delivery (no schema "
+                "field); ValidationError not AdCPError (rest silently drops it). "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # resolution (salesagent-lghk): all valid resolution modes pass on
+            # all transports; the empty-array reject passes on impl/mcp/rest
+            # (Pydantic ValidationError satisfies 'invalid'). Only a2a fails —
+            # the A2A boundary wraps the min_length ValidationError in a bare
+            # RuntimeError instead of AdCPError(INVALID_REQUEST).
+            (
+                "T-UC-004-partition-resolution",
+                {"a2a-empty_array"},
+                "A2A wraps the empty-array Pydantic ValidationError in a bare RuntimeError "
+                "(not AdCPError). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            (
+                "T-UC-004-boundary-resolution",
+                {"a2a-empty array (schema reject)"},
+                "A2A wraps the empty-array Pydantic ValidationError in a bare RuntimeError "
+                "(not AdCPError). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
+            # ownership (salesagent-lzf3): owner-matches rows pass on all
+            # transports. owner-mismatch is the C3 security gap — cross-
+            # principal access returns 200+empty instead of MEDIA_BUY_NOT_FOUND.
+            (
+                "T-UC-004-partition-ownership",
+                {"owner_mismatch"},
+                "cross-principal access returns 200+empty instead of "
+                "AdCPError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
+            ),
+            # Transport-scoped: impl genuinely PASSES "principal differs from owner"
+            # (production raises AdCPError on cross-principal access at the _impl
+            # boundary). a2a/mcp/rest still return 200+empty — C3 gap remains there.
+            (
+                "T-UC-004-boundary-ownership",
+                {
+                    "a2a-principal differs from owner",
+                    "mcp-principal differs from owner",
+                    "rest-principal differs from owner",
+                },
+                "cross-principal access returns 200+empty instead of "
+                "AdCPError(MEDIA_BUY_NOT_FOUND). impl genuinely passes. "
+                "See docs/test-debt-bdd-strict-markers.md item C3.",
+            ),
+            # status-filter (salesagent-6vu): all valid single statuses +
+            # arrays + (field absent) pass. pending_activation rows fail
+            # (Gherkin uses a non-spec MediaBuyStatus — item B1); empty-array /
+            # unknown-value "failed" rows raise ValidationError not
+            # AdCPError(INVALID_REQUEST) — item C4.
+            # partition: impl now genuinely PASSES single_pending (production
+            # normalizes the legacy 'pending_activation' label). a2a/mcp/rest
+            # still fail on the unknown-value/empty-array C4 normalization.
+            (
+                "T-UC-004-partition-status-filter",
+                {
+                    "a2a-single_pending",
+                    "mcp-single_pending",
+                    "rest-single_pending",
+                    "a2a-empty_array",
+                    "mcp-empty_array",
+                    "rest-empty_array",
+                    "a2a-unknown_value",
+                    "mcp-unknown_value",
+                    "rest-unknown_value",
+                },
+                "single_pending: Gherkin 'pending_activation' is not a valid AdCP "
+                "MediaBuyStatus (item B1) — impl normalizes the legacy label, "
+                "a2a/mcp/rest do not. empty_array/unknown_value: ValidationError "
+                "not AdCPError(INVALID_REQUEST) (item C4). "
+                "See docs/test-debt-bdd-strict-markers.md.",
+            ),
+            # boundary: pending_activation fails everywhere; the 'failed' /
+            # '[] (empty array...)' rows pass on impl/rest (ValidationError
+            # satisfies 'invalid') but fail on a2a/mcp — transport-prefixed
+            # substrings so only the genuinely-failing rows are marked.
+            (
+                "T-UC-004-boundary-status-filter",
+                {
+                    "impl-pending_activation (first enum value)",
+                    "a2a-pending_activation (first enum value)",
+                    "a2a-failed (not in AdCP enum",
+                    "a2a-[] (empty array, violates minItems)",
+                    "mcp-pending_activation (first enum value)",
+                    "mcp-failed (not in AdCP enum",
+                    "rest-pending_activation (first enum value)",
+                },
+                "pending_activation: Gherkin value not a valid AdCP MediaBuyStatus "
+                "(item B1). failed/[]: ValidationError not AdCPError on a2a/mcp (item C4). "
+                "See docs/test-debt-bdd-strict-markers.md.",
+            ),
+            # credentials (salesagent-f8u4): FULLY reconciled — the When step
+            # now validates the real AdCP reporting_webhook Authentication
+            # model (scheme enum + credentials min_length=32). All 40 rows
+            # genuinely PASS on all transports; NO strict=True entry needed
+            # (same shape as the reconciled date-range valid rows).
+        ]
+        for tag, substrings, reason in _UC004_GENUINE_XFAIL_ROWS:
+            if tag in marker_names and (not substrings or any(s in nodeid for s in substrings)):
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                break
 
         # UC-004 boundary scenarios: strict=False because some examples pass.
         # Invalid boundary values SHOULD fail validation but production doesn't validate.
