@@ -33,7 +33,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPServiceUnavailableError, AdCPValidationError
+from src.core.exceptions import AdCPServiceUnavailableError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
 
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
 from src.core.transport_helpers import resolve_identity_from_context
@@ -162,9 +163,7 @@ def _list_creative_formats_impl(
 
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
-    tenant = identity.tenant if identity else None
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(identity)
 
     # Get formats from all registered creative agents via registry
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry

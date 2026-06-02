@@ -14,6 +14,7 @@ from typing import Any
 from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -52,13 +53,11 @@ async def list_tasks(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
-    if not identity or not identity.tenant:
-        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
+    tenant = require_tenant(identity)
+    assert identity is not None  # require_tenant raised if identity was None
 
     if not identity.is_authenticated:
         raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
-
-    tenant = identity.tenant
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -142,13 +141,11 @@ async def get_task(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
-    if not identity or not identity.tenant:
-        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
+    tenant = require_tenant(identity)
+    assert identity is not None  # require_tenant raised if identity was None
 
     if not identity.is_authenticated:
         raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
-
-    tenant = identity.tenant
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -214,14 +211,13 @@ async def complete_task(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
-    if not identity or not identity.tenant:
-        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
+    tenant = require_tenant(identity)
+    assert identity is not None  # require_tenant raised if identity was None
 
     if not identity.is_authenticated:
         raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to complete tasks.")
 
     principal_id = identity.principal_id
-    tenant = identity.tenant
 
     if status not in ["completed", "failed"]:
         raise AdCPValidationError(

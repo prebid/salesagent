@@ -13,6 +13,7 @@ from fastmcp.server.context import Context
 if TYPE_CHECKING:
     from adcp.types import ContextObject
 
+    from src.core.resolved_identity import ResolvedIdentity
     from src.core.tool_context import ToolContext
 from fastmcp.server.dependencies import get_http_headers
 from sqlalchemy import select
@@ -327,6 +328,52 @@ def resolve_principal_or_raise(
     if principal is None:
         raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=context)
     return principal
+
+
+def require_principal_id(
+    identity: "ResolvedIdentity | None",
+    *,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> str:
+    """Return ``identity.principal_id`` or raise ``AdCPAuthenticationError``.
+
+    Single source of truth for the "no principal_id in identity" guard that
+    every ``_impl`` runs at entry. Use this instead of open-coding the check
+    across tool modules. ``context`` is echoed into the error envelope so
+    buyer agents can correlate the failure to their request.
+    """
+    from src.core.exceptions import AdCPAuthenticationError
+
+    principal_id = identity.principal_id if identity else None
+    if not principal_id:
+        raise AdCPAuthenticationError(
+            "Authentication required: Principal ID not found in identity. Provide a valid x-adcp-auth token.",
+            context=context,
+        )
+    return principal_id
+
+
+def require_tenant(
+    identity: "ResolvedIdentity | None",
+    *,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> dict[str, Any]:
+    """Return ``identity.tenant`` or raise ``AdCPAuthenticationError``.
+
+    Single source of truth for the "no tenant context available" guard — the
+    most-repeated ``_impl`` prologue. Use this instead of open-coding the check
+    across tool modules. The canonical message carries the actionable
+    diagnostic (token + host headers) so buyer agents can self-correct.
+    """
+    from src.core.exceptions import AdCPAuthenticationError
+
+    tenant = identity.tenant if identity else None
+    if not tenant:
+        raise AdCPAuthenticationError(
+            "No tenant context available. Check x-adcp-auth token and host headers.",
+            context=context,
+        )
+    return tenant
 
 
 def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | None = None) -> str | None:

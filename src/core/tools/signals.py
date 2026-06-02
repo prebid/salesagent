@@ -28,7 +28,7 @@ from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
 
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ActivateSignalResponse,
@@ -70,9 +70,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     assert identity is not None, "identity is required for signals"
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(identity)
 
     # Mock implementation - in production, this would query from a signal provider
     # or the ad server's available audience segments
@@ -235,8 +233,8 @@ async def _activate_signal_impl(
     principal_id = identity.principal_id if identity else None
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    if not identity or not identity.tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    require_tenant(identity)
+    assert identity is not None  # require_tenant raised if identity was None
 
     # Get the Principal object with ad server mappings
     if not principal_id:
