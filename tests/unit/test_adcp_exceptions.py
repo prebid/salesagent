@@ -481,17 +481,19 @@ class TestNoDeadA2AMap:
         """_A2A_ERROR_CODE_MAP was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), (
+        msg = (
             "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
         )
+        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), msg
 
     def test_no_to_a2a_error_code_in_exceptions(self):
         """to_a2a_error_code() was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(exc_module, "to_a2a_error_code"), (
+        msg = (
             "to_a2a_error_code() is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
         )
+        assert not hasattr(exc_module, "to_a2a_error_code"), msg
 
 
 # ---------------------------------------------------------------------------
@@ -583,3 +585,53 @@ class TestErrorCodeWireTranslation:
         exc = AdCPError("slow down")
         exc.error_code = "RATE_LIMIT_EXCEEDED"
         assert exc.to_adcp_error()["errors"][0]["code"] == "RATE_LIMIT_EXCEEDED"
+
+
+class TestIterConcreteSubclasses:
+    """Lock the contract of AdCPError.iter_concrete_subclasses().
+
+    The wire-code -> HTTP-status table (_build_error_code_to_status) and the
+    error-code compliance tests depend on this walk visiting every transitive
+    subclass exactly once. The two consumer tests iterate it but never pin the
+    transitivity / dedup / self-exclusion behavior, so a regression there would
+    go unnoticed.
+    """
+
+    def test_yields_transitive_descendants_once_excluding_cls(self):
+        """Generic walk: transitive, deduplicated across diamonds, never yields cls."""
+        from src.core.exceptions import AdCPError
+
+        # Exercise the underlying function with a local root so AdCPError's real
+        # subclass tree stays untouched — subclassing AdCPError here would leak
+        # these throwaway classes into every other test that enumerates it.
+        walk = AdCPError.iter_concrete_subclasses.__func__
+
+        class _Base: ...
+
+        class _Mid(_Base): ...
+
+        class _Leaf(_Mid): ...
+
+        class _Other(_Base): ...
+
+        class _Diamond(_Mid, _Other): ...  # reachable via both _Mid and _Other
+
+        result = list(walk(_Base))
+
+        # Transitive: the grandchild (_Leaf) and the diamond are reached, not
+        # just the direct children.
+        assert set(result) == {_Mid, _Leaf, _Other, _Diamond}
+        # Deduplicated despite two parent paths to _Diamond.
+        assert result.count(_Diamond) == 1
+        # Never yields the class it was called on.
+        assert _Base not in result
+
+    def test_real_tree_is_transitive_and_excludes_base(self):
+        """On the real hierarchy: a two-level-deep subclass is yielded, the base is not."""
+        from src.core.exceptions import AdCPError, AdCPProductNotFoundError
+
+        concrete = set(AdCPError.iter_concrete_subclasses())
+
+        # AdCPError -> AdCPNotFoundError -> AdCPProductNotFoundError (transitive).
+        assert AdCPProductNotFoundError in concrete
+        assert AdCPError not in concrete

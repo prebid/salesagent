@@ -262,3 +262,38 @@ class TestRequireApiKeyAuth:
             with app.test_client() as client:
                 resp = client.get("/test", headers={"X-Test-Key": "wrong-key"})
                 assert resp.status_code == 401
+
+
+class TestResolvePrincipalOrRaise:
+    """resolve_principal_or_raise (gh-1307) — the shared "look up principal, fail auth if absent" guard.
+
+    Collapses the identical lookup the create/update/delivery media-buy tools
+    share. Returns the Principal or raises AdCPAuthenticationError
+    (AUTH_TOKEN_INVALID), echoing the request context into the error envelope.
+    """
+
+    def test_returns_principal_when_found(self):
+        from src.core.auth import resolve_principal_or_raise
+
+        principal = MagicMock(principal_id="p1")
+        with patch("src.core.auth.get_principal_object", return_value=principal):
+            assert resolve_principal_or_raise("p1", tenant_id="t1") is principal
+
+    def test_missing_principal_raises_authentication_error(self):
+        from src.core.auth import resolve_principal_or_raise
+
+        with patch("src.core.auth.get_principal_object", return_value=None):
+            with pytest.raises(AdCPAuthenticationError, match="ghost") as exc_info:
+                resolve_principal_or_raise("ghost", tenant_id="t1")
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+
+    def test_echoes_context_into_error(self):
+        from src.core.auth import resolve_principal_or_raise
+
+        ctx = {"request_id": "req-123"}
+        with patch("src.core.auth.get_principal_object", return_value=None):
+            with pytest.raises(AdCPAuthenticationError) as exc_info:
+                resolve_principal_or_raise("ghost", tenant_id="t1", context=ctx)
+
+        assert exc_info.value.context == ctx

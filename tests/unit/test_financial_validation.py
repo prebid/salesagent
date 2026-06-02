@@ -2,7 +2,11 @@
 
 from decimal import Decimal
 
+import pytest
+
+from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
 from src.core.tools.financial_validation import (
+    raise_if_validation_failed,
     validate_max_campaign_budget,
     validate_max_daily_package_spend,
     validate_min_package_budget,
@@ -144,3 +148,24 @@ def test_validate_max_daily_package_spend_context_overrides_trailing_sentence() 
     assert error is not None
     assert "This protects against accidental large budgets." in error
     assert "Flight date changes" not in error
+
+
+def test_raise_if_validation_failed_is_noop_on_empty_message() -> None:
+    # None and "" are both no-ops — there is no failure to raise.
+    assert raise_if_validation_failed(None) is None
+    assert raise_if_validation_failed("") is None
+
+
+def test_raise_if_validation_failed_raises_default_validation_error() -> None:
+    with pytest.raises(AdCPValidationError) as exc_info:
+        raise_if_validation_failed("budget below minimum")
+
+    assert exc_info.value.error_code == "VALIDATION_ERROR"
+    assert "budget below minimum" in str(exc_info.value)
+
+
+def test_raise_if_validation_failed_raises_selected_subclass() -> None:
+    with pytest.raises(AdCPBudgetTooLowError) as exc_info:
+        raise_if_validation_failed("package below minimum spend", AdCPBudgetTooLowError)
+
+    assert exc_info.value.error_code == "BUDGET_TOO_LOW"

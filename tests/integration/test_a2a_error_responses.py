@@ -883,6 +883,8 @@ class TestA2AErrorResponseStructure:
 
             assert "tenant scope mismatch" in str(exc_info.value)
             assert exc_info.value.error_code == "AUTH_REQUIRED"
+            # AdCPAuthorizationError class default, preserved through the wrap (matches the docstring).
+            assert exc_info.value.recovery == "terminal"
             assert isinstance(exc_info.value.__cause__, PermissionError)
 
     async def test_untyped_exception_falls_through_to_dispatcher(self, integration_db, handler):

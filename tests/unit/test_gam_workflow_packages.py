@@ -345,3 +345,74 @@ class TestGAMSuccessPath:
 
             # Assert - No workflow_step_id on success path
             assert response.workflow_step_id is None, "Success path should not have workflow_step_id"
+
+
+class TestGAMAdapterErrorTaxonomy:
+    """Exercise a GAM create-path taxonomy raise site so the distinct internal
+    code is pinned at the site, not just on the class.
+
+    The wire collapses the adapter taxonomy to SERVICE_UNAVAILABLE (pinned for
+    all six taxonomy classes in test_typed_error_wire_codes.py); here the
+    line-item-failure raise site is driven so a class-swap at the site is caught
+    too. AdCPWorkflowError's create-path site is exercised above; the
+    update-path sites (activation / GAM-update / bulk-update) are covered by the
+    wire-mapping test and the GAM lifecycle integration suite.
+    """
+
+    def _build_adapter(self, mock_principal):
+        config = {
+            "network_code": "123456",
+            "advertiser_id": "789",
+            "trafficker_id": "456",
+            "refresh_token": "test_token",
+        }
+        with patch("src.adapters.google_ad_manager.GAMClientManager") as mock_client_manager:
+            mock_client_manager.return_value.get_client.return_value = Mock()
+            return GoogleAdManager(
+                config=config,
+                principal=mock_principal,
+                network_code="123456",
+                advertiser_id="789",
+                trafficker_id="456",
+                dry_run=False,
+                tenant_id="tenant_123",
+            )
+
+    @staticmethod
+    def _stub_product_session(mock_db_session):
+        """Mirror the product-config DB lookup the create path performs."""
+        mock_session = MagicMock()
+        mock_db_session.return_value.__enter__.return_value = mock_session
+        mock_product = Mock()
+        mock_product.product_id = "prod_test"
+        mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
+        mock_product.gemini_api_key = None
+        mock_product.order_name_template = None
+        mock_result = Mock()
+        mock_result.first.return_value = mock_product
+        mock_result.all.return_value = []
+        mock_session.scalars.return_value = mock_result
+
+    def test_line_item_creation_failure_raises_typed_line_item_error(
+        self, mock_principal, sample_request, sample_packages
+    ):
+        """A line-item creation failure raises AdCPLineItemError (LINE_ITEM_CREATION_FAILED)."""
+        from src.core.exceptions import AdCPLineItemError
+
+        adapter = self._build_adapter(mock_principal)
+
+        with (
+            patch.object(adapter.orders_manager, "create_order", return_value="order_123"),
+            patch.object(adapter.orders_manager, "create_line_items", side_effect=Exception("GAM API error")),
+            patch("src.core.database.database_session.get_db_session") as mock_db_session,
+        ):
+            self._stub_product_session(mock_db_session)
+
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            with pytest.raises(AdCPLineItemError) as exc_info:
+                adapter.create_media_buy(
+                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
+                )
+
+        assert exc_info.value.error_code == "LINE_ITEM_CREATION_FAILED"
