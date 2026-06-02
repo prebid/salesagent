@@ -44,7 +44,7 @@ dependencies = [
     "logfire>=4.16.0",
     "pydantic-ai>=0.3.0",
     # Security patches for transitive dependencies
-    "pyjwt>=2.12.0",  # GHSA-752w-5fwx-jx9f
+    "pyjwt>=2.13.0",  # GHSA-752w-5fwx-jx9f; PYSEC-2026-175/177/178/179
     "filelock>=3.20.3",  # GHSA-qmgc-5h2g-mvrw
     "urllib3>=2.7.0",  # GHSA-38jv-5279-wg99 + GHSA-qccp-gfcp-xxvc + GHSA-mf9v-mfxr-j63j
     "werkzeug>=3.1.6",  # GHSA-87hc-h4r5-73f7 + GHSA-29vq-49wr-vm6x
