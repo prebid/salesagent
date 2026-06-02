@@ -266,8 +266,9 @@ class TestExtractUserInfo:
             "name": "ID Token User",
             "picture": "https://example.com/photo.jpg",
         }
-        # Create unsigned token for testing
-        id_token = jwt.encode(id_token_payload, key="", algorithm="HS256")
+        # Signed with a throwaway key (pyjwt >=2.13.0 rejects empty HMAC keys); the
+        # signature is never checked — extract_user_info decodes with verify_signature=False.
+        id_token = jwt.encode(id_token_payload, key="unused-test-key", algorithm="HS256")
 
         token = {"id_token": id_token}
 
