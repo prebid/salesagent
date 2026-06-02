@@ -49,7 +49,7 @@ class TritonDigital(AdServerAdapter):
         if self.dry_run:
             self.log("Running in dry-run mode - Triton API calls will be simulated", dry_run_prefix=False)
         else:
-            self._require_config(
+            self.auth_token = self._require_config(
                 self.auth_token,
                 field="auth_token",
                 message="Triton Digital config is missing 'auth_token'",

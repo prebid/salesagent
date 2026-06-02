@@ -55,8 +55,12 @@ class Kevel(AdServerAdapter):
         if self.dry_run:
             self.log("Running in dry-run mode - Kevel API calls will be simulated", dry_run_prefix=False)
         else:
-            self._require_config(self.network_id, field="network_id", message="Kevel config is missing 'network_id'")
-            self._require_config(self.api_key, field="api_key", message="Kevel config is missing 'api_key'")
+            self.network_id = self._require_config(
+                self.network_id, field="network_id", message="Kevel config is missing 'network_id'"
+            )
+            self.api_key = self._require_config(
+                self.api_key, field="api_key", message="Kevel config is missing 'api_key'"
+            )
             self.headers = {"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"}
 
     # Supported device types (Kevel doesn't support CTV)

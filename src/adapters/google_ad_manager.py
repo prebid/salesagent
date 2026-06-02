@@ -153,7 +153,8 @@ class GoogleAdManager(AdServerAdapter):
             except (ValueError, TypeError) as e:
                 raise AdCPConfigurationError(
                     f"GAM advertiser_id must be numeric (got: '{advertiser_id}'). "
-                    f"Check principal platform_mappings configuration."
+                    f"Check principal platform_mappings configuration.",
+                    field="advertiser_id",
                 ) from e
 
         # advertiser_id is only required for order/campaign operations, not inventory sync
@@ -169,7 +170,8 @@ class GoogleAdManager(AdServerAdapter):
             if not self.key_file and not self.service_account_json and not self.refresh_token:
                 raise AdCPConfigurationError(
                     "GAM config is missing an authentication credential: set one of "
-                    "'service_account_key_file', 'service_account_json', or 'refresh_token'"
+                    "'service_account_key_file', 'service_account_json', or 'refresh_token'",
+                    field="authentication",
                 )
 
         # Initialize modular components
@@ -305,25 +307,25 @@ class GoogleAdManager(AdServerAdapter):
     def _validate_creative_for_gam(self, asset):
         """Validate creative asset for GAM requirements (delegated to creatives manager)."""
         if not self.creatives_manager:
-            raise ValueError("GAM adapter not configured for creative operations")
+            raise AdCPConfigurationError("GAM adapter not configured for creative operations")
         return self.creatives_manager._validate_creative_for_gam(asset)
 
     def _get_creative_type(self, asset):
         """Determine creative type from asset (delegated to creatives manager)."""
         if not self.creatives_manager:
-            raise ValueError("GAM adapter not configured for creative operations")
+            raise AdCPConfigurationError("GAM adapter not configured for creative operations")
         return self.creatives_manager._get_creative_type(asset)
 
     def _create_gam_creative(self, asset, creative_type, asset_placeholders):
         """Create a GAM creative (delegated to creatives manager)."""
         if not self.creatives_manager:
-            raise ValueError("GAM adapter not configured for creative operations")
+            raise AdCPConfigurationError("GAM adapter not configured for creative operations")
         return self.creatives_manager._create_gam_creative(asset, creative_type, asset_placeholders)
 
     def _check_order_has_guaranteed_items(self, order_id):
         """Check if order has guaranteed line items (delegated to orders manager)."""
         if not self.orders_manager:
-            raise ValueError("GAM adapter not configured for order operations")
+            raise AdCPConfigurationError("GAM adapter not configured for order operations")
         return self.orders_manager.check_order_has_guaranteed_items(order_id)
 
     def get_supported_pricing_models(self) -> set[str]:
@@ -436,7 +438,7 @@ class GoogleAdManager(AdServerAdapter):
             error_msg += ", ".join(missing)
 
             self.log(f"[red]Error: {error_msg}[/red]")
-            raise AdCPConfigurationError(error_msg)
+            raise AdCPConfigurationError(error_msg, field=", ".join(missing))
 
         # Get products to access implementation_config
 
