@@ -101,7 +101,12 @@ async def require_api_key(request: Request) -> None:
         or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     )
     if api_key not in allowed:
-        raise AdCPAuthRequiredError("Authentication required")
+        raise AdCPAuthRequiredError(
+            "Authentication required.",
+            details={
+                "suggestion": "Provide a valid API key via x-adcp-auth, X-API-Key, or Authorization: Bearer <key>."
+            },
+        )
 
 
 @router.get("/tenant/{tenant_id}/tmp-providers/discovery")
@@ -120,7 +125,10 @@ async def tmp_providers_discovery(tenant_id: str, _: None = Depends(require_api_
         if uow.tenant_config is None:
             raise AdCPServiceUnavailableError("Tenant config repository unavailable")
         if uow.tenant_config.get_tenant() is None:
-            raise AdCPAccountNotFoundError(f"Tenant '{tenant_id}' not found")
+            raise AdCPAccountNotFoundError(
+                f"Tenant '{tenant_id}' not found.",
+                details={"suggestion": "Provide a valid tenant ID."},
+            )
 
     with TMPProviderUoW(tenant_id) as uow:
         assert uow.tmp_providers is not None

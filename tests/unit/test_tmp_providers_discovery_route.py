@@ -178,6 +178,7 @@ class TestDiscoveryTenantNotFound:
         assert response.status_code == 404
         error = response.json()["detail"]["errors"][0]
         assert "not found" in error["message"].lower()
+        assert error["details"]["suggestion"] == "Provide a valid tenant ID."
 
 
 class TestDiscoveryEmptyProviders:
@@ -349,14 +350,19 @@ class TestDiscoveryApiKeyAuth:
         assert response.status_code == 200
 
     def test_returns_401_when_no_key_provided_and_keys_configured(self, client):
-        """When TMP_DISCOVERY_API_KEYS is set and no key is sent, returns 401."""
+        """When TMP_DISCOVERY_API_KEYS is set and no key is sent, returns 401 with suggestion."""
         with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "secret-key-1,secret-key-2"}):
             response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 401
+        error = response.json()["detail"]["errors"][0]
+        assert (
+            error["details"]["suggestion"]
+            == "Provide a valid API key via x-adcp-auth, X-API-Key, or Authorization: Bearer <key>."
+        )
 
     def test_returns_401_when_wrong_key_provided(self, client):
-        """When TMP_DISCOVERY_API_KEYS is set and a wrong key is sent, returns 401."""
+        """When TMP_DISCOVERY_API_KEYS is set and a wrong key is sent, returns 401 with suggestion."""
         with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "correct-key"}):
             response = client.get(
                 "/tenant/si-host/tmp-providers/discovery",
@@ -364,6 +370,11 @@ class TestDiscoveryApiKeyAuth:
             )
 
         assert response.status_code == 401
+        error = response.json()["detail"]["errors"][0]
+        assert (
+            error["details"]["suggestion"]
+            == "Provide a valid API key via x-adcp-auth, X-API-Key, or Authorization: Bearer <key>."
+        )
 
     def test_accepts_valid_key_via_x_adcp_auth_header(self, client):
         """Valid key in x-adcp-auth header is accepted."""
