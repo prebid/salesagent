@@ -104,6 +104,7 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
+from src.core.validation_helpers import first_validation_error_field
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -201,7 +202,7 @@ def _push_notification_config_error(operation: str, exc: Exception) -> InternalE
     envelope at all.
     """
     return InternalError(
-        message=f"Failed to {operation}: {exc}",
+        message=f"{operation} failed: {exc}",
         data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
     )
 
@@ -679,7 +680,20 @@ class AdCPRequestHandler(RequestHandler):
                         # Untyped fallthrough — same envelope shape as the AdCPError
                         # branch so storyboard runners can `JSON.parse` the DataPart
                         # uniformly regardless of which branch caught the failure.
-                        logger.error("Error in explicit skill %s: %s", skill_name, e, exc_info=True)
+                        # Route through the canonical boundary hook (ERROR + exc_info
+                        # for untyped failures, plus activity-feed + audit) so untyped
+                        # A2A skill failures land on the same observability surface as
+                        # MCP/REST and the typed path. The typed
+                        # (AdCPError/ValueError/PermissionError) failures were already
+                        # recorded inside _handle_explicit_skill, so this only fires for
+                        # genuinely-unexpected exceptions that escaped it.
+                        record_boundary_error(
+                            "a2a",
+                            skill_name,
+                            e,
+                            tenant_id=getattr(identity, "tenant_id", None),
+                            principal_id=getattr(identity, "principal_id", None) or "anonymous",
+                        )
                         results.append(self._build_failed_skill_result(skill_name, e))
 
                 # Check for submitted status (manual approval required) - return early without artifacts
@@ -1573,7 +1587,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             req = CreateMediaBuyRequest.model_validate(params)
         except ValidationError as e:
-            raise AdCPValidationError(f"Invalid parameters: {e}") from e
+            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
@@ -1973,7 +1987,7 @@ class AdCPRequestHandler(RequestHandler):
             req = UpdatePerformanceIndexRequest.model_validate(parameters)
         except ValidationError as e:
             # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-            raise AdCPValidationError(f"Invalid parameters: {e}") from e
+            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields and identity
         response = core_update_performance_index_tool(

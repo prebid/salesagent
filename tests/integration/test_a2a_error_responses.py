@@ -286,6 +286,10 @@ class TestA2AErrorPropagation:
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="budget")
+        # The structured field path is propagated from the Pydantic error (drift-proof
+        # vs the rendered message substring) — both envelope layers carry it.
+        wire_field = artifact_data["errors"][0].get("field") or ""
+        assert "budget" in wire_field, f"expected a budget field path on the wire, got {wire_field!r}"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
