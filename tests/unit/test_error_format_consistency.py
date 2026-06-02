@@ -728,6 +728,7 @@ class TestErrorCodeVocabularyConsistency:
         # SDK standard codes used by our exception classes
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
+        "INVALID_REQUEST",  # SDK standard: AdCPInvalidRequestError (semantically-invalid value)
         "AUTH_TOKEN_INVALID",  # AdCP spec: invalid/missing auth token (AdCPAuthenticationError)
         "AUTH_REQUIRED",  # SDK standard: authorisation (AdCPAuthorizationError)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)

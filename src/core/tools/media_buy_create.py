@@ -9,13 +9,17 @@ Handles media buy creation including:
 """
 
 import logging
+import secrets
 import time
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -41,6 +45,7 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPError,
+    AdCPInvalidRequestError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
@@ -93,9 +98,14 @@ from src.core.auth import (
     resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import MediaBuy
+from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, ObjectWorkflowMapping
+from src.core.database.models import Creative as DBCreative
+from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
+from src.core.database.models import Product as ProductModel
+from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -134,6 +144,7 @@ from src.core.tools.financial_validation import (
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
 from src.services.activity_feed import activity_feed
+from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -1602,6 +1613,7 @@ async def _create_media_buy_impl(
     # retrying with the same key must return the original media_buy_id without
     # creating a duplicate ad-server booking.
     if req.idempotency_key:
+        # Lazy: 49 tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
         from src.core.database.repositories import MediaBuyUoW as _IdempotencyUoW
 
         with _IdempotencyUoW(tenant["tenant_id"]) as idem_uow:
@@ -1666,7 +1678,7 @@ async def _create_media_buy_impl(
         # Register push notification config if provided (MCP/A2A protocol support)
         # Skip for dry_run mode (no database writes)
         if push_notification_config:
-            from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+            # Lazy: 49 tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import MediaBuyUoW
 
             logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
@@ -1690,8 +1702,6 @@ async def _create_media_buy_impl(
                     assert pnc_uow.session is not None
                     db = pnc_uow.session
                     # Check if config already exists
-                    from sqlalchemy import select
-
                     stmt = select(DBPushNotificationConfig).filter_by(
                         id=config_id, tenant_id=tenant["tenant_id"], principal_id=principal_id
                     )
@@ -1765,7 +1775,7 @@ async def _create_media_buy_impl(
 
             if computed_start_time < now:
                 error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
-                raise AdCPValidationError(
+                raise AdCPInvalidRequestError(
                     error_msg,
                     suggestion="Use a future datetime or 'asap' for immediate start.",
                     field="start_time",
@@ -1783,7 +1793,7 @@ async def _create_media_buy_impl(
 
         if computed_end_time <= computed_start_time:
             error_msg = f"Invalid time range: end time ({req.end_time}) must be after start time ({req.start_time})."
-            raise AdCPValidationError(
+            raise AdCPInvalidRequestError(
                 error_msg,
                 suggestion="Set end_time to a datetime after start_time.",
                 field="end_time",
@@ -1827,12 +1837,7 @@ async def _create_media_buy_impl(
                 raise AdCPValidationError(error_msg)
 
         # 4. Currency-specific budget validation
-        from decimal import Decimal
-
-        from sqlalchemy import select
-
-        from src.core.database.models import CurrencyLimit
-        from src.core.database.models import Product as ProductModel
+        # Lazy: 49 tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
         from src.core.database.repositories import MediaBuyUoW
 
         # Get products first to determine currency from pricing options
@@ -1841,8 +1846,6 @@ async def _create_media_buy_impl(
             assert validation_uow.session is not None
             session = validation_uow.session
             # Get products from database
-            from sqlalchemy.orm import selectinload
-
             products_stmt = (
                 select(ProductModel)
                 .where(ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids))
@@ -1971,8 +1974,6 @@ async def _create_media_buy_impl(
 
             # Check if currency is supported by GAM network (if GAM is configured)
             # GAM only accepts: primary currency OR enabled secondary currencies
-            from src.core.database.models import AdapterConfig
-
             adapter_config_stmt = select(AdapterConfig).where(AdapterConfig.tenant_id == tenant["tenant_id"])
             adapter_config = session.scalars(adapter_config_stmt).first()
             if adapter_config and adapter_config.gam_network_currency:
@@ -2177,7 +2178,7 @@ async def _create_media_buy_impl(
                     violations = unknown_violations + access_violations + geo_overlap_violations
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
-                        raise AdCPValidationError(
+                        raise AdCPInvalidRequestError(
                             error_msg,
                             suggestion="Check targeting constraints.",
                             field="targeting_overlay",
@@ -2329,8 +2330,6 @@ async def _create_media_buy_impl(
             for idx, pkg in enumerate(req.packages, 1):
                 # Generate permanent package ID using product_id and index
                 # Format: pkg_{product_id}_{timestamp_part}_{idx}
-                import secrets
-
                 package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
 
                 # Use product_id for package name since Package schema doesn't have 'name'
@@ -2460,8 +2459,6 @@ async def _create_media_buy_impl(
                 # FIXME(salesagent-9f2): package creation should use repository methods
                 assert pkg_uow.session is not None
                 session = pkg_uow.session
-                from src.core.database.models import MediaPackage as DBMediaPackage
-
                 for pkg_obj in pending_packages:
                     # Get paused state from package (adcp 2.12.0: replaced status enum with paused bool)
                     paused = getattr(pkg_obj, "paused", False)  # Default to False (not paused) if not present
@@ -2515,8 +2512,6 @@ async def _create_media_buy_impl(
                             break
 
                     # Extract pricing fields for dual-write
-                    from decimal import Decimal
-
                     budget_total = None
                     if budget_value:
                         if isinstance(budget_value, dict):
@@ -2550,8 +2545,6 @@ async def _create_media_buy_impl(
             with MediaBuyUoW(tenant["tenant_id"]) as wf_uow:
                 # FIXME(salesagent-9f2): workflow mapping should use a repository method
                 assert wf_uow.session is not None
-                from src.core.database.models import ObjectWorkflowMapping
-
                 mapping = ObjectWorkflowMapping(
                     object_type="media_buy", object_id=media_buy_id, step_id=step.step_id, action="create"
                 )
@@ -2566,9 +2559,6 @@ async def _create_media_buy_impl(
                     # FIXME(salesagent-9f2): assignment creation should use repository methods
                     assert assign_uow.session is not None
                     session = assign_uow.session
-                    from src.core.database.models import Creative as DBCreative
-                    from src.core.database.models import CreativeAssignment as DBAssignment
-
                     # Batch load all creatives upfront
                     all_creative_ids = []
                     for package in req.packages:
@@ -2592,6 +2582,7 @@ async def _create_media_buy_impl(
                         # - Creatives may be synced before being assigned to products
                         # - A creative may be valid for product A but not product B
                         # - Same creative can be reused across packages if formats align
+                        # Lazy: tests patch src.core.helpers.validate_creative_format_against_product; the call-time import binds the patched object.
                         from src.core.helpers import validate_creative_format_against_product
 
                         for package in req.packages:
@@ -2694,7 +2685,7 @@ async def _create_media_buy_impl(
             )
 
         # Get products for the media buy to check product-level auto-creation settings
-        # Lazy import to avoid circular dependency with main.py
+        # Lazy: tests patch src.core.tools.products.get_product_catalog; the call-time import binds the patched object.
         from src.core.tools.products import get_product_catalog
 
         catalog = get_product_catalog(tenant_id=identity.tenant_id)
@@ -2703,8 +2694,6 @@ async def _create_media_buy_impl(
 
         # Validate and auto-generate GAM implementation_config for each product if needed
         if adapter.__class__.__name__ == "GoogleAdManager":
-            from src.services.gam_product_config_service import GAMProductConfigService
-
             gam_validator = GAMProductConfigService()
             config_errors = []
 
@@ -2783,8 +2772,6 @@ async def _create_media_buy_impl(
             assert req.packages is not None, "packages required - validated earlier"
             for idx, pkg in enumerate(req.packages, 1):
                 # Generate permanent package ID
-                import secrets
-
                 package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
 
                 # Per AdCP spec, create-media-buy-response Package only includes:
@@ -3057,8 +3044,6 @@ async def _create_media_buy_impl(
                     cpm = float(rate)
 
             # Generate permanent package ID (not product_id)
-            import secrets
-
             package_id = f"pkg_{pkg_product.product_id}_{secrets.token_hex(4)}_{idx}"
 
             # Get budget from matching request package if available
@@ -3290,8 +3275,6 @@ async def _create_media_buy_impl(
                 # FIXME(salesagent-9f2): package creation should use repository methods
                 assert auto_pkg_uow.session is not None
                 session = auto_pkg_uow.session
-                from src.core.database.models import MediaPackage as DBMediaPackage
-
                 # Use response packages if available (has package_ids), otherwise generate from request
                 packages_to_save = response.packages if response.packages else []
                 logger.info(f"[DEBUG] Saving {len(packages_to_save)} packages to media_packages table")
@@ -3333,8 +3316,6 @@ async def _create_media_buy_impl(
                     }
 
                     # Extract pricing fields for dual-write from adapter response
-                    from decimal import Decimal
-
                     budget_total = None
                     budget_data = getattr(resp_package, "budget", None)
                     if budget_data:
@@ -3390,9 +3371,6 @@ async def _create_media_buy_impl(
                 # FIXME(salesagent-9f2): creative assignment should use repository methods
                 assert creative_uow.session is not None
                 session = creative_uow.session
-                from src.core.database.models import Creative as DBCreative
-                from src.core.database.models import CreativeAssignment as DBAssignment
-
                 # Batch load all creatives upfront to avoid N+1 queries
                 all_creative_ids = []
                 for package in req.packages:
@@ -3430,6 +3408,7 @@ async def _create_media_buy_impl(
                     # - Creatives may be synced before being assigned to products
                     # - A creative may be valid for product A but not product B
                     # - Same creative can be reused across packages if formats align
+                    # Lazy: tests patch src.core.helpers.validate_creative_format_against_product; the call-time import binds the patched object.
                     from src.core.helpers import validate_creative_format_against_product
 
                     for package in req.packages:

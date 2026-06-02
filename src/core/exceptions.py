@@ -368,6 +368,18 @@ class AdCPValidationError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+class AdCPInvalidRequestError(AdCPValidationError):
+    """A request value is well-formed but semantically invalid (400 → INVALID_REQUEST).
+
+    Distinct from the schema-level VALIDATION_ERROR: the value passes type/shape
+    validation but is invalid in context (e.g. start_time in the past, end_time
+    before start_time). Carries the INVALID_REQUEST standard wire code as class
+    identity; inherits 400 + correctable from AdCPValidationError.
+    """
+
+    _default_error_code: ClassVar[str] = "INVALID_REQUEST"
+
+
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
