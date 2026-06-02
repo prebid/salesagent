@@ -50,6 +50,13 @@ class TestMediaBuyCreateEnvExists:
         assert hasattr(MediaBuyCreateEnv, "REST_ENDPOINT")
         assert "media-buys" in MediaBuyCreateEnv.REST_ENDPOINT
 
+    def test_has_setup_helpers_it_calls_internally(self):
+        """setup_media_buy_data + _configure_mocks reference these; missing = AttributeError on __enter__."""
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+        assert callable(getattr(MediaBuyCreateEnv, "setup_product_chain", None))
+        assert callable(getattr(MediaBuyCreateEnv, "_build_mock_context_manager", None))
+
 
 class TestMediaBuyUpdateEnvExists:
     """Verify the update harness exists."""
