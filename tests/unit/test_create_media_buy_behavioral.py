@@ -306,8 +306,10 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with pytest.raises(AdCPBudgetExceededError, match="(?i)daily"):
+            with pytest.raises(AdCPBudgetExceededError, match="(?i)daily") as exc_info:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
+
+            assert exc_info.value.error_code == "BUDGET_EXCEEDED"
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_within_cap_passes_validation(self):
@@ -378,8 +380,10 @@ class TestMaxDailySpendExceeded:
         cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
 
         with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with pytest.raises(AdCPBudgetExceededError, match="(?i)daily"):
+            with pytest.raises(AdCPBudgetExceededError, match="(?i)daily") as exc_info:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
+
+            assert exc_info.value.error_code == "BUDGET_EXCEEDED"
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_no_cap_configured(self):
@@ -459,6 +463,7 @@ class TestCreativeMissingUrl:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
         """When creative has URL but missing dimensions, raise INVALID_CREATIVES.
@@ -494,6 +499,7 @@ class TestCreativeMissingUrl:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
 
 
 class TestCreativeUploadFailure:
@@ -612,6 +618,7 @@ class TestCreativeUploadFailure:
                 assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
                 assert "creative_no_platform" in str(exc_info.value)
                 assert "Network timeout" in str(exc_info.value)
+                assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
 
 
 # ===========================================================================
@@ -739,6 +746,7 @@ class TestMultipleInvalidCreativesAccumulated:
             assert "creative_1" in error_message
             assert "creative_2" in error_message
             assert "creative_3" in error_message
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
 
 
 class TestPricingOptionXOR:
@@ -886,6 +894,7 @@ class TestCreativeIdsNotFound:
                 assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
                 assert "creative_missing_1" in str(exc_info.value)
                 assert "creative_missing_2" in str(exc_info.value)
+                assert exc_info.value.error_code == "NOT_FOUND"
 
     def test_set_difference_logic_detects_missing_creative_ids(self):
         """The set-difference logic (requested - found) correctly identifies missing IDs.
@@ -1007,8 +1016,10 @@ class TestMainFlowObligations:
         req = _make_request()
         from src.core.exceptions import AdCPAuthenticationError
 
-        with pytest.raises(AdCPAuthenticationError, match="Principal ID not found"):
+        with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity)
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
 
     @pytest.mark.asyncio
     async def test_tenant_setup_validation(self):
@@ -1040,8 +1051,10 @@ class TestMainFlowObligations:
                 "Setup incomplete", missing_tasks=[{"name": "Configure Products", "description": "Add products"}]
             )
 
-            with pytest.raises(AdCPValidationError, match="Setup incomplete"):
+            with pytest.raises(AdCPValidationError, match="Setup incomplete") as exc_info:
                 await _create_media_buy_impl(req=req, identity=identity)
+
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_ordering_mode_detection_package_based(self):
@@ -1209,6 +1222,7 @@ class TestMainFlowObligations:
             )
 
         assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_persistence_after_adapter_success(self):
@@ -1283,8 +1297,10 @@ class TestPreconditionObligations:
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
 
 
 class TestAsapStartTimingObligations:
@@ -1689,6 +1705,7 @@ class TestInlineCreativeObligations:
             )
 
         assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_unapproved_creatives_may_trigger_manual_approval(self):
@@ -1978,6 +1995,7 @@ class TestExtensionObligations:
                     )
 
                 assert "not registered" in str(exc_info.value).lower()
+                assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
@@ -2007,6 +2025,7 @@ class TestExtensionObligations:
                 )
 
             assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
+            assert exc_info.value.error_code == "NOT_FOUND"
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):
@@ -2020,8 +2039,10 @@ class TestExtensionObligations:
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
 
         # Identity with no principal_id -> requires authentication
 
@@ -2032,8 +2053,10 @@ class TestExtensionObligations:
             auth_token="test",
             protocol="mcp",
         )
-        with pytest.raises(AdCPAuthenticationError, match="Principal ID not found"):
+        with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity_no_principal)
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
 
     @pytest.mark.asyncio
     async def test_no_database_record_on_adapter_failure(self):
@@ -2272,8 +2295,10 @@ class TestPostconditionObligations:
         # for "nonexistent_prod" so the validation block hits the not-found
         # branch, raising the typed AdCPProductNotFoundError.
         with _PatchContext() as pc:
-            with pytest.raises(AdCPProductNotFoundError):
+            with pytest.raises(AdCPProductNotFoundError) as exc_info:
                 await _create_media_buy_impl(req=req, identity=pc.identity)
+
+            assert exc_info.value.error_code == "PRODUCT_NOT_FOUND"
 
         # Postcondition: the typed raise happens BEFORE any session.add() —
         # no MediaBuy/Package rows are inserted on the failure path.

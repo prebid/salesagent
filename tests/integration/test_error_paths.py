@@ -258,8 +258,11 @@ class TestCreateMediaBuyErrorPaths:
         future_start = datetime.now(UTC) + timedelta(days=1)
         future_end = future_start + timedelta(days=7)
 
-        # Negative budget should fail Pydantic validation (ge=0 constraint)
-        with pytest.raises((ToolError, AdCPValidationError)) as exc_info:
+        # Negative budget fails Pydantic ge=0 validation when create_media_buy_raw
+        # builds CreateMediaBuyRequest; the raw shim converts that ValidationError to
+        # AdCPValidationError (format_validation_error). Pin the typed exception + the
+        # field path, not the version-fragile Pydantic message text.
+        with pytest.raises(AdCPValidationError) as exc_info:
             await create_media_buy_raw(
                 po_number="error_test_po",
                 brand={"domain": "testbrand.com"},
@@ -275,9 +278,8 @@ class TestCreateMediaBuyErrorPaths:
                 identity=identity,
             )
 
-        error_message = str(exc_info.value)
-        assert "budget" in error_message.lower()
-        assert "greater than or equal to 0" in error_message.lower()
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        assert "budget" in str(exc_info.value).lower()
 
     async def test_missing_packages_returns_validation_error(self, test_tenant_with_principal):
         """Test that empty packages raises AdCPValidationError.
