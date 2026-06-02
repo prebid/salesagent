@@ -384,7 +384,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tenant_id,
             )
         except Exception as e:
-            logger.warning(f"Failed to log A2A operation: {e}")
+            logger.warning("Failed to log A2A operation: %s", e)
 
     async def _send_protocol_webhook(
         self,
@@ -435,7 +435,7 @@ class AdCPRequestHandler(RequestHandler):
                 status_enum = GeneratedTaskStatus(status)
             except ValueError:
                 # Fallback for unknown status values
-                logger.warning(f"Unknown status '{status}', defaulting to 'working'")
+                logger.warning("Unknown status '%s', defaulting to 'working'", status)
                 status_enum = GeneratedTaskStatus.working
 
             # Build result data for the webhook payload
@@ -466,7 +466,7 @@ class AdCPRequestHandler(RequestHandler):
             )
         except Exception as e:
             # Don't fail the task if webhook fails
-            logger.warning(f"Failed to send protocol-level webhook for task {task.id}: {e}")
+            logger.warning("Failed to send protocol-level webhook for task %s: %s", task.id, e)
 
     def _reconstruct_response_object(self, skill_name: str, data: dict) -> Any:
         """Reconstruct a response object from skill result data to call __str__().
@@ -528,7 +528,7 @@ class AdCPRequestHandler(RequestHandler):
             if response_class:
                 return response_class(**data)
         except Exception as e:
-            logger.debug(f"Could not reconstruct response object for {skill_name}: {e}")
+            logger.debug("Could not reconstruct response object for %s: %s", skill_name, e)
         return None
 
     async def on_message_send(
@@ -549,7 +549,7 @@ class AdCPRequestHandler(RequestHandler):
         Returns:
             Task object or Message response
         """
-        logger.info(f"Handling message/send request: {params}")
+        logger.info("Handling message/send request: %s", params)
 
         # Parse message for both text and structured data parts
         message = params.message
@@ -648,7 +648,7 @@ class AdCPRequestHandler(RequestHandler):
                 for invocation in skill_invocations:
                     skill_name = invocation["skill"]
                     parameters = invocation["parameters"]
-                    logger.info(f"Processing explicit skill: {skill_name} with parameters: {parameters}")
+                    logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
 
                     try:
                         result = await self._handle_explicit_skill(
@@ -679,7 +679,7 @@ class AdCPRequestHandler(RequestHandler):
                         # Untyped fallthrough — same envelope shape as the AdCPError
                         # branch so storyboard runners can `JSON.parse` the DataPart
                         # uniformly regardless of which branch caught the failure.
-                        logger.error(f"Error in explicit skill {skill_name}: {e}", exc_info=True)
+                        logger.error("Error in explicit skill %s: %s", skill_name, e, exc_info=True)
                         results.append(self._build_failed_skill_result(skill_name, e))
 
                 # Check for submitted status (manual approval required) - return early without artifacts
@@ -798,7 +798,7 @@ class AdCPRequestHandler(RequestHandler):
                             log_details,
                         )
                     except Exception as e:
-                        logger.warning(f"Could not log skill invocations: {e}")
+                        logger.warning("Could not log skill invocations: %s", e)
 
             # Natural language fallback (existing keyword-based routing)
             elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):
@@ -1252,7 +1252,7 @@ class AdCPRequestHandler(RequestHandler):
                 for snap_id, snap_url, snap_auth_type, snap_auth_token, snap_validation_token in config_snapshots
             ]
 
-            logger.info(f"Listed {len(configs_list)} push notification configs for tenant {tool_context.tenant_id}")
+            logger.info("Listed %s push notification configs for tenant %s", len(configs_list), tool_context.tenant_id)
 
             return ListTaskPushNotificationConfigsResponse(configs=configs_list)
 
@@ -1298,7 +1298,7 @@ class AdCPRequestHandler(RequestHandler):
                 if not deleted:
                     raise TaskNotFoundError(message=f"Push notification config not found: {config_id}")
 
-            logger.info(f"Deleted push notification config: {config_id} for tenant {tool_context.tenant_id}")
+            logger.info("Deleted push notification config: %s for tenant %s", config_id, tool_context.tenant_id)
             return None
 
         except A2AError:
@@ -1399,7 +1399,7 @@ class AdCPRequestHandler(RequestHandler):
         compat_result = normalize_request_params(skill_name, parameters)
         parameters = compat_result.params
 
-        logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
+        logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
         # Validate identity for non-discovery skills
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
@@ -1595,9 +1595,9 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_sync_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit sync_creatives skill invocation (AdCP spec endpoint)."""
         # DEBUG: Log incoming parameters
-        logger.info(f"[A2A sync_creatives] Received parameters keys: {list(parameters.keys())}")
-        logger.info(f"[A2A sync_creatives] assignments param: {parameters.get('assignments')}")
-        logger.info(f"[A2A sync_creatives] creatives count: {len(parameters.get('creatives', []))}")
+        logger.info("[A2A sync_creatives] Received parameters keys: %s", list(parameters.keys()))
+        logger.info("[A2A sync_creatives] assignments param: %s", parameters.get("assignments"))
+        logger.info("[A2A sync_creatives] creatives count: %s", len(parameters.get("creatives", [])))
 
         # Create ToolContext from A2A auth info and resolve identity
         tool_context = self._make_tool_context(identity, "sync_creatives")

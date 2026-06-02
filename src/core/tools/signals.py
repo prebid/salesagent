@@ -284,7 +284,7 @@ async def _activate_signal_impl(
     except AdCPError:
         raise
     except Exception as e:
-        logger.error(f"Error activating signal {signal_agent_segment_id}: {e}")
+        logger.error("Error activating signal %s: %s", signal_agent_segment_id, e)
         raise AdCPAdapterError(str(e), context=context) from e
 
 
