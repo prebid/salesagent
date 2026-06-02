@@ -1,7 +1,7 @@
-# Review-Derived Test Patterns
+# Test Review Patterns
 
-Patterns consistently flagged by ChrisHuie and KonstantinMirin in test code
-across 102 review comments on 14 merged PRs. Follow these when writing tests.
+Recurring patterns extracted from test code review history. Follow these
+when writing or modifying tests.
 
 ## Vacuous / Tautological Assertions
 

@@ -1,7 +1,7 @@
-# Review-Derived Code Patterns
+# Code Review Patterns
 
-Patterns consistently flagged by ChrisHuie and KonstantinMirin across 102
-review comments on 14 merged PRs. Follow these when writing or modifying code.
+Recurring patterns extracted from code review history. Follow these when
+writing or modifying code.
 
 ## Hoisting — No Inline Imports Without Circular-Dep Justification
 
