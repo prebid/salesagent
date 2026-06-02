@@ -8,7 +8,7 @@ inputs:
   uv-version:
     description: uv version to install.
     required: false
-    default: "0.11.6"
+    default: "0.11.15"
   dependency-group:
     description: Dependency group passed to uv sync.
     required: false
