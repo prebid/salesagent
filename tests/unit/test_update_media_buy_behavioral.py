@@ -2014,17 +2014,15 @@ class TestUC003ExtA:
     """Authentication error obligations."""
 
     def test_no_principal_in_context(self):
-        """Missing principal_id raises typed AdCPAuthRequiredError.
+        """Missing principal_id raises typed AdCPAuthenticationError.
 
         Covers: UC-003-EXT-A-01
         """
         with MediaBuyUpdateEnv(principal_id=None, tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPAuthRequiredError
-
             identity = env.identity
             req = UpdateMediaBuyRequest(media_buy_id="mb_no_auth")
 
-            with pytest.raises(AdCPAuthRequiredError, match="principal_id missing") as exc_info:
+            with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
             assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"

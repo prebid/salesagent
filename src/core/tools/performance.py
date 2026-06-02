@@ -12,13 +12,13 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object, require_principal_id, require_tenant
+from src.core.auth import require_principal_id, require_tenant, resolve_principal_or_raise
 from src.core.database.repositories import MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -67,10 +67,7 @@ def _update_performance_index_impl(
         _verify_principal(req.media_buy_id, identity, uow.media_buys)
     principal_id = require_principal_id(identity)
 
-    # Get the Principal object
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
-    if not principal:
-        raise AdCPNotFoundError(f"Principal {principal_id} not found")
+    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
     # Get the appropriate adapter (no dry_run support for performance updates)
     adapter = get_adapter(principal, dry_run=False, tenant=tenant)

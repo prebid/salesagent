@@ -43,9 +43,9 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPGoneError,
     AdCPMediaBuyNotFoundError,
+    AdCPNotFoundError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
-    AdCPWorkflowError,
 )
 from src.core.tool_context import ToolContext
 
@@ -186,10 +186,7 @@ def _update_media_buy_impl(
             "Identity is required", details={"suggestion": "Provide a valid authentication token"}
         )
 
-    # CRITICAL: Extract principal from identity
-    principal_id = identity.principal_id
-    if principal_id is None:
-        raise AdCPAuthRequiredError("principal_id missing from authentication context")
+    principal_id = require_principal_id(identity, context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity)
@@ -271,9 +268,11 @@ def _update_media_buy_impl(
                     is_async=True,
                 )
 
-                # Verify persistent_ctx is not None
+                # Verify persistent_ctx is not None. In the async path this is
+                # only None when a buyer-supplied context_id does not resolve —
+                # a not-found condition, not a transient adapter outage.
                 if persistent_ctx is None:
-                    raise AdCPWorkflowError("Failed to create or get persistent context")
+                    raise AdCPNotFoundError(f"Context not found: {ctx_id}")
 
                 # Create workflow step for this tool call
                 step = ctx_manager.create_workflow_step(

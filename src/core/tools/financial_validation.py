@@ -6,17 +6,19 @@ the same policy checks without duplicating comparison logic.
 """
 
 from decimal import Decimal
-
-from adcp.types import ContextObject
+from typing import TYPE_CHECKING
 
 from src.core.exceptions import AdCPError, AdCPValidationError
+
+if TYPE_CHECKING:
+    from adcp.types import ContextObject
 
 
 def raise_if_validation_failed(
     message: str | None,
     exc_type: type[AdCPError] = AdCPValidationError,
     *,
-    context: ContextObject | None = None,
+    context: "ContextObject | None" = None,
 ) -> None:
     """Raise ``exc_type(message, context=context)`` when ``message`` is non-empty.
 
