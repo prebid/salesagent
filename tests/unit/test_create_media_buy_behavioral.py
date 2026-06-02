@@ -613,32 +613,6 @@ class TestCreativeUploadFailure:
                 assert "creative_no_platform" in str(exc_info.value)
                 assert "Network timeout" in str(exc_info.value)
 
-    def test_creative_upload_failure_wraps_exception_as_tool_error(self):
-        """The try/except pattern at line 3162-3168 wraps generic exceptions
-        as ToolError('CREATIVE_UPLOAD_FAILED', ...).
-
-        This directly tests the exception wrapping behavior by simulating the
-        pattern. The actual upload call is adapter.add_creative_assets().
-        """
-        # Simulate the exact wrapping pattern from the source:
-        #   except Exception as upload_error:
-        #       raise ToolError("CREATIVE_UPLOAD_FAILED", f"Failed to ...") from upload_error
-        upload_error = ConnectionError("Network timeout during GAM upload")
-        creative_id = "creative_abc"
-
-        with pytest.raises(AdCPAdapterError) as exc_info:
-            try:
-                raise upload_error
-            except Exception as e:
-                raise AdCPAdapterError(
-                    f"Failed to upload creative {creative_id} to GAM: {e!s}",
-                    details={"error_code": "CREATIVE_UPLOAD_FAILED"},
-                ) from e
-
-        assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
-        assert creative_id in str(exc_info.value)
-        assert "Network timeout" in str(exc_info.value)
-
 
 # ===========================================================================
 # MEDIUM_RISK Tests

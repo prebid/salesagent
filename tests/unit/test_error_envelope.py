@@ -12,6 +12,8 @@ adcp_error.code; missing either layer triggers MCP_ERROR synthesis.
 
 from __future__ import annotations
 
+import json
+
 from src.core.exceptions import (
     AdCPError,
     AdCPNotFoundError,
@@ -148,8 +150,11 @@ class TestContextEcho:
             payload = exc.to_adcp_error()
             envelope = build_two_layer_error_envelope(exc)
 
-            assert flat["context"] == envelope["context"]
-            assert payload["errors"][0]["details"]["context"] == envelope["context"]
+            # Byte-level comparison (matches TestWireBytesIdenticalAcrossTransports)
+            # rather than dict-equality, so a serialization-shape regression is caught.
+            envelope_bytes = json.dumps(envelope["context"], sort_keys=True)
+            assert json.dumps(flat["context"], sort_keys=True) == envelope_bytes
+            assert json.dumps(payload["errors"][0]["details"]["context"], sort_keys=True) == envelope_bytes
 
 
 class TestRestAndA2AReconstructionAgree:

@@ -208,13 +208,14 @@ class TestBroadstreetAdapterCreateMediaBuy:
 
         from src.core.exceptions import AdCPValidationError
 
-        with pytest.raises(AdCPValidationError):
+        with pytest.raises(AdCPValidationError) as exc_info:
             adapter.create_media_buy(
                 request=request,
                 packages=[package],
                 start_time=start_time,
                 end_time=end_time,
             )
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
 
 
 class TestBroadstreetAdapterCreatives:
@@ -359,7 +360,7 @@ class TestBroadstreetAdapterUpdates:
         from src.core.exceptions import AdCPPackageNotFoundError
 
         with _mock_db_session([]):
-            with pytest.raises(AdCPPackageNotFoundError):
+            with pytest.raises(AdCPPackageNotFoundError) as exc_info:
                 adapter.update_media_buy(
                     media_buy_id="bs_12345",
                     action="pause_media_buy",
@@ -367,6 +368,7 @@ class TestBroadstreetAdapterUpdates:
                     budget=None,
                     today=datetime.now(UTC),
                 )
+        assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
 
     def test_update_media_buy_pause_package_dry_run(self, mock_principal, mock_config):
         """Test pausing a single package in dry-run mode."""
@@ -405,7 +407,7 @@ class TestBroadstreetAdapterUpdates:
 
         from src.core.exceptions import AdCPCapabilityNotSupportedError
 
-        with pytest.raises(AdCPCapabilityNotSupportedError):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             adapter.update_media_buy(
                 media_buy_id="bs_12345",
                 action="UNSUPPORTED_ACTION",
@@ -413,6 +415,7 @@ class TestBroadstreetAdapterUpdates:
                 budget=None,
                 today=datetime.now(UTC),
             )
+        assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
 
     def test_check_media_buy_status_dry_run(self, mock_principal, mock_config):
         """Test checking media buy status in dry-run mode."""
