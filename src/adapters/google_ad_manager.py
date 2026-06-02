@@ -1536,11 +1536,11 @@ class GoogleAdManager(AdServerAdapter):
                         )
 
                     # Pause/resume each package's line item
-                    failed_packages = []
+                    failed_items = []
                     for pkg in packages:
                         platform_line_item_id = pkg.package_config.get("platform_line_item_id")
                         if not platform_line_item_id:
-                            failed_packages.append({"package_id": pkg.package_id, "reason": "No GAM line item ID"})
+                            failed_items.append({"id": pkg.package_id, "reason": "No GAM line item ID"})
                             continue
 
                         self.log(f"[GAM] {action_verb} line item {platform_line_item_id} (package {pkg.package_id})")
@@ -1550,14 +1550,14 @@ class GoogleAdManager(AdServerAdapter):
                             success = self.orders_manager.resume_line_item(platform_line_item_id)
 
                         if not success:
-                            failed_packages.append(
-                                {"package_id": pkg.package_id, "line_item_id": platform_line_item_id}
+                            failed_items.append(
+                                {"id": pkg.package_id, "reason": f"GAM line item {platform_line_item_id} update failed"}
                             )
 
-                    if failed_packages:
+                    if failed_items:
                         raise AdCPBulkUpdateError(
                             f"Failed to {action_verb.lower()} some packages in GAM",
-                            details={"failed_packages": failed_packages},
+                            details={"failed_items": failed_items},
                         )
 
                     self.log(f"✓ {action_verb} all {len(packages)} packages in media buy {media_buy_id}")

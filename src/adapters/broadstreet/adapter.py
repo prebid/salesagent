@@ -672,9 +672,10 @@ class BroadstreetAdapter(AdServerAdapter):
                     else:
                         failed = self._toggle_advertisements(unique_ad_ids, active=is_resume)
                         if failed:
+                            failed_items = [{"id": ad_id, "reason": "update failed"} for ad_id in failed]
                             raise AdCPBulkUpdateError(
                                 f"Failed to update {len(failed)} advertisements",
-                                details={"failed_advertisement_ids": failed},
+                                details={"failed_items": failed_items},
                             )
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs found for {media_buy_id}[/yellow]")
@@ -713,9 +714,10 @@ class BroadstreetAdapter(AdServerAdapter):
                     else:
                         failed = self._toggle_advertisements(ad_ids, active=is_resume)
                         if failed:
+                            failed_items = [{"id": ad_id, "reason": "update failed"} for ad_id in failed]
                             raise AdCPBulkUpdateError(
                                 f"Failed to update {len(failed)} advertisements",
-                                details={"failed_advertisement_ids": failed},
+                                details={"failed_items": failed_items},
                             )
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs for package {package_id}[/yellow]")
