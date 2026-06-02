@@ -29,10 +29,17 @@ OBLIGATION COVERAGE:
   UC-002-MAIN-01, -03, -04, -05, -09, -10, -14, -15, -17, -20
   UC-002-POST-01, -03, UC-002-PRECOND-01, -02
   UC-002-UPG-01, -02, -04, -07, -09
+
+The _create_media_buy_impl pipeline tests run against a real PostgreSQL database
+via MediaBuyCreateEnv. Only external services (adapter, audit, slack, context
+manager, setup checklist, format spec) are mocked; products, pricing options,
+creatives, currency limits and workflow rows are real factory-created records.
+Tests that exercise schema validation or pure helper functions (no DB pipeline)
+do not use the harness.
 """
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -55,10 +62,108 @@ from src.core.schemas import (
     PricingOption,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+# A subdomain free of underscores is required: Product.publisher_properties derives
+# publisher_domain from the tenant subdomain (f"{subdomain}.example.com") and the
+# AdCP domain pattern rejects underscores. TenantFactory builds the subdomain as
+# f"pub-{tenant_id}", so the tenant_id must not contain underscores either.
+_TENANT_ID = "behavioraltenant"
+_PRINCIPAL_ID = "behavioralprincipal"
+
 
 # ---------------------------------------------------------------------------
-# Shared helpers for building mocks/fixtures
+# Harness subclass + request helper
 # ---------------------------------------------------------------------------
+
+
+class _MediaBuyCreateEnv(MediaBuyCreateEnv):
+    """MediaBuyCreateEnv with the product-chain and context-manager builders.
+
+    setup_product_chain seeds a real PropertyTag/Product/PricingOption row set.
+    _build_mock_context_manager wraps the real ContextManager so create_context
+    and create_workflow_step persist real Context/WorkflowStep rows — the manual
+    approval path then satisfies the ObjectWorkflowMapping foreign keys.
+    """
+
+    def setup_product_chain(
+        self,
+        tenant: Any,
+        *,
+        product_id: str = "prod_1",
+        currency: str = "USD",
+        with_pricing: bool = True,
+        format_ids: list[dict[str, str]] | None = None,
+    ) -> tuple:
+        from tests.factories import PricingOptionFactory, ProductFactory
+        from tests.factories.core import PropertyTagFactory
+
+        existing_tag = getattr(self, "_seeded_all_inventory_tag", False)
+        if not existing_tag:
+            PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+            self._seeded_all_inventory_tag = True
+
+        if format_ids is None:
+            format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+
+        product = ProductFactory(
+            tenant=tenant,
+            product_id=product_id,
+            delivery_type="non_guaranteed",
+            format_ids=format_ids,
+            property_tags=["all_inventory"],
+        )
+        pricing_option = None
+        if with_pricing:
+            pricing_option = PricingOptionFactory(
+                product=product, pricing_model="cpm", currency=currency, is_fixed=True
+            )
+        return product, pricing_option
+
+    def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
+        from src.core.context_manager import get_context_manager
+
+        real = get_context_manager()
+        mgr = MagicMock()
+
+        def _create_context(*_args: Any, **kwargs: Any):
+            return real.create_context(
+                tenant_id=kwargs.get("tenant_id", self._tenant_id),
+                principal_id=kwargs.get("principal_id", self._principal_id),
+            )
+
+        def _create_workflow_step(*_args: Any, **kwargs: Any):
+            kwargs.setdefault("step_type", "media_buy_creation")
+            kwargs.setdefault("owner", "system")
+            kwargs.setdefault("tool_name", tool_name)
+            return real.create_workflow_step(**kwargs)
+
+        mgr.create_context.side_effect = _create_context
+        mgr.get_context.return_value = None
+        mgr.create_workflow_step.side_effect = _create_workflow_step
+        mgr.update_workflow_step.return_value = None
+        mgr.add_message.return_value = None
+        return mgr
+
+
+def _env(**overrides: Any) -> _MediaBuyCreateEnv:
+    """Build the harness with a hyphen-safe tenant and explicit approval flags."""
+    overrides.setdefault("tenant_id", _TENANT_ID)
+    overrides.setdefault("principal_id", _PRINCIPAL_ID)
+    overrides.setdefault("human_review_required", False)
+    return _MediaBuyCreateEnv(**overrides)
+
+
+def _require_manual_approval(env: _MediaBuyCreateEnv) -> None:
+    """Make the mock adapter opt into manual approval for create_media_buy.
+
+    The approval branch needs both tenant.human_review_required (set via the env
+    constructor) AND "create_media_buy" in adapter.manual_approval_operations.
+    The harness default leaves the operations list empty.
+    """
+    env.mock["adapter"].return_value.manual_approval_operations = ["create_media_buy"]
 
 
 def _future(days: int = 7) -> str:
@@ -89,150 +194,6 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
     return CreateMediaBuyRequest(**defaults)
 
 
-def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
-    """Create a mock DB Product with pricing_options."""
-    pricing_option = MagicMock(spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "root"])
-    pricing_option.pricing_model = "cpm"
-    pricing_option.currency = currency
-    pricing_option.is_fixed = True
-    pricing_option.rate = Decimal("5.00")
-    pricing_option.min_spend_per_package = None
-    # Simulate RootModel unwrap: getattr(po, "root", po) returns the object itself
-    pricing_option.root = pricing_option
-
-    product = MagicMock()
-    product.product_id = product_id
-    product.pricing_options = [pricing_option]
-    return product
-
-
-def _mock_currency_limit(
-    max_daily_package_spend: Decimal | None = None, min_package_budget: Decimal | None = None
-) -> MagicMock:
-    """Create a mock CurrencyLimit row."""
-    cl = MagicMock()
-    cl.max_daily_package_spend = max_daily_package_spend
-    cl.min_package_budget = min_package_budget
-    return cl
-
-
-def _standard_patches():
-    """Return a dict of common patch targets for _create_media_buy_impl."""
-    return {
-        "src.core.helpers.context_helpers.ensure_tenant_context": "_tenant",
-        "src.core.tools.media_buy_create.validate_setup_complete": "_setup",
-        "src.core.auth.get_principal_object": "_principal_obj",
-        "src.core.tools.media_buy_create.get_context_manager": "_ctx_manager",
-    }
-
-
-class _PatchContext:
-    """Thin helper that sets up the standard mocks for _create_media_buy_impl.
-
-    Usage::
-
-        with _PatchContext() as pc:
-            # Customise mocks via pc attributes
-            pc.db_session.scalars.return_value.all.return_value = [product]
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
-    """
-
-    def __init__(
-        self,
-        *,
-        products: list[MagicMock] | None = None,
-        currency_limit: MagicMock | None = None,
-        adapter_config: MagicMock | None = None,
-        human_review_required: bool = False,
-        auto_create_media_buys: bool = True,
-    ):
-        self._products = products or [_mock_product()]
-        self._currency_limit = currency_limit or _mock_currency_limit()
-        self._adapter_config = adapter_config
-        self._human_review_required = human_review_required
-        self._auto_create_media_buys = auto_create_media_buys
-
-    def __enter__(self):
-        # Build a ResolvedIdentity instead of mock context
-        self.identity = ResolvedIdentity(
-            principal_id="principal_1",
-            tenant_id="test_tenant",
-            tenant={
-                "tenant_id": "test_tenant",
-                "human_review_required": self._human_review_required,
-                "auto_create_media_buys": self._auto_create_media_buys,
-            },
-            auth_token="test-token",
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
-        )
-
-        # tenant
-        self._p_tenant = patch("src.core.helpers.context_helpers.ensure_tenant_context")
-        self._p_tenant.start().return_value = {
-            "tenant_id": "test_tenant",
-            "human_review_required": self._human_review_required,
-            "auto_create_media_buys": self._auto_create_media_buys,
-        }
-
-        # setup validation
-        self._p_setup = patch("src.core.tools.media_buy_create.validate_setup_complete")
-        self._p_setup.start()
-
-        # principal object
-        self._p_principal = patch("src.core.auth.get_principal_object")
-        mock_principal = MagicMock()
-        mock_principal.principal_id = "principal_1"
-        mock_principal.name = "Test Buyer"
-        self._p_principal.start().return_value = mock_principal
-
-        # context manager (for workflow steps)
-        self._p_ctx_mgr = patch("src.core.tools.media_buy_create.get_context_manager")
-        patched_get_ctx_mgr = self._p_ctx_mgr.start()
-        mock_step = MagicMock()
-        mock_step.step_id = "step_1"
-        patched_get_ctx_mgr.return_value.create_context.return_value = MagicMock(context_id="ctx_1")
-        patched_get_ctx_mgr.return_value.create_workflow_step.return_value = mock_step
-        self.ctx_manager = patched_get_ctx_mgr.return_value
-
-        # MediaBuyUoW — mock UoW that provides session via context manager.
-        # Patched at the repository module because media_buy_create.py uses lazy imports.
-        self.db_session = MagicMock()
-
-        # By default, configure the scalars chain to return products on .all()
-        # and currency_limit (then adapter_config) on successive .first() calls.
-        all_mock = MagicMock()
-        all_mock.all.return_value = self._products
-        first_results = [self._currency_limit, self._adapter_config]
-        first_mock = MagicMock(side_effect=first_results)
-
-        scalars_result = MagicMock()
-        scalars_result.all = all_mock.all
-        scalars_result.first = first_mock
-        self.db_session.scalars.return_value = scalars_result
-
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=None)
-        mock_uow.session = self.db_session
-        mock_media_buys = MagicMock()
-        mock_media_buys.get_by_principal.return_value = []  # no duplicate buyer_refs
-        mock_media_buys.get_packages.return_value = []
-        mock_uow.media_buys = mock_media_buys
-
-        self._p_uow = patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow)
-        self._p_uow.start()
-
-        return self
-
-    def __exit__(self, *args):
-        self._p_tenant.stop()
-        self._p_setup.stop()
-        self._p_principal.stop()
-        self._p_ctx_mgr.stop()
-        self._p_uow.stop()
-
-
 # ===========================================================================
 # HIGH_RISK Tests
 # ===========================================================================
@@ -241,13 +202,10 @@ class _PatchContext:
 class TestProductNotFound:
     """GAP-001: Product not found raises the typed AdCPProductNotFoundError."""
 
-    @pytest.mark.asyncio
-    async def test_product_not_found_returns_error(self):
+    def test_product_not_found_returns_error(self, integration_db):
         """When packages reference non-existent product_ids, raise
         AdCPProductNotFoundError with the missing IDs listed.
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request(
             packages=[
                 {
@@ -263,14 +221,14 @@ class TestProductNotFound:
             ]
         )
 
-        # Only prod_exists is in the DB
-        existing_product = _mock_product("prod_exists")
-
-        with _PatchContext(products=[existing_product]) as pc:
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            # Only prod_exists is in the DB.
+            env.setup_product_chain(tenant, product_id="prod_exists")
             # Missing product_ids raise the typed AdCPProductNotFoundError, whose
             # class identity carries the PRODUCT_NOT_FOUND wire code (404).
             with pytest.raises(AdCPProductNotFoundError) as excinfo:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
         exc = excinfo.value
         assert exc.error_code == "PRODUCT_NOT_FOUND"
@@ -282,14 +240,11 @@ class TestProductNotFound:
 class TestMaxDailySpendExceeded:
     """GAP-002: Max daily spend exceeded returns validation_error."""
 
-    @pytest.mark.asyncio
-    async def test_max_daily_spend_exceeded(self):
+    def test_max_daily_spend_exceeded(self, integration_db):
         """When budget / flight_days > max_daily_package_spend, return validation_error.
 
         Anchors: media_buy_create.py:1696-1733
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # 7 day flight, $7000 budget = $1000/day
         # max_daily_package_spend = $500 -> should fail
         req = _make_request(
@@ -302,26 +257,22 @@ class TestMaxDailySpendExceeded:
             ]
         )
 
-        product = _mock_product("prod_1")
-        cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
-
-        with _PatchContext(products=[product], currency_limit=cl) as pc:
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            tenant.currency_limits[0].max_daily_package_spend = 500
+            env.setup_product_chain(tenant)
             with pytest.raises(AdCPBudgetExceededError, match="(?i)daily") as exc_info:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
             assert exc_info.value.error_code == "BUDGET_EXCEEDED"
 
-    @pytest.mark.asyncio
-    async def test_max_daily_spend_within_cap_passes_validation(self):
+    def test_max_daily_spend_within_cap_passes_validation(self, integration_db):
         """When daily spend is within cap, validation should pass (no error from this check).
 
         This test verifies the boundary: daily spend <= max means no daily-spend error.
-        It will still fail later in the pipeline (adapter call) but that's expected.
 
         Anchors: media_buy_create.py:1696-1733
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # 7 day flight, $3500 budget = $500/day exactly
         # max_daily_package_spend = $500 -> should pass (equal is OK)
         req = _make_request(
@@ -334,33 +285,21 @@ class TestMaxDailySpendExceeded:
             ]
         )
 
-        product = _mock_product("prod_1")
-        cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            tenant.currency_limits[0].max_daily_package_spend = 500
+            env.setup_product_chain(tenant)
+            # The happy-path adapter mock lets the pipeline complete; we only need
+            # to confirm the daily-spend check did not reject this budget.
+            result = env.call_impl(req=req)
 
-        with _PatchContext(products=[product], currency_limit=cl) as pc:
-            # Patch the adapter and downstream calls so we can check we passed
-            # daily spend validation (any error beyond it is fine)
-            with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
-                mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False, manual_approval_operations=["create_media_buy"]
-                )
-                try:
-                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
-                except AdCPValidationError as e:
-                    # Validation errors must NOT be about daily spend
-                    msg = f"Daily spend validation should have passed but got: {e}"
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), msg
-                except Exception:
-                    pass  # Downstream failures unrelated to daily spend validation are fine
+        assert isinstance(result.response, CreateMediaBuySuccess)
 
-    @pytest.mark.asyncio
-    async def test_max_daily_spend_same_day_flight_uses_min_one_day(self):
+    def test_max_daily_spend_same_day_flight_uses_min_one_day(self, integration_db):
         """Same-day flight (0 calendar days) uses min 1 day for daily spend calculation.
 
         Anchors: media_buy_create.py:1700-1701
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # Same-day: start = now+1h, end = now+2h -> 0 days -> uses min 1 day
         # Budget = $600, max_daily = $500 -> $600/1 = $600 > $500 -> fail
         now = datetime.now(UTC)
@@ -376,23 +315,20 @@ class TestMaxDailySpendExceeded:
             ],
         )
 
-        product = _mock_product("prod_1")
-        cl = _mock_currency_limit(max_daily_package_spend=Decimal("500"))
-
-        with _PatchContext(products=[product], currency_limit=cl) as pc:
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            tenant.currency_limits[0].max_daily_package_spend = 500
+            env.setup_product_chain(tenant)
             with pytest.raises(AdCPBudgetExceededError, match="(?i)daily") as exc_info:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
             assert exc_info.value.error_code == "BUDGET_EXCEEDED"
 
-    @pytest.mark.asyncio
-    async def test_max_daily_spend_no_cap_configured(self):
+    def test_max_daily_spend_no_cap_configured(self, integration_db):
         """When max_daily_package_spend is None, no daily spend check is applied.
 
         Anchors: media_buy_create.py:1698
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # Large budget, no cap -> should pass daily spend check
         req = _make_request(
             packages=[
@@ -404,20 +340,14 @@ class TestMaxDailySpendExceeded:
             ]
         )
 
-        product = _mock_product("prod_1")
-        cl = _mock_currency_limit(max_daily_package_spend=None)
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            tenant.currency_limits[0].max_daily_package_spend = None
+            env.setup_product_chain(tenant)
+            # No cap -> daily-spend check skipped -> pipeline reaches success.
+            result = env.call_impl(req=req)
 
-        with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
-                mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False, manual_approval_operations=["create_media_buy"]
-                )
-                try:
-                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
-                except AdCPValidationError as e:
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
-                except Exception:
-                    pass  # Downstream failures unrelated to daily spend are fine
+        assert isinstance(result.response, CreateMediaBuySuccess)
 
 
 class TestCreativeMissingUrl:
@@ -511,19 +441,15 @@ class TestCreativeUploadFailure:
     2. A behavioral test of the ToolError wrapping logic
     """
 
-    @pytest.mark.asyncio
-    async def test_creative_upload_failure_raises_tool_error(self):
+    def test_creative_upload_failure_raises_tool_error(self, integration_db):
         """When adapter.add_creative_assets() raises a generic exception during auto-approval,
         _create_media_buy_impl wraps it as ToolError('CREATIVE_UPLOAD_FAILED').
 
-        Exercises the real code path at media_buy_create.py:3132-3168 by mocking
-        the pipeline deep enough to reach the creative upload code.
+        Exercises the real code path at media_buy_create.py:3132-3168 by seeding a
+        real creative (no platform_creative_id) and an adapter whose upload raises.
 
         Anchors: media_buy_create.py:3162-3168
         """
-        from src.core.schemas import Package as RespPackage
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # Request with a package that has creative_ids (triggers the creative upload path)
         req = _make_request(
             packages=[
@@ -536,89 +462,33 @@ class TestCreativeUploadFailure:
             ]
         )
 
-        product = _mock_product("prod_1")
+        with _env() as env:
+            from tests.factories import CreativeFactory
 
-        # Mock creative in DB: no platform_creative_id -> triggers upload path
-        mock_creative = MagicMock()
-        mock_creative.creative_id = "creative_no_platform"
-        mock_creative.format = "display_300x250_image"
-        mock_creative.agent_url = "https://creative.example.com"
-        mock_creative.name = "Test Creative"
-        mock_creative.data = {}  # No platform_creative_id
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            # Creative exists, no platform_creative_id, with extractable url/dimensions
+            # so _build_adapter_asset_from_creative succeeds and the upload runs.
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="creative_no_platform",
+                format="display_300x250",
+                agent_url="https://creative.adcontextprotocol.org",
+                data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
+            )
 
-        # Build a successful adapter response
-        resp_package = MagicMock(spec=RespPackage)
-        resp_package.package_id = "pkg_prod_1_abc_1"
-        resp_package.platform_line_item_id = None
-        adapter_response = MagicMock(spec=CreateMediaBuySuccess)
-        adapter_response.media_buy_id = "mb_test123"
-        adapter_response.packages = [resp_package]
-        # Make isinstance(response, CreateMediaBuyError) return False
-        adapter_response.__class__ = CreateMediaBuySuccess
+            # Adapter create succeeds; the creative upload raises a generic exception.
+            mock_adapter = env.mock["adapter"].return_value
+            mock_adapter.add_creative_assets.side_effect = ConnectionError("Network timeout during GAM upload")
 
-        # Mock adapter whose add_creative_assets raises a generic exception
-        mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_adapter.manual_approval_operations = []
-        mock_adapter.__class__.__name__ = "MockAdapter"
-        mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
-        mock_adapter.validate_media_buy_request.return_value = []
-        mock_adapter.add_creative_assets.side_effect = ConnectionError("Network timeout during GAM upload")
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                env.call_impl(req=req)
 
-        # Mock product catalog for products_in_buy lookup
-        mock_schema_product = MagicMock()
-        mock_schema_product.product_id = "prod_1"
-        mock_schema_product.name = "Test Product"
-        mock_schema_product.implementation_config = None
-        mock_schema_product.format_ids = None
-        mock_schema_product.delivery_type = MagicMock()
-        mock_schema_product.delivery_type.value = "non_guaranteed"
-
-        with _PatchContext(products=[product]) as pc:
-            # Override the scalars chain to handle multiple .all() and .first() calls.
-            # .all() call 1 (products query) -> [product]
-            # .all() call 2 (creatives query) -> [mock_creative]
-            # platform_order_id persistence uses media_buys.get_packages() (not scalars)
-            # .first() calls: currency_limit, adapter_config=None, package_record=None, etc.
-            all_results = iter([[product], [mock_creative]])
-            first_results = iter([_mock_currency_limit(), None, None, None, None, None])
-            scalars_mock = MagicMock()
-            scalars_mock.all.side_effect = lambda: next(all_results)
-            scalars_mock.first.side_effect = lambda: next(first_results, None)
-            pc.db_session.scalars.return_value = scalars_mock
-
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
-                patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-                patch(
-                    "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
-                ),
-                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
-                patch("src.core.helpers.validate_creative_format_against_product", return_value=(True, None)),
-                patch(
-                    "src.core.tools.media_buy_create._get_format_spec_sync",
-                    return_value=MagicMock(output_format_ids=None),
-                ),
-                patch(
-                    "src.core.tools.media_buy_create.extract_media_url_and_dimensions",
-                    return_value=("https://example.com/ad.jpg", 300, 250),
-                ),
-                patch("src.core.tools.media_buy_create.extract_click_url", return_value=None),
-                patch("src.core.tools.media_buy_create.extract_impression_tracker_url", return_value=None),
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-
-                with pytest.raises(AdCPAdapterError) as exc_info:
-                    await _create_media_buy_impl(req=req, identity=pc.identity)
-
-                assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
-                assert "creative_no_platform" in str(exc_info.value)
-                assert "Network timeout" in str(exc_info.value)
-                assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+            assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
+            assert "creative_no_platform" in str(exc_info.value)
+            assert "Network timeout" in str(exc_info.value)
+            assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
 
 
 # ===========================================================================
@@ -629,14 +499,11 @@ class TestCreativeUploadFailure:
 class TestInlineCreativesProcessedBeforeApproval:
     """GAP-005: Inline creatives are processed before the approval check."""
 
-    @pytest.mark.asyncio
-    async def test_inline_creatives_processed_before_approval_check(self):
+    def test_inline_creatives_processed_before_approval_check(self, integration_db):
         """process_and_upload_package_creatives is called before manual approval check.
 
         Anchors: media_buy_create.py:1791-1808 (creatives), 1814-1819 (approval)
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         call_order = []
 
         req = _make_request(
@@ -661,36 +528,29 @@ class TestInlineCreativesProcessedBeforeApproval:
             ]
         )
 
-        product = _mock_product("prod_1")
-        cl = _mock_currency_limit()
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
 
-        with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-            ):
+            mock_adapter = env.mock["adapter"].return_value
+
+            def record_adapter_check(*args, **kwargs):
+                call_order.append("approval_check")
+                return mock_adapter
+
+            env.mock["adapter"].side_effect = record_adapter_check
+
+            with patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload:
 
                 def record_upload(*args, **kwargs):
                     call_order.append("creatives_processed")
-                    # Return (updated_packages, uploaded_ids)
                     return (req.packages, {})
 
                 mock_upload.side_effect = record_upload
 
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = True
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
-                mock_adapter.validate_media_buy_request.return_value = []
-
-                def record_adapter_check(*args, **kwargs):
-                    call_order.append("approval_check")
-                    return mock_adapter
-
-                mock_adapter_fn.side_effect = record_adapter_check
-
                 try:
-                    await _create_media_buy_impl(req=req, identity=pc.identity)
+                    env.call_impl(req=req)
                 except Exception:
                     pass  # Expected — downstream failures are fine
 
@@ -804,20 +664,16 @@ class TestCreativeIdsNotFound:
     are missing. We verify with behavioral tests exercising the actual code path.
     """
 
-    @pytest.mark.asyncio
-    async def test_creative_ids_not_found_raises_tool_error(self):
+    def test_creative_ids_not_found_raises_tool_error(self, integration_db):
         """When creative_ids reference IDs that don't exist in the database,
         _create_media_buy_impl raises ToolError('CREATIVES_NOT_FOUND') with
         the missing IDs listed.
 
-        Exercises the real code path at media_buy_create.py:2957-2966 by mocking
-        the pipeline deep enough to reach the creative ID lookup.
+        Exercises the real code path at media_buy_create.py:2957-2966 by seeding
+        only one of the three requested creatives.
 
         Anchors: media_buy_create.py:2957-2966
         """
-        from src.core.schemas import Package as RespPackage
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # Request with creative_ids that includes one that won't be found in DB
         req = _make_request(
             packages=[
@@ -830,71 +686,28 @@ class TestCreativeIdsNotFound:
             ]
         )
 
-        product = _mock_product("prod_1")
+        with _env() as env:
+            from tests.factories import CreativeFactory
 
-        # Only one creative exists in DB — the other two are missing
-        mock_creative = MagicMock()
-        mock_creative.creative_id = "creative_exists"
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            # Only one creative exists in DB — the other two are missing.
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="creative_exists",
+                format="display_300x250",
+                agent_url="https://creative.adcontextprotocol.org",
+                data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
+            )
 
-        # Build a successful adapter response
-        resp_package = MagicMock(spec=RespPackage)
-        resp_package.package_id = "pkg_prod_1_abc_1"
-        adapter_response = MagicMock(spec=CreateMediaBuySuccess)
-        adapter_response.media_buy_id = "mb_test123"
-        adapter_response.packages = [resp_package]
-        adapter_response.__class__ = CreateMediaBuySuccess
+            with pytest.raises(AdCPNotFoundError) as exc_info:
+                env.call_impl(req=req)
 
-        # Mock adapter
-        mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_adapter.manual_approval_operations = []
-        mock_adapter.__class__.__name__ = "MockAdapter"
-        mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
-        mock_adapter.validate_media_buy_request.return_value = []
-
-        # Mock product catalog for products_in_buy lookup
-        mock_schema_product = MagicMock()
-        mock_schema_product.product_id = "prod_1"
-        mock_schema_product.name = "Test Product"
-        mock_schema_product.implementation_config = None
-        mock_schema_product.format_ids = None
-        mock_schema_product.delivery_type = MagicMock()
-        mock_schema_product.delivery_type.value = "non_guaranteed"
-
-        with _PatchContext(products=[product]) as pc:
-            # Override the scalars chain to handle multiple .all() and .first() calls.
-            # .all() call 1 (products query) -> [product]
-            # .all() call 2 (creatives query) -> [mock_creative] (only 1 of 3)
-            # platform_order_id persistence uses media_buys.get_packages() (not scalars)
-            # .first() returns currency_limit then None for subsequent calls
-            all_results = iter([[product], [mock_creative]])
-            first_results = iter([_mock_currency_limit(), None, None, None, None, None])
-            scalars_mock = MagicMock()
-            scalars_mock.all.side_effect = lambda: next(all_results)
-            scalars_mock.first.side_effect = lambda: next(first_results, None)
-            pc.db_session.scalars.return_value = scalars_mock
-
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
-                patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-                patch(
-                    "src.core.tools.media_buy_create._execute_adapter_media_buy_creation", return_value=adapter_response
-                ),
-                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-
-                with pytest.raises(AdCPNotFoundError) as exc_info:
-                    await _create_media_buy_impl(req=req, identity=pc.identity)
-
-                assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
-                assert "creative_missing_1" in str(exc_info.value)
-                assert "creative_missing_2" in str(exc_info.value)
-                assert exc_info.value.error_code == "NOT_FOUND"
+            assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
+            assert "creative_missing_1" in str(exc_info.value)
+            assert "creative_missing_2" in str(exc_info.value)
+            assert exc_info.value.error_code == "NOT_FOUND"
 
     def test_set_difference_logic_detects_missing_creative_ids(self):
         """The set-difference logic (requested - found) correctly identifies missing IDs.
@@ -947,50 +760,17 @@ class TestCreativeIdsNotFound:
 class TestMainFlowObligations:
     """Main flow obligation tests covering UC-002-MAIN-* IDs."""
 
-    @pytest.mark.asyncio
-    async def test_happy_path_auto_approved(self):
+    def test_happy_path_auto_approved(self, integration_db):
         """Auto-approved media buy returns success with media_buy_id and packages.
 
         Covers: UC-002-MAIN-01
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        # Build schema-level product for get_product_catalog
-        mock_schema_product = MagicMock()
-        mock_schema_product.product_id = "prod_1"
-        mock_schema_product.name = "Test Product"
-        mock_schema_product.implementation_config = None
-        mock_schema_product.format_ids = None
-        mock_schema_product.delivery_type = MagicMock()
-        mock_schema_product.delivery_type.value = "non_guaranteed"
-
-        with _PatchContext(products=[product]) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_exec,
-                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-            ):
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = []
-                mock_adapter.__class__.__name__ = "MockAdapter"
-                mock_adapter_fn.return_value = mock_adapter
-                mock_upload.return_value = (req.packages, {})
-
-                from src.core.schemas import Package as RespPkg
-
-                resp_pkg = RespPkg(package_id="pkg_prod_1_abc_1", product_id="prod_1", budget=5000.0)
-                mock_success = CreateMediaBuySuccess(media_buy_id="mb_test123", packages=[resp_pkg])
-                mock_exec.return_value = mock_success
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            result = env.call_impl(req=req)
 
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result.response, CreateMediaBuySuccess)
@@ -1068,67 +848,41 @@ class TestMainFlowObligations:
         assert req.packages is not None
         assert len(req.packages) > 0
 
-    @pytest.mark.asyncio
-    async def test_package_validation_products_exist(self):
+    def test_package_validation_products_exist(self, integration_db):
         """When all product_ids exist, validation passes.
 
         Covers: UC-002-MAIN-09
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product]) as pc:
-            with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
-                mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=[],
-                    __class__=type("MockAdapter", (), {"__name__": "MockAdapter"}),
-                )
-                try:
-                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
-                except AdCPValidationError as e:
-                    msg = f"Product validation should have passed but got: {e}"
-                    assert "not found" not in str(e).lower() or "product" not in str(e).lower(), msg
-                except Exception:
-                    pass  # Downstream failures unrelated to product validation are fine
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            # All products exist -> pipeline reaches success without a not-found error.
+            result = env.call_impl(req=req)
 
-    @pytest.mark.asyncio
-    async def test_currency_validation_supported(self):
+        assert isinstance(result.response, CreateMediaBuySuccess)
+
+    def test_currency_validation_supported(self, integration_db):
         """Currency supported by tenant passes validation.
 
         Covers: UC-002-MAIN-10
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1", currency="USD")
-        cl = _mock_currency_limit()  # CurrencyLimit exists -> USD supported
 
-        with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
-                mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=[],
-                    __class__=type("MockAdapter", (), {"__name__": "MockAdapter"}),
-                )
-                try:
-                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
-                except AdCPValidationError as e:
-                    msg = f"Currency validation should have passed but got: {e}"
-                    assert "currency" not in str(e).lower() or "not supported" not in str(e).lower(), msg
-                except Exception:
-                    pass  # Downstream failures unrelated to currency validation are fine
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            # CurrencyLimit USD exists (auto-created) -> USD supported.
+            env.setup_product_chain(tenant, currency="USD")
+            result = env.call_impl(req=req)
 
-    @pytest.mark.asyncio
-    async def test_targeting_overlay_validation(self):
+        assert isinstance(result.response, CreateMediaBuySuccess)
+
+    def test_targeting_overlay_validation(self, integration_db):
         """Valid targeting overlay passes validation.
 
         Covers: UC-002-MAIN-14
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request(
             packages=[
                 {
@@ -1139,73 +893,37 @@ class TestMainFlowObligations:
                 },
             ]
         )
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product]) as pc:
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
             with (
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter,
                 patch("src.services.targeting_capabilities.validate_unknown_targeting_fields", return_value=[]),
                 patch("src.services.targeting_capabilities.validate_overlay_targeting", return_value=[]),
                 patch("src.services.targeting_capabilities.validate_geo_overlap", return_value=[]),
             ):
-                mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=[],
-                    __class__=type("MockAdapter", (), {"__name__": "MockAdapter"}),
-                )
-                try:
-                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
-                except AdCPValidationError as e:
-                    assert "targeting" not in str(e).lower(), f"Targeting validation should have passed but got: {e}"
-                except Exception:
-                    pass  # Downstream failures unrelated to targeting validation are fine
+                result = env.call_impl(req=req)
 
-    @pytest.mark.asyncio
-    async def test_auto_approval_determination(self):
+        # Valid targeting overlay does not block the pipeline.
+        assert isinstance(result.response, CreateMediaBuySuccess)
+
+    def test_auto_approval_determination(self, integration_db):
         """Auto-approval when tenant allows and adapter doesn't require manual approval.
 
         Covers: UC-002-MAIN-15
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        mock_schema_product = MagicMock()
-        mock_schema_product.product_id = "prod_1"
-        mock_schema_product.name = "Test Product"
-        mock_schema_product.implementation_config = None
-        mock_schema_product.format_ids = None
-        mock_schema_product.delivery_type = MagicMock()
-        mock_schema_product.delivery_type.value = "non_guaranteed"
+        with _env(human_review_required=False) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            result = env.call_impl(req=req)
 
-        with _PatchContext(products=[product], human_review_required=False) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_exec,
-                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-            ):
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = []
-                mock_adapter.__class__.__name__ = "MockAdapter"
-                mock_adapter_fn.return_value = mock_adapter
-                mock_upload.return_value = (req.packages, {})
-
-                from src.core.schemas import Package as RespPkg
-
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
-                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_auto", packages=[resp_pkg])
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
-
-        # Auto-approval: adapter was called (not manual path)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        mock_exec.assert_called_once_with(req, ANY, ANY, ANY, ANY, ANY, ANY, tenant=ANY)
+            # Auto-approval: adapter.create_media_buy was called (not the manual path)
+            # with the original request and the resolved package/flight arguments.
+            assert isinstance(result.response, CreateMediaBuySuccess)
+            assert result.status == "completed"
+            env.mock["adapter"].return_value.create_media_buy.assert_called_once_with(req, ANY, ANY, ANY, ANY)
 
     @pytest.mark.asyncio
     async def test_format_id_validation(self):
@@ -1224,48 +942,17 @@ class TestMainFlowObligations:
         assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
-    @pytest.mark.asyncio
-    async def test_persistence_after_adapter_success(self):
+    def test_persistence_after_adapter_success(self, integration_db):
         """Media buy is persisted after adapter returns success.
 
         Covers: UC-002-MAIN-20
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        mock_schema_product = MagicMock()
-        mock_schema_product.product_id = "prod_1"
-        mock_schema_product.name = "Test Product"
-        mock_schema_product.implementation_config = None
-        mock_schema_product.format_ids = None
-        mock_schema_product.delivery_type = MagicMock()
-        mock_schema_product.delivery_type.value = "non_guaranteed"
-
-        with _PatchContext(products=[product]) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_exec,
-                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-            ):
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = []
-                mock_adapter.__class__.__name__ = "MockAdapter"
-                mock_adapter_fn.return_value = mock_adapter
-                mock_upload.return_value = (req.packages, {})
-
-                from src.core.schemas import Package as RespPkg
-
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
-                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_persist", packages=[resp_pkg])
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            result = env.call_impl(req=req)
 
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.media_buy_id is not None
@@ -1306,65 +993,27 @@ class TestPreconditionObligations:
 class TestAsapStartTimingObligations:
     """ASAP start timing obligation tests."""
 
-    @pytest.mark.asyncio
-    async def test_asap_persisted_as_resolved_datetime(self):
+    def test_asap_persisted_as_resolved_datetime(self, integration_db):
         """ASAP start_time is resolved to actual datetime, not stored as literal.
 
         Covers: UC-002-ALT-ASAP-START-TIMING-02
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request(start_time="asap")
-        product = _mock_product("prod_1")
 
-        mock_schema_product = MagicMock()
-        mock_schema_product.product_id = "prod_1"
-        mock_schema_product.name = "Test Product"
-        mock_schema_product.implementation_config = None
-        mock_schema_product.format_ids = None
-        mock_schema_product.delivery_type = MagicMock()
-        mock_schema_product.delivery_type.value = "non_guaranteed"
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            result = env.call_impl(req=req)
 
-        with _PatchContext(products=[product]) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_exec,
-                patch("src.core.tools.media_buy_create._determine_media_buy_status", return_value="active"),
-                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-            ):
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = []
-                mock_adapter.__class__.__name__ = "MockAdapter"
-                mock_adapter_fn.return_value = mock_adapter
-                mock_upload.return_value = (req.packages, {})
-
-                from src.core.schemas import Package as RespPkg
-
-                resp_pkg = RespPkg(package_id="pkg_1", product_id="prod_1", budget=5000.0)
-                mock_exec.return_value = CreateMediaBuySuccess(media_buy_id="mb_asap", packages=[resp_pkg])
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
-
-        # Adapter should have been called with a datetime, not "asap"
+        # The function got past the asap resolution and created the media buy.
         assert isinstance(result.response, CreateMediaBuySuccess)
-        # The start_time passed to the adapter is a resolved datetime
-        call_args = mock_exec.call_args
-        if call_args:
-            # Verify the function got past the asap resolution without error
-            assert result.response.media_buy_id is not None
+        assert result.response.media_buy_id is not None
 
-    @pytest.mark.asyncio
-    async def test_asap_flight_days_calculation(self):
+    def test_asap_flight_days_calculation(self, integration_db):
         """ASAP uses resolved start time for flight days calculation.
 
         Covers: UC-002-ALT-ASAP-START-TIMING-03
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # ASAP start, end in 14 days to ensure flight is long enough
         req = _make_request(
             start_time="asap",
@@ -1377,118 +1026,68 @@ class TestAsapStartTimingObligations:
                 },
             ],
         )
-        product = _mock_product("prod_1")
-        # Set max daily spend high enough: $7000/~14days = ~$500/day -> $600 cap should pass
-        cl = _mock_currency_limit(max_daily_package_spend=Decimal("1500"))
 
-        with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
-                mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=[],
-                    __class__=type("MockAdapter", (), {"__name__": "MockAdapter"}),
-                )
-                try:
-                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
-                except AdCPValidationError as e:
-                    msg = f"Daily spend validation should have passed but got: {e}"
-                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), msg
-                except Exception:
-                    pass  # Downstream failures unrelated to daily spend are fine
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            # $7000/~14 days ~= $500/day -> $1500 cap should pass.
+            tenant.currency_limits[0].max_daily_package_spend = 1500
+            env.setup_product_chain(tenant)
+            result = env.call_impl(req=req)
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
 
 
 class TestManualApprovalObligations:
     """Manual approval workflow obligation tests."""
 
-    @pytest.mark.asyncio
-    async def test_tenant_requires_review_enters_manual_path(self):
+    def test_tenant_requires_review_enters_manual_path(self, integration_db):
         """Tenant with human_review_required=true enters manual approval flow.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-01
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product], human_review_required=True) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-                patch("src.core.tools.media_buy_create.get_audit_logger"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            result = env.call_impl(req=req)
 
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.status == "submitted"  # Not "completed"
 
-    @pytest.mark.asyncio
-    async def test_adapter_requires_review_enters_manual_path(self):
+    def test_adapter_requires_review_enters_manual_path(self, integration_db):
         """Adapter with manual_approval_required=true enters manual approval flow.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-02
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product], human_review_required=False) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-                patch("src.core.tools.media_buy_create.get_audit_logger"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = True
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env(human_review_required=False) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            # Adapter (not tenant) requires manual approval.
+            mock_adapter = env.mock["adapter"].return_value
+            mock_adapter.manual_approval_required = True
+            mock_adapter.manual_approval_operations = ["create_media_buy"]
+            result = env.call_impl(req=req)
 
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.status == "submitted"
 
-    @pytest.mark.asyncio
-    async def test_seller_notification_sent_on_manual_approval(self):
+    def test_seller_notification_sent_on_manual_approval(self, integration_db):
         """Slack notification is sent when manual approval is required.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-05
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product], human_review_required=True) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.get_slack_notifier") as mock_slack,
-                patch("src.core.tools.media_buy_create.activity_feed"),
-                patch("src.core.tools.media_buy_create.get_audit_logger"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
-
-                mock_notifier = MagicMock()
-                mock_slack.return_value = mock_notifier
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            result = env.call_impl(req=req)
+            mock_notifier = env.mock["slack"].return_value
 
         assert result.status == "submitted"
         mock_notifier.notify_media_buy_event.assert_called_once_with(
@@ -1501,70 +1100,40 @@ class TestManualApprovalObligations:
             success=True,
         )
 
-    @pytest.mark.asyncio
-    async def test_response_envelope_status_is_submitted(self):
+    def test_response_envelope_status_is_submitted(self, integration_db):
         """Manual approval response has status 'submitted', not 'completed'.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-06
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product], human_review_required=True) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-                patch("src.core.tools.media_buy_create.get_audit_logger"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            result = env.call_impl(req=req)
 
         assert result.status == "submitted"
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.workflow_step_id is not None
 
-    @pytest.mark.asyncio
-    async def test_no_adapter_execution_before_approval(self):
+    def test_no_adapter_execution_before_approval(self, integration_db):
         """Adapter is NOT called when manual approval is required.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-07
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product], human_review_required=True) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_exec,
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-                patch("src.core.tools.media_buy_create.get_audit_logger"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            result = env.call_impl(req=req)
 
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            assert result.status == "submitted"
+            env.mock["adapter"].return_value.create_media_buy.assert_not_called()
 
-        assert result.status == "submitted"
-        mock_exec.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_seller_rejects_buyer_notified(self):
+    def test_seller_rejects_buyer_notified(self, integration_db):
         """Seller rejection workflow returns appropriate status.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-09
@@ -1573,33 +1142,19 @@ class TestManualApprovalObligations:
         This test verifies the pending_approval state is set up correctly for
         subsequent rejection handling.
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product], human_review_required=True) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-                patch("src.core.tools.media_buy_create.get_audit_logger"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            result = env.call_impl(req=req)
 
         # Pending approval means it's ready for accept/reject
         assert result.status == "submitted"
         assert result.response.workflow_step_id is not None
 
-    @pytest.mark.asyncio
-    async def test_buyer_can_poll_approval_progress(self):
+    def test_buyer_can_poll_approval_progress(self, integration_db):
         """Response includes workflow_step_id for polling.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-10
@@ -1607,43 +1162,26 @@ class TestManualApprovalObligations:
         Note: Polling is via tasks/get with the workflow_step_id.
         This test verifies the step_id is included in the response.
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product], human_review_required=True) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-                patch("src.core.tools.media_buy_create.get_audit_logger"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            result = env.call_impl(req=req)
 
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.workflow_step_id is not None
-        assert result.response.workflow_step_id == "step_1"
 
 
 class TestInlineCreativeObligations:
     """Inline creative handling obligation tests."""
 
-    @pytest.mark.asyncio
-    async def test_inline_creatives_uploaded_and_assigned(self):
+    def test_inline_creatives_uploaded_and_assigned(self, integration_db):
         """Inline creatives are processed by process_and_upload_package_creatives.
 
         Covers: UC-002-ALT-WITH-INLINE-CREATIVES-01
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request(
             packages=[
                 {
@@ -1662,28 +1200,18 @@ class TestInlineCreativeObligations:
                 },
             ]
         )
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product]) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-            ):
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+
+            with patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload:
                 mock_upload.return_value = (req.packages, {"pkg-1": ["new_creative_id"]})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = True
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
-
-                with (
-                    patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                    patch("src.core.tools.media_buy_create.activity_feed"),
-                    patch("src.core.tools.media_buy_create.get_audit_logger"),
-                ):
-                    try:
-                        await _create_media_buy_impl(req=req, identity=pc.identity)
-                    except Exception:
-                        pass
+                try:
+                    env.call_impl(req=req)
+                except Exception:
+                    pass
 
         mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY)
 
@@ -1785,16 +1313,13 @@ class TestProposalBasedObligations:
         assert req.proposal_id == "prop_abc"
         assert req.total_budget is not None
 
-    @pytest.mark.asyncio
-    async def test_proposal_based_product_validation(self):
+    def test_proposal_based_product_validation(self, integration_db):
         """Derived packages still require valid product_ids.
 
         Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-06
 
         Note: Even with proposal_id, product validation still runs on packages.
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # Request with proposal_id but packages referencing non-existent product
         req = _make_request(
             proposal_id="prop_123",
@@ -1807,12 +1332,12 @@ class TestProposalBasedObligations:
             ],
         )
 
-        with _PatchContext(products=[]) as pc:
-            # No products in DB -> products not found
-            pc.db_session.scalars.return_value.all.return_value = []
+        with _env() as env:
+            # No products in DB -> products not found.
+            env.setup_default_data()
             # Missing product_ids raise the typed AdCPProductNotFoundError.
             with pytest.raises(AdCPProductNotFoundError) as excinfo:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
         exc = excinfo.value
         assert exc.error_code == "PRODUCT_NOT_FOUND"
@@ -1848,38 +1373,23 @@ class TestCrossCuttingObligations:
         assert isinstance(error_result.response, CreateMediaBuyError)
         assert not isinstance(error_result.response, CreateMediaBuySuccess)
 
-    @pytest.mark.asyncio
-    async def test_manual_approval_persistence_before_adapter(self):
+    def test_manual_approval_persistence_before_adapter(self, integration_db):
         """Manual approval persists records before adapter execution.
 
         Covers: UC-002-CC-ADAPTER-ATOMICITY-03
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        with _PatchContext(products=[product], human_review_required=True) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_exec,
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-                patch("src.core.tools.media_buy_create.get_audit_logger"),
-            ):
-                mock_upload.return_value = (req.packages, {})
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = ["create_media_buy"]
-                mock_adapter_fn.return_value = mock_adapter
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            result = env.call_impl(req=req)
 
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
-
-        # Manual path: adapter was NOT called, but records were persisted
-        assert result.status == "submitted"
-        mock_exec.assert_not_called()
-        assert result.response.media_buy_id is not None
+            # Manual path: adapter was NOT called, but records were persisted
+            assert result.status == "submitted"
+            env.mock["adapter"].return_value.create_media_buy.assert_not_called()
+            assert result.response.media_buy_id is not None
 
     @pytest.mark.asyncio
     async def test_creative_in_valid_state_assigned_successfully(self):
@@ -1907,27 +1417,28 @@ class TestCrossCuttingObligations:
 class TestExtensionObligations:
     """Extension scenario obligation tests."""
 
-    @pytest.mark.asyncio
-    async def test_currency_not_supported_by_gam(self):
+    def test_currency_not_supported_by_gam(self, integration_db):
         """Currency supported by tenant but not GAM returns error.
 
         Covers: UC-002-EXT-D-02
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from tests.factories.core import AdapterConfigFactory, CurrencyLimitFactory
 
         req = _make_request()
-        product = _mock_product("prod_1", currency="EUR")
 
-        # Build adapter_config mock with GAM currency constraint
-        adapter_config = MagicMock()
-        adapter_config.gam_network_currency = "USD"
-        adapter_config.gam_secondary_currencies = None
-
-        cl = _mock_currency_limit()
-
-        with _PatchContext(products=[product], currency_limit=cl, adapter_config=adapter_config) as pc:
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            # Product priced in EUR; tenant supports EUR (CurrencyLimit) but GAM does not.
+            CurrencyLimitFactory(tenant=tenant, currency_code="EUR")
+            env.setup_product_chain(tenant, currency="EUR")
+            AdapterConfigFactory(
+                tenant=tenant,
+                adapter_type="google_ad_manager",
+                gam_network_currency="USD",
+                gam_secondary_currencies=None,
+            )
             with pytest.raises(AdCPValidationError) as excinfo:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
         exc = excinfo.value
         assert exc.error_code == "VALIDATION_ERROR"
@@ -2058,84 +1569,50 @@ class TestExtensionObligations:
 
         assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
 
-    @pytest.mark.asyncio
-    async def test_no_database_record_on_adapter_failure(self):
+    def test_no_database_record_on_adapter_failure(self, integration_db):
         """When adapter fails, no database records are created.
 
         Covers: UC-002-EXT-J-02
 
         Note: In the auto-approval path, adapter execution happens BEFORE
-        database persistence. If the adapter fails, the function returns
-        an error result and no persistence occurs.
+        database persistence. If the adapter returns an error, the function
+        returns an error result and no persistence occurs.
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.core.schemas import Error
 
         req = _make_request()
-        product = _mock_product("prod_1")
 
-        mock_schema_product = MagicMock()
-        mock_schema_product.product_id = "prod_1"
-        mock_schema_product.name = "Test Product"
-        mock_schema_product.implementation_config = None
-        mock_schema_product.format_ids = None
-        mock_schema_product.delivery_type = MagicMock()
-        mock_schema_product.delivery_type.value = "non_guaranteed"
-
-        with _PatchContext(products=[product]) as pc:
-            with (
-                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
-                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
-                patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_exec,
-                patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
-                patch("src.core.tools.media_buy_create.get_slack_notifier"),
-                patch("src.core.tools.media_buy_create.activity_feed"),
-            ):
-                mock_adapter = MagicMock()
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = []
-                mock_adapter.__class__.__name__ = "MockAdapter"
-                mock_adapter_fn.return_value = mock_adapter
-                mock_upload.return_value = (req.packages, {})
-
-                # Adapter returns error
-                from src.core.schemas import Error
-
-                adapter_error = CreateMediaBuyError(errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")])
-                mock_exec.return_value = adapter_error
-
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            # Adapter returns an error envelope (not success).
+            env.mock["adapter"].return_value.create_media_buy.side_effect = None
+            env.mock["adapter"].return_value.create_media_buy.return_value = CreateMediaBuyError(
+                errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")]
+            )
+            result = env.call_impl(req=req)
 
         # Adapter returned error -> result is error, no persistence
         assert isinstance(result.response, CreateMediaBuyError)
         assert result.status == "failed"
 
-    @pytest.mark.asyncio
-    async def test_no_max_daily_spend_configured_check_skipped(self):
+    def test_no_max_daily_spend_configured_check_skipped(self, integration_db):
         """No max_daily_package_spend -> daily spend check is skipped.
 
         Covers: UC-002-EXT-K-03
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request(
             packages=[{"product_id": "prod_1", "budget": 999999.0, "pricing_option_id": "cpm_usd_fixed"}]
         )
-        product = _mock_product("prod_1")
-        cl = _mock_currency_limit(max_daily_package_spend=None)
 
-        with _PatchContext(products=[product], currency_limit=cl) as pc:
-            with patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter:
-                mock_adapter.return_value = MagicMock(
-                    manual_approval_required=False,
-                    manual_approval_operations=[],
-                    __class__=type("M", (), {"__name__": "M"}),
-                )
-                try:
-                    result = await _create_media_buy_impl(req=req, identity=pc.identity)
-                except AdCPValidationError as e:
-                    assert "daily" not in str(e).lower(), f"Daily spend validation should have passed but got: {e}"
-                except Exception:
-                    pass  # Downstream failures unrelated to daily spend are fine
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            tenant.currency_limits[0].max_daily_package_spend = None
+            env.setup_product_chain(tenant)
+            # No cap -> the very large budget passes the daily-spend check.
+            result = env.call_impl(req=req)
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
 
     def test_proposal_not_found_error_code(self):
         """PROPOSAL_NOT_FOUND error code is used for missing proposals.
@@ -2172,22 +1649,21 @@ class TestExtensionObligations:
 
         assert callable(_get_products_impl)
 
-    @pytest.mark.asyncio
-    async def test_proposal_budget_amount_zero_rejected(self):
+    def test_proposal_budget_amount_zero_rejected(self, integration_db):
         """Total budget <= 0 returns BUDGET_BELOW_MINIMUM.
 
         Covers: UC-002-EXT-M-01
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # Zero budget triggers the typed AdCPBudgetTooLowError raise at
         # media_buy_create.py:1758 directly — propagates through the boundary
         # catch unchanged (typed AdCPError raised directly).
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
-        with _PatchContext() as pc:
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
             with pytest.raises(AdCPBudgetTooLowError) as excinfo:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
         exc = excinfo.value
         assert exc.error_code == "BUDGET_TOO_LOW"
@@ -2206,22 +1682,19 @@ class TestExtensionObligations:
         )
         assert error.details["error_code"] == "CURRENCY_MISMATCH"
 
-    @pytest.mark.asyncio
-    async def test_product_with_no_pricing_options(self):
+    def test_product_with_no_pricing_options(self, integration_db):
         """Product with no pricing options returns PRICING_ERROR.
 
         Covers: UC-002-EXT-N-02
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         req = _make_request()
-        product = MagicMock()
-        product.product_id = "prod_1"
-        product.pricing_options = []  # No pricing options
 
-        with _PatchContext(products=[product]) as pc:
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            # Product created WITHOUT any pricing option.
+            env.setup_product_chain(tenant, with_pricing=False)
             with pytest.raises(AdCPValidationError) as excinfo:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
         # Pricing-error sites in _validate_pricing_model_selection tag the error
         # via details={"error_code": "PRICING_ERROR"} while the wire code stays
@@ -2272,14 +1745,11 @@ class TestExtensionObligations:
 class TestPostconditionObligations:
     """Postcondition obligation tests."""
 
-    @pytest.mark.asyncio
-    async def test_system_state_unchanged_on_failure(self):
+    def test_system_state_unchanged_on_failure(self, integration_db):
         """On validation failure, no records are created.
 
         Covers: UC-002-POST-01
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # Non-existent product -> validation failure inside _impl
         req = _make_request(
             packages=[
@@ -2291,27 +1761,32 @@ class TestPostconditionObligations:
             ]
         )
 
-        # Default _PatchContext mocks one product with id "prod_1"; req asks
-        # for "nonexistent_prod" so the validation block hits the not-found
-        # branch, raising the typed AdCPProductNotFoundError.
-        with _PatchContext() as pc:
+        with _env() as env:
+            from sqlalchemy import func, select
+
+            from src.core.database.models import MediaBuy
+
+            tenant, _principal = env.setup_default_data()
+            # Seed a product with id "prod_1"; req asks for "nonexistent_prod" so the
+            # validation block hits the not-found branch, raising the typed error.
+            env.setup_product_chain(tenant)
             with pytest.raises(AdCPProductNotFoundError) as exc_info:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
             assert exc_info.value.error_code == "PRODUCT_NOT_FOUND"
 
-        # Postcondition: the typed raise happens BEFORE any session.add() —
-        # no MediaBuy/Package rows are inserted on the failure path.
-        pc.db_session.add.assert_not_called()
+            # Postcondition: the typed raise happens BEFORE any media buy is
+            # persisted — no MediaBuy rows exist for this tenant.
+            count = env._session.scalar(
+                select(func.count()).select_from(MediaBuy).where(MediaBuy.tenant_id == tenant.tenant_id)
+            )
+            assert count == 0
 
-    @pytest.mark.asyncio
-    async def test_error_response_contains_recovery_guidance(self):
+    def test_error_response_contains_recovery_guidance(self, integration_db):
         """Error messages include enough info for buyer to fix and retry.
 
         Covers: UC-002-POST-03
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
         # Missing product -> error with product ID listed
         req = _make_request(
             packages=[
@@ -2323,12 +1798,13 @@ class TestPostconditionObligations:
             ]
         )
 
-        with _PatchContext(products=[]) as pc:
-            pc.db_session.scalars.return_value.all.return_value = []
+        with _env() as env:
+            # No products in DB.
+            env.setup_default_data()
             # Production raises the typed AdCPProductNotFoundError, whose class
             # identity carries the PRODUCT_NOT_FOUND wire code.
             with pytest.raises(AdCPProductNotFoundError) as excinfo:
-                await _create_media_buy_impl(req=req, identity=pc.identity)
+                env.call_impl(req=req)
 
         exc = excinfo.value
         # Recovery guidance lives on the typed exception itself: the
