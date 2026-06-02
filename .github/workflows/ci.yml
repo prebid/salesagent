@@ -144,7 +144,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 20
+    # Single job runs full integration/ suite (~25–30 min). On main, test.yml shards
+    # this across 5 matrix jobs (15 min each); 20 min here caused cancel at ~95%.
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:15
@@ -184,7 +186,7 @@ jobs:
         run: |
           ENCRYPTION_KEY="$(python -c "import base64; print(base64.urlsafe_b64encode(b'0'*32).decode())")"
           export ENCRYPTION_KEY
-          uv run pytest tests/integration/ -p no:randomly -m "not requires_server and not skip_ci" -q --tb=line --cov=src --cov-report=xml --cov-report=term
+          uv run pytest tests/integration/ -p no:randomly -m "not requires_server and not skip_ci" -q --tb=line
       - name: Cleanup pinned creative agent
         if: always()
         run: ./scripts/creative-agent-stack.sh down
