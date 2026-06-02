@@ -12,13 +12,13 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_principal_id, require_tenant
 from src.core.database.repositories import MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -60,16 +60,12 @@ def _update_performance_index_impl(
         raise ValueError("Identity is required for update_performance_index")
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(identity)
 
     with MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
         _verify_principal(req.media_buy_id, identity, uow.media_buys)
-    principal_id = identity.principal_id
-    if principal_id is None:
-        raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")
+    principal_id = require_principal_id(identity)
 
     # Get the Principal object
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)

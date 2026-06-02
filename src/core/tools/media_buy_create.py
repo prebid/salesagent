@@ -39,7 +39,6 @@ from rich.console import Console
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
     AdCPBudgetExceededError,
@@ -95,6 +94,8 @@ from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_object,
+    require_principal_id,
+    require_tenant,
     resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
@@ -1582,14 +1583,10 @@ async def _create_media_buy_impl(
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
     # Authentication and tenant setup
-    principal_id = identity.principal_id
-    if principal_id is None:
-        raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")
+    principal_id = require_principal_id(identity)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(identity)
 
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:

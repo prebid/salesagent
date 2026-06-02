@@ -35,7 +35,6 @@ from sqlalchemy import select
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
     AdCPBudgetExceededError,
@@ -54,6 +53,8 @@ logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
+    require_principal_id,
+    require_tenant,
     resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
@@ -134,18 +135,10 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
         ValueError: Media buy not found
         PermissionError: Principal doesn't own media buy
     """
-    principal_id: str | None = context.principal_id
-
-    # CRITICAL: principal_id is required for media buy updates
-    if not principal_id:
-        raise AdCPAuthenticationError(
-            "Authentication required: Missing or invalid x-adcp-auth header. Media buy updates require authentication."
-        )
+    principal_id = require_principal_id(context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = context.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(context)
 
     # Query database for media buy by ID
     media_buy = repo.get_by_id(media_buy_id)
@@ -154,11 +147,6 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
         raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
     if media_buy.principal_id != principal_id:
-        # CRITICAL: Verify principal_id is set (security check, not assertion)
-        # Using explicit check instead of assert because asserts are removed with python -O
-        if not principal_id:
-            raise AdCPAuthenticationError("Authentication required: principal_id not found in context")
-
         # Log security violation
         security_logger = get_audit_logger("AdCP", tenant["tenant_id"])
         security_logger.log_security_violation(
@@ -204,9 +192,7 @@ def _update_media_buy_impl(
         raise AdCPAuthRequiredError("principal_id missing from authentication context")
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(identity)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
     # Hoist ``ctx_manager`` and ``step`` out of the try below so the
