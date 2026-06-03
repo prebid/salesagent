@@ -106,7 +106,7 @@ class BroadstreetAdapter(AdServerAdapter):
             # Fall back to default advertiser from config
             self.advertiser_id = self.config.get("default_advertiser_id")
             if not self.dry_run:
-                self._require_config(
+                self.advertiser_id = self._require_config(
                     self.advertiser_id,
                     field="advertiser_id",
                     message=(

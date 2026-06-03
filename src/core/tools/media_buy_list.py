@@ -233,14 +233,15 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # Use the spec-standard ``INTERNAL_ERROR`` code (data-integrity
-                    # is a seller-side issue; buyer can't fix). The specific
-                    # ``TARGETING_REHYDRATION_FAILED`` shape lives in the message
-                    # so callers can grep/route on it without us adding a
-                    # non-standard wire code.
+                    # Seller-side data-integrity failure (the buyer can't fix it),
+                    # surfaced with the standard ``SERVICE_UNAVAILABLE`` wire code —
+                    # matching the sibling per-creative advisory in
+                    # creatives/_processing.py — with the specific
+                    # ``TARGETING_REHYDRATION_FAILED`` shape in the message so
+                    # callers can grep/route on it.
                     hydration_errors.append(
                         Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            code="INTERNAL_ERROR",
+                            code="SERVICE_UNAVAILABLE",
                             message=(
                                 f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
                                 f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "

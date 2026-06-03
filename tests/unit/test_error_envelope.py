@@ -390,3 +390,20 @@ class TestWireBytesIdenticalAcrossTransports:
         a2a_bytes = self._a2a_envelope_bytes(exc)
         msg = f"REST and A2A envelopes drifted apart for AdCPNotFoundError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
         assert rest_bytes == a2a_bytes, msg
+
+
+class TestMalformedContextFailsOpen:
+    """The serializer must fail open on a malformed context: log + drop it, never
+    raise. A raise inside the boundary translator would shadow the buyer's original
+    error (the reason _serialize_context returns None instead of raising TypeError).
+    """
+
+    def test_non_model_context_is_dropped_not_raised(self):
+        # context is neither a dict nor a Pydantic BaseModel.
+        exc = AdCPValidationError("bad budget", context=object())
+
+        envelope = build_two_layer_error_envelope(exc)  # must not raise
+
+        assert "context" not in envelope, "malformed context must be dropped, not serialized"
+        assert envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
+        assert envelope["errors"][0]["code"] == "VALIDATION_ERROR"

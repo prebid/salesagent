@@ -18,6 +18,7 @@ from src.core.exceptions import (
     AdCPInventoryUnavailableError,
     AdCPLineItemError,
     AdCPMediaBuyRejectedError,
+    AdCPWorkflowError,
     build_two_layer_error_envelope,
 )
 
@@ -31,6 +32,7 @@ from src.core.exceptions import (
         (AdCPBulkUpdateError, "PARTIAL_FAILURE", "SERVICE_UNAVAILABLE"),
         (AdCPActivationWorkflowError, "ACTIVATION_WORKFLOW_FAILED", "SERVICE_UNAVAILABLE"),
         (AdCPGamUpdateError, "GAM_UPDATE_FAILED", "SERVICE_UNAVAILABLE"),
+        (AdCPWorkflowError, "WORKFLOW_CREATION_FAILED", "SERVICE_UNAVAILABLE"),
         # Mock-adapter business outcomes: distinct buyer-facing wire codes.
         (AdCPMediaBuyRejectedError, "MEDIA_BUY_REJECTED", "POLICY_VIOLATION"),
         (AdCPInventoryUnavailableError, "INVENTORY_UNAVAILABLE", "PRODUCT_UNAVAILABLE"),

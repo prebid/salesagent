@@ -175,31 +175,14 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     below). The canonical prefix is ``"{operation} failed: {exc}"`` so
     storyboard runners can parse the failure uniformly.
 
-    Protocol-level RPC handlers (``on_get_task_push_notification_config``,
-    ``on_create_task_push_notification_config``,
-    ``on_list_task_push_notification_config``,
-    ``on_delete_task_push_notification_config``) are JSON-RPC protocol methods,
-    not async-task skill handlers. They raise via
-    ``_push_notification_config_error`` (below), which keeps the JSON-RPC error
-    convention but carries the AdCP envelope in the error ``data`` field.
-    """
-    return InternalError(message=f"{operation} failed: {exc}")
-
-
-def _push_notification_config_error(operation: str, exc: Exception) -> InternalError:
-    """JSON-RPC ``InternalError`` for push-notification-config CRUD failures.
-
-    The four ``on_*_task_push_notification_config`` handlers are JSON-RPC protocol
-    methods, not async-Task skills, so their failures surface as JSON-RPC errors
-    rather than Task-DataPart envelopes. To keep the AdCP two-layer envelope
-    available to buyers on this path, it rides in the error's ``data`` field —
-    readers take ``error.data["errors"][0]["code"]`` / ``error.data["adcp_error"]``.
-
-    ``InternalError`` stays an ``A2AError`` so the SDK's ``JsonRpcDispatcher``
-    serializes it as a structured JSON-RPC error. Raising a non-``A2AError`` (e.g.
-    ``AdCPAdapterError``) would instead hit the dispatcher's ``except Exception``
-    branch and be flattened to a bare ``InternalError(message=str(exc))`` with no
-    envelope at all.
+    The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
+    this helper too — they have no async Task to carry a DataPart, so the two-layer
+    envelope rides in the error's ``data`` field (``error.data["errors"][0]["code"]``
+    / ``error.data["adcp_error"]``). ``InternalError`` stays an ``A2AError`` so the
+    SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error; raising
+    a non-``A2AError`` (e.g. ``AdCPAdapterError``) would hit the dispatcher's
+    ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
+    envelope.
     """
     return InternalError(
         message=f"{operation} failed: {exc}",
@@ -1147,7 +1130,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _push_notification_config_error("get push notification config", e) from e
+            raise _internal_error_for("get push notification config", e) from e
 
     async def on_create_task_push_notification_config(
         self,
@@ -1222,7 +1205,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _push_notification_config_error("set push notification config", e) from e
+            raise _internal_error_for("set push notification config", e) from e
 
     async def on_list_task_push_notification_configs(
         self,
@@ -1280,7 +1263,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _push_notification_config_error("list push notification configs", e) from e
+            raise _internal_error_for("list push notification configs", e) from e
 
     async def on_delete_task_push_notification_config(
         self,
@@ -1325,7 +1308,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _push_notification_config_error("delete push notification config", e) from e
+            raise _internal_error_for("delete push notification config", e) from e
 
     async def on_get_extended_agent_card(
         self,
