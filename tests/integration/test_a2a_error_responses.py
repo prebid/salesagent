@@ -591,6 +591,40 @@ class TestA2AErrorPropagation:
             message_substr="mb_does_not_exist_a2a_wire",
         )
 
+    async def test_update_media_buy_missing_media_buy_id_wire_envelope(self, handler, test_tenant, test_principal):
+        """update_media_buy skill with no media_buy_id surfaces VALIDATION_ERROR on the A2A wire.
+
+        Pins the skill-handler required-param guard: a missing field raises a typed
+        AdCPValidationError so the dispatcher emits the two-layer envelope — not a raw
+        JSON-RPC InvalidParamsError that erases the wire code. The create_media_buy skill
+        already does this; this locks update_media_buy to the same contract.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        # No media_buy_id — the skill handler's required-param guard must fire.
+        message = self.create_message_with_skill("update_media_buy", {"paused": True})
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None and len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="media_buy_id")
+
     @pytest.fixture
     def active_media_buy(self, _seeded):
         """Persist an active media buy for the chain tenant/principal via MediaBuyFactory.

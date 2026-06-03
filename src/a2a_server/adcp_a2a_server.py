@@ -988,7 +988,7 @@ class AdCPRequestHandler(RequestHandler):
             await self._send_protocol_webhook(task, status="failed")
 
             # Raise A2A error instead of creating failed task
-            raise _internal_error_for("Message processing", e)
+            raise _internal_error_for("message processing", e)
 
         self.tasks[task_id] = task
         return task
@@ -1866,9 +1866,13 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(legacy_updates, dict) and "packages" in legacy_updates:
                 params["packages"] = legacy_updates["packages"]
 
-        # media_buy_id is required
+        # media_buy_id is required. Raise typed AdCPValidationError so the dispatcher
+        # routes it through the two-layer envelope, matching the create_media_buy skill.
         if "media_buy_id" not in params:
-            raise InvalidParamsError(message="Missing required parameter: 'media_buy_id'")
+            raise AdCPValidationError(
+                "Missing required parameter: media_buy_id",
+                suggestion="Provide the media_buy_id of the media buy to update",
+            )
 
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status')
@@ -1881,7 +1885,7 @@ class AdCPRequestHandler(RequestHandler):
                 context=params.get("context"),
             )
         except ValidationError as e:
-            raise InvalidParamsError(message=f"Invalid parameters: {e}")
+            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields + raw nested structures and identity
         response = core_update_media_buy_tool(
