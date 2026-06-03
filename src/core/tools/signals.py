@@ -13,7 +13,6 @@ from fastmcp.tools.tool import ToolResult
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
@@ -28,7 +27,7 @@ from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
 
-from src.core.auth import get_principal_object, require_tenant
+from src.core.auth import get_principal_object, require_identity, require_principal_id, require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ActivateSignalResponse,
@@ -229,19 +228,13 @@ async def _activate_signal_impl(
     """
     start_time = time.time()
 
-    # Authentication required for signal activation
-    principal_id = identity.principal_id if identity else None
-
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    identity = require_identity(identity)
+    principal_id = require_principal_id(identity)
     require_tenant(identity)
-    assert identity is not None  # require_tenant raised if identity was None
 
     # Get the Principal object with ad server mappings
-    if not principal_id:
-        raise AdCPAuthenticationError("Authentication required for signal activation")
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
 
-    # Apply testing hooks (identity is non-None here — require_tenant asserted it above)
     testing_ctx = identity.testing_context or AdCPTestContext()
     campaign_info = {"endpoint": "activate_signal", "signal_id": signal_agent_segment_id}
     # Note: apply_testing_hooks modifies response data dict, not called here as no response yet

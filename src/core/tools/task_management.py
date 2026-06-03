@@ -14,7 +14,7 @@ from typing import Any
 from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_tenant
+from src.core.auth import require_identity, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -53,8 +53,8 @@ async def list_tasks(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
+    identity = require_identity(identity)
     tenant = require_tenant(identity)
-    assert identity is not None  # require_tenant raised if identity was None
 
     if not identity.is_authenticated:
         raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
@@ -141,8 +141,8 @@ async def get_task(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
+    identity = require_identity(identity)
     tenant = require_tenant(identity)
-    assert identity is not None  # require_tenant raised if identity was None
 
     if not identity.is_authenticated:
         raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
@@ -211,8 +211,8 @@ async def complete_task(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
+    identity = require_identity(identity)
     tenant = require_tenant(identity)
-    assert identity is not None  # require_tenant raised if identity was None
 
     if not identity.is_authenticated:
         raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to complete tasks.")

@@ -40,7 +40,6 @@ from rich.console import Console
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
-    AdCPAuthRequiredError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPError,
@@ -94,6 +93,7 @@ from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_object,
+    require_identity,
     require_principal_id,
     require_tenant,
     resolve_principal_or_raise,
@@ -1575,10 +1575,7 @@ async def _create_media_buy_impl(
             )
 
     # Extract testing context first
-    if identity is None:
-        raise AdCPAuthRequiredError(
-            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
-        )
+    identity = require_identity(identity)
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 

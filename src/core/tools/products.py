@@ -19,12 +19,11 @@ from pydantic import Field, ValidationError
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
-    AdCPAuthRequiredError,
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
@@ -169,30 +168,12 @@ async def _get_products_impl(
         raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
 
     # Extract identity fields
-    if identity is None:
-        raise AdCPAuthRequiredError(
-            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
-        )
+    identity = require_identity(identity)
 
     testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id
-    tenant: dict[str, Any] = identity.tenant if identity.tenant else {}
-
-    if tenant:
-        logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
-    elif principal_id:
-        # If we have principal but no tenant, something went wrong
-        logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
-        raise AdCPValidationError(
-            f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}",
-            recovery="terminal",
-        )
-    else:
-        # No tenant context and no principal - cannot determine which tenant's products to return
-        logger.error("[GET_PRODUCTS] No tenant context available - cannot determine which products to return")
-        raise AdCPAuthenticationError(
-            "Cannot determine tenant context. Please provide valid authentication or ensure tenant can be identified from request headers."
-        )
+    tenant = require_tenant(identity)
+    logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
 
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None

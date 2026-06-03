@@ -102,24 +102,21 @@ class TestIdentityValidation:
     """Test _get_products_impl identity validation error paths.
 
     Intent: _get_products_impl must refuse requests where tenant context
-    cannot be determined. Two cases:
-    1. Principal authenticated but tenant mapping failed → bug, not user error
-    2. No credentials at all → user needs to authenticate
+    cannot be determined. The require_tenant guard rejects any missing tenant
+    (None or empty dict) with AdCPAuthenticationError, regardless of whether a
+    principal is present.
     """
 
     @pytest.mark.asyncio
-    async def test_principal_without_tenant_raises_validation_error(self):
-        """Principal present but no tenant → AdCPValidationError with 'bug' indication."""
+    async def test_principal_without_tenant_raises_auth_error(self):
+        """Principal present but no tenant → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="user-123", tenant=None)
         req = _make_request()
 
         from src.core.tools.products import _get_products_impl
 
-        with pytest.raises(AdCPValidationError, match="tenant context missing") as exc_info:
+        with pytest.raises(AdCPAuthenticationError, match="No tenant context available"):
             await _get_products_impl(req, identity)
-
-        assert "user-123" in str(exc_info.value)
-        assert "bug" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_no_principal_no_tenant_raises_authentication_error(self):
@@ -129,7 +126,7 @@ class TestIdentityValidation:
 
         from src.core.tools.products import _get_products_impl
 
-        with pytest.raises(AdCPAuthenticationError, match="Cannot determine tenant context"):
+        with pytest.raises(AdCPAuthenticationError, match="No tenant context available"):
             await _get_products_impl(req, identity)
 
     @pytest.mark.asyncio
@@ -140,7 +137,7 @@ class TestIdentityValidation:
 
         from src.core.tools.products import _get_products_impl
 
-        with pytest.raises(AdCPValidationError, match="tenant context missing"):
+        with pytest.raises(AdCPAuthenticationError, match="No tenant context available"):
             await _get_products_impl(req, identity)
 
 

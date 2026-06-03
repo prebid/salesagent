@@ -214,15 +214,19 @@ class TestAuthenticationRequirements:
 
         from src.core.tools.signals import _activate_signal_impl
 
-        # Call without identity (no auth) — _impl raises an error before proceeding.
-        # May raise RuntimeError (no tenant context), AdCPAuthenticationError, or AdCPValidationError.
+        # Call without identity (no auth) — require_identity rejects before proceeding.
         with pytest.raises((AdCPAuthenticationError, AdCPValidationError, RuntimeError)) as exc_info:
             asyncio.run(
                 _activate_signal_impl(signal_agent_segment_id="test_signal", media_buy_id="test_buy", identity=None)
             )
 
         error_msg = str(exc_info.value).lower()
-        assert "authentication required" in error_msg or "context" in error_msg or "tenant" in error_msg
+        assert (
+            "identity is required" in error_msg
+            or "authentication required" in error_msg
+            or "context" in error_msg
+            or "tenant" in error_msg
+        )
 
 
 class TestAuthenticationWithMockedContext:

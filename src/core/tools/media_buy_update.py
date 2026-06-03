@@ -36,7 +36,6 @@ from sqlalchemy import select
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
-    AdCPAuthRequiredError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
@@ -53,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
+    require_identity,
     require_principal_id,
     require_tenant,
     resolve_principal_or_raise,
@@ -181,10 +181,7 @@ def _update_media_buy_impl(
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
 
-    if identity is None:
-        raise AdCPAuthRequiredError(
-            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
-        )
+    identity = require_identity(identity)
 
     principal_id = require_principal_id(identity, context=req.context)
 

@@ -19,7 +19,6 @@ from pydantic import Field, RootModel, ValidationError
 from rich.console import Console
 
 from src.core.exceptions import (
-    AdCPAuthRequiredError,
     AdCPError,
     AdCPValidationError,
 )
@@ -52,7 +51,7 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
-from src.core.auth import require_principal_id, require_tenant, resolve_principal_or_raise
+from src.core.auth import require_identity, require_principal_id, require_tenant, resolve_principal_or_raise
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import DeliveryRepository
@@ -97,10 +96,7 @@ def _get_media_buy_delivery_impl(
     """
 
     # Validate identity is provided
-    if identity is None:
-        raise AdCPAuthRequiredError(
-            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
-        )
+    identity = require_identity(identity)
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()

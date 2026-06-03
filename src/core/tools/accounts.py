@@ -34,6 +34,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
@@ -130,11 +131,9 @@ def _list_accounts_impl(
         req = ListAccountsRequest()
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
-    if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        raise AdCPAuthenticationError("Authentication required for list_accounts")
-
-    tenant_id = identity.tenant_id
-    principal_id = identity.principal_id
+    principal_id = require_principal_id(identity)
+    tenant = require_tenant(identity)
+    tenant_id = tenant["tenant_id"]
 
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None

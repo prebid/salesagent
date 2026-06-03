@@ -376,6 +376,24 @@ def require_tenant(
     return tenant
 
 
+def require_identity(identity: "ResolvedIdentity | None") -> "ResolvedIdentity":
+    """Return the resolved identity or raise ``AdCPAuthRequiredError``.
+
+    Single source of truth for the "identity is required" guard every ``_impl``
+    runs at entry. Narrowing the return type lets callers drop the follow-up
+    ``assert identity is not None`` (which ``python -O`` strips) instead of
+    open-coding the check across tool modules.
+    """
+    from src.core.exceptions import AdCPAuthRequiredError
+
+    if identity is None:
+        raise AdCPAuthRequiredError(
+            "Identity is required",
+            details={"suggestion": "Provide a valid authentication token"},
+        )
+    return identity
+
+
 def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | None = None) -> str | None:
     """Get the adapter-specific ID for a principal."""
     mappings = get_principal_adapter_mapping(principal_id, tenant_id=tenant_id)

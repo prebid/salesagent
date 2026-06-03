@@ -58,11 +58,10 @@ from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_identity
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.exceptions import (
-    AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
 )
@@ -98,10 +97,7 @@ def _get_media_buys_impl(
     Returns:
         GetMediaBuysResponse with matching media buys
     """
-    if identity is None:
-        raise AdCPAuthRequiredError(
-            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
-        )
+    identity = require_identity(identity)
 
     if req.account is not None or req.account_id is not None:
         raise AdCPCapabilityNotSupportedError(
