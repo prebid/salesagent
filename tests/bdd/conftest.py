@@ -973,14 +973,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                 break
 
-        # Graduated: T-UC-004-dim-sortby-fallback — impl, mcp, rest pass; only a2a fails
-        if "T-UC-004-dim-sortby-fallback" in marker_names and is_a2a:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="sort_by fallback: A2A transport drops by_placement from response — serialization gap",
-                    strict=False,
-                )
-            )
+        # Graduated: T-UC-004-dim-sortby-fallback — all transports pass.
+        # A2A previously dropped by_placement; that serialization gap is fixed.
+        # Verified (bdd-3.1 jceq): the scenario xpasses with by_placement present
+        # and sorted by spend (then_placement_sorted_fallback asserts
+        # values == sorted(values, reverse=True); inline pytest.xfail guards the
+        # vacuous case), so the pass is real, not a weakened assertion.
 
         # UC-004 status filter: "active" works, other values may not
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
@@ -1414,7 +1412,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if not _cred_passes:
                 item.add_marker(
                     pytest.mark.xfail(
-                        reason="webhook credentials boundary: validation gaps on this transport", strict=False
+                        reason="credentials boundary test passes for the wrong reason — When sends an "
+                        "unsupported 'credentials' field (extra_forbidden), not real credential "
+                        "validation; not graduated pending rework (salesagent-7n4b)",
+                        strict=False,
                     )
                 )
 
@@ -1740,7 +1741,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if not _pcred_passes:
                 item.add_marker(
                     pytest.mark.xfail(
-                        reason="webhook credentials partition: validation gaps on this transport", strict=False
+                        reason="credentials partition test passes for the wrong reason — When sends an "
+                        "unsupported 'credentials' field (extra_forbidden), not real credential "
+                        "validation; not graduated pending rework (salesagent-7n4b)",
+                        strict=False,
                     )
                 )
 
