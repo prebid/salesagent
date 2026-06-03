@@ -143,6 +143,18 @@ COPY templates/ templates/
 # Copy pre-built virtual environment from builder stage (runtime deps only)
 COPY --from=builder /app/.venv /app/.venv
 
+# Copy nginx configs - run_all_services.py selects based on ADCP_MULTI_TENANT
+# Default: single-tenant (path-based routing, localhost upstreams)
+# ADCP_MULTI_TENANT=true: multi-tenant (subdomain routing)
+# Development config included for docker-compose.yml multi-container setup
+COPY config/nginx/nginx-single-tenant.conf /etc/nginx/nginx-single-tenant.conf
+COPY config/nginx/nginx-multi-tenant.conf /etc/nginx/nginx-multi-tenant.conf
+COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
+
+# Create nginx directories with proper permissions
+RUN mkdir -p /var/log/nginx /var/run && \
+    chown -R www-data:www-data /var/log/nginx /var/run
+
 # Add .venv to PATH and set PYTHONPATH for module imports
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app"
@@ -155,11 +167,11 @@ ENV ADCP_HOST=0.0.0.0
 # core/main.py serves MCP, A2A, and the Flask admin from one Starlette
 # binary on $ADCP_PORT. The bundled nginx thread in run_all_services.py
 # is unused on this fork — kept off via SKIP_NGINX=true.
-ENV SKIP_NGINX=false
+#ENV SKIP_NGINX=false
 # Server-owned adapter schedulers replace the bundled supercronic inventory
 # sweep in the default container runtime. Operators can still opt back into
 # cron by overriding this, but should not run both mechanisms together.
-ENV SKIP_CRON=true
+#ENV SKIP_CRON=true
 
 # Expose the unified python port directly. Fly.io / upstream proxy
 # talks to this port; no in-image reverse proxy.
@@ -167,7 +179,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["python", "scripts/healthcheck.py", "8080"]
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Use venv Python directly as entrypoint (prepares for hardened images that lack bash)
 ENTRYPOINT ["/app/.venv/bin/python", "scripts/deploy/run_all_services.py"]
