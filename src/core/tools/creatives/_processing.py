@@ -25,8 +25,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _failed_sync_result(creative_id: str, error_msg: str) -> SyncCreativeResult:
-    """Build a SyncCreativeResult for a failed creative sync operation."""
+def _failed_sync_result(creative_id: str, error_msg: str, *, recovery: str | None = None) -> SyncCreativeResult:
+    """Build a SyncCreativeResult for a failed creative sync operation.
+
+    ``recovery`` distinguishes a transient failure (creative agent down — a retry
+    may help) from a terminal one (server misconfiguration — retrying cannot fix
+    it). The wire code stays the standard ``SERVICE_UNAVAILABLE`` either way
+    (``CONFIGURATION_ERROR`` is internal-only and would leak verbatim in an
+    advisory); ``recovery`` is the structured retry signal.
+    """
     return SyncCreativeResult(
         creative_id=creative_id,
         action="failed",
@@ -34,7 +41,7 @@ def _failed_sync_result(creative_id: str, error_msg: str) -> SyncCreativeResult:
         platform_id=None,
         errors=[
             AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-                code="SERVICE_UNAVAILABLE", message=error_msg
+                code="SERVICE_UNAVAILABLE", message=error_msg, recovery=recovery
             )
         ],
         review_feedback=None,
@@ -425,6 +432,13 @@ def _update_existing_creative(
                     logger.error(f"[sync_creatives] {error_msg}")
                     return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
 
+        except AdCPConfigurationError as config_error:
+            # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
+            # and admin-fixable — not a transient creative-agent outage. Surface it
+            # honestly so the buyer does not retry a misconfiguration.
+            error_msg = str(config_error)
+            logger.error(f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id}", exc_info=True)
+            return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="terminal"), False)
         except Exception as validation_error:
             # Creative agent validation failed for update (network error, agent down, etc.)
             # Do NOT update the creative - it needs validation before acceptance
@@ -436,7 +450,7 @@ def _update_existing_creative(
                 f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id}",
                 exc_info=True,
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
+            return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="transient"), False)
 
     # In full upsert, consider all fields as changed
     changes.extend(["url", "click_url", "width", "height", "duration"])
@@ -720,6 +734,13 @@ def _create_new_creative(
                         logger.error(f"[sync_creatives] {error_msg}")
                         return (_failed_sync_result(creative_id, error_msg), False)
 
+        except AdCPConfigurationError as config_error:
+            # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
+            # and admin-fixable — not a transient creative-agent outage. Surface it
+            # honestly so the buyer does not retry a misconfiguration.
+            error_msg = str(config_error)
+            logger.error(f"[sync_creatives] {error_msg} - rejecting creative {creative_id}", exc_info=True)
+            return (_failed_sync_result(creative_id, error_msg, recovery="terminal"), False)
         except Exception as validation_error:
             # Creative agent validation failed (network error, agent down, etc.)
             # Do NOT store the creative - it needs validation before acceptance
@@ -731,7 +752,7 @@ def _create_new_creative(
                 f"[sync_creatives] {error_msg} - rejecting creative {creative_id}",
                 exc_info=True,
             )
-            return (_failed_sync_result(creative_id, error_msg), False)
+            return (_failed_sync_result(creative_id, error_msg, recovery="transient"), False)
 
     # Determine creative status based on approval mode
 
