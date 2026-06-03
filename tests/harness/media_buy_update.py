@@ -42,6 +42,21 @@ from tests.harness._base import BaseTestEnv
 _MODULE = "src.core.tools.media_buy_update"
 _DB_MODULE = "src.core.database.database_session"
 
+# UpdateMediaBuyRequest fields that the flat update wrappers (update_media_buy_raw /
+# update_media_buy MCP) do not accept as parameters. MediaBuyDualEnv pops these from
+# the model_dump before calling a wrapper so the flat-kwargs call doesn't fail on
+# unexpected keyword arguments. Kept in sync with update_media_buy_raw's signature.
+_WRAPPER_UNSUPPORTED_FIELDS = (
+    "account",
+    "adcp_major_version",
+    "canceled",
+    "cancellation_reason",
+    "invoice_recipient",
+    "new_packages",
+    "revision",
+    "today",
+)
+
 
 class MediaBuyUpdateEnv(BaseTestEnv):
     """Unit test environment for _update_media_buy_impl.
