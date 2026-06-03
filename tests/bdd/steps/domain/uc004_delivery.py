@@ -139,6 +139,27 @@ def given_media_buy_with_status(ctx: dict, mb_id: str, owner: str, status: str) 
     _ensure_media_buy_in_db(ctx, mb_id, owner, status)
 
 
+@given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with status "{status}" and reach_unit "{reach_unit}"'))
+def given_media_buy_with_status_and_reach_unit(ctx: dict, mb_id: str, owner: str, status: str, reach_unit: str) -> None:
+    """Create a media buy with a status and a reach_unit (v3.1 BR-RULE-224).
+
+    A dedicated parser is required because ``parsers.parse`` end-anchors the
+    whole step: the broader ``with status "{status}"`` parser would otherwise
+    backtrack ``{status}`` to absorb ``active" and reach_unit "individuals``,
+    overflowing the varchar(20) status column. reach_unit is not a MediaBuy
+    column — it describes the buy's reach measurement and is stored on ctx for
+    aggregated_totals.reach/frequency Then steps.
+    """
+    ctx.setdefault("media_buys", {})[mb_id] = {
+        "media_buy_id": mb_id,
+        "owner": owner,
+        "status": status,
+        "reach_unit": reach_unit,
+    }
+    ctx.setdefault("reach_units", {})[mb_id] = reach_unit
+    _ensure_media_buy_in_db(ctx, mb_id, owner, status)
+
+
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with buyer_ref "{buyer_ref}"'))
 def given_media_buy_with_buyer_ref(ctx: dict, mb_id: str, owner: str, buyer_ref: str) -> None:
     """Create a media buy with a buyer reference.
