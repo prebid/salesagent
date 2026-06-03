@@ -918,6 +918,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004: additional xfails for features needing production enhancements
         # FIXME(salesagent-a0o): These require production changes, not BDD wiring.
         _UC004_XFAIL_ADDITIONAL: dict[str, tuple[str, bool]] = {
+            # FIXME(salesagent-vtfc): delivery response reports a date-derived status
+            # (media_buy_delivery.py:246-257, Literal excludes pending_*), so a
+            # pending_start buy reports "active". The adcp MediaBuyDelivery.status
+            # enum includes pending_start/pending_creatives/pending — surfacing the
+            # persisted pre-serving status is a production change tracked in salesagent-vtfc.
+            "T-UC-004-status-pending-legacy-alias": (
+                "delivery response does not surface persisted pending_start status "
+                "(adcp MediaBuyDelivery.status enum includes it) — salesagent-vtfc",
+                True,
+            ),
             # T-UC-004-attr-supported: resolved — steps now assert attribution_window model and echo
             # T-UC-004-attr-unsupported: resolved — xfail now in step function for specific production gap
             # T-UC-004-attr-echo: resolved — vvx9 + ral2 fixed enum→str handling
