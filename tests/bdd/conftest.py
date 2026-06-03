@@ -975,9 +975,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004 status filter: "active" works, other values may not
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
             (
+                # Graduated rejected/canceled: the status_filter family was masked
+                # by a step-parser bug (the generic `with {request_params}` step
+                # dropped the space-separated `status_filter "value"` form), not a
+                # production gap. With the parser fixed, the filter correctly
+                # excludes non-matching buys. paused/completed still xfail on a
+                # separate d.status reporting gap. (pending_activation was stale —
+                # not a real MediaBuyStatus value.)
                 "T-UC-004-filter",
-                {"pending_activation", "rejected", "canceled", "paused", "completed"},
-                "status_filter for non-active statuses not mapped in _impl",
+                {"paused", "completed"},
+                "status_filter paused/completed: reported d.status not derived from persisted status",
             ),
             (
                 "T-UC-004-filter-default",

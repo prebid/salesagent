@@ -2762,6 +2762,16 @@ def _parse_request_params(params_str: str) -> dict[str, Any]:
             kwargs[key] = value.strip('"')
         else:
             kwargs[key] = value
+
+    # v3.1 Gherkin uses a space-separated quoted/bracketed form
+    # (e.g. `status_filter "pending_creatives"`) in addition to key=value.
+    # Fill only keys the key=value pass did not set, and only for quoted or
+    # bracketed values so arbitrary word pairs are never mis-parsed.
+    for match in re.finditer(r'(\w+)\s+(\[.+?\]|"[^"]*")', params_str):
+        key, value = match.group(1), match.group(2)
+        if key in kwargs or key == "buyer_refs":
+            continue
+        kwargs[key] = json.loads(value) if value.startswith("[") else value.strip('"')
     return kwargs
 
 
