@@ -167,11 +167,11 @@ ENV ADCP_HOST=0.0.0.0
 # core/main.py serves MCP, A2A, and the Flask admin from one Starlette
 # binary on $ADCP_PORT. The bundled nginx thread in run_all_services.py
 # is unused on this fork — kept off via SKIP_NGINX=true.
-#ENV SKIP_NGINX=false
+ENV SKIP_NGINX=false
 # Server-owned adapter schedulers replace the bundled supercronic inventory
 # sweep in the default container runtime. Operators can still opt back into
 # cron by overriding this, but should not run both mechanisms together.
-#ENV SKIP_CRON=true
+ENV SKIP_CRON=false
 
 # Expose the unified python port directly. Fly.io / upstream proxy
 # talks to this port; no in-image reverse proxy.
