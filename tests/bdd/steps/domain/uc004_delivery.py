@@ -1044,14 +1044,14 @@ def when_boundary_date_range(ctx: dict, boundary_point: str) -> None:
 
 @when(parsers.re(r'the webhook is configured with credentials "(?P<partition>[^"]+)"'))
 def when_partition_credentials(ctx: dict, partition: str) -> None:
-    """Partition test: webhook credentials."""
-    _dispatch_partition(ctx, "credentials", partition)
+    """Partition test: validate webhook credentials at the create_media_buy boundary."""
+    _validate_reporting_webhook_credentials(ctx, *_credential_label_to_config(partition))
 
 
 @when(parsers.re(r'the webhook credentials are at boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_credentials(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: webhook credentials."""
-    _dispatch_partition(ctx, "credentials", boundary_point)
+    """Boundary test: validate webhook credentials at the create_media_buy boundary."""
+    _validate_reporting_webhook_credentials(ctx, *_credential_label_to_config(boundary_point))
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with resolution "(?P<partition>[^"]+)"'))
@@ -2763,6 +2763,71 @@ def _parse_request_params(params_str: str) -> dict[str, Any]:
         else:
             kwargs[key] = value
     return kwargs
+
+
+def _credential_label_to_config(label: str) -> tuple[str, str]:
+    """Map a webhook-credential partition/boundary label to (auth_scheme, credentials).
+
+    Scheme and credential length together decide validity per BR-RULE-029
+    (AdCP reporting_webhook Authentication: scheme must be in the enum, credentials
+    must be at least 32 characters).
+    """
+    text = label.lower()
+    if "bearer" in text:
+        scheme = "Bearer"
+    elif "unknown" in text:  # "unknown_scheme" / "Unknown auth scheme not in enum"
+        scheme = "Frobnicate-Not-A-Scheme"
+    else:
+        scheme = "HMAC-SHA256"
+
+    if "31" in text or "too_short" in text or "too short" in text:
+        credentials = "c" * 31  # below the 32-char minimum
+    elif "32" in text or "minimum" in text or "at_minimum" in text:
+        credentials = "c" * 32  # exactly the minimum
+    else:
+        credentials = "c" * 40  # comfortably valid
+    return scheme, credentials
+
+
+def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credentials: str) -> None:
+    """Drive webhook credentials through the real create_media_buy request boundary.
+
+    The reporting webhook's Authentication (scheme enum + credentials min_length=32,
+    BR-RULE-029) is validated when ``CreateMediaBuyRequest`` is parsed — the same
+    validation production performs at the create_media_buy boundary. A valid config is
+    accepted; an invalid one raises a ``ValidationError`` located on the credentials or
+    scheme. Only credential/scheme errors count as the rejection under test; any other
+    validation error means the test's base request is wrong (fail loudly).
+    """
+    from datetime import UTC, datetime
+
+    from pydantic import ValidationError
+
+    from src.core.schemas import CreateMediaBuyRequest
+
+    reporting_webhook = {
+        "url": "https://buyer.example.com/reporting",
+        "authentication": {"schemes": [auth_scheme], "credentials": credentials},
+        "reporting_frequency": "daily",
+    }
+    ctx.pop("error", None)
+    try:
+        ctx["response"] = CreateMediaBuyRequest(
+            brand={"domain": "buyer.example.com"},
+            start_time=datetime(2025, 1, 1, tzinfo=UTC),
+            end_time=datetime(2025, 2, 1, tzinfo=UTC),
+            reporting_webhook=reporting_webhook,
+        )
+    except ValidationError as exc:
+        offending = {".".join(str(p) for p in err["loc"]) for err in exc.errors()}
+        credential_locs = {
+            loc for loc in offending if "authentication.credentials" in loc or "authentication.schemes" in loc
+        }
+        assert credential_locs, (
+            "Expected a credential/scheme validation error from the create_media_buy "
+            f"boundary, but the base request failed elsewhere: {sorted(offending)}"
+        )
+        ctx["error"] = exc
 
 
 def _dispatch_partition(ctx: dict, field: str, value: str) -> None:

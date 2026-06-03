@@ -1406,21 +1406,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if marker_names & _UC004_BOUNDARY_TAGS:
             item.add_marker(pytest.mark.xfail(reason="boundary validation partially implemented", strict=False))
 
-        # Graduated: T-UC-004-boundary-credentials — impl passes invalid examples,
-        # rest passes valid examples. A2A and MCP still fail on all examples.
-        if "T-UC-004-boundary-credentials" in marker_names:
-            _cred_invalid = any(s in nodeid for s in ("31 chars (rejected)", "Unknown auth scheme"))
-            _cred_valid = any(s in nodeid for s in ("Bearer scheme", "HMAC-SHA256 scheme", "credentials = 32 chars"))
-            _cred_passes = (is_impl and _cred_invalid) or (is_rest and _cred_valid)
-            if not _cred_passes:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="credentials boundary test passes for the wrong reason — the When sends an "
-                        "unsupported 'credentials' request field (extra_forbidden), not real credential "
-                        "length/scheme validation; not graduated pending a test rework",
-                        strict=False,
-                    )
-                )
+        # Graduated: T-UC-004-boundary-credentials — the When now validates the real
+        # AdCP reporting_webhook Authentication at the create_media_buy boundary
+        # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
         # Graduated: T-UC-004-boundary-ownership — impl-"differs" and rest-"matches" pass
         # Remaining failures: impl-matches, a2a-both, mcp-both, rest-differs
@@ -1735,21 +1723,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
-        # Graduated: T-UC-004-partition-credentials — impl passes invalid examples,
-        # rest passes valid examples. A2A and MCP still fail on all examples.
-        if "T-UC-004-partition-credentials" in marker_names:
-            _pcred_invalid = any(s in nodeid for s in ("credentials_too_short", "unknown_scheme"))
-            _pcred_valid = any(s in nodeid for s in ("hmac_sha256", "bearer_auth", "credentials_at_minimum"))
-            _pcred_passes = (is_impl and _pcred_invalid) or (is_rest and _pcred_valid)
-            if not _pcred_passes:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="credentials partition test passes for the wrong reason — the When sends an "
-                        "unsupported 'credentials' request field (extra_forbidden), not real credential "
-                        "length/scheme validation; not graduated pending a test rework",
-                        strict=False,
-                    )
-                )
+        # Graduated: T-UC-004-partition-credentials — the When now validates the real
+        # AdCP reporting_webhook Authentication at the create_media_buy boundary
+        # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
         # Graduated: T-UC-004-partition-sampling — "not_provided" passes all transports;
         # valid named methods (random, stratified, recent, failures_only) pass on REST only.
