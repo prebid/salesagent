@@ -3111,8 +3111,10 @@ def _dispatch_resolution(ctx: dict, partition: str) -> None:
     # Normalize boundary-style names to partition names
     partition_norm = partition_clean.lower().replace(" ", "_")
 
-    if "media_buy_ids" in partition_norm and "only" in partition_norm:
-        # Resolve by media_buy_ids only
+    if "media_buy_ids" in partition_norm and ("only" in partition_norm or "provided" in partition_norm):
+        # Resolve by media_buy_ids ("media_buy_ids only" / "media_buy_ids provided").
+        # Both translate to an explicit IDs request; passing the boundary label
+        # verbatim would leak it into the request model (extra_forbidden).
         request_params["media_buy_ids"] = real_ids
         dispatch_request(ctx, media_buy_ids=real_ids)
     elif "neither_provided" in partition_norm or "neither" in partition_norm:
