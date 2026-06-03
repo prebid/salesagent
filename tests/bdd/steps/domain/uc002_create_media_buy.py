@@ -412,6 +412,24 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
         ctx["account_ref"] = None
         ctx["account_invalid_both"] = True
 
+    elif config.startswith("brand+op") and "sandbox" in config:
+        # v3.1: sandbox natural-key resolution — an active sandbox account is
+        # matched by brand+operator+sandbox=true.
+        account = AccountFactory(
+            tenant=tenant,
+            account_id="acc-brand-sandbox",
+            status="active",
+            brand={"domain": "sandboxbo.com"},
+            operator="sandboxbo.com",
+            sandbox=True,
+        )
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        ctx["account_ref"] = AccountReference(
+            root=AccountReferenceByNaturalKey(
+                brand=BrandReference(domain="sandboxbo.com"), operator="sandboxbo.com", sandbox=True
+            ),
+        )
+
     else:
         raise ValueError(f"Unknown boundary config: {config}")
 
