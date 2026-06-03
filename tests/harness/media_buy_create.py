@@ -76,17 +76,16 @@ class MediaBuyCreateEnv(IntegrationEnv):
         with_pricing: bool = True,
         format_ids: list[dict[str, str]] | None = None,
     ) -> tuple:
-        """Seed a real PropertyTag/Product/PricingOption row set for *tenant*.
+        """Seed a real PropertyTag ("all_inventory") + Product + PricingOption row set.
 
-        Creates the "all_inventory" PropertyTag once (idempotent across calls),
-        a non-guaranteed Product referencing it, and (when ``with_pricing``) a
-        fixed CPM PricingOption. Returns (product, pricing_option).
+        The "all_inventory" tag is created once per env (idempotent across repeated
+        calls). Returns ``(product, pricing_option)``; ``pricing_option`` is ``None``
+        when ``with_pricing=False``.
         """
         from tests.factories import PricingOptionFactory, ProductFactory
         from tests.factories.core import PropertyTagFactory
 
-        existing_tag = getattr(self, "_seeded_all_inventory_tag", False)
-        if not existing_tag:
+        if not getattr(self, "_seeded_all_inventory_tag", False):
             PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
             self._seeded_all_inventory_tag = True
 
@@ -108,11 +107,10 @@ class MediaBuyCreateEnv(IntegrationEnv):
         return product, pricing_option
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
-        """Wrap the real ContextManager so create_context/create_workflow_step persist.
+        """Mock context manager that delegates create_context / create_workflow_step to the REAL one.
 
-        The manual approval path satisfies ObjectWorkflowMapping foreign keys by
-        creating real Context/WorkflowStep rows. ``get_context`` returns None and
-        the update/message hooks are no-ops.
+        Persisting real Context / WorkflowStep rows lets the manual-approval path satisfy
+        the ObjectWorkflowMapping foreign keys while the other ContextManager methods stay mocked.
         """
         from src.core.context_manager import get_context_manager
 
