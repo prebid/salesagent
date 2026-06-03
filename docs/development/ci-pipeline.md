@@ -1,6 +1,49 @@
 # CI Pipeline
 
-GitHub Actions workflow: `.github/workflows/test.yml`
+Authoritative workflow: [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
+
+Legacy `.github/workflows/test.yml` is removed by PR #1372. Branch
+protection must reference the new rendered check names — see
+[Branch protection migration](#branch-protection-migration) below.
+
+## Prerequisites
+
+PR #1372 (**PR3**) depends on PR #1370 (**PR2**: uv.lock, pre-commit, dependency
+groups). Merge PR2 first, then rebase PR3 onto `upstream/main`:
+
+```bash
+git fetch upstream
+git checkout ci/pr3-ci-authoritative-pipeline
+git rebase upstream/main
+git diff upstream/main --stat   # target: ~20-30 files, no alembic/versions/ changes
+```
+
+## Required checks (18 rendered names)
+
+Run `./scripts/capture-rendered-names.sh` after any job rename. The frozen guard
+[`tests/unit/test_architecture_required_ci_checks_frozen.py`](../../tests/unit/test_architecture_required_ci_checks_frozen.py)
+must stay in sync.
+
+| Rendered check name | Job |
+|---------------------|-----|
+| `CI / Quality Gate` | Static analysis (ruff, mypy, duplication) — **no pytest** |
+| `CI / Type Check` | mypy |
+| `CI / Schema Contract` | AdCP contract tests |
+| `CI / Security Audit` | pip-audit + uv-secure |
+| `CI / Quickstart` | docker compose health |
+| `CI / Smoke Tests` | import smoke + skip-decorator guard |
+| `CI / Unit Tests` | unit + harness with coverage artifact |
+| `CI / Integration (creative)` | integration shard |
+| `CI / Integration (product)` | integration shard |
+| `CI / Integration (media-buy)` | integration shard |
+| `CI / Integration (infra)` | integration shard |
+| `CI / Integration (other)` | integration shard |
+| `CI / E2E Tests` | full stack |
+| `CI / Admin UI Tests` | admin suite |
+| `CI / BDD Tests` | BDD suite (single job in PR3; sharding is PR #1379) |
+| `CI / Migration Roundtrip` | alembic upgrade |
+| `CI / Coverage` | `--fail-under` from `.coverage-baseline` using unit artifact |
+| `CI / Summary` | aggregation gate |
 
 ## Integration Test Shards
 
@@ -65,3 +108,33 @@ The service container uses `pg_isready -U adcp_user` for health checks. The
 `-U` flag is required — without it, `pg_isready` defaults to the OS user
 (`root` on GitHub Actions runners), which produces noisy "role root does not
 exist" log entries.
+
+## Branch protection migration
+
+**Do this before merging PR #1372**, or PRs will show green checks that are not
+required (or stay blocked on stale `Test Suite / …` names).
+
+### Maintainer checklist
+
+1. Merge PR #1370 (PR2) and rebase PR #1372 (PR3) onto `main`.
+2. Run `./scripts/capture-rendered-names.sh` on the rebased PR branch and copy the output.
+3. In GitHub → Settings → Rules → `main` branch protection:
+   - Remove legacy required checks prefixed with `Test Suite /`.
+   - Add all 18 checks prefixed with `CI /` from the script output.
+4. Keep non-CI required checks unchanged (`check-pr-title`, CodeQL, `security.yml` jobs, etc.).
+5. Merge PR #1372 only after a test PR shows all 18 `CI / …` checks as required and green.
+6. For BDD parallel sharding (PR #1379): update branch protection again when shard check names are added — do **not** combine with PR3.
+
+### Local vs CI quality targets
+
+| Target | Runs pytest? | Used by |
+|--------|--------------|---------|
+| `make quality-ci` | No | CI Quality Gate job |
+| `make quality` | Yes (`tests/unit/ -x`) | Local pre-commit habit |
+| `make quality-full` | Full suites via `run_all_tests.sh` | Pre-PR local gate |
+
+## Alembic migrations
+
+`alembic/versions/` is excluded from `ruff format` in `pyproject.toml`. Never
+reformat or edit committed migration files in CI PRs — it violates project policy
+and creates review noise.

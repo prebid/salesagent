@@ -6,11 +6,7 @@ accidental renames that would silently break protection coverage.
 
 from __future__ import annotations
 
-import pathlib
-
-import yaml
-
-WORKFLOW_PATH = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+from tests.unit.workflow_helpers import load_ci_workflow, rendered_ci_check_names
 
 REQUIRED_RENDERED_CHECKS = {
     "CI / Quality Gate",
@@ -20,7 +16,11 @@ REQUIRED_RENDERED_CHECKS = {
     "CI / Quickstart",
     "CI / Smoke Tests",
     "CI / Unit Tests",
-    "CI / Integration Tests",
+    "CI / Integration (creative)",
+    "CI / Integration (product)",
+    "CI / Integration (media-buy)",
+    "CI / Integration (infra)",
+    "CI / Integration (other)",
     "CI / E2E Tests",
     "CI / Admin UI Tests",
     "CI / BDD Tests",
@@ -30,19 +30,13 @@ REQUIRED_RENDERED_CHECKS = {
 }
 
 
-def _load_workflow() -> dict:
-    return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-
-
 def test_ci_workflow_name_is_frozen() -> None:
-    workflow = _load_workflow()
+    workflow = load_ci_workflow()
     assert workflow["name"] == "CI", "Workflow name must remain 'CI' for stable rendered check names."
 
 
 def test_required_check_names_are_frozen() -> None:
-    workflow = _load_workflow()
-    jobs = workflow["jobs"]
-    rendered = {f"CI / {job['name']}" for job in jobs.values()}
+    rendered = rendered_ci_check_names()
 
     assert rendered == REQUIRED_RENDERED_CHECKS, (
         "Required rendered CI check names drifted.\n"

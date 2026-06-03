@@ -72,6 +72,43 @@ class TestCISuiteCoverage:
             "instance (mirror the integration-tests job)."
         )
 
+    def test_integration_job_uses_entity_shards(self):
+        """Integration tests must run in parallel entity shards (legacy parity)."""
+        integration_job = load_ci_workflow()["jobs"]["integration-tests"]
+        matrix = integration_job.get("strategy", {}).get("matrix", {})
+        include = matrix.get("include", [])
+        groups = {row["group"] for row in include}
+
+        assert groups == {"creative", "product", "media-buy", "infra", "other"}, (
+            "integration-tests must shard by entity marker groups to keep CI wall time bounded."
+        )
+
+        run_steps = " ".join(str(step.get("run", "")) for step in integration_job.get("steps", []))
+        assert "matrix.marker" in run_steps, (
+            "integration-tests must filter pytest with matrix.marker, not run the full suite serially."
+        )
+
+    def test_quality_gate_does_not_run_unit_tests(self):
+        """Quality Gate runs static checks only; unit tests run once in unit-tests."""
+        quality_job = load_ci_workflow()["jobs"]["quality-gate"]
+        run_steps = " ".join(str(step.get("run", "")) for step in quality_job.get("steps", []))
+
+        assert "make quality-ci" in run_steps, "quality-gate must invoke make quality-ci (no pytest)."
+        assert "pytest" not in run_steps, "quality-gate must not re-run unit tests."
+
+    def test_coverage_job_reuses_unit_test_artifact(self):
+        """Coverage gate must not re-run pytest; it consumes unit-tests artifacts."""
+        coverage_job = load_ci_workflow()["jobs"]["coverage"]
+        needs = coverage_job.get("needs", [])
+        steps_text = " ".join(
+            str(step.get("name", "")) + " " + str(step.get("uses", "")) for step in coverage_job.get("steps", [])
+        )
+
+        assert "unit-tests" in needs, "coverage job must depend on unit-tests."
+        assert "download-artifact" in steps_text, "coverage job must download unit test coverage data."
+        run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
+        assert "pytest" not in run_steps, "coverage job must not re-run unit tests."
+
     def test_summary_gates_bdd_and_e2e(self):
         """summary must depend on AND fail for bdd + e2e.
 
@@ -84,9 +121,9 @@ class TestCISuiteCoverage:
         needs = summary["needs"]
 
         for required in ("bdd-tests", "e2e-tests"):
-            assert (
-                required in needs
-            ), f"summary.needs is missing '{required}'. CI will report green even when the {required} suite fails."
+            assert required in needs, (
+                f"summary.needs is missing '{required}'. CI will report green even when the {required} suite fails."
+            )
 
         # The aggregation step must actually check the result of each suite.
         check_text = " ".join(str(step.get("run", "")) for step in summary.get("steps", []))
@@ -108,6 +145,6 @@ class TestCISuiteCoverage:
         # PyYAML parses the bare ``on:`` key as the boolean True.
         triggers = workflow.get("on", workflow.get(True))
 
-        assert (
-            "pull_request" in triggers
-        ), "The CI workflow does not trigger on pull_request, so BDD/E2E gating would never run before merge."
+        assert "pull_request" in triggers, (
+            "The CI workflow does not trigger on pull_request, so BDD/E2E gating would never run before merge."
+        )

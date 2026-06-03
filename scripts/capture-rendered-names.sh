@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Print the rendered CI check names ("CI / <job name>") from ci.yml.
+# Print rendered CI check names ("CI / <job name>") from ci.yml, including matrix expansion.
 uv run python - <<'PY'
-from pathlib import Path
-import yaml
+from tests.unit.workflow_helpers import rendered_ci_check_names
 
-workflow_path = Path(".github/workflows/ci.yml")
-workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
-workflow_name = workflow["name"]
-
-for job in workflow["jobs"].values():
-    print(f"{workflow_name} / {job['name']}")
+for name in sorted(rendered_ci_check_names()):
+    print(name)
 PY
