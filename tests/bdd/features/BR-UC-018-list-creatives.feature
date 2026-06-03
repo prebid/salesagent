@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-018 List Creatives
   As a Buyer
@@ -9,19 +9,22 @@ Feature: BR-UC-018 List Creatives
   # Postconditions verified:
   #   POST-S1: Buyer knows which creatives match their filter criteria
   #   POST-S2: Buyer knows the total number of matching creatives and current page position
-  #   POST-S3: Buyer knows the core attributes (ID, name, format, status, dates) for each returned creative
+  #   POST-S3: Buyer knows the core attributes (ID, name, format_id, status, dates) for each returned creative
   #   POST-S4: Buyer knows which packages each creative is assigned to (when assignments requested)
-  #   POST-S5: Buyer knows the aggregated performance metrics for each creative (when performance requested)
-  #   POST-S6: Buyer knows the sub-assets for multi-format creatives (when sub-assets requested)
+  #   POST-S5: Buyer knows the lightweight delivery snapshot for each creative (when include_snapshot requested), or a snapshot_unavailable_reason
+  #   POST-S6: Buyer knows the items for multi-asset creatives (when include_items requested)
   #   POST-S7: Buyer knows which filters and sort order were applied to produce the results
+  #   POST-S8: Buyer knows the dynamic-content variables / DCO slots for each creative (when include_variables requested)
+  #   POST-S9: Buyer knows the pricing options for each creative (when include_pricing requested and an account is provided)
   #   POST-F1: Buyer knows the operation failed
   #   POST-F2: Buyer knows what went wrong (error explains the failure)
   #   POST-F3: Buyer knows how to recover (suggestion for corrective action)
   #
   # Rules: BR-RULE-146 (defaults), BR-RULE-147 (pagination/sorting), BR-RULE-148 (filter semantics),
-  #        BR-RULE-149 (field selector/error tolerance), BR-RULE-034 (cross-principal isolation)
-  # Extensions: A (auth required), B (tenant unavailable), C (validation failure), D (invalid date)
-  # Error codes: AUTHENTICATION_REQUIRED, TENANT_REQUIRED, VALIDATION_ERROR, DATE_INVALID_FORMAT
+  #        BR-RULE-149 (field selector/error tolerance), BR-RULE-034 (cross-principal isolation),
+  #        BR-RULE-209 (sandbox semantics), BR-RULE-225 (pricing disclosure gate), BR-RULE-226 (snapshot unavailability)
+  # Extensions: A (auth required), B (tenant unavailable), C (validation failure), D (invalid date), E (snapshot unavailable)
+  # Error codes: AUTHENTICATION_REQUIRED, TENANT_REQUIRED, VALIDATION_ERROR, DATE_INVALID_FORMAT, ACCOUNT_REQUIRED
 
   Background:
     Given a Seller Agent is operational and accepting requests
@@ -46,6 +49,7 @@ Feature: BR-UC-018 List Creatives
     # POST-S2: Buyer knows total count and page position
     # POST-S3: Buyer knows core attributes
     # POST-S7: Buyer knows applied filters and sort
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-enriched @main-flow
   Scenario: List creatives with assignments included by default
@@ -55,28 +59,40 @@ Feature: BR-UC-018 List Creatives
     And each creative includes assignment data
     # BR-RULE-149 INV-3: include_assignments defaults to true
     # POST-S4: Buyer knows package assignments (default included)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-performance @main-flow
-  Scenario: List creatives with explicit performance data request
-    Given the authenticated principal has 2 approved creatives with performance data
-    When the Buyer Agent sends a list_creatives request with include_performance true
-    Then each creative includes performance metrics
-    # BR-RULE-149 INV-4: include_performance defaults to false, must explicitly request
-    # POST-S5: Buyer knows performance metrics (when requested)
+  Scenario: List creatives with explicit delivery snapshot request
+    Given the authenticated principal has 2 approved creatives with delivery snapshot data
+    When the Buyer Agent sends a list_creatives request with include_snapshot true
+    Then each creative includes a delivery snapshot
+    # BR-RULE-149 INV-4: include_snapshot defaults to false, must explicitly request
+    # POST-S5: Buyer knows the lightweight delivery snapshot (when requested)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-subassets @main-flow
-  Scenario: List creatives with explicit sub-assets request
-    Given the authenticated principal has a multi-format creative with sub-assets
-    When the Buyer Agent sends a list_creatives request with include_sub_assets true
-    Then the creative includes sub_assets data
-    # BR-RULE-149 INV-5: include_sub_assets defaults to false, must explicitly request
-    # POST-S6: Buyer knows sub-assets (when requested)
+  Scenario: List creatives with explicit items request
+    Given the authenticated principal has a multi-asset creative with items
+    When the Buyer Agent sends a list_creatives request with include_items true
+    Then the creative includes items data
+    # BR-RULE-149 INV-5: include_items defaults to false, must explicitly request
+    # POST-S6: Buyer knows the items for multi-asset creatives (when requested)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+  @T-UC-018-main-variables @main-flow
+  Scenario: List creatives with explicit variables request
+    Given the authenticated principal has a creative with dynamic-content variables
+    When the Buyer Agent sends a list_creatives request with include_variables true
+    Then the creative includes variables data
+    # BR-RULE-149 INV-7: include_variables defaults to false, must explicitly request
+    # POST-S8: Buyer knows dynamic-content variables / DCO slots (when requested)
 
   @T-UC-018-ext-a @extension @ext-a @error
   Scenario: Authentication required -- no credentials
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a list_creatives request
-    Then the operation should fail with error code "AUTHENTICATION_REQUIRED"
+    Then the operation should fail with error code "AUTH_REQUIRED"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "authentication"
     And the error should include a "suggestion" field
     And the suggestion should contain "valid authentication credentials"
@@ -88,7 +104,8 @@ Feature: BR-UC-018 List Creatives
   Scenario: Tenant unavailable -- identity has no tenant mapping
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a list_creatives request
-    Then the operation should fail with error code "TENANT_REQUIRED"
+    Then the operation should fail with error code "AUTH_REQUIRED"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "tenant"
     And the error should include a "suggestion" field
     And the suggestion should contain "valid tenant"
@@ -101,6 +118,7 @@ Feature: BR-UC-018 List Creatives
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a list_creatives request with <invalid_param>
     Then the operation should fail with error code "VALIDATION_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "<error_detail>"
     And the error should include a "suggestion" field
     And the suggestion should contain "<suggestion_text>"
@@ -123,7 +141,8 @@ Feature: BR-UC-018 List Creatives
   Scenario Outline: Invalid date format -- <date_field> with value "<value>"
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a list_creatives request with <date_field> as "<value>"
-    Then the operation should fail with error code "DATE_INVALID_FORMAT"
+    Then the operation should fail with error code "VALIDATION_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "<date_field>"
     And the error should include a "suggestion" field
     And the suggestion should contain "ISO 8601"
@@ -215,7 +234,7 @@ Feature: BR-UC-018 List Creatives
       | sort_order='asc' (valid enum)                     | sort_order "asc"       | creatives sorted ascending                                        |
       | sort_order='desc' (valid enum, also the default)  | sort_order "desc"      | creatives sorted descending                                       |
       | sort_order='random' (invalid, coerced to desc)    | sort_order "random"    | creatives sorted descending (silently coerced)                     |
-      | sort_by='performance_score' (valid enum boundary) | sort_by "performance_score" | creatives sorted by performance_score                         |
+      | sort_by='assignment_count' (valid enum boundary; v3.1 highest-index sort field) | sort_by "assignment_count" | creatives sorted by assignment_count                 |
       | sort_by='unknown_field' (invalid, coerced to created_date) | sort_by "unknown_field" | creatives sorted by created_date (silently coerced)       |
 
   @T-UC-018-partition-filters @partition @filter-semantics
@@ -227,7 +246,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Valid partitions
       | partition                        | request_params                                                                     | outcome                                                              |
       | no_filters                       | no filter parameters                                                               | all non-archived creatives returned                                   |
-      | flat_only                        | flat status "approved" and format "video"                                          | only approved video creatives returned                                |
+      | flat_only                        | flat status "approved"                                                             | only approved creatives returned                                      |
       | structured_only                  | structured filters with statuses ["approved"] and name_contains "nike"             | only approved creatives matching "nike" returned                      |
       | flat_and_structured_no_conflict  | flat tags ["q1"] and structured name_contains "nike"                               | creatives matching both tag "q1" AND name "nike" returned             |
       | flat_and_structured_conflict     | flat status "approved" and structured statuses ["rejected"]                        | approved creatives returned (flat param takes precedence)             |
@@ -270,8 +289,8 @@ Feature: BR-UC-018 List Creatives
       | omitted                      | no fields parameter                                                                                 | all fields included in each creative object                     |
       | single_field                 | fields ["creative_id"]                                                                              | only creative_id field in each creative object                  |
       | minimal_set                  | fields ["creative_id", "name", "status"]                                                            | only creative_id, name, status in each creative object          |
-      | all_fields                   | fields with all 10 enum values                                                                      | all 10 fields included in each creative object                  |
-      | enrichment_fields            | fields ["creative_id", "assignments", "performance"] and include_performance true                   | creative_id, assignments, and performance data included          |
+      | all_fields                   | fields with all 13 enum values                                                                      | all 13 fields included in each creative object                  |
+      | enrichment_fields            | fields ["creative_id", "assignments", "snapshot"] and include_snapshot true                         | creative_id, assignments, and delivery snapshot included         |
       | assignments_disabled         | include_assignments false                                                                           | assignment data excluded from creatives                          |
       | invalid_db_status_tolerance  | database has creative with unrecognized status value                                                | creative returned with status mapped to "pending_review"         |
 
@@ -290,7 +309,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Boundary values
       | boundary_point                                            | request_params                                  | outcome                                                  |
       | ['creative_id'] (single field, minItems boundary)         | fields ["creative_id"]                          | only creative_id field in response                        |
-      | All 10 enum values (max enum coverage)                    | fields with all 10 enum values                  | all 10 fields included                                    |
+      | All 13 enum values (max enum coverage)                    | fields with all 13 enum values                  | all 13 fields included                                    |
       | [] (empty array, violates minItems: 1)                    | fields as empty array                           | error "VALIDATION_ERROR" with suggestion                  |
       | ['creative_id', 'thumbnail'] (unknown enum value)         | fields ["creative_id", "thumbnail"]             | error "VALIDATION_ERROR" with suggestion                  |
       | fields omitted entirely (all fields returned)             | no fields parameter                             | all fields included in response                            |
@@ -401,20 +420,16 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with media_buy_id "mb1" and media_buy_ids ["mb2"]
     Then the response contains creatives from both "mb1" and "mb2"
 
-  @T-UC-018-inv-148-5-holds @invariant @BR-RULE-148
-  Scenario: BR-RULE-148 INV-5 holds -- singular buyer_ref merged into plural array
-    Given the authenticated principal has creatives with buyer refs "ref1" and "ref2"
-    When the Buyer Agent sends a list_creatives request with buyer_ref "ref1" and buyer_refs ["ref2"]
-    Then the response contains creatives from both "ref1" and "ref2"
-
   @T-UC-018-inv-148-6-holds @invariant @BR-RULE-148
   Scenario: BR-RULE-148 INV-6 holds -- invalid date format raises validation error
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a list_creatives request with created_after "not-a-date"
-    Then the operation should fail with error code "DATE_INVALID_FORMAT"
+    Then the operation should fail with error code "VALIDATION_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include a "suggestion" field
     And the suggestion should contain "ISO 8601"
     # POST-F3: Suggestion for recovery
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-148-6-violated @invariant @BR-RULE-148
   Scenario: BR-RULE-148 INV-6 counter -- valid ISO 8601 date accepted
@@ -442,16 +457,25 @@ Feature: BR-UC-018 List Creatives
     Then the creative in the response includes assignment data
 
   @T-UC-018-inv-149-4-holds @invariant @BR-RULE-149
-  Scenario: BR-RULE-149 INV-4 holds -- include_performance defaults to false
-    Given the authenticated principal has an approved creative with performance data
-    When the Buyer Agent sends a list_creatives request without specifying include_performance
-    Then the creative in the response does not include performance data
+  Scenario: BR-RULE-149 INV-4 holds -- include_snapshot defaults to false
+    Given the authenticated principal has an approved creative with delivery snapshot data
+    When the Buyer Agent sends a list_creatives request without specifying include_snapshot
+    Then the creative in the response does not include a delivery snapshot
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-5-holds @invariant @BR-RULE-149
-  Scenario: BR-RULE-149 INV-5 holds -- include_sub_assets defaults to false
-    Given the authenticated principal has a multi-format creative with sub-assets
-    When the Buyer Agent sends a list_creatives request without specifying include_sub_assets
-    Then the creative in the response does not include sub_assets data
+  Scenario: BR-RULE-149 INV-5 holds -- include_items defaults to false
+    Given the authenticated principal has a multi-asset creative with items
+    When the Buyer Agent sends a list_creatives request without specifying include_items
+    Then the creative in the response does not include items data
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+  @T-UC-018-inv-149-7-holds @invariant @BR-RULE-149
+  Scenario: BR-RULE-149 INV-7 holds -- include_variables defaults to false
+    Given the authenticated principal has an approved creative with dynamic-content variables
+    When the Buyer Agent sends a list_creatives request without specifying include_variables
+    Then the creative in the response does not include variables data
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-6-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-6 holds -- unrecognized DB status mapped to pending_review
@@ -485,6 +509,7 @@ Feature: BR-UC-018 List Creatives
     And the response is not an error
     # POST-S1: Buyer knows no creatives match (empty result)
     # POST-S2: Buyer knows total is 0
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-edge-pagination-next @main-flow @edge-case
   Scenario: Pagination cursor traversal across pages
@@ -496,6 +521,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with the cursor from the previous response
     Then the response contains 50 creatives from the second page
     And the creatives do not overlap with the first page results
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-edge-duplicate-dedup @invariant @BR-RULE-148 @edge-case
   Scenario: Singular media_buy_id duplicate in plural array is deduplicated
@@ -520,7 +546,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Valid partitions
       | partition          | request_params                                         | outcome                                         |
       | minimal_fields     | fields ["creative_id", "name", "status"]               | only creative_id, name, status in response       |
-      | all_enum_values    | fields with all 10 enum values                         | all 10 fields included in response               |
+      | all_enum_values    | fields with all 13 enum values                         | all 13 fields included in response               |
 
   @T-UC-018-partition-sort-field @partition @creative-sort-field
   Scenario Outline: Creative sort field partition -- <partition>
@@ -532,7 +558,6 @@ Feature: BR-UC-018 List Creatives
       | partition          | request_params                  | outcome                                    |
       | updated_date       | sort_by "updated_date"          | creatives sorted by updated_date           |
       | assignment_count   | sort_by "assignment_count"      | creatives sorted by assignment_count       |
-      | performance_score  | sort_by "performance_score"     | creatives sorted by performance_score      |
 
     Examples: Invalid partitions
       | partition          | request_params                  | outcome                                          |
@@ -547,7 +572,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Boundary values
       | boundary_point                                                                                                                          | request_params                                | outcome                                   |
       | ["creative_id"] (single field, minimum valid)                                                                                           | fields ["creative_id"]                        | only creative_id returned                  |
-      | ["creative_id", "name", "format", "status", "created_date", "updated_date", "tags", "assignments", "performance", "sub_assets"] (all 10 fields) | fields with all 10 enum values                | all 10 fields returned                     |
+      | ["creative_id", "name", "format_id", "status", "created_date", "updated_date", "tags", "assignments", "snapshot", "items", "variables", "concept", "pricing_options"] (all 13 fields) | fields with all 13 enum values                | all 13 fields returned                     |
       | Not provided (all fields returned)                                                                                                      | no fields parameter                           | all fields returned                        |
       | ["creative_id", "thumbnail"] (unknown field in array)                                                                                   | fields ["creative_id", "thumbnail"]           | error "VALIDATION_ERROR" with suggestion   |
       | [] (empty array, violates minItems)                                                                                                     | fields as empty array                         | error "VALIDATION_ERROR" with suggestion   |
@@ -561,7 +586,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Boundary values
       | boundary_point                              | request_params                  | outcome                                         |
       | created_date (first enum value, also default) | sort_by "created_date"          | creatives sorted by created_date                 |
-      | performance_score (last enum value)         | sort_by "performance_score"     | creatives sorted by performance_score            |
+      | assignment_count (last enum value, v3.1 highest-index sort field) | sort_by "assignment_count" | creatives sorted by assignment_count   |
       | Not provided (defaults to created_date)     | no sort params                  | creatives sorted by created_date (default)       |
       | format (not in enum)                        | sort_by "format"                | creatives sorted by created_date (coerced)       |
 
@@ -595,4 +620,225 @@ Feature: BR-UC-018 List Creatives
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
+
+  @T-UC-018-inv-225-1-holds @invariant @BR-RULE-225 @error
+  Scenario: BR-RULE-225 INV-1 holds -- include_pricing without account is rejected
+    Given the Buyer is authenticated with a valid principal_id
+    When the Buyer Agent sends a list_creatives request with include_pricing true and no account reference
+    Then the operation should fail with error code "VALIDATION_ERROR"
+    And the error code should be "VALIDATION_ERROR"
+    And the error should include a "suggestion" field
+    And the suggestion should contain "account"
+    # POST-F1, POST-F2, POST-F3
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+  @T-UC-018-inv-225-2-holds @invariant @BR-RULE-225
+  Scenario: BR-RULE-225 INV-2 holds -- include_pricing with account returns pricing_options
+    Given the authenticated principal has 2 approved creatives
+    And the request supplies an account reference resolvable to a rate card
+    When the Buyer Agent sends a list_creatives request with include_pricing true and the account reference
+    Then each creative in the response carries a pricing_options array with at least one option
+    # POST-S9: Buyer knows pricing options (when include_pricing and account provided)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+  @T-UC-018-inv-225-3-holds @invariant @BR-RULE-225
+  Scenario: BR-RULE-225 INV-3 holds -- pricing_options absent when include_pricing omitted
+    Given the authenticated principal has 2 approved creatives
+    When the Buyer Agent sends a list_creatives request without specifying include_pricing
+    Then no creative in the response includes a pricing_options field
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+  @T-UC-018-partition-pricing-include @partition @pricing-include
+  Scenario Outline: Pricing disclosure gate -- <partition>
+    Given the authenticated principal has approved creatives
+    When the Buyer Agent sends a list_creatives request with <request_params>
+    Then <outcome>
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+    Examples: Valid partitions
+      | partition                        | request_params                                              | outcome                               |
+      | pricing_omitted                  | no include_pricing parameter                                | no pricing_options in any creative    |
+      | pricing_false                    | include_pricing false                                       | no pricing_options in any creative    |
+      | pricing_with_account             | include_pricing true and account account_id "acct_acme"     | each creative carries pricing_options |
+      | pricing_with_natural_key_account | include_pricing true and account brand+operator natural key | each creative carries pricing_options |
+
+    Examples: Invalid partitions
+      | partition               | request_params                      | outcome                                    |
+      | pricing_without_account | include_pricing true and no account | error "ACCOUNT_REQUIRED" with suggestion   |
+
+  @T-UC-018-boundary-pricing-include @boundary @pricing-include
+  Scenario Outline: Pricing disclosure gate boundary -- <boundary_point>
+    Given the authenticated principal has approved creatives
+    When the Buyer Agent sends a list_creatives request with <request_params>
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                              | request_params                                          | outcome                                  |
+      | include_pricing=true + account present (gate satisfied)     | include_pricing true and account account_id "acct_acme" | each creative carries pricing_options    |
+      | include_pricing=true + account absent (gate violated)       | include_pricing true and no account                     | error "ACCOUNT_REQUIRED" with suggestion |
+      | include_pricing=false (no account needed)                   | include_pricing false                                   | no pricing_options in any creative       |
+      | include_pricing omitted (defaults false, no account needed) | no include_pricing parameter                            | no pricing_options in any creative       |
+
+  @T-UC-018-inv-226-1-holds @invariant @BR-RULE-226
+  Scenario: BR-RULE-226 INV-1 holds -- snapshot returned when available
+    Given the authenticated principal has an approved creative with available delivery snapshot data
+    When the Buyer Agent sends a list_creatives request with include_snapshot true
+    Then the creative in the response includes a delivery snapshot
+    And the creative does not include a snapshot_unavailable_reason
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+  @T-UC-018-inv-226-2-holds @invariant @BR-RULE-226
+  Scenario Outline: BR-RULE-226 INV-2 holds -- snapshot unavailable surfaces machine-readable reason -- <reason>
+    Given the authenticated principal has an approved creative whose snapshot is unavailable due to <condition>
+    When the Buyer Agent sends a list_creatives request with include_snapshot true
+    Then the creative in the response omits the snapshot
+    And the creative includes a snapshot_unavailable_reason of "<reason>"
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+    Examples:
+      | condition                             | reason                            |
+      | the platform never supports snapshots | SNAPSHOT_UNSUPPORTED              |
+      | a transient data gap                  | SNAPSHOT_TEMPORARILY_UNAVAILABLE  |
+      | an access restriction                 | SNAPSHOT_PERMISSION_DENIED        |
+
+  @T-UC-018-inv-226-3-holds @invariant @BR-RULE-226
+  Scenario: BR-RULE-226 INV-3 holds -- no snapshot fields when include_snapshot omitted
+    Given the authenticated principal has an approved creative whose snapshot is unavailable
+    When the Buyer Agent sends a list_creatives request without specifying include_snapshot
+    Then the creative in the response includes neither a snapshot nor a snapshot_unavailable_reason
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+  @T-UC-018-partition-snapshot-unavailable @partition @snapshot-unavailable
+  Scenario Outline: Snapshot unavailability disclosure -- <partition>
+    Given the authenticated principal has an approved creative
+    When the Buyer Agent sends a list_creatives request with <request_params>
+    Then <outcome>
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+    Examples: Valid partitions
+      | partition              | request_params                              | outcome                                                                    |
+      | snapshot_returned      | include_snapshot true, snapshot available   | creative includes snapshot, no snapshot_unavailable_reason                  |
+      | reason_unsupported     | include_snapshot true, platform unsupported | creative has snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"             |
+      | reason_temporary       | include_snapshot true, transient gap        | creative has snapshot_unavailable_reason "SNAPSHOT_TEMPORARILY_UNAVAILABLE" |
+      | reason_permission      | include_snapshot true, no permission        | creative has snapshot_unavailable_reason "SNAPSHOT_PERMISSION_DENIED"       |
+      | snapshot_not_requested | no include_snapshot parameter               | neither snapshot nor snapshot_unavailable_reason present                    |
+
+    Examples: Invalid partitions
+      | partition          | request_params                                         | outcome                                  |
+      | reason_not_in_enum | snapshot_unavailable_reason "SNAPSHOT_BROKEN" returned  | error "VALIDATION_ERROR" with suggestion |
+
+  @T-UC-018-boundary-snapshot-unavailable @boundary @snapshot-unavailable
+  Scenario Outline: Snapshot unavailability boundary -- <boundary_point>
+    Given the authenticated principal has an approved creative
+    When the Buyer Agent sends a list_creatives request with <request_params>
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                                       | request_params                                | outcome                                                  |
+      | snapshot_unavailable_reason='SNAPSHOT_UNSUPPORTED' (valid enum)       | include_snapshot true, platform unsupported   | snapshot_unavailable_reason is "SNAPSHOT_UNSUPPORTED"     |
+      | snapshot_unavailable_reason='SNAPSHOT_PERMISSION_DENIED' (valid enum) | include_snapshot true, no permission          | snapshot_unavailable_reason is "SNAPSHOT_PERMISSION_DENIED" |
+      | snapshot_unavailable_reason='SNAPSHOT_BROKEN' (not in enum)           | snapshot_unavailable_reason "SNAPSHOT_BROKEN"  | error "VALIDATION_ERROR" with suggestion                 |
+      | include_snapshot omitted (neither snapshot nor reason present)        | no include_snapshot parameter                 | neither snapshot nor snapshot_unavailable_reason present  |
+
+  @T-UC-018-ext-e @extension @ext-e @degradation
+  Scenario Outline: Snapshot unavailable -- listing still succeeds with reason -- <reason>
+    Given the authenticated principal has approved creatives
+    And the delivery snapshot is unavailable for one creative due to <condition>
+    When the Buyer Agent sends a list_creatives request with include_snapshot true
+    Then the operation succeeds and returns the full creatives array
+    And the affected creative carries a snapshot_unavailable_reason of "<reason>"
+    And creatives with available snapshots still include their snapshot
+    # POST-S5: degraded result is explained, not silently dropped
+
+    Examples:
+      | condition                             | reason                            |
+      | the platform never supports snapshots | SNAPSHOT_UNSUPPORTED              |
+      | a transient data gap                  | SNAPSHOT_TEMPORARILY_UNAVAILABLE  |
+      | an access restriction                 | SNAPSHOT_PERMISSION_DENIED        |
+
+  @T-UC-018-storyboard-list-all-creatives-after-sync @storyboard-v3.1 @v3-1 @list-after-sync
+  Scenario: List creatives with no filters returns the library including recently synced creatives
+    Given the buyer recently synced three creatives in three different formats via sync_creatives
+    When the Buyer Agent sends list_creatives with no filters for the same account
+    Then the response should be schema-valid against list-creatives-response.json
+    And the creatives array should include each of the synced creatives
+    And each creative entry should expose creative_id, name, format_id, and status
+    # creative_lifecycle list_and_filter / list_all: after sync_creatives,
+    # list_creatives without filters returns the library for the account
+    # including the synced items. Each entry exposes creative_id, name,
+    # format_id, status.
+    # creative_lifecycle: list_creatives reflects recent sync_creatives state
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+
+  @T-UC-018-storyboard-filter-by-format-id-object @storyboard-v3.1 @v3-1 @list-filter @format-id-object
+  Scenario: List creatives filtered by a format_id object returns only creatives matching that {agent_url, id}
+    Given the buyer has synced creatives in formats including {agent_url, "display_300x250"} and {agent_url, "video_30s"}
+    When the Buyer Agent sends list_creatives with filters.format_ids carrying one format_id object {agent_url, "display_300x250"}
+    Then the response should be schema-valid against list-creatives-response.json
+    And the creatives array should only include creatives whose format_id matches both agent_url and id
+    And the creatives array should NOT include creatives whose format_id has a different id even on the same agent_url
+    # creative_lifecycle list_filtered: the buyer filters by a format_id object
+    # (agent_url + id). Only creatives whose format_id matches both fields are
+    # returned. A filter shaped as a bare string id (not an object) is not part
+    # of the v3.1 contract; format_ids are objects, period.
+    # creative_lifecycle: format_id object filter exact-matches both (agent_url, id)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+
+  @T-UC-018-storyboard-filter-by-concept-id @storyboard-v3.1 @v3-1 @list-filter @concept-id
+  Scenario: List creatives filtered by concept_ids returns only creatives in that concept carrying concept_id and concept_name
+    Given the authenticated principal has creatives grouped under concept "concept_summer_2026" and other creatives under different concepts
+    When the Buyer Agent sends list_creatives with filters.concept_ids ["concept_summer_2026"]
+    Then the response should be schema-valid against list-creatives-response.json
+    And the creatives array should only include creatives belonging to concept "concept_summer_2026"
+    And each returned creative should carry concept_id "concept_summer_2026" and a concept_name
+    # v3.1 ADDED filter filters.concept_ids (array of concept-id strings, minItems 1).
+    # Concepts group related creatives across sizes and formats. Satisfies the
+    # User Intent "List creatives in this concept with their DCO variables" and the
+    # INT-001 "concept" filter dimension. Each returned creative exposes concept_id
+    # and concept_name (list-creatives-response.json creatives[].concept_id/concept_name).
+    # creative_lifecycle: concept_ids filter scopes results to one concept; concept_id/concept_name exposed
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+
+  @T-UC-018-filter-boolean-flags @list-filter @boolean-filter @v3-1
+  Scenario Outline: v3.1 boolean filter <flag> partitions the library
+    Given the authenticated principal has both creatives matching and not matching <flag>
+    When the Buyer Agent sends a list_creatives request with <flag> <value>
+    Then <outcome>
+    # v3.1 ADDED boolean CreativeFilters has_variables (DCO vs static) and
+    # has_served (has served >=1 impression vs never served). Each partitions
+    # the principal's library into the matching subset.
+
+    Examples: Boolean filter partitions
+      | flag          | value | outcome                                                          |
+      | has_variables | true  | only creatives with dynamic variables (DCO) are returned          |
+      | has_variables | false | only static creatives (no dynamic variables) are returned         |
+      | has_served    | true  | only creatives that have served at least one impression are returned |
+      | has_served    | false | only creatives that have never served are returned                |
+
+  @T-UC-018-boundary-creative-status @boundary @creative-status
+  Scenario Outline: Creative status filter boundary -- <boundary_point>
+    Given the authenticated principal has creatives in statuses "processing", "approved", "rejected", "pending_review", "archived"
+    When the Buyer Agent sends a list_creatives request with <request_params>
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                                                  | request_params                          | outcome                                                          |
+      | processing (first enum value)                                                   | statuses filter ["processing"]          | only processing creatives are returned                            |
+      | archived (last enum value)                                                      | statuses filter ["archived"]            | only archived creatives are returned                              |
+      | ["approved", "rejected"] (multi-status array)                                   | statuses filter ["approved", "rejected"] | only approved and rejected creatives are returned                 |
+      | Not provided (default excludes archived; or seller has no review lifecycle)     | no statuses filter                      | all non-archived creatives are returned (archived excluded by default) |
+      | deleted (not in CreativeStatus enum)                                            | statuses filter ["deleted"]             | error "VALIDATION_ERROR" with suggestion                          |
+
+  @T-UC-018-boundary-sandbox-response @boundary @sandbox @br-rule-209
+  Scenario Outline: Sandbox response semantics boundary -- <boundary_point>
+    Given the authenticated principal has creatives
+    And the request targets <account_kind>
+    When the Buyer Agent sends a list_creatives request
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                  | account_kind                          | outcome                                          |
+      | sandbox: true in response (sandbox account)     | a sandbox account                     | the response should include sandbox equals true   |
+      | sandbox absent in response (production account) | a production account                  | the response should not include a sandbox field   |
+      | sandbox: false in response (explicit production) | a production account with sandbox false | the response should include sandbox equals false  |
 
