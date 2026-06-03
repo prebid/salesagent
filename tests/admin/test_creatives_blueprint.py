@@ -253,7 +253,10 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
     return asgn.assignment_id
 
 
-_PUSH_PATCH = "src.core.tools.media_buy_create.push_creative_to_existing_buy"
+# Patch where it's used (the blueprint's binding), not where it's defined: the blueprint
+# does `from ...media_buy_create import push_creative_to_existing_buy` at module load, so
+# patching the source module never intercepts the call.
+_PUSH_PATCH = "src.admin.blueprints.creatives.push_creative_to_existing_buy"
 
 
 class TestCreativeApprovalRetroactivePush:

@@ -926,7 +926,7 @@ class TestMainFlowObligations:
             env.mock["adapter"].return_value.create_media_buy.assert_called_once_with(req, ANY, ANY, ANY, ANY)
 
     @pytest.mark.asyncio
-    async def test_format_id_validation(self):
+    async def test_format_id_validation(self, integration_db):
         """Format ID validation runs for packages with format_ids.
 
         Covers: UC-002-MAIN-17
@@ -1216,7 +1216,7 @@ class TestInlineCreativeObligations:
         mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY)
 
     @pytest.mark.asyncio
-    async def test_inline_creative_format_validation(self):
+    async def test_inline_creative_format_validation(self, integration_db):
         """Inline creative format IDs are validated via format spec lookup.
 
         Covers: UC-002-ALT-WITH-INLINE-CREATIVES-02
