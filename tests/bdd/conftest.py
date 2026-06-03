@@ -918,14 +918,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004: additional xfails for features needing production enhancements
         # FIXME(salesagent-a0o): These require production changes, not BDD wiring.
         _UC004_XFAIL_ADDITIONAL: dict[str, tuple[str, bool]] = {
-            # FIXME(salesagent-vtfc): delivery response reports a date-derived status
-            # (media_buy_delivery.py:246-257, Literal excludes pending_*), so a
-            # pending_start buy reports "active". The adcp MediaBuyDelivery.status
+            # Delivery response reports a date-derived status (media_buy_delivery.py
+            # status computation casts to a Literal that excludes the pending_* states),
+            # so a pending_start buy reports "active". The adcp MediaBuyDelivery.status
             # enum includes pending_start/pending_creatives/pending — surfacing the
-            # persisted pre-serving status is a production change tracked in salesagent-vtfc.
+            # persisted pre-serving status is an unimplemented production change.
             "T-UC-004-status-pending-legacy-alias": (
-                "delivery response does not surface persisted pending_start status "
-                "(adcp MediaBuyDelivery.status enum includes it) — salesagent-vtfc",
+                "delivery response does not surface persisted pending_start status, though "
+                "the adcp MediaBuyDelivery.status enum includes it (production gap)",
                 True,
             ),
             # T-UC-004-attr-supported: resolved — steps now assert attribution_window model and echo
@@ -975,24 +975,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # Graduated: T-UC-004-dim-sortby-fallback — all transports pass.
         # A2A previously dropped by_placement; that serialization gap is fixed.
-        # Verified (bdd-3.1 jceq): the scenario xpasses with by_placement present
-        # and sorted by spend (then_placement_sorted_fallback asserts
-        # values == sorted(values, reverse=True); inline pytest.xfail guards the
-        # vacuous case), so the pass is real, not a weakened assertion.
+        # Verified: the scenario passes with by_placement present and sorted by
+        # spend (then_placement_sorted_fallback asserts values == sorted(values,
+        # reverse=True); inline pytest.xfail guards the vacuous case), so the
+        # pass is real, not a weakened assertion.
 
         # UC-004 status filter: "active" works, other values may not
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
             (
-                # Graduated rejected/canceled: the status_filter family was masked
-                # by a step-parser bug (the generic `with {request_params}` step
-                # dropped the space-separated `status_filter "value"` form), not a
-                # production gap. With the parser fixed, the filter correctly
-                # excludes non-matching buys. paused/completed still xfail on a
-                # separate d.status reporting gap. (pending_activation was stale —
-                # not a real MediaBuyStatus value.)
+                # The generic `requests delivery metrics with {request_params}` step
+                # shadows the specific `with status_filter "X"` step and parses only
+                # the key=value form, so the `status_filter "X"` value is dropped and
+                # the filter defaults to "active". Every non-active value therefore
+                # returns the active buy and fails the "only buys with status X" check.
+                # pending_creatives/pending_start are the v3.1 additions of this same
+                # known step-shadowing gap (pending_activation was stale — not a real
+                # MediaBuyStatus value). Fixing the generic step is tracked separately
+                # and would graduate this whole family.
                 "T-UC-004-filter",
-                {"paused", "completed"},
-                "status_filter paused/completed: reported d.status not derived from persisted status",
+                {"rejected", "canceled", "paused", "completed", "pending_creatives", "pending_start"},
+                "status_filter for non-active values is dropped by the generic request_params step "
+                "(shadows the specific status_filter step), so the filter defaults to active",
             ),
             (
                 "T-UC-004-filter-default",
@@ -1412,9 +1415,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if not _cred_passes:
                 item.add_marker(
                     pytest.mark.xfail(
-                        reason="credentials boundary test passes for the wrong reason — When sends an "
-                        "unsupported 'credentials' field (extra_forbidden), not real credential "
-                        "validation; not graduated pending rework (salesagent-7n4b)",
+                        reason="credentials boundary test passes for the wrong reason — the When sends an "
+                        "unsupported 'credentials' request field (extra_forbidden), not real credential "
+                        "length/scheme validation; not graduated pending a test rework",
                         strict=False,
                     )
                 )
@@ -1741,9 +1744,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if not _pcred_passes:
                 item.add_marker(
                     pytest.mark.xfail(
-                        reason="credentials partition test passes for the wrong reason — When sends an "
-                        "unsupported 'credentials' field (extra_forbidden), not real credential "
-                        "validation; not graduated pending rework (salesagent-7n4b)",
+                        reason="credentials partition test passes for the wrong reason — the When sends an "
+                        "unsupported 'credentials' request field (extra_forbidden), not real credential "
+                        "length/scheme validation; not graduated pending a test rework",
                         strict=False,
                     )
                 )
