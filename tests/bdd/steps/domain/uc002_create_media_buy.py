@@ -287,6 +287,25 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
 
+    elif partition == "natural_key_sandbox":
+        # v3.1: sandbox natural-key resolution — an active sandbox account is
+        # matched by brand+operator+sandbox=true (Account.sandbox column,
+        # AccountRepository.get_by_natural_key(sandbox=...)).
+        account = AccountFactory(
+            tenant=tenant,
+            account_id="acc-sandbox",
+            status="active",
+            brand={"domain": "sandbox.com"},
+            operator="sandbox.com",
+            sandbox=True,
+        )
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        ctx["account_ref"] = AccountReference(
+            root=AccountReferenceByNaturalKey(
+                brand=BrandReference(domain="sandbox.com"), operator="sandbox.com", sandbox=True
+            ),
+        )
+
     else:
         raise ValueError(f"Unknown account partition: {partition}")
 
