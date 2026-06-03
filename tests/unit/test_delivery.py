@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import MediaBuyStatus
 
-from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -1574,11 +1574,11 @@ class TestDeliveryAdapterError:
     """UC-004-EXT-F: adapter failure handling."""
 
     def test_adapter_exception_returns_adapter_error(self):
-        """UC-004-EXT-F1: adapter raises Exception -> AdCPAdapterError.
+        """UC-004-EXT-F1: adapter raises Exception -> error RETURNED in response.errors[].
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
-        Adapter exceptions now propagate as AdCPAdapterError so the boundary translator
-        produces a two-layer envelope.
+        Per the obligation, a per-buy adapter failure degrades: the response still returns
+        with an advisory error in errors[] so the other buys' data is preserved.
         Covers: UC-004-EXT-F-01
         """
         buy = _make_mock_media_buy(media_buy_id="mb_err")
@@ -1587,15 +1587,19 @@ class TestDeliveryAdapterError:
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_err"])
 
-        with pytest.raises(AdCPAdapterError, match="mb_err"):
-            _run_impl_with_patches(
-                req,
-                adapter=mock_adapter,
-                target_buys=[("mb_err", buy)],
-            )
+        result = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_err", buy)],
+        )
 
-    def test_adapter_error_raises_adapter_error(self):
-        """UC-004-EXT-F2: adapter exception raises AdCPAdapterError.
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert result.errors is not None
+        assert any("mb_err" in e.message for e in result.errors)
+        assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
+
+    def test_adapter_error_returns_adapter_error(self):
+        """UC-004-EXT-F2: adapter exception -> error RETURNED in response.errors[].
 
         Covers: UC-004-EXT-F-02
         """
@@ -1609,18 +1613,22 @@ class TestDeliveryAdapterError:
             end_date="2025-03-31",
         )
 
-        with pytest.raises(AdCPAdapterError, match="mb_err2"):
-            _run_impl_with_patches(
-                req,
-                adapter=mock_adapter,
-                target_buys=[("mb_err2", buy)],
-            )
+        result = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_err2", buy)],
+        )
+
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert result.errors is not None
+        assert any("mb_err2" in e.message for e in result.errors)
+        assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
 
         Spec: UNSPECIFIED (implementation-defined audit/logging behavior).
-        When adapter raises an exception, the error must be logged before AdCPAdapterError propagates.
+        When the adapter fails, the error must be logged before the advisory error is returned.
         Covers: UC-004-EXT-F-03
         """
         buy = _make_mock_media_buy(media_buy_id="mb_log")
@@ -1630,20 +1638,21 @@ class TestDeliveryAdapterError:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_log"])
 
         with patch(f"{_PATCH_PREFIX}.logger") as mock_logger:
-            with pytest.raises(AdCPAdapterError):
-                _run_impl_with_patches(
-                    req,
-                    adapter=mock_adapter,
-                    target_buys=[("mb_log", buy)],
-                )
+            result = _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_log", buy)],
+            )
 
-        # Error was logged
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert result.errors is not None and any("mb_log" in e.message for e in result.errors)
+        # Error was logged before the advisory error was returned
         mock_logger.error.assert_called()
         log_message = mock_logger.error.call_args[0][0]
         assert "mb_log" in log_message
 
     def test_adapter_error_no_state_change(self):
-        """UC-004-EXT-F4: adapter error raises AdCPAdapterError; no DB writes occur.
+        """UC-004-EXT-F4: adapter error is returned (degrade); operation stays read-only.
 
         Covers: UC-004-EXT-F-04
         """
@@ -1657,12 +1666,15 @@ class TestDeliveryAdapterError:
             end_date="2025-06-30",
         )
 
-        with pytest.raises(AdCPAdapterError, match="mb_nowrite"):
-            _run_impl_with_patches(
-                req,
-                adapter=mock_adapter,
-                target_buys=[("mb_nowrite", buy)],
-            )
+        result = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_nowrite", buy)],
+        )
+
+        assert isinstance(result, GetMediaBuyDeliveryResponse)
+        assert result.errors is not None
+        assert any("mb_nowrite" in e.message for e in result.errors)
 
 
 # ===========================================================================

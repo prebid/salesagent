@@ -20,7 +20,6 @@ from datetime import date
 import pytest
 
 from src.core.exceptions import (
-    AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPValidationError,
 )
@@ -393,8 +392,11 @@ class TestAdapterUnavailableReturnsAdapterError:
 
             env.set_adapter_error(ConnectionError("Connection refused"))
 
-            with pytest.raises(AdCPAdapterError, match="mb_001"):
-                env.call_impl(media_buy_ids=["mb_001"])
+            result = env.call_impl(media_buy_ids=["mb_001"])
+
+            assert result.errors is not None
+            assert any("mb_001" in e.message for e in result.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -429,8 +431,11 @@ class TestAdapterInternalServerErrorReturnsAdapterError:
 
             env.set_adapter_error(RuntimeError("500 Internal Server Error"))
 
-            with pytest.raises(AdCPAdapterError, match="mb_001"):
-                env.call_impl(media_buy_ids=["mb_001"])
+            result = env.call_impl(media_buy_ids=["mb_001"])
+
+            assert result.errors is not None
+            assert any("mb_001" in e.message for e in result.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -446,18 +451,13 @@ class TestAdapterFailureAuditTrail:
     """
 
     def test_adapter_failure_writes_audit_log(self, integration_db):
-        """When adapter.get_media_buy_delivery raises, the failure is audit-logged.
+        """When adapter.get_media_buy_delivery fails, the failure is audit-logged.
 
         Covers: UC-004-EXT-F-03
 
-        After the error-emission architecture migration, the impl raises
-        AdCPAdapterError; the UoW context manager rolls back on exception, so
-        session.add(audit_log) is not persisted to the DB. The production code
-        does log the failure via logger.error before raising, which satisfies
-        NFR-003 (failure is recorded in the audit trail at the log layer).
-
-        We assert on the logger here because the DB audit record is rolled back
-        with the surrounding transaction. The same pattern is used in
+        Per UC-004-EXT-F the impl degrades: it logs the failure via logger.error
+        and returns an advisory error in the response (NFR-003), rather than
+        aborting. We assert on the logger here, mirroring
         tests/unit/test_delivery.py::test_adapter_failure_audit_logged.
         """
         from unittest.mock import patch
@@ -477,14 +477,14 @@ class TestAdapterFailureAuditTrail:
             env.set_adapter_error(RuntimeError("GAM API timeout"))
 
             with patch("src.core.tools.media_buy_delivery.logger") as mock_logger:
-                with pytest.raises(AdCPAdapterError):
-                    env.call_impl(
-                        media_buy_ids=["mb_fail"],
-                        start_date="2025-06-01",
-                        end_date="2025-06-30",
-                    )
+                result = env.call_impl(
+                    media_buy_ids=["mb_fail"],
+                    start_date="2025-06-01",
+                    end_date="2025-06-30",
+                )
 
-            # The adapter failure was logged before AdCPAdapterError propagated.
+            assert result.errors is not None and any("mb_fail" in e.message for e in result.errors)
+            # The adapter failure was logged before the advisory error was returned.
             mock_logger.error.assert_called()
             error_calls = [c for c in mock_logger.error.call_args_list if "mb_fail" in str(c)]
             assert error_calls, "Expected logger.error to be called with media_buy_id mb_fail"
@@ -503,7 +503,7 @@ class TestAdapterErrorNoStateMutation:
     """
 
     def test_adapter_error_returns_error_without_state_modification(self, integration_db):
-        """When adapter raises, AdCPAdapterError is propagated.
+        """When the adapter fails, an advisory error is returned; domain state is unchanged.
 
         Covers: UC-004-EXT-F-04
         """
@@ -521,12 +521,15 @@ class TestAdapterErrorNoStateMutation:
 
             env.set_adapter_error(RuntimeError("GAM API timeout"))
 
-            with pytest.raises(AdCPAdapterError, match="mb_err"):
-                env.call_impl(
-                    media_buy_ids=["mb_err"],
-                    start_date="2025-06-01",
-                    end_date="2025-06-30",
-                )
+            result = env.call_impl(
+                media_buy_ids=["mb_err"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+
+            assert result.errors is not None
+            assert any("mb_err" in e.message for e in result.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
 
 # ---------------------------------------------------------------------------

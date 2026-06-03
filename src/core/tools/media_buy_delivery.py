@@ -19,7 +19,6 @@ from pydantic import Field, RootModel, ValidationError
 from rich.console import Console
 
 from src.core.exceptions import (
-    AdCPAdapterError,
     AdCPAuthRequiredError,
     AdCPError,
     AdCPValidationError,
@@ -150,6 +149,9 @@ def _get_media_buy_delivery_impl(
 
         # Diff requested IDs vs found IDs to report missing ones (salesagent-mexj)
         not_found_errors: list[Error] = []
+        # Per-buy adapter failures degrade (UC-004): record an advisory error and continue
+        # with the other buys instead of aborting the whole multi-buy request.
+        adapter_errors: list[Error] = []
         found_ids = {buy_id for buy_id, _ in target_media_buys}
         if req.media_buy_ids:
             for requested_id in req.media_buy_ids:
@@ -273,10 +275,13 @@ def _get_media_buy_delivery_impl(
                                 uow.session.add(audit_log)
                         except Exception as audit_err:
                             logger.error(f"Failed to write adapter failure audit log: {audit_err}")
-                        raise AdCPAdapterError(
-                            f"Error getting delivery for {media_buy_id}",
-                            context=req.context,
-                        ) from e
+                        adapter_errors.append(
+                            Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                                code="SERVICE_UNAVAILABLE",
+                                message=f"Error getting delivery for {media_buy_id}",
+                            )
+                        )
+                        continue
                 else:
                     # Use simulation for testing
                     # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
@@ -426,8 +431,8 @@ def _get_media_buy_delivery_impl(
                 total_clicks += clicks if clicks is not None else 0
 
             except AdCPError:
-                # Typed AdCPError (e.g., AdCPAdapterError from inner block) propagates
-                # to the boundary translator for a spec-compliant envelope.
+                # A typed AdCPError from per-buy processing propagates to the boundary
+                # translator for a spec-compliant envelope.
                 raise
             except Exception as e:
                 logger.error(f"Error getting delivery for {media_buy_id}: {e}")
@@ -498,7 +503,7 @@ def _get_media_buy_delivery_impl(
             ),
             media_buy_deliveries=deliveries,
             attribution_window=attribution_window,
-            errors=not_found_errors or None,
+            errors=(not_found_errors + adapter_errors) or None,
             context=context_val,
             notification_type=notification_type,
             sequence_number=sequence_number,

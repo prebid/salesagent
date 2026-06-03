@@ -3728,14 +3728,12 @@ class TestDeliveryImplErrors:
                 _get_media_buy_delivery_impl(req, identity)
 
     def test_adapter_error_returns_error_code(self):
-        """UC-004-E03: adapter failure raises AdCPAdapterError.
+        """UC-004-E03: adapter failure RETURNS an advisory error (UC-004-EXT-F degrade).
 
         Priority: P1
         Type: unit
         Source: UC-004 ext-f
         """
-        from src.core.exceptions import AdCPAdapterError
-
         buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
         buy.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]}
 
@@ -3763,8 +3761,11 @@ class TestDeliveryImplErrors:
                 start_date="2025-01-01",
                 end_date="2025-06-30",
             )
-            with pytest.raises(AdCPAdapterError):
-                _get_media_buy_delivery_impl(req, identity)
+            result = _get_media_buy_delivery_impl(req, identity)
+
+            assert result.errors is not None
+            assert any("mb_1" in e.message for e in result.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
     def test_ownership_mismatch_returns_not_found(self):
         """UC-004-E04: non-owner sees not_found, not ownership_mismatch.
