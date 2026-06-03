@@ -406,6 +406,11 @@ def _load_traceability(path: Path) -> dict:
     # Ensure mappings is a dict (yaml may parse empty {} with comment as None)
     if data.get("mappings") is None:
         data["mappings"] = {}
+    # Coerce per-UC None to [] — older YAMLs wrote bare keys for empty UCs,
+    # which YAML parses as None and crashes any iteration over them.
+    for uc_key, scenarios in list(data["mappings"].items()):
+        if scenarios is None:
+            data["mappings"][uc_key] = []
     return data
 
 
@@ -448,6 +453,11 @@ def _save_traceability(path: Path, data: dict) -> None:
         output += "mappings:\n"
         for uc_key in sorted(mappings.keys()):
             scenarios = mappings[uc_key]
+            if not scenarios:
+                # Preserve empty UCs as an explicit empty list — bare key
+                # serializes as `null` and breaks the Pydantic schema check.
+                output += f"  {uc_key}: []\n"
+                continue
             output += f"  {uc_key}:\n"
             for s in scenarios:
                 output += f"    - adcp_scenario_id: {_yaml_str(s['adcp_scenario_id'])}\n"
@@ -705,12 +715,15 @@ def _render_feature(
     uc_key: str,
     feature_filename: str,
     commit_sha: str,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], set[str]]:
     """Render a transformed feature file.
 
-    Returns (rendered_text, list_of_new_mappings).
+    Returns (rendered_text, list_of_new_mappings, all_scenario_ids_produced).
+    The third element is needed by the prune step in compile_features so it
+    can distinguish "renamed/removed" vs "already-mapped" entries.
     """
     new_mappings: list[dict] = []
+    all_scenario_ids: set[str] = set()
     lines: list[str] = []
 
     # Generation stamp
@@ -741,6 +754,10 @@ def _render_feature(
         output_tags, new_mapping = _transform_scenario_tags(scenario, traceability, uc_key, feature_filename)
         if new_mapping is not None:
             new_mappings.append(new_mapping)
+        # Track every scenario_id this compile actually produced (whether new or
+        # already mapped). The prune step needs this set, not just the new ones.
+        if scenario.contextgit is not None:
+            all_scenario_ids.add(scenario.contextgit.id)
 
         # Transform step text first (strip transport suffixes)
         for step in scenario.steps:
@@ -775,7 +792,7 @@ def _render_feature(
 
         lines.append("")
 
-    return "\n".join(lines) + "\n", new_mappings
+    return "\n".join(lines) + "\n", new_mappings, all_scenario_ids
 
 
 # ---------------------------------------------------------------------------
@@ -792,14 +809,16 @@ def compile_feature(
 ) -> tuple[str, str, list[dict]]:
     """Compile a single feature file.
 
-    Returns (uc_key, output_text, new_mappings).
+    Returns (uc_key, output_text, new_mappings, all_scenario_ids).
     """
     text = source_path.read_text()
     feature = parse_feature_file(text)
     feature_filename = source_path.name
     uc_key = _extract_uc_key(feature_filename)
 
-    output_text, new_mappings = _render_feature(feature, traceability, uc_key, feature_filename, commit_sha)
+    output_text, new_mappings, all_scenario_ids = _render_feature(
+        feature, traceability, uc_key, feature_filename, commit_sha
+    )
 
     if not dry_run:
         output_path = OUTPUT_DIR / feature_filename
@@ -811,7 +830,7 @@ def compile_feature(
         print(f"    Scenarios: {len(feature.scenarios)}")
         print(f"    New mappings: {len(new_mappings)}")
 
-    return uc_key, output_text, new_mappings
+    return uc_key, output_text, new_mappings, all_scenario_ids
 
 
 def compile_features(
@@ -835,9 +854,21 @@ def compile_features(
     print()
 
     all_new_mappings: dict[str, list[dict]] = {}
+    # Per-UC: set of scenario ids THIS compile produced + the feature_filenames
+    # the compile actually touched. The prune step uses both — only entries
+    # whose adcp_feature matches a touched filename are eligible for pruning,
+    # so salesagent-side hand-maintained features sharing the same UC key
+    # (e.g. BR-UC-002-manual-overrides.feature alongside the adcp-req-sourced
+    # BR-UC-002-create-media-buy.feature) are preserved.
+    current_ids_per_uc: dict[str, set[str]] = {}
+    touched_files_per_uc: dict[str, set[str]] = {}
 
     for source_path in feature_files:
-        uc_key, _output_text, new_mappings = compile_feature(source_path, traceability, commit_sha, dry_run=dry_run)
+        uc_key, _output_text, new_mappings, all_scenario_ids = compile_feature(
+            source_path, traceability, commit_sha, dry_run=dry_run
+        )
+        current_ids_per_uc.setdefault(uc_key, set()).update(all_scenario_ids)
+        touched_files_per_uc.setdefault(uc_key, set()).add(source_path.name)
         if new_mappings:
             all_new_mappings.setdefault(uc_key, []).extend(new_mappings)
 
@@ -851,6 +882,31 @@ def compile_features(
                     existing.append(nm)
                     existing_ids.add(nm["adcp_scenario_id"])
 
+    # Prune stale entries. For each UC the current compile touched:
+    #   - For each entry whose adcp_feature is one of the touched filenames,
+    #     KEEP iff its adcp_scenario_id was produced this run; drop otherwise
+    #     (renamed/removed/consolidated upstream in adcp-req).
+    #   - Entries pointing at adcp_feature filenames NOT touched this run are
+    #     left alone (they belong to a sibling feature file owned by salesagent
+    #     or to a UC subset the --uc filter excluded).
+    # Without pruning, the YAML accumulates phantoms across rederive cycles
+    # and the obligation-sync test fails. Without the per-filename scope,
+    # salesagent-side companion features in the same UC namespace are wiped.
+    pruned_count = 0
+    for uc_key, current_ids in current_ids_per_uc.items():
+        existing = traceability.get("mappings", {}).get(uc_key, [])
+        touched_files = touched_files_per_uc.get(uc_key, set())
+        kept: list[dict] = []
+        for m in existing:
+            if m.get("adcp_feature") in touched_files:
+                if m["adcp_scenario_id"] in current_ids:
+                    kept.append(m)
+                else:
+                    pruned_count += 1
+            else:
+                kept.append(m)  # owned by an untouched feature file — preserve
+        traceability.setdefault("mappings", {})[uc_key] = kept
+
     # Update source metadata
     traceability["source"]["commit"] = commit_sha
     traceability["source"]["compiled_at"] = now
@@ -858,9 +914,652 @@ def compile_features(
     if not dry_run:
         _save_traceability(TRACEABILITY_PATH, traceability)
         print(f"\n  Updated: {TRACEABILITY_PATH.relative_to(PROJECT_ROOT)}")
+        if pruned_count:
+            print(f"  Pruned: {pruned_count} stale traceability entry/entries (no longer produced by adcp-req)")
     else:
         total_new = sum(len(v) for v in all_new_mappings.values())
         print(f"\n  [DRY RUN] Would add {total_new} new mapping(s) to traceability YAML")
+        if pruned_count:
+            print(f"  [DRY RUN] Would prune {pruned_count} stale entry/entries")
+
+    print("\nDone.")
+
+
+# ---------------------------------------------------------------------------
+# Merge mode (Layer 1 — deterministic classifier)
+# ---------------------------------------------------------------------------
+#
+# Join adcp-req TARGET scenarios with salesagent's existing compiled LEGACY
+# scenarios on the @T-<id> tag. Classify each pair into a bucket, apply the
+# deterministic buckets directly, and emit a manifest of items needing
+# Layer 2 semantic merging via claude -p.
+#
+# Buckets:
+#   NO-OP                 — identical step text + tags + Examples. Keep LEGACY
+#                           verbatim. If file uses @schema-v<MAJ>.<MIN> scheme
+#                           and the version tag is missing, add @schema-v3.1.
+#   EXAMPLES-ONLY         — steps + tags identical, Examples table differs.
+#                           Replace LEGACY's Examples table with TARGET's.
+#   NEEDS-SEMANTIC-MERGE  — steps or tags differ. Leave LEGACY in output,
+#                           emit manifest entry for Layer 2 to patch later.
+#   NEW-ADD               — id only in TARGET. Render TARGET via the standard
+#                           compile transform (contextgit→@T-id tag, etc).
+#   LEGACY-DELETE         — id only in LEGACY, no hand-edit marker. Drop.
+#   LEGACY-PRESERVE       — id only in LEGACY, has @hand-edited tag or a
+#                           "# HAND-EDITED" comment in the preamble. Keep.
+
+
+HAND_EDITED_RE = re.compile(r"@hand-edited\b|#\s*HAND-EDITED", re.IGNORECASE)
+
+
+def _extract_id_from_tags(tags: list[str]) -> str | None:
+    """Return the contextgit id embedded as a leading @T-<id> tag.
+
+    compile_bdd.py renders adcp-req's `# @contextgit id=T-...` comment as
+    `@T-...` tag on the compiled scenario. That tag is the join key for
+    merge mode.
+    """
+    for t in tags:
+        if t.startswith("@T-"):
+            return t[1:]  # strip leading @
+    return None
+
+
+def _scenario_id(scenario: Scenario) -> str | None:
+    """Get the scenario id from either contextgit (adcp-req side) or @T- tag (compiled side)."""
+    if scenario.contextgit is not None:
+        return scenario.contextgit.id
+    return _extract_id_from_tags(scenario.tags)
+
+
+def _has_hand_edited_marker(scenario: Scenario) -> bool:
+    """A LEGACY-only scenario is preserved (not deleted) iff it carries an
+    explicit hand-edit marker — @hand-edited tag OR `# HAND-EDITED` comment
+    inside the scenario body."""
+    for t in scenario.tags:
+        if HAND_EDITED_RE.search(t):
+            return True
+    for c in scenario.comment_lines:
+        if HAND_EDITED_RE.search(c):
+            return True
+    return False
+
+
+def _steps_match(a: list[Step], b: list[Step]) -> bool:
+    """Byte-identical match of step keyword + text + table rows, in order."""
+    if len(a) != len(b):
+        return False
+    for sa, sb in zip(a, b, strict=True):
+        if sa.keyword != sb.keyword or sa.text != sb.text:
+            return False
+        if sa.table_rows != sb.table_rows:
+            return False
+    return True
+
+
+def _tags_match_ignoring_id(a: list[str], b: list[str]) -> bool:
+    """Set-equal modulo the @T-<id> join-key tag (which only appears on the
+    compiled-side LEGACY scenario, never on the adcp-req TARGET source)."""
+    aa = {t for t in a if not t.startswith("@T-")}
+    bb = {t for t in b if not t.startswith("@T-")}
+    return aa == bb
+
+
+def _examples_match(a: list[ExamplesBlock], b: list[ExamplesBlock]) -> bool:
+    """Byte-identical match of Examples blocks (header + rows), in order."""
+    if len(a) != len(b):
+        return False
+    for ea, eb in zip(a, b, strict=True):
+        if ea.header_line.strip() != eb.header_line.strip():
+            return False
+        if [r.strip() for r in ea.rows] != [r.strip() for r in eb.rows]:
+            return False
+    return True
+
+
+def classify_scenario_pair(legacy: Scenario | None, target: Scenario | None) -> str:
+    """Bucket a (legacy, target) scenario pair. Exactly one of legacy/target
+    may be None; both being None is a caller bug."""
+    if target is None and legacy is None:
+        raise ValueError("both sides None")
+    if legacy is None:
+        return "NEW-ADD"
+    if target is None:
+        return "LEGACY-PRESERVE" if _has_hand_edited_marker(legacy) else "LEGACY-DELETE"
+    if _steps_match(legacy.steps, target.steps) and _tags_match_ignoring_id(legacy.tags, target.tags):
+        if _examples_match(legacy.examples, target.examples):
+            return "NO-OP"
+        return "EXAMPLES-ONLY"
+    return "NEEDS-SEMANTIC-MERGE"
+
+
+# --- Per-bucket apply ---------------------------------------------------------
+
+
+def _apply_no_op(legacy: Scenario) -> Scenario:
+    """Keep LEGACY verbatim. Tags are NEVER auto-injected — version tag
+    presence is preserved from upstream (TARGET or LEGACY), period. This
+    is the rzgb4.1 invariant: nothing in MERGED is invented downstream."""
+    return legacy
+
+
+def _apply_examples_only(legacy: Scenario, target: Scenario) -> Scenario:
+    """Keep LEGACY steps/tags; replace Examples table with TARGET's."""
+    base = _apply_no_op(legacy)
+    return Scenario(
+        contextgit=base.contextgit,
+        tags=base.tags,
+        keyword=base.keyword,
+        name=base.name,
+        steps=base.steps,
+        examples=target.examples,
+        comment_lines=base.comment_lines,
+    )
+
+
+# --- Per-scenario render (lighter than _render_feature — used for merge mode) -
+
+
+def _render_scenario_lines(scenario: Scenario) -> list[str]:
+    """Render a single scenario to a list of lines (no trailing blank).
+
+    Designed to emit either LEGACY scenarios verbatim (NO-OP / EXAMPLES-ONLY /
+    LEGACY-PRESERVE / NEEDS-SEMANTIC-MERGE buckets) or a TARGET scenario that
+    has been pre-transformed (NEW-ADD bucket, after calling the existing
+    `_transform_scenario_tags` + `_transform_step_text` + `_strip_transport`
+    pipeline)."""
+    lines: list[str] = []
+    if scenario.tags:
+        lines.append("  " + " ".join(scenario.tags))
+    lines.append(f"  {scenario.keyword}: {scenario.name}")
+    for step in scenario.steps:
+        lines.append(f"    {step.keyword} {step.text}")
+        for tr in step.table_rows:
+            lines.append(f"    {tr.strip()}")
+    for cl in scenario.comment_lines:
+        lines.append(f"    {cl.strip()}")
+    for eb in scenario.examples:
+        lines.append("")
+        lines.append(f"    {eb.header_line.strip()}")
+        for row in eb.rows:
+            lines.append(f"      {row.strip()}")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Binding ground truth (which scenarios actually have step-defs in salesagent)
+# ---------------------------------------------------------------------------
+#
+# Empirical truth from pytest-bdd baseline collection (see
+# phase5-snapshot/baseline-2026-06-01/bdd.json):
+#   - Only 8 UCs have a test_<uc>_*.py driver that loads the feature file.
+#     Scenarios in unwired UCs cannot have bindings (pytest-bdd never sees
+#     them), so v3.1 TARGET wins unconditionally.
+#   - Within wired UCs, only scenarios whose baseline outcome was 'passed'
+#     have working bindings. The rest auto-xfailed at runtime
+#     (StepDefinitionNotFoundError) — no binding to preserve.
+#
+# Together these reduce the "needs semantic merge" set from 661 to ~106
+# scenarios (only wired UC + bound scenario). The rest take TARGET
+# mechanically via the NEW-ADD render path.
+WIRED_UCS = frozenset(
+    {
+        "UC-002",
+        "UC-003",
+        "UC-004",
+        "UC-005",
+        "UC-006",
+        "UC-011",
+        "UC-019",
+        "UC-026",
+    }
+)
+
+
+def load_bound_scenarios(baseline_bdd_json_path: Path) -> set[str]:
+    """Read baseline bdd.json, return set of T-UC-NNN-... scenario_ids where
+    at least one parametrized test instance had outcome='passed'. These are
+    the scenarios with working step-def bindings — the only ones for which
+    a true semantic merge protects binding stability."""
+    import json
+    import re
+
+    t_id = re.compile(r"^T-UC-[\w\-.]+$")
+    by_sid: dict[str, set[str]] = {}
+    try:
+        data = json.loads(baseline_bdd_json_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[load_bound_scenarios] cannot read {baseline_bdd_json_path}: {exc!r}", file=sys.stderr)
+        return set()
+    for t in data.get("tests", []):
+        if "__scenario__" not in t.get("keywords", []):
+            continue
+        sid = next((k for k in t["keywords"] if t_id.match(k)), None)
+        if not sid:
+            continue
+        by_sid.setdefault(sid, set()).add(t.get("outcome", ""))
+    return {sid for sid, outs in by_sid.items() if "passed" in outs}
+
+
+def merge_feature(
+    target_source_path: Path,
+    legacy_compiled_path: Path | None,
+    traceability: dict,
+    commit_sha: str,
+    *,
+    lockfile_root: Path | None = None,
+    adcp_spec_pin: str | None = None,
+    bound_scenarios: set[str] | None = None,
+) -> tuple[str, str, list[dict], set[str], list[dict], dict[str, int]]:
+    """Merge one UC: adcp-req TARGET source ⨝ salesagent LEGACY compiled.
+
+    Returns (uc_key, output_text, manifest_entries, all_scenario_ids,
+             new_mappings, bucket_counts).
+    manifest_entries lists NEEDS-SEMANTIC-MERGE scenarios for Layer 2;
+    bucket_counts is per-classifier-bucket count for the manifest summary.
+
+    bound_scenarios: when provided, scenarios outside this set (OR in UCs
+    not in WIRED_UCS) are classified TARGET-WINS instead of
+    NEEDS-SEMANTIC-MERGE — applied mechanically via the NEW-ADD render path
+    since there's no binding to preserve.
+    """
+    target_feature = parse_feature_file(target_source_path.read_text())
+    feature_filename = target_source_path.name
+    uc_key = _extract_uc_key(feature_filename)
+
+    # Index TARGET by id (skip scenarios without id — orphan source error)
+    target_by_id: dict[str, Scenario] = {}
+    for scen in target_feature.scenarios:
+        sid = _scenario_id(scen)
+        if sid is not None:
+            target_by_id[sid] = scen
+
+    # Index LEGACY by id (if any)
+    legacy_feature: Feature | None = None
+    legacy_by_id: dict[str, Scenario] = {}
+    if legacy_compiled_path is not None and legacy_compiled_path.exists():
+        legacy_feature = parse_feature_file(legacy_compiled_path.read_text())
+        for scen in legacy_feature.scenarios:
+            sid = _scenario_id(scen)
+            if sid is not None:
+                legacy_by_id[sid] = scen
+
+    # Lockfile consultation (rzgb4.4). Optional: if lockfile_root is None or
+    # the lockfile module isn't importable, fall back to plain classification.
+    lockfile = None
+    _compute_cache_key = None
+    if lockfile_root is not None and adcp_spec_pin is not None:
+        try:
+            import sys as _sys
+
+            phase5_dir = (lockfile_root / "scripts" / "phase5").resolve()
+            if str(phase5_dir) not in _sys.path:
+                _sys.path.insert(0, str(phase5_dir))
+            from lockfile import Lockfile  # type: ignore[import-not-found]
+            from lockfile import compute_cache_key as _cck
+
+            lockfile = Lockfile(uc_key, lockfile_root)
+            _compute_cache_key = _cck
+        except (ImportError, ValueError) as exc:
+            print(
+                f"[merge_feature] lockfile disabled for {uc_key}: {exc!r}",
+                file=sys.stderr,
+            )
+
+    # Backgrounds extracted for cache-key composition.
+    legacy_bg_text = "\n".join(legacy_feature.background_lines) if legacy_feature is not None else ""
+    target_bg_text = "\n".join(target_feature.background_lines)
+
+    # --- Classify and apply ---
+    manifest_entries: list[dict] = []
+    all_scenario_ids: set[str] = set()
+    new_mappings: list[dict] = []
+    bucket_counts: dict[str, int] = {}
+    merged_scenarios: list[Scenario] = []
+    # Set True when Background should come from TARGET (not LEGACY) — used
+    # when UC is unwired (no bindings to preserve) and bg_changed.
+    use_target_background = False
+
+    # --- Background as a merge unit (rzgb4.4) ---
+    # If LEGACY and TARGET disagree on Background, emit a __background__
+    # manifest entry (or check lockfile cache hit) so Layer 2 can merge it.
+    # Otherwise, the existing Background-from-LEGACY render path is correct.
+    bg_changed = (
+        legacy_feature is not None
+        and legacy_feature.background_lines != target_feature.background_lines
+        and (legacy_feature.background_lines or target_feature.background_lines)
+    )
+    if bg_changed:
+        bg_legacy_gherkin = "\n".join(legacy_feature.background_lines)
+        bg_target_gherkin = "\n".join(target_feature.background_lines)
+        bg_cache_key = None
+        bg_hit = False
+        if lockfile is not None and _compute_cache_key is not None:
+            bg_cache_key = _compute_cache_key(
+                target_gherkin=bg_target_gherkin,
+                legacy_gherkin=bg_legacy_gherkin,
+                background_legacy="",
+                background_target="",
+                binding_annotations=[],
+                adcp_spec_sha=adcp_spec_pin,
+            )
+            if lockfile.matches("__background__", bg_cache_key):
+                bg_hit = True
+        if bg_hit:
+            bucket_counts["RESOLVED-FROM-LOCKFILE"] = bucket_counts.get("RESOLVED-FROM-LOCKFILE", 0) + 1
+        elif uc_key not in WIRED_UCS:
+            # UC has no test driver — no Background-step binding to preserve.
+            bucket_counts["TARGET-WINS"] = bucket_counts.get("TARGET-WINS", 0) + 1
+            use_target_background = True
+        else:
+            bucket_counts["NEEDS-SEMANTIC-MERGE"] = bucket_counts.get("NEEDS-SEMANTIC-MERGE", 0) + 1
+            manifest_entries.append(
+                {
+                    "scenario_id": "__background__",
+                    "uc_key": uc_key,
+                    "legacy_gherkin": bg_legacy_gherkin,
+                    "target_gherkin": bg_target_gherkin,
+                    "legacy_background": "",
+                    "target_background": "",
+                    "legacy_file": str(legacy_compiled_path) if legacy_compiled_path else None,
+                    "target_file": str(target_source_path),
+                    "cache_key": list(bg_cache_key) if bg_cache_key is not None else None,
+                }
+            )
+
+    # Pass 1: scenarios that appear in TARGET (deterministic order)
+    for scen in target_feature.scenarios:
+        sid = _scenario_id(scen)
+        if sid is None:
+            # Source scenario without an id — skip (operator error in adcp-req)
+            continue
+        all_scenario_ids.add(sid)
+        legacy_scen = legacy_by_id.get(sid)
+        bucket = classify_scenario_pair(legacy_scen, scen)
+        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+
+        if bucket == "NO-OP":
+            merged_scenarios.append(_apply_no_op(legacy_scen))
+        elif bucket == "EXAMPLES-ONLY":
+            merged_scenarios.append(_apply_examples_only(legacy_scen, scen))
+        elif bucket == "NEW-ADD":
+            # Transform TARGET via existing compile pipeline (contextgit→@T-id,
+            # transport strip, etc).
+            output_tags, new_mapping = _transform_scenario_tags(scen, traceability, uc_key, feature_filename)
+            if new_mapping is not None:
+                new_mappings.append(new_mapping)
+            for step in scen.steps:
+                step.text = _transform_step_text(step.keyword, step.text)
+            _strip_transport_from_scenario(scen)
+            merged_scenarios.append(
+                Scenario(
+                    contextgit=scen.contextgit,
+                    tags=output_tags,
+                    keyword=scen.keyword,
+                    name=scen.name,
+                    steps=scen.steps,
+                    examples=scen.examples,
+                    comment_lines=scen.comment_lines,
+                )
+            )
+        elif bucket == "NEEDS-SEMANTIC-MERGE":
+            # Demote to TARGET-WINS when pytest-bdd has no working binding to
+            # preserve (UC has no test driver OR scenario auto-xfails on
+            # baseline). Render TARGET via the standard compile pipeline —
+            # same path NEW-ADD uses — since legacy phrasing has nothing to
+            # protect.
+            # UC-level gate is ALWAYS active: if the UC has no
+            # test_<uc>_*.py driver in salesagent (i.e., not in WIRED_UCS),
+            # pytest-bdd never collects its scenarios — there is no step-def
+            # binding to preserve, regardless of what the gherkin says.
+            # Demote to TARGET-WINS (mechanical render, no LLM).
+            #
+            # Scenario-level gate is OPTIONAL: when --bound-scenarios-from is
+            # provided, narrow within a wired UC to only the scenarios
+            # pytest-bdd actually bound. WARNING — known false-positive prone:
+            # baseline bdd.json's "xfailed" outcomes can be harness-not-wired
+            # XFails (e.g. "No harness wired for None") rather than
+            # StepDefinitionNotFoundError. Only enable when bdd.json is
+            # known clean.
+            no_binding = (
+                uc_key not in WIRED_UCS
+                or (bound_scenarios is not None and sid not in bound_scenarios)
+            )
+            if no_binding:
+                bucket_counts[bucket] = bucket_counts.get(bucket, 0) - 1
+                bucket_counts["TARGET-WINS"] = bucket_counts.get("TARGET-WINS", 0) + 1
+                output_tags, new_mapping = _transform_scenario_tags(scen, traceability, uc_key, feature_filename)
+                if new_mapping is not None:
+                    new_mappings.append(new_mapping)
+                for step in scen.steps:
+                    step.text = _transform_step_text(step.keyword, step.text)
+                _strip_transport_from_scenario(scen)
+                merged_scenarios.append(
+                    Scenario(
+                        contextgit=scen.contextgit,
+                        tags=output_tags,
+                        keyword=scen.keyword,
+                        name=scen.name,
+                        steps=scen.steps,
+                        examples=scen.examples,
+                        comment_lines=scen.comment_lines,
+                    )
+                )
+                continue
+
+            legacy_gherkin = "\n".join(_render_scenario_lines(legacy_scen))
+            target_gherkin = "\n".join(_render_scenario_lines(scen))
+            cache_key = None
+            lockfile_hit = False
+            if lockfile is not None and _compute_cache_key is not None:
+                cache_key = _compute_cache_key(
+                    target_gherkin=target_gherkin,
+                    legacy_gherkin=legacy_gherkin,
+                    background_legacy=legacy_bg_text,
+                    background_target=target_bg_text,
+                    binding_annotations=[],
+                    adcp_spec_sha=adcp_spec_pin,
+                )
+                if lockfile.matches(sid, cache_key):
+                    lockfile_hit = True
+            if lockfile_hit:
+                # RESOLVED-FROM-LOCKFILE: replace bucket count, splice
+                # merged_gherkin via the renderer when feasible. For now we
+                # mark the scenario as resolved and keep LEGACY in the output
+                # (Layer 3 / rzgb4.8 will render from lockfile directly).
+                bucket_counts[bucket] = bucket_counts.get(bucket, 0) - 1
+                bucket_counts["RESOLVED-FROM-LOCKFILE"] = bucket_counts.get("RESOLVED-FROM-LOCKFILE", 0) + 1
+                merged_scenarios.append(legacy_scen)
+            else:
+                # Defer to Layer 2: keep LEGACY in output for now, emit manifest entry
+                merged_scenarios.append(legacy_scen)
+                manifest_entries.append(
+                    {
+                        "scenario_id": sid,
+                        "uc_key": uc_key,
+                        "legacy_gherkin": legacy_gherkin,
+                        "target_gherkin": target_gherkin,
+                        "legacy_background": legacy_bg_text,
+                        "target_background": target_bg_text,
+                        "legacy_file": str(legacy_compiled_path) if legacy_compiled_path else None,
+                        "target_file": str(target_source_path),
+                        "cache_key": list(cache_key) if cache_key is not None else None,
+                    }
+                )
+
+    # Pass 2: LEGACY-only scenarios (id in legacy but not in target)
+    for sid, legacy_scen in legacy_by_id.items():
+        if sid in target_by_id:
+            continue
+        bucket = classify_scenario_pair(legacy_scen, None)
+        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        if bucket == "LEGACY-PRESERVE":
+            merged_scenarios.append(legacy_scen)
+            all_scenario_ids.add(sid)
+        # LEGACY-DELETE: omit entirely
+
+    # --- Render the merged file ---
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out_lines: list[str] = []
+    out_lines.append(f"# Generated from adcp-req @ {commit_sha} on {now} (merge mode)")
+    out_lines.append("# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge")
+    out_lines.append("")
+
+    # Feature header: take from TARGET (v3.1 description / postconditions
+    # supersede). Background: take from LEGACY (preserves binding stability).
+    if target_feature.feature_tags:
+        out_lines.append(" ".join(target_feature.feature_tags))
+    out_lines.append(target_feature.feature_line)
+    for dl in target_feature.description_lines:
+        out_lines.append(dl.rstrip())
+    if use_target_background and target_feature.background_lines:
+        # Unwired UC + Background diff → TARGET wins (no bindings to keep).
+        for bl in target_feature.background_lines:
+            out_lines.append(bl.rstrip())
+        out_lines.append("")
+    elif legacy_feature is not None and legacy_feature.background_lines:
+        for bl in legacy_feature.background_lines:
+            out_lines.append(bl.rstrip())
+        out_lines.append("")
+    elif target_feature.background_lines:
+        for bl in target_feature.background_lines:
+            out_lines.append(bl.rstrip())
+        out_lines.append("")
+
+    for scen in merged_scenarios:
+        out_lines.extend(_render_scenario_lines(scen))
+        out_lines.append("")
+
+    output_text = "\n".join(out_lines) + "\n"
+
+    # Also pass through new mappings so the caller can update traceability
+    # (mirrors compile_feature's contract for the prune step).
+    return uc_key, output_text, manifest_entries, all_scenario_ids, new_mappings, bucket_counts
+
+
+def merge_features(
+    adcp_req_path: Path,
+    uc_filter: str | None = None,
+    *,
+    dry_run: bool = False,
+    manifest_path: Path | None = None,
+    lockfile_root: Path | None = None,
+    adcp_spec_pin: str | None = None,
+    bound_scenarios: set[str] | None = None,
+) -> None:
+    """Top-level merge orchestrator. Replaces wholesale-overwrite for routine
+    Phase 5 runs. The wholesale `compile_features` path is retained only for
+    the verify-mode comparison (`--verify` still works against last compile)."""
+    feature_files = _find_feature_files(adcp_req_path, uc_filter)
+    if not feature_files:
+        print("No feature files matched.", file=sys.stderr)
+        return
+
+    commit_sha = _get_commit_sha(adcp_req_path)
+    traceability = _load_traceability(TRACEABILITY_PATH)
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    print(f"Merging {len(feature_files)} feature file(s) from adcp-req @ {commit_sha[:10]} (merge mode)")
+    if dry_run:
+        print("[DRY RUN MODE — no files written]")
+    print()
+
+    manifest: dict = {
+        "schema_version": 2,
+        "adcp_req_sha": commit_sha,
+        "adcp_spec_pin": adcp_spec_pin,
+        "compiled_at": now,
+        "per_uc": {},
+    }
+    all_new_mappings: dict[str, list[dict]] = {}
+    current_ids_per_uc: dict[str, set[str]] = {}
+    touched_files_per_uc: dict[str, set[str]] = {}
+
+    for source_path in feature_files:
+        legacy_compiled_path = OUTPUT_DIR / source_path.name
+        uc_key, output_text, manifest_entries, all_scenario_ids, new_mappings, bucket_counts = merge_feature(
+            source_path,
+            legacy_compiled_path,
+            traceability,
+            commit_sha,
+            lockfile_root=lockfile_root,
+            adcp_spec_pin=adcp_spec_pin,
+            bound_scenarios=bound_scenarios,
+        )
+        current_ids_per_uc.setdefault(uc_key, set()).update(all_scenario_ids)
+        touched_files_per_uc.setdefault(uc_key, set()).add(source_path.name)
+        if new_mappings:
+            all_new_mappings.setdefault(uc_key, []).extend(new_mappings)
+
+        uc_bucket = manifest["per_uc"].setdefault(
+            uc_key,
+            {
+                "buckets": {},
+                "needs_semantic_merge": [],
+            },
+        )
+        for b, n in bucket_counts.items():
+            uc_bucket["buckets"][b] = uc_bucket["buckets"].get(b, 0) + n
+        uc_bucket["needs_semantic_merge"].extend(manifest_entries)
+
+        if not dry_run:
+            output_path = OUTPUT_DIR / source_path.name
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(output_text)
+        summary = " ".join(f"{k}={v}" for k, v in sorted(bucket_counts.items()))
+        verb = "[DRY] would merge" if dry_run else "Merged"
+        print(f"  {verb}: {source_path.name}  [{summary}]")
+
+    # Traceability update + prune (mirrors compile_features semantics)
+    if all_new_mappings:
+        for uc_key, new_maps in all_new_mappings.items():
+            existing = traceability["mappings"].setdefault(uc_key, [])
+            existing_ids = {m["adcp_scenario_id"] for m in existing}
+            for nm in new_maps:
+                if nm["adcp_scenario_id"] not in existing_ids:
+                    existing.append(nm)
+                    existing_ids.add(nm["adcp_scenario_id"])
+
+    pruned_count = 0
+    for uc_key, current_ids in current_ids_per_uc.items():
+        existing = traceability.get("mappings", {}).get(uc_key, [])
+        touched_files = touched_files_per_uc.get(uc_key, set())
+        kept: list[dict] = []
+        for m in existing:
+            if m.get("adcp_feature") in touched_files:
+                if m["adcp_scenario_id"] in current_ids:
+                    kept.append(m)
+                else:
+                    pruned_count += 1
+            else:
+                kept.append(m)
+        traceability.setdefault("mappings", {})[uc_key] = kept
+
+    traceability["source"]["commit"] = commit_sha
+    traceability["source"]["compiled_at"] = now
+
+    if not dry_run:
+        _save_traceability(TRACEABILITY_PATH, traceability)
+        print(f"\n  Updated: {TRACEABILITY_PATH.relative_to(PROJECT_ROOT)}")
+        if pruned_count:
+            print(f"  Pruned: {pruned_count} stale traceability entry/entries")
+
+    # Write manifest
+    if manifest_path is None:
+        manifest_path = PROJECT_ROOT / ".merge-manifest.json"
+    if not dry_run:
+        import json
+
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        total_nsm = sum(len(uc["needs_semantic_merge"]) for uc in manifest["per_uc"].values())
+        try:
+            display = manifest_path.relative_to(PROJECT_ROOT)
+        except ValueError:
+            display = manifest_path
+        print(f"  Manifest: {display} ({total_nsm} NEEDS-SEMANTIC-MERGE)")
+    else:
+        total_nsm = sum(len(uc["needs_semantic_merge"]) for uc in manifest["per_uc"].values())
+        print(f"  [DRY] Would write manifest ({total_nsm} NEEDS-SEMANTIC-MERGE)")
 
     print("\nDone.")
 
@@ -952,10 +1651,61 @@ def main() -> None:
         help="Show what would happen without writing files.",
     )
     parser.add_argument(
+        "--merge",
+        action="store_true",
+        help=(
+            "Use scenario-by-scenario merge mode instead of wholesale overwrite. "
+            "Joins adcp-req TARGET with existing salesagent LEGACY on @T-<id> tag; "
+            "applies NO-OP / EXAMPLES-ONLY / NEW-ADD / LEGACY-DELETE / "
+            "LEGACY-PRESERVE directly; emits .merge-manifest.json listing "
+            "NEEDS-SEMANTIC-MERGE scenarios for Layer 2 (claude -p driver)."
+        ),
+    )
+    parser.add_argument(
+        "--manifest-path",
+        type=Path,
+        default=None,
+        help="Where to write .merge-manifest.json (default: <salesagent>/.merge-manifest.json).",
+    )
+    parser.add_argument(
         "--adcp-req-path",
         type=Path,
         default=DEFAULT_ADCP_REQ_PATH,
         help=f"Path to adcp-req repository (default: {DEFAULT_ADCP_REQ_PATH}).",
+    )
+    parser.add_argument(
+        "--lockfile-root",
+        type=Path,
+        default=None,
+        help=(
+            "Path to adcp-req repository for lockfile lookup "
+            "(defaults to --adcp-req-path when --merge is used). "
+            "When set, NEEDS-SEMANTIC-MERGE scenarios are checked against "
+            "phase5-lockfile/UC-NNN.yaml first; cache hits become "
+            "RESOLVED-FROM-LOCKFILE and skip the manifest."
+        ),
+    )
+    parser.add_argument(
+        "--adcp-spec-pin",
+        type=str,
+        default=None,
+        help=(
+            "adcp spec sha pin (e.g. 04f59d2d5 for v3.1). Required component "
+            "of the lockfile cache key. Defaults to AdCP v3.1 pin if "
+            "--merge is used and --lockfile-root is set."
+        ),
+    )
+    parser.add_argument(
+        "--bound-scenarios-from",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a baseline bdd.json (e.g., "
+            "adcp-req/phase5-snapshot/baseline-2026-06-01/bdd.json). When set, "
+            "scenarios outside wired UCs OR not in the baseline-passed set are "
+            "demoted from NEEDS-SEMANTIC-MERGE to TARGET-WINS (taken from v3.1 "
+            "mechanically — no LLM merge needed)."
+        ),
     )
 
     args = parser.parse_args()
@@ -970,7 +1720,26 @@ def main() -> None:
         sys.exit(0 if ok else 1)
 
     uc_filter = args.uc if hasattr(args, "uc") else None
-    compile_features(adcp_req_path, uc_filter, dry_run=args.dry_run)
+    if args.merge:
+        lockfile_root = args.lockfile_root if args.lockfile_root else adcp_req_path
+        adcp_spec_pin = args.adcp_spec_pin or "04f59d2d5"
+        bound = load_bound_scenarios(args.bound_scenarios_from) if args.bound_scenarios_from is not None else None
+        if bound is not None:
+            print(
+                f"[merge] bound-scenario gate active: {len(bound)} bound IDs loaded; non-bound scenarios → TARGET-WINS",
+                file=sys.stderr,
+            )
+        merge_features(
+            adcp_req_path,
+            uc_filter,
+            dry_run=args.dry_run,
+            manifest_path=args.manifest_path,
+            lockfile_root=lockfile_root,
+            adcp_spec_pin=adcp_spec_pin,
+            bound_scenarios=bound,
+        )
+    else:
+        compile_features(adcp_req_path, uc_filter, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
