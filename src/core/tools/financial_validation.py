@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 
 def raise_if_validation_failed(
     message: str | None,
-    exc_type: type[AdCPError] = AdCPValidationError,
     *,
+    exc_type: type[AdCPError] = AdCPValidationError,
     context: "ContextObject | None" = None,
 ) -> None:
     """Raise ``exc_type(message, context=context)`` when ``message`` is non-empty.

@@ -3075,9 +3075,9 @@ class TestUpdateMediaBuyAdapterFailure:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        ctx_mgr.audit_workflow_step_result.assert_called()
-        call_kwargs = ctx_mgr.audit_workflow_step_result.call_args
-        assert call_kwargs[1].get("status") == "failed" or call_kwargs.kwargs.get("status") == "failed"
+        ctx_mgr.audit_workflow_step_result.assert_called_once_with(
+            "step_1", ANY, status="failed", error_message="GAM API timeout"
+        )
 
     def test_unknown_context_id_raises_not_found(self):
         """A buyer-supplied context_id that does not resolve raises AdCPNotFoundError.

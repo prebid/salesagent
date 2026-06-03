@@ -166,6 +166,6 @@ def test_raise_if_validation_failed_raises_default_validation_error() -> None:
 
 def test_raise_if_validation_failed_raises_selected_subclass() -> None:
     with pytest.raises(AdCPBudgetTooLowError) as exc_info:
-        raise_if_validation_failed("package below minimum spend", AdCPBudgetTooLowError)
+        raise_if_validation_failed("package below minimum spend", exc_type=AdCPBudgetTooLowError)
 
     assert exc_info.value.error_code == "BUDGET_TOO_LOW"

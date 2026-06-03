@@ -2086,7 +2086,7 @@ async def _create_media_buy_impl(
                                             currency=package_currency,
                                             context="for products in this package",
                                         ),
-                                        AdCPBudgetTooLowError,
+                                        exc_type=AdCPBudgetTooLowError,
                                         context=req.context,
                                     )
                     else:
@@ -2104,7 +2104,7 @@ async def _create_media_buy_impl(
                                     subject="Total",
                                     context="for the selected products",
                                 ),
-                                AdCPBudgetTooLowError,
+                                exc_type=AdCPBudgetTooLowError,
                                 context=req.context,
                             )
 
@@ -2137,7 +2137,7 @@ async def _create_media_buy_impl(
                                     "and prevents GAM line item proliferation."
                                 ),
                             ),
-                            AdCPBudgetExceededError,
+                            exc_type=AdCPBudgetExceededError,
                             context=req.context,
                         )
                 else:
@@ -2152,7 +2152,7 @@ async def _create_media_buy_impl(
                             limit_label="maximum daily spend",
                             context="This protects against accidental large budgets.",
                         ),
-                        AdCPBudgetExceededError,
+                        exc_type=AdCPBudgetExceededError,
                         context=req.context,
                     )
 

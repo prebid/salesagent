@@ -483,7 +483,7 @@ def _update_media_buy_impl(
                                 )
                                 raise_if_validation_failed(
                                     package_daily_spend_error,
-                                    AdCPBudgetExceededError,
+                                    exc_type=AdCPBudgetExceededError,
                                     context=req.context,
                                 )
 
@@ -611,7 +611,7 @@ def _update_media_buy_impl(
                             )
                             raise_if_validation_failed(
                                 package_min_budget_error,
-                                AdCPBudgetTooLowError,
+                                exc_type=AdCPBudgetTooLowError,
                                 context=req.context,
                             )
 
@@ -1120,7 +1120,7 @@ def _update_media_buy_impl(
                     max_campaign_budget=MAX_CAMPAIGN_BUDGET,
                     currency=budget_currency,
                 )
-                raise_if_validation_failed(budget_error, AdCPBudgetExceededError, context=req.context)
+                raise_if_validation_failed(budget_error, exc_type=AdCPBudgetExceededError, context=req.context)
 
                 # TODO: Sync budget change to GAM order
                 # Currently only updates database - does NOT sync to GAM API

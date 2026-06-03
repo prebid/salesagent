@@ -635,3 +635,25 @@ class TestIterConcreteSubclasses:
         # AdCPError -> AdCPNotFoundError -> AdCPProductNotFoundError (transitive).
         assert AdCPProductNotFoundError in concrete
         assert AdCPError not in concrete
+
+    def test_skips_abstract_bases_yields_concrete_descendants(self):
+        """Abstract bases are walked through but not yielded — the 'concrete' promise."""
+        import abc
+
+        from src.core.exceptions import AdCPError
+
+        walk = AdCPError.iter_concrete_subclasses.__func__
+
+        class _Root: ...
+
+        class _AbstractMid(_Root, abc.ABC):
+            @abc.abstractmethod
+            def handle(self) -> None: ...
+
+        class _Concrete(_AbstractMid):
+            def handle(self) -> None: ...
+
+        result = list(walk(_Root))
+
+        assert _Concrete in result  # concrete descendant of an abstract base is yielded
+        assert _AbstractMid not in result  # the abstract base itself is skipped
