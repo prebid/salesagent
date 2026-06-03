@@ -75,6 +75,69 @@ def sample_packages():
     ]
 
 
+def _build_gam_adapter(mock_principal):
+    """Construct a real GoogleAdManager with the OAuth client manager patched out.
+
+    Shared by the create-path raise-site test classes below so the adapter wiring
+    lives in one place.
+    """
+    config = {
+        "network_code": "123456",
+        "advertiser_id": "789",
+        "trafficker_id": "456",
+        "refresh_token": "test_token",
+    }
+    with patch("src.adapters.google_ad_manager.GAMClientManager") as mock_client_manager:
+        mock_client_manager.return_value.get_client.return_value = Mock()
+        return GoogleAdManager(
+            config=config,
+            principal=mock_principal,
+            network_code="123456",
+            advertiser_id="789",
+            trafficker_id="456",
+            dry_run=False,
+            tenant_id="tenant_123",
+        )
+
+
+_DEFAULT_PRODUCT = object()  # sentinel: build a product configured with inventory targeting
+
+
+def _make_configured_product():
+    """A product whose implementation_config carries inventory targeting (passes validation)."""
+    product = Mock()
+    product.product_id = "prod_test"
+    product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
+    product.gemini_api_key = None
+    product.order_name_template = None
+    return product
+
+
+def _make_product_without_inventory():
+    """A product that exists but carries no inventory targeting (no ad units, no placements)."""
+    product = _make_configured_product()
+    product.implementation_config = {}
+    return product
+
+
+def _stub_product_session(mock_db_session, *, product=_DEFAULT_PRODUCT):
+    """Wire the product-config DB lookup the create path performs.
+
+    ``product`` defaults to a fully-configured product (``.first()`` returns it,
+    passing the inventory-targeting validation). Pass ``product=None`` to simulate
+    a lookup miss, or a product without inventory to drive the no-targeting branch.
+    ``.all()`` returns no inventory mappings so the GAMInventory branch is skipped.
+    """
+    if product is _DEFAULT_PRODUCT:
+        product = _make_configured_product()
+    mock_session = MagicMock()
+    mock_db_session.return_value.__enter__.return_value = mock_session
+    mock_result = Mock()
+    mock_result.first.return_value = product
+    mock_result.all.return_value = []
+    mock_session.scalars.return_value = mock_result
+
+
 class TestGAMManualApprovalPath:
     """Test GAM adapter manual approval path returns packages correctly."""
 
@@ -359,54 +422,20 @@ class TestGAMAdapterErrorTaxonomy:
     wire-mapping test and the GAM lifecycle integration suite.
     """
 
-    def _build_adapter(self, mock_principal):
-        config = {
-            "network_code": "123456",
-            "advertiser_id": "789",
-            "trafficker_id": "456",
-            "refresh_token": "test_token",
-        }
-        with patch("src.adapters.google_ad_manager.GAMClientManager") as mock_client_manager:
-            mock_client_manager.return_value.get_client.return_value = Mock()
-            return GoogleAdManager(
-                config=config,
-                principal=mock_principal,
-                network_code="123456",
-                advertiser_id="789",
-                trafficker_id="456",
-                dry_run=False,
-                tenant_id="tenant_123",
-            )
-
-    @staticmethod
-    def _stub_product_session(mock_db_session):
-        """Mirror the product-config DB lookup the create path performs."""
-        mock_session = MagicMock()
-        mock_db_session.return_value.__enter__.return_value = mock_session
-        mock_product = Mock()
-        mock_product.product_id = "prod_test"
-        mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-        mock_product.gemini_api_key = None
-        mock_product.order_name_template = None
-        mock_result = Mock()
-        mock_result.first.return_value = mock_product
-        mock_result.all.return_value = []
-        mock_session.scalars.return_value = mock_result
-
     def test_line_item_creation_failure_raises_typed_line_item_error(
         self, mock_principal, sample_request, sample_packages
     ):
         """A line-item creation failure raises AdCPLineItemError (LINE_ITEM_CREATION_FAILED)."""
         from src.core.exceptions import AdCPLineItemError
 
-        adapter = self._build_adapter(mock_principal)
+        adapter = _build_gam_adapter(mock_principal)
 
         with (
             patch.object(adapter.orders_manager, "create_order", return_value="order_123"),
             patch.object(adapter.orders_manager, "create_line_items", side_effect=Exception("GAM API error")),
             patch("src.core.database.database_session.get_db_session") as mock_db_session,
         ):
-            self._stub_product_session(mock_db_session)
+            _stub_product_session(mock_db_session)
 
             start_time = datetime.now()
             end_time = start_time + timedelta(days=30)
@@ -416,3 +445,48 @@ class TestGAMAdapterErrorTaxonomy:
                 )
 
         assert exc_info.value.error_code == "LINE_ITEM_CREATION_FAILED"
+
+
+class TestGAMProductUnavailableRaiseSites:
+    """Drive both AdCPProductUnavailableError raise sites in GAM create_media_buy.
+
+    Two distinct pre-order validation conditions raise the same class:
+      1. Product config missing — the package's product is absent from the DB,
+         so ``products_map`` never gets an entry (google_ad_manager.py:540).
+      2. No inventory targeting — the product exists but its implementation_config
+         carries neither ad units nor placements (google_ad_manager.py:561).
+
+    test_typed_error_wire_codes.py pins the class -> wire-code mapping by
+    constructing the exception directly; here the production validation loop is
+    driven so a class-swap at either site (e.g. AdCPProductUnavailableError ->
+    AdCPError or AdCPCapabilityNotSupportedError) is caught. The wire collapses
+    PRODUCT_UNAVAILABLE through ERROR_CODE_MAPPING, pinned separately.
+    """
+
+    @pytest.mark.parametrize(
+        ("condition", "make_product"),
+        [
+            ("product_config_missing", lambda: None),
+            ("no_inventory_targeting", _make_product_without_inventory),
+        ],
+    )
+    def test_product_unavailable_raise_sites(
+        self, mock_principal, sample_request, sample_packages, condition, make_product
+    ):
+        """Both pre-order validation conditions raise AdCPProductUnavailableError
+        (PRODUCT_UNAVAILABLE) at the actual production site."""
+        from src.core.exceptions import AdCPProductUnavailableError
+
+        adapter = _build_gam_adapter(mock_principal)
+
+        with patch("src.core.database.database_session.get_db_session") as mock_db_session:
+            _stub_product_session(mock_db_session, product=make_product())
+
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            with pytest.raises(AdCPProductUnavailableError) as exc_info:
+                adapter.create_media_buy(
+                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
+                )
+
+        assert exc_info.value.error_code == "PRODUCT_UNAVAILABLE", condition

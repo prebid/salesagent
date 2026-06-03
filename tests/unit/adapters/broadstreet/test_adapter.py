@@ -435,6 +435,77 @@ class TestBroadstreetAdapterUpdates:
         assert result.status == "active"
 
 
+class TestBroadstreetAdapterBulkUpdateRaiseSites:
+    """Drive the AdCPBulkUpdateError (PARTIAL_FAILURE) raise sites in update_media_buy.
+
+    test_typed_error_wire_codes.py pins the class -> SERVICE_UNAVAILABLE wire
+    mapping; here the production pause path is driven end-to-end (non-dry-run, so
+    the real ``_toggle_advertisements`` runs and collects failed IDs) so removing
+    the ``raise`` or swapping it to a parent fails the test. The PARTIAL_FAILURE
+    internal code asserted is the taxonomy carried as class identity.
+    """
+
+    @staticmethod
+    def _build_live_adapter(mock_principal, mock_config):
+        """A non-dry-run adapter whose Broadstreet client is a no-network mock.
+
+        ``update_advertisement`` raises so the real ``_toggle_advertisements``
+        appends the ad to its ``failed`` list, which is what the production
+        ``update_media_buy`` checks before raising AdCPBulkUpdateError.
+        """
+        with patch("src.adapters.broadstreet.adapter.BroadstreetClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.update_advertisement.side_effect = RuntimeError("Broadstreet API 500")
+            mock_client_cls.return_value = mock_client
+            adapter = BroadstreetAdapter(
+                config=mock_config,
+                principal=mock_principal,
+                dry_run=False,
+                tenant_id="test_tenant",
+            )
+        return adapter
+
+    def test_pause_media_buy_advertisement_failure_raises_bulk_update_error(self, mock_principal, mock_config):
+        """Campaign-level pause where every advertisement toggle fails raises
+        AdCPBulkUpdateError (PARTIAL_FAILURE)."""
+        from src.core.exceptions import AdCPBulkUpdateError
+
+        adapter = self._build_live_adapter(mock_principal, mock_config)
+        db_pkgs = [_make_mock_db_package(ad_ids=["ad_100"])]
+
+        with _mock_db_session(db_pkgs):
+            with pytest.raises(AdCPBulkUpdateError) as exc_info:
+                adapter.update_media_buy(
+                    media_buy_id="bs_12345",
+                    action="pause_media_buy",
+                    package_id=None,
+                    budget=None,
+                    today=datetime.now(UTC),
+                )
+
+        assert exc_info.value.error_code == "PARTIAL_FAILURE"
+
+    def test_pause_package_advertisement_failure_raises_bulk_update_error(self, mock_principal, mock_config):
+        """Package-level pause where the advertisement toggle fails raises
+        AdCPBulkUpdateError (PARTIAL_FAILURE)."""
+        from src.core.exceptions import AdCPBulkUpdateError
+
+        adapter = self._build_live_adapter(mock_principal, mock_config)
+        db_pkgs = [_make_mock_db_package(package_id="pkg_1", ad_ids=["ad_100"])]
+
+        with _mock_db_session(db_pkgs):
+            with pytest.raises(AdCPBulkUpdateError) as exc_info:
+                adapter.update_media_buy(
+                    media_buy_id="bs_12345",
+                    action="pause_package",
+                    package_id="pkg_1",
+                    budget=None,
+                    today=datetime.now(UTC),
+                )
+
+        assert exc_info.value.error_code == "PARTIAL_FAILURE"
+
+
 class TestBroadstreetAdapterDelivery:
     """Tests for delivery reporting."""
 
