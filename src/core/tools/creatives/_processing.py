@@ -437,7 +437,9 @@ def _update_existing_creative(
             # and admin-fixable — not a transient creative-agent outage. Surface it
             # honestly so the buyer does not retry a misconfiguration.
             error_msg = str(config_error)
-            logger.error(f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id}", exc_info=True)
+            logger.error(
+                "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
+            )
             return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="terminal"), False)
         except Exception as validation_error:
             # Creative agent validation failed for update (network error, agent down, etc.)
@@ -739,7 +741,7 @@ def _create_new_creative(
             # and admin-fixable — not a transient creative-agent outage. Surface it
             # honestly so the buyer does not retry a misconfiguration.
             error_msg = str(config_error)
-            logger.error(f"[sync_creatives] {error_msg} - rejecting creative {creative_id}", exc_info=True)
+            logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
             return (_failed_sync_result(creative_id, error_msg, recovery="terminal"), False)
         except Exception as validation_error:
             # Creative agent validation failed (network error, agent down, etc.)
