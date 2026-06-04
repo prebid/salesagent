@@ -1321,10 +1321,7 @@ def merge_feature(
             # XFails (e.g. "No harness wired for None") rather than
             # StepDefinitionNotFoundError. Only enable when bdd.json is
             # known clean.
-            no_binding = (
-                uc_key not in WIRED_UCS
-                or (bound_scenarios is not None and sid not in bound_scenarios)
-            )
+            no_binding = uc_key not in WIRED_UCS or (bound_scenarios is not None and sid not in bound_scenarios)
             if no_binding:
                 bucket_counts[bucket] = bucket_counts.get(bucket, 0) - 1
                 bucket_counts["TARGET-WINS"] = bucket_counts.get("TARGET-WINS", 0) + 1
