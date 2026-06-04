@@ -114,3 +114,28 @@ release is stable, and the feature files already target it).
 reconcile schema drift, delete hand-rolled fields/validation the models now enforce;
 net with the protocol-level scenarios · (3) extract shared `validate_business_rules()`;
 net with business-rule scenarios.
+
+## SDK type-collision blocker (found mid-2b)
+
+The adcp SDK codegen **inlines each JSON-Schema `$ref` into a per-message local
+class instead of sharing one type.** Across `adcp.types.generated_poc`: **431 class
+names are defined in 2+ modules** (of 3,712). Worst: `Account`×37, `Error`×35,
+`Brand`×33, `Authentication`×7. So the same *concept* (a brand, an account) is many
+different Python classes that don't `isinstance`-match and can't be shared. The
+top-level `adcp.types` picks one representative per name; the real types live in the
+fragile deep modules. This is why "I can't use it properly."
+
+**Reframe (the e2e rationale is the answer):** tests should assert the **wire
+contract** — the AdCP JSON shape the scenario defines — NOT the SDK Python types.
+Then the 431-collision mess is irrelevant to the test/refactor goal; it only bites
+the **production boundary** (request parsing / response serialization). So "fix the
+SDK before anything meaningful" applies to the *boundary*, not the *tests* — and the
+test goal can proceed on contract assertions while the SDK question is decided
+separately.
+
+**SDK-fix options (boundary only):** (a) upstream the shared-`$ref` fix to the adcp
+codegen; (b) fork/vendor and fix the `datamodel-code-generator` config to emit shared
+types (we already depend on `datamodel-code-generator` + `jsonref`); (c) generate our
+own clean boundary models from the AdCP JSON Schema (the source of truth), using the
+SDK only as schema provenance; (d) stay on 4.3 and route around. 2b (4.3→5.7) is
+**blocked** until this is decided.
