@@ -21,21 +21,6 @@ env:
   PYTEST_CURRENT_TEST: true
   ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
 
-x-postgres-service: &postgres-service
-  postgres:
-    image: postgres:15
-    env:
-      POSTGRES_USER: adcp_user
-      POSTGRES_PASSWORD: test_password
-      POSTGRES_DB: adcp_test
-    options: >-
-      --health-cmd "pg_isready -U adcp_user"
-      --health-interval 5s
-      --health-timeout 3s
-      --health-retries 10
-    ports:
-      - 5432:5432
-
 jobs:
   quality-gate:
     name: Quality Gate
@@ -192,7 +177,20 @@ jobs:
             marker: (transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent) and not creative and not product and not media_buy and not delivery
           - group: other
             marker: not (creative or product or media_buy or delivery or transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent)
-    services: *postgres-service
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -275,7 +273,20 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 25
-    services: *postgres-service
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -298,7 +309,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    services: *postgres-service
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
