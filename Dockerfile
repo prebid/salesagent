@@ -161,7 +161,7 @@ ENV PYTHONPATH="/app"
 ENV PYTHONUNBUFFERED=1
 
 # Default port
-ENV ADCP_PORT=8080
+ENV ADCP_PORT=8000
 ENV ADCP_HOST=0.0.0.0
 
 # core/main.py serves MCP, A2A, and the Flask admin from one Starlette
