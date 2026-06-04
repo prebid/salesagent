@@ -124,6 +124,18 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     return "".join(parts)
 
 
+def package_field_path(attr: str) -> str:
+    """Bracket-notation field path for a per-package field in an _impl-layer error.
+
+    Mirrors the list notation of :func:`first_validation_error_field` but without a
+    concrete index: the _impl layer validates the package collection as a whole and
+    raises ``packages[].budget`` / ``packages[].package_id`` / ``packages[].product_id``,
+    while the boundary-derived path carries the offending index (``packages[0].budget``).
+    Centralizing the prefix here stops the hand-rolled literals from drifting apart.
+    """
+    return f"packages[].{attr}"
+
+
 def format_validation_error(validation_error: ValidationError, context: str = "request") -> str:
     """Format Pydantic ValidationError with helpful context for clients.
 

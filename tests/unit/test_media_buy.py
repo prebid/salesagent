@@ -28,7 +28,6 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
-    AdCPNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -3079,12 +3078,13 @@ class TestUpdateMediaBuyAdapterFailure:
             "step_1", ANY, status="failed", error_message="GAM API timeout"
         )
 
-    def test_unknown_context_id_raises_not_found(self):
-        """A buyer-supplied context_id that does not resolve raises AdCPNotFoundError.
+    def test_unknown_context_id_raises_validation_error(self):
+        """A buyer-supplied context_id that does not resolve raises AdCPValidationError.
 
         get_or_create_context returns None only when the referenced context_id is
-        absent (create_context never returns None), so this is a not-found/terminal
-        condition, not a transient SERVICE_UNAVAILABLE adapter outage.
+        absent (create_context never returns None). AdCP has no context-specific
+        not-found wire code, so an unresolvable context_id surfaces as a correctable
+        VALIDATION_ERROR carrying field="context_id".
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -3116,8 +3116,9 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises(AdCPNotFoundError, match="Context not found"):
+            with pytest.raises(AdCPValidationError, match="Context not found") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity, context_id="ctx_missing")
+            assert exc_info.value.field == "context_id"
 
 
 # ===========================================================================

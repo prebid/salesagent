@@ -143,7 +143,7 @@ from src.core.tools.financial_validation import (
 )
 
 # Import get_product_catalog from main (after refactor)
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -1722,7 +1722,7 @@ async def _create_media_buy_impl(
             raise AdCPBudgetTooLowError(
                 error_msg,
                 suggestion="Set each package budget to a positive amount.",
-                field="packages[].budget",
+                field=package_field_path("budget"),
             )
 
         # 2. DateTime validation
@@ -1844,7 +1844,7 @@ async def _create_media_buy_impl(
                 raise AdCPProductNotFoundError(
                     error_msg,
                     suggestion="Check available products with get_products.",
-                    field="packages[].product_id",
+                    field=package_field_path("product_id"),
                 )
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation

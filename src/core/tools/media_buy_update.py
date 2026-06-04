@@ -42,7 +42,6 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPGoneError,
     AdCPMediaBuyNotFoundError,
-    AdCPNotFoundError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -89,7 +88,7 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -144,7 +143,7 @@ def _verify_principal(media_buy_id: str, identity: "ResolvedIdentity", repo: Med
     media_buy = repo.get_by_id(media_buy_id)
 
     if not media_buy:
-        raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
+        raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found")
 
     if media_buy.principal_id != principal_id:
         # Log security violation
@@ -269,7 +268,7 @@ def _update_media_buy_impl(
                 # only None when a buyer-supplied context_id does not resolve —
                 # a not-found condition, not a transient adapter outage.
                 if persistent_ctx is None:
-                    raise AdCPNotFoundError(f"Context not found: {ctx_id}")
+                    raise AdCPValidationError(f"Context not found: {ctx_id}", field="context_id")
 
                 # Create workflow step for this tool call
                 step = ctx_manager.create_workflow_step(
@@ -584,7 +583,7 @@ def _update_media_buy_impl(
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
                                 "package_id is required when updating package budget",
-                                field="packages[].package_id",
+                                field=package_field_path("package_id"),
                                 context=req.context,
                             )
 
@@ -657,7 +656,7 @@ def _update_media_buy_impl(
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
                                 "package_id is required when updating creative_ids",
-                                field="packages[].package_id",
+                                field=package_field_path("package_id"),
                                 context=req.context,
                             )
 
@@ -853,7 +852,7 @@ def _update_media_buy_impl(
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
                                 "package_id is required when uploading creatives",
-                                field="packages[].package_id",
+                                field=package_field_path("package_id"),
                                 context=req.context,
                             )
 
@@ -896,7 +895,7 @@ def _update_media_buy_impl(
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
                                 "package_id is required when updating creative_assignments",
-                                field="packages[].package_id",
+                                field=package_field_path("package_id"),
                                 context=req.context,
                             )
 
@@ -1054,7 +1053,7 @@ def _update_media_buy_impl(
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
                                 "package_id is required when updating targeting_overlay",
-                                field="packages[].package_id",
+                                field=package_field_path("package_id"),
                                 context=req.context,
                             )
 
@@ -1186,7 +1185,9 @@ def _update_media_buy_impl(
                     existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
 
                     if not existing_mb:
-                        raise AdCPMediaBuyNotFoundError(f"Media buy {req.media_buy_id} not found", context=req.context)
+                        raise AdCPMediaBuyNotFoundError(
+                            f"Media buy '{req.media_buy_id}' not found", context=req.context
+                        )
 
                     # Validate date range: end_time must be after start_time
                     # Type guard: Ensure we're working with datetime objects (not SQLAlchemy DateTime)
