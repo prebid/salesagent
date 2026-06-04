@@ -79,10 +79,10 @@ dev = [
     "types-waitress>=3.0.1.20250801",
 ]
 ui-tests = [
-    "playwright==1.48.0",
+    "playwright==1.60.0",
     "pytest-playwright>=0.7.2",  # 0.6.x caps pytest<9.0.0; bump to allow pytest>=9.0.3 (GHSA-6w46-j5rx-g56g)
     "pytest-asyncio>=1.1.0",
-    "allure-pytest==2.13.5",
+    "allure-pytest==2.16.0",
 ]
 
 [project.urls]
