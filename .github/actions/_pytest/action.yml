@@ -35,9 +35,6 @@ runs:
         if [ "${{ inputs.with_coverage }}" = "true" ]; then
           args+=(--cov=src --cov-report=xml --cov-report=term)
         fi
-        if [ -n "${{ inputs.extra_args }}" ]; then
-          # shellcheck disable=SC2206
-          extra=(${{ inputs.extra_args }})
-          args+=("${extra[@]}")
-        fi
-        "${args[@]}"
+        # Inject extra_args at compile time — do not bash-word-split (marker exprs contain parentheses).
+        # shellcheck disable=SC2086,SC2093
+        exec "${args[@]}" ${{ inputs.extra_args }}
