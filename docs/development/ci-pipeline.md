@@ -47,15 +47,18 @@ must stay in sync.
 
 ## Integration Test Shards
 
-Integration tests are split into 5 parallel shards by entity marker:
+Integration tests are split into 5 parallel shards by entity marker. Shards use a
+**strict partition** (priority: creative → product → media-buy → infra → other) so
+multi-marker files run in exactly one shard — measured overlap on the pre-fix
+markers was 14 duplicate file assignments across shards 1–4.
 
 | Shard | Markers |
 |-------|---------|
 | creative | `creative` |
-| product | `product` |
-| media-buy | `media_buy or delivery` |
-| infra | `transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent` |
-| other | everything not in the above |
+| product | `product and not creative` |
+| media-buy | `(media_buy or delivery) and not creative and not product` |
+| infra | `(transport or auth or … or agent) and not creative and not product and not media_buy and not delivery` |
+| other | negation of all 15 markers above |
 
 Each shard runs against a GitHub Actions service container (Postgres 15).
 

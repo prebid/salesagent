@@ -51,8 +51,13 @@ class TestCISuiteCoverage:
         """
         bdd_job = _load_workflow()["jobs"]["bdd-tests"]
         run_steps = " ".join(str(step.get("run", "")) for step in bdd_job.get("steps", []))
+        pytest_inputs = " ".join(
+            str(step.get("with", {}).get("paths", ""))
+            for step in bdd_job.get("steps", [])
+            if str(step.get("uses", "")).endswith("/_pytest")
+        )
 
-        assert "pytest tests/bdd/" in run_steps, (
+        assert "tests/bdd/" in run_steps or "tests/bdd/" in pytest_inputs, (
             "The 'bdd-tests' job does not run 'pytest tests/bdd/'. The job "
             "must execute the BDD suite, not merely exist."
         )
@@ -83,10 +88,27 @@ class TestCISuiteCoverage:
             "integration-tests must shard by entity marker groups to keep CI wall time bounded."
         )
 
-        run_steps = " ".join(str(step.get("run", "")) for step in integration_job.get("steps", []))
-        assert "matrix.marker" in run_steps, (
+        step_text = " ".join(
+            str(step.get("run", "")) + " " + str(step.get("with", {}).get("extra_args", ""))
+            for step in integration_job.get("steps", [])
+        )
+        assert "matrix.marker" in step_text, (
             "integration-tests must filter pytest with matrix.marker, not run the full suite serially."
         )
+
+    def test_integration_shards_use_strict_partition(self):
+        """Shards 2–4 must exclude earlier shard markers to avoid duplicate runs."""
+        integration_job = load_ci_workflow()["jobs"]["integration-tests"]
+        markers = {row["group"]: row["marker"] for row in integration_job["strategy"]["matrix"]["include"]}
+
+        assert markers["creative"] == "creative"
+        assert "and not creative" in markers["product"]
+        assert "and not creative" in markers["media-buy"]
+        assert "and not product" in markers["media-buy"]
+        assert "and not creative" in markers["infra"]
+        assert "and not product" in markers["infra"]
+        assert "and not media_buy" in markers["infra"]
+        assert "and not delivery" in markers["infra"]
 
     def test_quality_gate_does_not_run_unit_tests(self):
         """Quality Gate runs static checks only; unit tests run once in unit-tests."""

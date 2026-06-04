@@ -1,12 +1,43 @@
-name: Run pytest command
-description: Execute a pytest command through uv.
+name: Run pytest
+description: Run pytest via uv with shared CI defaults.
 inputs:
-  command:
-    description: Full pytest command to execute.
+  paths:
+    description: Space-separated pytest paths or files.
     required: true
+  extra_args:
+    description: Additional pytest CLI arguments.
+    required: false
+    default: ""
+  disable_randomly:
+    description: When true, pass -p no:randomly.
+    required: false
+    default: "false"
+  with_coverage:
+    description: When true, pass --cov=src with xml/term reports.
+    required: false
+    default: "false"
+  tb:
+    description: Traceback style passed to --tb.
+    required: false
+    default: line
 runs:
   using: composite
   steps:
     - name: Run pytest
       shell: bash
-      run: ${{ inputs.command }}
+      run: |
+        set -euo pipefail
+        args=(uv run pytest ${{ inputs.paths }})
+        if [ "${{ inputs.disable_randomly }}" = "true" ]; then
+          args+=(-p no:randomly)
+        fi
+        args+=(-q "--tb=${{ inputs.tb }}")
+        if [ "${{ inputs.with_coverage }}" = "true" ]; then
+          args+=(--cov=src --cov-report=xml --cov-report=term)
+        fi
+        if [ -n "${{ inputs.extra_args }}" ]; then
+          # shellcheck disable=SC2206
+          extra=(${{ inputs.extra_args }})
+          args+=("${extra[@]}")
+        fi
+        "${args[@]}"

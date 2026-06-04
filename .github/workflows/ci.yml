@@ -12,6 +12,29 @@ permissions: {}
 env:
   PYTHON_VERSION: "3.12"
   UV_VERSION: "0.11.15"
+  DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
+  GEMINI_API_KEY: test_key_for_mocking
+  GOOGLE_CLIENT_ID: test_client_id
+  GOOGLE_CLIENT_SECRET: test_client_secret
+  SUPER_ADMIN_EMAILS: test@example.com
+  ADCP_TESTING: true
+  PYTEST_CURRENT_TEST: true
+  ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+
+x-postgres-service: &postgres-service
+  postgres:
+    image: postgres:15
+    env:
+      POSTGRES_USER: adcp_user
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: adcp_test
+    options: >-
+      --health-cmd "pg_isready -U adcp_user"
+      --health-interval 5s
+      --health-timeout 3s
+      --health-retries 10
+    ports:
+      - 5432:5432
 
 jobs:
   quality-gate:
@@ -59,8 +82,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
-      - name: Run AdCP schema contract tests
-        run: uv run pytest tests/unit/test_adcp_contract.py -q --tb=line
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/unit/test_adcp_contract.py
 
   security-audit:
     name: Security Audit
@@ -111,11 +135,9 @@ jobs:
           uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_pytest
         with:
-          command: uv run pytest tests/smoke/ -v --tb=short
-        env:
-          GEMINI_API_KEY: test_key
-          PYTEST_CURRENT_TEST: true
-          ADCP_TESTING: true
+          paths: tests/smoke/
+          tb: short
+          extra_args: -v
       - name: Check for skipped tests
         run: |
           if grep -r "@pytest.mark.skip" tests/ --include="test_*.py" | grep -v "skip_ci"; then
@@ -137,14 +159,10 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
-      - name: Run unit tests
-        env:
-          GEMINI_API_KEY: test_key_for_mocking
-          GOOGLE_CLIENT_ID: test_client_id
-          GOOGLE_CLIENT_SECRET: test_client_secret
-          SUPER_ADMIN_EMAILS: test@example.com
-          ADCP_TESTING: true
-        run: uv run pytest tests/unit/ tests/harness/ -p no:randomly -q --tb=line --cov=src --cov-report=xml --cov-report=term
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/unit/ tests/harness/
+          with_coverage: "true"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: unit-coverage
@@ -167,27 +185,14 @@ jobs:
           - group: creative
             marker: creative
           - group: product
-            marker: product
+            marker: product and not creative
           - group: media-buy
-            marker: media_buy or delivery
+            marker: (media_buy or delivery) and not creative and not product
           - group: infra
-            marker: transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent
+            marker: (transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent) and not creative and not product and not media_buy and not delivery
           - group: other
             marker: not (creative or product or media_buy or delivery or transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent)
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: adcp_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: adcp_test
-        options: >-
-          --health-cmd "pg_isready -U adcp_user"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-        ports:
-          - 5432:5432
+    services: *postgres-service
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -198,24 +203,17 @@ jobs:
           uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
-          database-url: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
+          database-url: ${{ env.DATABASE_URL }}
       - name: Start pinned creative agent
         if: matrix.group == 'creative'
         run: ./scripts/creative-agent-stack.sh up
-      - name: Run integration tests (${{ matrix.group }})
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/integration/
+          disable_randomly: "true"
+          extra_args: --timeout=60 -m "(${{ matrix.marker }}) and not requires_server and not skip_ci"
         env:
-          DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
-          GEMINI_API_KEY: test_key_for_mocking
-          GOOGLE_CLIENT_ID: test_client_id
-          GOOGLE_CLIENT_SECRET: test_client_secret
-          SUPER_ADMIN_EMAILS: test@example.com
-          ADCP_TESTING: true
           CREATIVE_AGENT_URL: ${{ matrix.group == 'creative' && 'http://localhost:9999/api/creative-agent' || '' }}
-        run: |
-          ENCRYPTION_KEY="$(python -c "import base64; print(base64.urlsafe_b64encode(b'0'*32).decode())")"
-          export ENCRYPTION_KEY
-          uv run pytest tests/integration/ -p no:randomly -q --tb=line --timeout=60 \
-            -m "(${{ matrix.marker }}) and not requires_server and not skip_ci"
       - name: Cleanup pinned creative agent
         if: always() && matrix.group == 'creative'
         run: ./scripts/creative-agent-stack.sh down
@@ -240,17 +238,16 @@ jobs:
           echo '#!/bin/bash' | sudo tee /usr/local/bin/docker-compose
           echo 'exec docker compose "$@"' | sudo tee -a /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
-      - name: Run E2E tests
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/e2e/
+          with_coverage: "true"
+          extra_args: --timeout=300
         env:
-          GEMINI_API_KEY: test_key_for_mocking
-          GOOGLE_CLIENT_ID: test_client_id
-          GOOGLE_CLIENT_SECRET: test_client_secret
-          SUPER_ADMIN_EMAILS: test@example.com
           ADCP_SALES_PORT: 8080
           POSTGRES_PORT: 5435
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
-        run: uv run pytest tests/e2e/ -q --tb=line --timeout=300 --cov=src --cov-report=xml --cov-report=term
 
   admin-ui-tests:
     name: Admin UI Tests
@@ -266,14 +263,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
-      - name: Run admin tests
-        env:
-          GEMINI_API_KEY: test_key_for_mocking
-          GOOGLE_CLIENT_ID: test_client_id
-          GOOGLE_CLIENT_SECRET: test_client_secret
-          SUPER_ADMIN_EMAILS: test@example.com
-          ADCP_TESTING: true
-        run: uv run pytest tests/admin/ -m "not requires_server and not slow" -q --tb=line --cov=src --cov-report=xml --cov-report=term
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/admin/
+          with_coverage: "true"
+          extra_args: -m "not requires_server and not slow"
 
   bdd-tests:
     name: BDD Tests
@@ -281,20 +275,7 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 25
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: adcp_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: adcp_test
-        options: >-
-          --health-cmd "pg_isready -U adcp_user"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-        ports:
-          - 5432:5432
+    services: *postgres-service
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -305,39 +286,19 @@ jobs:
           uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
-          database-url: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
-      - name: Run BDD tests
-        env:
-          DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
-          GEMINI_API_KEY: test_key_for_mocking
-          GOOGLE_CLIENT_ID: test_client_id
-          GOOGLE_CLIENT_SECRET: test_client_secret
-          SUPER_ADMIN_EMAILS: test@example.com
-          ADCP_TESTING: true
-        run: |
-          ENCRYPTION_KEY="$(python -c "import base64; print(base64.urlsafe_b64encode(b'0'*32).decode())")"
-          export ENCRYPTION_KEY
-          uv run pytest tests/bdd/ -n auto --dist=loadfile -q --tb=line --cov=src --cov-report=xml --cov-report=term --timeout=60
+          database-url: ${{ env.DATABASE_URL }}
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/bdd/
+          with_coverage: "true"
+          extra_args: -n auto --dist=loadfile --timeout=60
 
   migration-roundtrip:
     name: Migration Roundtrip
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: adcp_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: adcp_test
-        options: >-
-          --health-cmd "pg_isready -U adcp_user"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-        ports:
-          - 5432:5432
+    services: *postgres-service
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -346,9 +307,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
+      - uses: ./.github/actions/_postgres
+        with:
+          database-url: ${{ env.DATABASE_URL }}
+          run-migrations: "false"
       - name: Migration roundtrip
-        env:
-          DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
         run: |
           uv run alembic upgrade head
           uv run alembic downgrade -1
