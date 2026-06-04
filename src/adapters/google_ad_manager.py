@@ -304,29 +304,37 @@ class GoogleAdManager(AdServerAdapter):
         gam_mappings = self.principal.platform_mappings.get("google_ad_manager", {})
         return bool(gam_mappings.get("gam_admin", False) or gam_mappings.get("is_admin", False))
 
+    def _require_creatives_manager(self):
+        """Return the creatives manager, or raise if the adapter is not configured for it."""
+        manager = self.creatives_manager
+        if not manager:
+            raise AdCPConfigurationError(
+                "GAM adapter not configured for creative operations", field="creatives_manager"
+            )
+        return manager
+
+    def _require_orders_manager(self):
+        """Return the orders manager, or raise if the adapter is not configured for it."""
+        manager = self.orders_manager
+        if not manager:
+            raise AdCPConfigurationError("GAM adapter not configured for order operations", field="orders_manager")
+        return manager
+
     def _validate_creative_for_gam(self, asset):
         """Validate creative asset for GAM requirements (delegated to creatives manager)."""
-        if not self.creatives_manager:
-            raise AdCPConfigurationError("GAM adapter not configured for creative operations")
-        return self.creatives_manager._validate_creative_for_gam(asset)
+        return self._require_creatives_manager()._validate_creative_for_gam(asset)
 
     def _get_creative_type(self, asset):
         """Determine creative type from asset (delegated to creatives manager)."""
-        if not self.creatives_manager:
-            raise AdCPConfigurationError("GAM adapter not configured for creative operations")
-        return self.creatives_manager._get_creative_type(asset)
+        return self._require_creatives_manager()._get_creative_type(asset)
 
     def _create_gam_creative(self, asset, creative_type, asset_placeholders):
         """Create a GAM creative (delegated to creatives manager)."""
-        if not self.creatives_manager:
-            raise AdCPConfigurationError("GAM adapter not configured for creative operations")
-        return self.creatives_manager._create_gam_creative(asset, creative_type, asset_placeholders)
+        return self._require_creatives_manager()._create_gam_creative(asset, creative_type, asset_placeholders)
 
     def _check_order_has_guaranteed_items(self, order_id):
         """Check if order has guaranteed line items (delegated to orders manager)."""
-        if not self.orders_manager:
-            raise AdCPConfigurationError("GAM adapter not configured for order operations")
-        return self.orders_manager.check_order_has_guaranteed_items(order_id)
+        return self._require_orders_manager().check_order_has_guaranteed_items(order_id)
 
     def get_supported_pricing_models(self) -> set[str]:
         """Return set of pricing models GAM adapter supports.
