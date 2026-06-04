@@ -14,10 +14,9 @@ from typing import Any
 from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_identity, require_tenant
+from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import (
-    AdCPAuthenticationError,
     AdCPConflictError,
     AdCPNotFoundError,
     AdCPValidationError,
@@ -55,9 +54,7 @@ async def list_tasks(
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)
-
-    if not identity.is_authenticated:
-        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
+    require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -143,9 +140,7 @@ async def get_task(
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)
-
-    if not identity.is_authenticated:
-        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
+    require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -213,11 +208,7 @@ async def complete_task(
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)
-
-    if not identity.is_authenticated:
-        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to complete tasks.")
-
-    principal_id = identity.principal_id
+    principal_id = require_principal_id(identity)  # F-03: an authenticated principal is required
 
     if status not in ["completed", "failed"]:
         raise AdCPValidationError(

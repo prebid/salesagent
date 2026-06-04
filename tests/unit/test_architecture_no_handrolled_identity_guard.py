@@ -11,10 +11,13 @@ hand-roll the guard via:
     ``raise ...`` — divergent messages, bypasses the canonical wire envelope, and
     is the byte-identical duplication that accumulates when one ``_impl`` is migrated
     and its sibling is not.
+  - ``if not identity.is_authenticated: raise ...`` — ``is_authenticated`` is just
+    ``bool(principal_id)`` (resolved_identity.py), so this is ``require_principal_id``
+    open-coded; use the helper instead.
 
 Scans ``src/core/tools``, ``src/core/helpers``, ``src/adapters``. ``assert identity
-is not None`` is flagged in ANY function (no legitimate use — a wrapper should raise,
-not assert). Bare ``X is None`` identity guards are flagged only inside ``*_impl``
+is not None`` and ``if not identity.is_authenticated: raise`` are flagged in ANY
+function (no legitimate open-coded use). Bare ``X is None`` identity guards are flagged only inside ``*_impl``
 functions AND only when the branch RAISES; transport wrappers (``*_raw``, MCP tool
 functions) legitimately guard at the boundary and are out of scope, and a non-raising
 ``if X is None`` branch (graceful degradation — strip pricing for an anonymous caller,
@@ -88,6 +91,21 @@ def _if_identity_guard_kind(node: ast.AST) -> str | None:
     return None
 
 
+def _is_not_is_authenticated_raise(node: ast.AST) -> bool:
+    """True if ``node`` is ``if not <x>.is_authenticated: <raise ...>``.
+
+    ``is_authenticated`` is ``bool(principal_id)`` (resolved_identity.py), so this
+    hand-rolled guard is exactly what ``require_principal_id`` enforces. Flagged in
+    any business-logic function — there is no legitimate open-coded form.
+    """
+    if not isinstance(node, ast.If) or not _body_raises(node.body):
+        return False
+    test = node.test
+    if not (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)):
+        return False
+    return isinstance(test.operand, ast.Attribute) and test.operand.attr == "is_authenticated"
+
+
 def _scan_file(py_file: Path) -> list[tuple[str, int, str]]:
     """Return (enclosing_function, lineno, kind) for hand-rolled identity guards."""
     try:
@@ -106,6 +124,9 @@ def _scan_file(py_file: Path) -> list[tuple[str, int, str]]:
             # assert identity is not None — flagged in any function
             if func is not None and _is_assert_identity_not_none(child):
                 hits.append((func, lineno, "assert identity is not None"))
+            # `if not <x>.is_authenticated: raise` — flagged in any function
+            elif func is not None and _is_not_is_authenticated_raise(child):
+                hits.append((func, lineno, "if not identity.is_authenticated: raise"))
             # bare/or-chain identity None-guard — flagged only inside *_impl functions
             elif func is not None and func.endswith("_impl"):
                 kind = _if_identity_guard_kind(child)

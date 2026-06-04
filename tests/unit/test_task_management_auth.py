@@ -4,8 +4,9 @@ Covers the vulnerability where list_tasks / get_task / complete_task accepted
 requests that had a resolved tenant (via localhost fallback) but no principal_id.
 An unauthenticated caller could read or mutate workflow task state.
 
-The fix: all three _impl functions now check identity.is_authenticated
-immediately after the tenant check.
+The fix: all three functions enforce an authenticated principal via
+require_principal_id (after the tenant check), which raises AdCPAuthenticationError
+when principal_id is missing.
 """
 
 import pytest
