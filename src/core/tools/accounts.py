@@ -459,9 +459,11 @@ async def _sync_accounts_impl(
     if req is None:
         req = SyncAccountsRequest(accounts=[], idempotency_key=str(uuid.uuid4()))
 
-    # BR-RULE-055: sync requires auth (consistent with list_accounts)
-    identity = require_identity(identity)
+    # BR-RULE-055: sync requires auth (consistent with list_accounts). require_principal_id
+    # first so the canonical auth message surfaces for a missing/anonymous token; require_identity
+    # then narrows the type for _check_billing_policy below.
     principal_id = require_principal_id(identity)
+    identity = require_identity(identity)
     tenant = require_tenant(identity)
     tenant_id = tenant["tenant_id"]
 
