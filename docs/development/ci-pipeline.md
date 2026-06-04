@@ -62,6 +62,9 @@ markers was 14 duplicate file assignments across shards 1–4.
 
 Each shard runs against a GitHub Actions service container (Postgres 15).
 
+**Admin UI** and **BDD** jobs also require the Postgres service container plus
+`_postgres` (wait + migrate) — admin blueprint tests use the `integration_db` fixture.
+
 ## E2E Tests
 
 The workflow sets `ADCP_TESTING: true` at the top level for integration/BDD/smoke

@@ -266,7 +266,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 20
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -275,6 +289,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
+      - uses: ./.github/actions/_postgres
+        with:
+          database-url: ${{ env.DATABASE_URL }}
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/admin/

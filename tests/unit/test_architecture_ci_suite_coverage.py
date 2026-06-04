@@ -77,6 +77,16 @@ class TestCISuiteCoverage:
             "instance (mirror the integration-tests job)."
         )
 
+    def test_admin_job_has_postgres_service(self):
+        """Admin blueprint tests use integration_db and require PostgreSQL."""
+        admin_job = load_ci_workflow()["jobs"]["admin-ui-tests"]
+        services = admin_job.get("services", {})
+
+        assert "postgres" in services, (
+            "The 'admin-ui-tests' job has no 'postgres' service. Admin tests use "
+            "the integration_db fixture and require a real PostgreSQL instance."
+        )
+
     def test_integration_job_uses_entity_shards(self):
         """Integration tests must run in parallel entity shards (legacy parity)."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
