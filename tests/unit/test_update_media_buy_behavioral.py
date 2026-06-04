@@ -1211,7 +1211,7 @@ class TestUC003UpdateCreativeIds:
             )
             with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert exc_info.value.details["error_code"] == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_creative_rejected_state_rejected(self):
@@ -1241,7 +1241,7 @@ class TestUC003UpdateCreativeIds:
             )
             with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert exc_info.value.details["error_code"] == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_creative_format_compatibility_check(self):
@@ -1291,7 +1291,7 @@ class TestUC003UpdateCreativeIds:
             )
             with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert exc_info.value.details["error_code"] == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_creative_update_no_adapter_call(self):
@@ -2387,7 +2387,7 @@ class TestUC003ExtJ:
             )
             with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert exc_info.value.details["error_code"] == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_all_validation_errors_collected(self):
@@ -2443,7 +2443,7 @@ class TestUC003ExtJ:
 
             # Both errors should be collected
             error_details = exc_info.value.details
-            assert error_details["error_code"] == "INVALID_CREATIVES"
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
             assert len(error_details["creative_errors"]) == 2
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 

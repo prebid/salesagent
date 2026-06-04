@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPPolicyViolationError,
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
@@ -290,9 +291,7 @@ async def _get_products_impl(
         # Always block if policy says blocked
         logger.warning(f"Brief blocked by policy: {policy_result.reason}")
         # Raise ToolError to properly signal failure to client
-        raise AdCPAuthorizationError(
-            policy_result.reason or "Blocked by policy", details={"error_code": "POLICY_VIOLATION"}
-        )
+        raise AdCPPolicyViolationError(policy_result.reason or "Blocked by policy")
 
     # If restricted and manual review is required, create a task
     if (
@@ -320,9 +319,8 @@ async def _get_products_impl(
 
         # Raise error for policy violations - explicit failure, not silent return
         restrictions_list = policy_result.restrictions if policy_result.restrictions else []
-        raise AdCPAuthorizationError(
-            f"Request violates content policy: {policy_result.reason}. Restrictions: {', '.join(restrictions_list)}",
-            details={"error_code": "POLICY_VIOLATION"},
+        raise AdCPPolicyViolationError(
+            f"Request violates content policy: {policy_result.reason}. Restrictions: {', '.join(restrictions_list)}"
         )
 
     # Resolve adapter type for delivery_measurement defaults

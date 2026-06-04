@@ -587,7 +587,7 @@ def process_and_upload_package_creatives(
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
             logger.error(error_msg)
             # Re-raise as ToolError for consistent error handling
-            raise AdCPAdapterError(error_msg, details={"error_code": "CREATIVES_UPLOAD_FAILED"}) from e
+            raise AdCPAdapterError(error_msg) from e
 
     return updated_packages, uploaded_by_product
 

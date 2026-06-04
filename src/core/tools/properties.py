@@ -56,7 +56,6 @@ def _list_authorized_properties_impl(
     if not tenant:
         raise AdCPAuthenticationError(
             "Could not resolve tenant from request context (no subdomain, virtual host, or x-adcp-tenant header found)",
-            details={"error_code": "TENANT_ERROR"},
         )
 
     tenant_id = tenant["tenant_id"]
@@ -193,7 +192,6 @@ def _list_authorized_properties_impl(
 
         raise AdCPAdapterError(
             f"Failed to list authorized properties: {str(e)}",
-            details={"error_code": "PROPERTIES_ERROR"},
         )
 
 

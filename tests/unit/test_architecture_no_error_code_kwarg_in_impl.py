@@ -13,6 +13,7 @@ pinned in the allowlist so a new bypass (or a new synthesize caller) fails the b
 """
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,12 +39,25 @@ def _func_targets_adcp_error_or_synthesize(func: ast.expr) -> bool:
     return False
 
 
-def _find_error_code_kwargs() -> list[tuple[str, str, int]]:
-    """Find error_code= kwargs on AdCP*Error/synthesize calls inside any function.
+def _call_has_error_code_in_details(call: ast.Call) -> bool:
+    """True if a Call passes ``details={...}`` with an ``error_code`` key (the smuggling form).
 
-    Returns list of (relative_path, enclosing_function_name, lineno).
+    ``error_code=`` is the kwarg bypass; ``details={"error_code": "X"}`` is the
+    indirection variant that smuggles a second code into the envelope's
+    ``errors[0].details`` while the typed class still sets the wire ``adcp_error.code``.
+    Both bypass the "wire code = subclass identity" invariant. Only inline dict
+    literals are matched (a ``details=`` built from a variable would slip through, but
+    every known site uses a literal).
     """
-    violations: list[tuple[str, str, int]] = []
+    for kw in call.keywords:
+        if kw.arg == "details" and isinstance(kw.value, ast.Dict):
+            if any(isinstance(k, ast.Constant) and k.value == "error_code" for k in kw.value.keys):
+                return True
+    return False
+
+
+def _iter_adcp_error_calls() -> Iterator[tuple[str, str, ast.Call]]:
+    """Yield (relative_path, enclosing_function, call) for every AdCP*Error/synthesize call."""
     for scan_dir in SCAN_DIRS:
         for py_file in scan_dir.rglob("*.py"):
             try:
@@ -55,13 +69,26 @@ def _find_error_code_kwargs() -> list[tuple[str, str, int]]:
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 for child in ast.walk(node):
-                    if not isinstance(child, ast.Call):
-                        continue
-                    if not any(kw.arg == "error_code" for kw in child.keywords):
-                        continue
-                    if _func_targets_adcp_error_or_synthesize(child.func):
-                        violations.append((rel_path, node.name, child.lineno))
-    return violations
+                    if isinstance(child, ast.Call) and _func_targets_adcp_error_or_synthesize(child.func):
+                        yield rel_path, node.name, child
+
+
+def _find_error_code_kwargs() -> list[tuple[str, str, int]]:
+    """Find error_code= kwargs on AdCP*Error/synthesize calls. (relative_path, function, lineno)."""
+    return [
+        (rel, func, call.lineno)
+        for rel, func, call in _iter_adcp_error_calls()
+        if any(kw.arg == "error_code" for kw in call.keywords)
+    ]
+
+
+def _find_error_code_in_details() -> list[tuple[str, str, int]]:
+    """Find details={"error_code": ...} smuggling on AdCP*Error calls. (relative_path, function, lineno)."""
+    return [
+        (rel, func, call.lineno)
+        for rel, func, call in _iter_adcp_error_calls()
+        if _call_has_error_code_in_details(call)
+    ]
 
 
 class TestNoErrorCodeKwargInImpl:
@@ -94,3 +121,20 @@ class TestNoErrorCodeKwargInImpl:
         all_sites = {(rel, func) for rel, func, _ in _find_error_code_kwargs()}
         msg = f"error_code= sites changed.\nFound: {sorted(all_sites)}\nAllowlist: {sorted(KNOWN_VIOLATIONS)}"
         assert all_sites == KNOWN_VIOLATIONS, msg
+
+
+class TestNoErrorCodeInDetails:
+    """details={"error_code": ...} smuggling is forbidden — the wire code is the typed class identity.
+
+    Allowlist is empty: there is no sanctioned site for the indirection variant. A raise
+    that needs a specific wire code uses a typed subclass (create one if no standard code
+    matches); buyer-actionable detail goes under a non-``error_code`` key (e.g. ``creative_errors``).
+    """
+
+    def test_no_error_code_in_details_literal(self):
+        sites = [f"  {rel}:{lineno} in {func}()" for rel, func, lineno in _find_error_code_in_details()]
+        assert not sites, (
+            f'Found {len(sites)} details={{"error_code": ...}} smuggling site(s). The wire code must come '
+            "from the typed AdCPError subclass identity, not a smuggled details sub-code. Migrate to a typed "
+            "subclass and drop the details error_code key (keep other detail keys):\n" + "\n".join(sites)
+        )

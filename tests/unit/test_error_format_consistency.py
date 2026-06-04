@@ -731,6 +731,7 @@ class TestErrorCodeVocabularyConsistency:
         "INVALID_REQUEST",  # SDK standard: AdCPInvalidRequestError (semantically-invalid value)
         "AUTH_TOKEN_INVALID",  # AdCP spec: invalid/missing auth token (AdCPAuthenticationError)
         "AUTH_REQUIRED",  # SDK standard: authorisation (AdCPAuthorizationError)
+        "POLICY_VIOLATION",  # SDK standard: AdCPPolicyViolationError (content/advertising policy block)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
         "ACCOUNT_AMBIGUOUS",  # adcp-req: Natural key matches multiple accounts (BR-RULE-080)

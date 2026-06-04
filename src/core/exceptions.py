@@ -422,6 +422,20 @@ class AdCPAuthorizationError(AdCPError):
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
 
 
+class AdCPPolicyViolationError(AdCPAuthorizationError):
+    """Request content blocked by an advertising/content policy (403, POLICY_VIOLATION).
+
+    Refines ``AdCPAuthorizationError`` (still a 403, still ``isinstance`` of it):
+    the caller is permitted to call the tool, but the *content* of the request
+    (brief, brand, targeting) violates a publisher policy. Carries the distinct
+    ``POLICY_VIOLATION`` wire code, and the buyer can revise and retry, so
+    recovery is ``correctable`` rather than the parent's ``terminal``.
+    """
+
+    _default_error_code: ClassVar[str] = "POLICY_VIOLATION"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
 class AdCPNotFoundError(AdCPError):
     """Requested resource does not exist (404)."""
 

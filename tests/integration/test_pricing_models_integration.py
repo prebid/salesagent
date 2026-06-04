@@ -387,7 +387,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         await _create_media_buy_impl(req=request, identity=identity)
 
     exc = excinfo.value
-    assert exc.details == {"error_code": "PRICING_ERROR"}
+    assert exc.error_code == "VALIDATION_ERROR"
     msg = exc.message.lower()
     assert "below floor price" in msg or "floor" in msg
 
@@ -460,7 +460,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         await _create_media_buy_impl(req=request, identity=identity)
 
     exc = excinfo.value
-    assert exc.details == {"error_code": "PRICING_ERROR"}
+    assert exc.error_code == "VALIDATION_ERROR"
     msg = exc.message.lower()
     assert "below minimum spend" in msg or "minimum" in msg
 
@@ -533,6 +533,6 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         await _create_media_buy_impl(req=request, identity=identity)
 
     exc = excinfo.value
-    assert exc.details == {"error_code": "PRICING_ERROR"}
+    assert exc.error_code == "VALIDATION_ERROR"
     msg = exc.message.lower()
     assert "does not offer" in msg or "pricing" in msg

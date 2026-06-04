@@ -323,7 +323,7 @@ class TestCreativeMissingUrl:
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
-            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
@@ -359,7 +359,7 @@ class TestCreativeMissingUrl:
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
-            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "VALIDATION_ERROR"
 
 
@@ -416,7 +416,7 @@ class TestCreativeUploadFailure:
             with pytest.raises(AdCPAdapterError) as exc_info:
                 env.call_impl(req=req)
 
-            assert exc_info.value.details.get("error_code") == "CREATIVE_UPLOAD_FAILED"
+            assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
             assert "creative_no_platform" in str(exc_info.value)
             assert "Network timeout" in str(exc_info.value)
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
@@ -532,7 +532,7 @@ class TestMultipleInvalidCreativesAccumulated:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             error_message = str(exc_info.value)
-            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
             # All three creative IDs should appear in the accumulated error
             assert "creative_1" in error_message
             assert "creative_2" in error_message
@@ -635,7 +635,6 @@ class TestCreativeIdsNotFound:
             with pytest.raises(AdCPNotFoundError) as exc_info:
                 env.call_impl(req=req)
 
-            assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
             assert exc_info.value.error_code == "NOT_FOUND"
@@ -662,9 +661,9 @@ class TestCreativeIdsNotFound:
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
             with pytest.raises(AdCPNotFoundError) as exc_info:
-                raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVE_REJECTED"})
+                raise AdCPNotFoundError(error_msg)
 
-            assert exc_info.value.details.get("error_code") == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "NOT_FOUND"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 
@@ -870,7 +869,6 @@ class TestMainFlowObligations:
                 format_ids=["banner_300x250"], tenant_id="test_tenant", package_idx=0
             )
 
-        assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_persistence_after_adapter_success(self, integration_db):
@@ -1163,7 +1161,6 @@ class TestInlineCreativeObligations:
                 format_ids=[{"agent_url": "", "id": ""}], tenant_id="test_tenant", package_idx=0
             )
 
-        assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
@@ -1466,7 +1463,6 @@ class TestExtensionObligations:
                     package_idx=0,
                 )
 
-            assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
             assert exc_info.value.error_code == "NOT_FOUND"
 
     @pytest.mark.asyncio
@@ -1632,7 +1628,7 @@ class TestExtensionObligations:
         # VALIDATION_ERROR — verify both layers so we don't regress either one.
         exc = excinfo.value
         assert exc.error_code == "VALIDATION_ERROR"
-        assert exc.details == {"error_code": "PRICING_ERROR"}
+        assert exc.error_code == "VALIDATION_ERROR"
         assert "pricing_options" in exc.message
 
     @pytest.mark.asyncio
@@ -1643,18 +1639,16 @@ class TestExtensionObligations:
         """
         # This is covered by TestCreativeIdsNotFound above.
         # Verify the error code pattern.
-        error = AdCPNotFoundError(
-            "Creative IDs not found: creative_missing", details={"error_code": "CREATIVE_REJECTED"}
-        )
-        assert error.details["error_code"] == "CREATIVE_REJECTED"
+        error = AdCPNotFoundError("Creative IDs not found: creative_missing")
+        assert error.error_code == "NOT_FOUND"
 
     def test_creative_upload_failed_error_code(self):
-        """CREATIVE_UPLOAD_FAILED error code is used for upload failures.
+        """Creative upload failures raise AdCPAdapterError (wire code SERVICE_UNAVAILABLE).
 
         Covers: UC-002-EXT-Q-01
         """
-        error = AdCPAdapterError("Failed to upload creative to GAM", details={"error_code": "CREATIVE_UPLOAD_FAILED"})
-        assert error.details["error_code"] == "CREATIVE_UPLOAD_FAILED"
+        error = AdCPAdapterError("Failed to upload creative to GAM")
+        assert error.error_code == "SERVICE_UNAVAILABLE"
 
     def test_partial_execution_state_on_creative_upload_failure(self):
         """Creative upload failure may leave partial state in ad server.
@@ -1663,13 +1657,11 @@ class TestExtensionObligations:
 
         Note: This is a known atomicity concern. The media buy order may
         exist in the ad server even though creative upload failed.
-        The error is CREATIVE_UPLOAD_FAILED, not a rollback.
+        The error is SERVICE_UNAVAILABLE (adapter failure), not a rollback.
         """
-        error = AdCPAdapterError(
-            "Failed to upload creative cr_1 to GAM: timeout", details={"error_code": "CREATIVE_UPLOAD_FAILED"}
-        )
+        error = AdCPAdapterError("Failed to upload creative cr_1 to GAM: timeout")
         # Partial execution: error is about upload, not about the order
-        assert "CREATIVE_UPLOAD_FAILED" == error.details["error_code"]
+        assert error.error_code == "SERVICE_UNAVAILABLE"
         assert "cr_1" in str(error)
 
 

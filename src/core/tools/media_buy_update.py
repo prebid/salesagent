@@ -777,7 +777,7 @@ def _update_media_buy_impl(
                             logger.error(f"[UPDATE] {error_msg}")
                             raise AdCPValidationError(
                                 error_msg,
-                                details={"error_code": "INVALID_CREATIVES", "creative_errors": validation_errors},
+                                details={"creative_errors": validation_errors},
                             )
 
                         # Get existing assignments for this package

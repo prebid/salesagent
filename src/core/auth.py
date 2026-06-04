@@ -261,7 +261,6 @@ def get_principal_from_context(
             raise AdCPAuthenticationError(
                 f"Authentication token is invalid for tenant '{requested_tenant_id or 'any'}'. "
                 f"The token may be expired, revoked, or associated with a different tenant.",
-                details={"error_code": "INVALID_AUTH_TOKEN"},
             )
         else:
             # For discovery endpoints, treat invalid token like missing token
