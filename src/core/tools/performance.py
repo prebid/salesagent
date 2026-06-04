@@ -18,7 +18,7 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal_id, require_tenant, resolve_principal_or_raise
+from src.core.auth import require_identity, require_principal_id, require_tenant, resolve_principal_or_raise
 from src.core.database.repositories import MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -56,8 +56,7 @@ def _update_performance_index_impl(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
-    if identity is None:
-        raise ValueError("Identity is required for update_performance_index")
+    identity = require_identity(identity)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity)

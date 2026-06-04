@@ -19,7 +19,7 @@ from pydantic import Field as PydanticField
 from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_tenant
+from src.core.auth import require_identity, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers import log_tool_activity
@@ -196,7 +196,7 @@ def _list_creatives_impl(
         raise AdCPAuthenticationError("Missing x-adcp-auth header")
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    assert identity is not None, "identity is required for listing creatives"
+    identity = require_identity(identity)
     tenant = require_tenant(identity)
 
     creatives = []

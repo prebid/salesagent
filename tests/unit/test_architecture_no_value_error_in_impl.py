@@ -47,7 +47,6 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/gam_implementation_config_schema.py": 4,
     "src/adapters/xandr.py": 5,
     "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)
-    "src/core/tools/performance.py": 1,
 }
 
 from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse

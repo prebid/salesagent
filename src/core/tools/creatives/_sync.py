@@ -9,7 +9,7 @@ from adcp import PushNotificationConfig
 from adcp.types import ContextObject, CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
-from src.core.auth import require_tenant
+from src.core.auth import require_identity, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
@@ -87,7 +87,7 @@ def _sync_creatives_impl(
 
     # Tenant context is resolved at the transport boundary (resolve_identity_from_context).
     # By the time we reach _impl, identity.tenant is a fully-populated TenantContext.
-    assert identity is not None, "identity is required for creative sync"
+    identity = require_identity(identity)
     tenant = require_tenant(identity)
 
     # Track actions per creative for AdCP-compliant response

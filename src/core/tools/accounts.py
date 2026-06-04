@@ -34,10 +34,10 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal_id, require_tenant
+from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -459,16 +459,15 @@ async def _sync_accounts_impl(
     if req is None:
         req = SyncAccountsRequest(accounts=[], idempotency_key=str(uuid.uuid4()))
 
-    # BR-RULE-055: sync requires auth
-    if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        raise AdCPAuthenticationError("Authentication required: sync_accounts requires a valid auth token.")
+    # BR-RULE-055: sync requires auth (consistent with list_accounts)
+    identity = require_identity(identity)
+    principal_id = require_principal_id(identity)
+    tenant = require_tenant(identity)
+    tenant_id = tenant["tenant_id"]
 
     # Validate non-empty accounts array
     if not req.accounts:
         raise AdCPValidationError("accounts array must not be empty — at least one account is required.")
-
-    tenant_id = identity.tenant_id
-    principal_id = identity.principal_id
     dry_run = bool(req.dry_run)
     delete_missing = bool(req.delete_missing)
 
@@ -579,8 +578,7 @@ async def _sync_accounts_impl(
                 # (BR-RULE-037) — do NOT fall back to approval_mode.
                 # Resolved BEFORE the dry_run branch so previews reflect what a real
                 # create would return (BR-RULE-062).
-                tenant = identity.tenant if identity else None
-                approval_mode = tenant.get("account_approval_mode") if tenant else None
+                approval_mode = tenant.get("account_approval_mode")
                 setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
                 initial_status = "pending_approval" if setup else "active"
 

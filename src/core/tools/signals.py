@@ -68,7 +68,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     _ = identity.principal_id if identity else None
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    assert identity is not None, "identity is required for signals"
+    identity = require_identity(identity)
     tenant = require_tenant(identity)
 
     # Mock implementation - in production, this would query from a signal provider
