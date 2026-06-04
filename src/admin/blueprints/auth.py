@@ -402,8 +402,7 @@ def google_auth():
 
         # Only add /admin prefix in production mode with nginx (not in Docker standalone)
         # SKIP_NGINX=true indicates Docker standalone mode without nginx reverse proxy
-        # TODO: remove hardcoded skip_nginx value
-        skip_nginx = True  # os.environ.get("SKIP_NGINX", "false").lower() == "true"
+        skip_nginx = os.environ.get("SKIP_NGINX", "false").lower() == "true"
         production = os.environ.get("PRODUCTION", "").lower() == "true"
 
         if not skip_nginx and production and "/admin/" not in base_url:
