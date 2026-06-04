@@ -17,8 +17,8 @@
 schema_version: 1
 source:
   repository: adcp-req
-  commit: a14db6e5894e781a8b2c577e86e1b136876e4915
-  compiled_at: "2026-06-03T11:30:04Z"
+  commit: render
+  compiled_at: "2026-06-04T09:53:13Z"
 
 mappings:
   COMPAT-001:
@@ -6963,6 +6963,36 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-sandbox-response-shape"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main", "BR-RULE-209"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sandbox-capability-not-declared"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main", "BR-RULE-209"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-v31-error-account-setup-required"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-v31-error-conflict-version"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-v31-error-idempotency-conflict"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011", "BR-UC-011-ext-h", "BR-RULE-238"]
+      business_rules: []
+      status: new
   UC-012:
     - adcp_scenario_id: "T-UC-012-list-main"
       adcp_feature: "BR-UC-012-manage-content-standards.feature"
@@ -10511,12 +10541,6 @@ mappings:
       upstream_refs: ["BR-UC-019-main-rest"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-019-main-filter-refs"
-      adcp_feature: "BR-UC-019-query-media-buys.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-019-main-rest"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-019-main-snapshot"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
@@ -10655,12 +10679,6 @@ mappings:
       upstream_refs: ["BR-RULE-154"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-019-partition-principal-invalid"
-      adcp_feature: "BR-UC-019-query-media-buys.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-154"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-019-boundary-principal"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
@@ -10758,6 +10776,330 @@ mappings:
       business_rules: ["BR-RULE-209"]
       status: new
     - adcp_scenario_id: "T-UC-019-main"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-150-6"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-150-7"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-150-8"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-150-9"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-150-10"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-150-11"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-151-5"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-151"]
+      business_rules: ["BR-RULE-151"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-history"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-289"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-boundary-history"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-289"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-289-3"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-289"]
+      business_rules: ["BR-RULE-289"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-289-5"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-289"]
+      business_rules: ["BR-RULE-289"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-289-6"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-289"]
+      business_rules: ["BR-RULE-289"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-289-9"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-289"]
+      business_rules: ["BR-RULE-289"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-valid-actions"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-290"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-boundary-valid-actions"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-290"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-290-3"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-290"]
+      business_rules: ["BR-RULE-290"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-290-4"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-290"]
+      business_rules: ["BR-RULE-290"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-290-5"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-290"]
+      business_rules: ["BR-RULE-290"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-revision"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-291"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-boundary-revision"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-291"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-291-1"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-291"]
+      business_rules: ["BR-RULE-291"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-291-4"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-291"]
+      business_rules: ["BR-RULE-291"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-291-5"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-291"]
+      business_rules: ["BR-RULE-291"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-confirmed-at-present"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019", "BR-UC-019-si"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-confirmed-at-stable"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019", "BR-UC-019-si"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-confirmed-at"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019", "BR-UC-019-si"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-package-creative-deadline"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019", "BR-UC-019-si"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-package-creative-deadline-inheritance"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019", "BR-UC-019-si"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-cancellation"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-292"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-boundary-cancellation"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-292"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-292-1"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-292"]
+      business_rules: ["BR-RULE-292"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-292-2"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-292"]
+      business_rules: ["BR-RULE-292"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-292-7"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-292"]
+      business_rules: ["BR-RULE-292"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-293-2"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-293", "BR-UC-019-ext-e"]
+      business_rules: ["BR-RULE-293"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-293-5"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-293"]
+      business_rules: ["BR-RULE-293"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-targeting-rehydration"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-294"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-294-3"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-294"]
+      business_rules: ["BR-RULE-294"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-294-5"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-294"]
+      business_rules: ["BR-RULE-294"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-294-6"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-294"]
+      business_rules: ["BR-RULE-294"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-294-8"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-294"]
+      business_rules: ["BR-RULE-294"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-delivery-status"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-295"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-boundary-delivery-status"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-295"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-295-1"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-295"]
+      business_rules: ["BR-RULE-295"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-295-2"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-295"]
+      business_rules: ["BR-RULE-295"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-invoice-recipient"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-296"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-296-1"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-296"]
+      business_rules: ["BR-RULE-296"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-296-2"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-296"]
+      business_rules: ["BR-RULE-296"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-296-3"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-296"]
+      business_rules: ["BR-RULE-296"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-296-4"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-296"]
+      business_rules: ["BR-RULE-296"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-partition-currency-budget"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-boundary-currency-budget"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-boundary-sandbox"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019-main", "BR-RULE-209"]
+      business_rules: ["BR-RULE-209"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-boundary-targeting-overlay"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-294"]
+      business_rules: ["BR-RULE-294"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-storyboard-post-create-status-poll"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-019-main"]
@@ -13794,12 +14136,6 @@ mappings:
       upstream_refs: ["BR-UC-026-alt-update"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-026-alt-update-buyer-ref"
-      adcp_feature: "BR-UC-026-package-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-026-alt-update"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-026-alt-pause"
       adcp_feature: "BR-UC-026-package-media-buy.feature"
       obligation_id: null
@@ -13847,18 +14183,6 @@ mappings:
       obligation_id: null
       upstream_refs: ["BR-UC-026-alt-keyword-ops"]
       business_rules: ["BR-RULE-202"]
-      status: new
-    - adcp_scenario_id: "T-UC-026-alt-dedup"
-      adcp_feature: "BR-UC-026-package-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-026-alt-dedup"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-026-alt-dedup-crossbuy"
-      adcp_feature: "BR-UC-026-package-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-026-alt-dedup"]
-      business_rules: ["BR-RULE-194"]
       status: new
     - adcp_scenario_id: "T-UC-026-ext-a"
       adcp_feature: "BR-UC-026-package-media-buy.feature"
@@ -13943,18 +14267,6 @@ mappings:
       obligation_id: null
       upstream_refs: ["BR-UC-026-ext-i"]
       business_rules: ["BR-RULE-021"]
-      status: new
-    - adcp_scenario_id: "T-UC-026-inv-194-1"
-      adcp_feature: "BR-UC-026-package-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-194"]
-      business_rules: ["BR-RULE-194"]
-      status: new
-    - adcp_scenario_id: "T-UC-026-inv-194-2"
-      adcp_feature: "BR-UC-026-package-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-194"]
-      business_rules: ["BR-RULE-194"]
       status: new
     - adcp_scenario_id: "T-UC-026-inv-195-1"
       adcp_feature: "BR-UC-026-package-media-buy.feature"
@@ -14094,18 +14406,6 @@ mappings:
       upstream_refs: ["BR-RULE-196"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-026-partition-buyer-ref"
-      adcp_feature: "BR-UC-026-package-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-194"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-026-boundary-buyer-ref"
-      adcp_feature: "BR-UC-026-package-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-194"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-026-partition-format-ids"
       adcp_feature: "BR-UC-026-package-media-buy.feature"
       obligation_id: null
@@ -14236,6 +14536,24 @@ mappings:
       adcp_feature: "BR-UC-026-package-media-buy.feature"
       obligation_id: null
       upstream_refs: ["BR-RULE-201"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-026-alt-cancel"
+      adcp_feature: "BR-UC-026-package-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-026-alt-cancel"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-026-alt-cancel-irreversible"
+      adcp_feature: "BR-UC-026-package-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-026-alt-cancel"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-026-ext-j"
+      adcp_feature: "BR-UC-026-package-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-026-ext-j"]
       business_rules: []
       status: new
   UC-027:
