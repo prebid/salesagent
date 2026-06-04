@@ -58,7 +58,7 @@ from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
-from src.core.auth import get_principal_object, require_identity
+from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.exceptions import (
@@ -128,7 +128,9 @@ def _get_media_buys_impl(
             ],
         )
 
-    tenant = identity.tenant
+    # require_tenant raises the canonical auth envelope instead of a raw TypeError
+    # if no tenant resolved (the principal advisories above take precedence).
+    tenant = require_tenant(identity)
     today = datetime.now(UTC).date()
     tenant_id: str = tenant["tenant_id"]
 
