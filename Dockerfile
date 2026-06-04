@@ -171,7 +171,7 @@ ENV SKIP_NGINX=false
 # Server-owned adapter schedulers replace the bundled supercronic inventory
 # sweep in the default container runtime. Operators can still opt back into
 # cron by overriding this, but should not run both mechanisms together.
-ENV SKIP_CRON=false
+ENV SKIP_CRON=True
 
 # Expose the unified python port directly. Fly.io / upstream proxy
 # talks to this port; no in-image reverse proxy.
