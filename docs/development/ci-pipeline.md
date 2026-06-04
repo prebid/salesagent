@@ -62,6 +62,14 @@ markers was 14 duplicate file assignments across shards 1–4.
 
 Each shard runs against a GitHub Actions service container (Postgres 15).
 
+## E2E Tests
+
+The workflow sets `ADCP_TESTING: true` at the top level for integration/BDD/smoke
+jobs. The **E2E job overrides this to empty** so `tests/e2e/conftest.py` starts
+`docker-compose.e2e.yml` itself (same as legacy `test.yml`). Do not set
+`ADCP_TESTING=true` on the E2E pytest step — that path assumes an already-running
+stack on `ADCP_SALES_PORT` and fails with "Server not ready after 60s".
+
 ## Reference Creative Agent
 
 The `creative` shard starts a reference creative agent from the upstream
