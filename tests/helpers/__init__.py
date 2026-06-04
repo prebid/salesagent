@@ -25,13 +25,15 @@ def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token"
         tenant={"tenant_id": "default"},
         protocol="rest",
     )
+    expected_headers = {"authorization": f"Bearer {auth_token}"}
     with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
         _resolve_auth_dep(auth_ctx)
 
-    mock_resolve.assert_called_once()
-    call_kwargs = mock_resolve.call_args
-    assert call_kwargs.kwargs.get("auth_token") == auth_token or (
-        len(call_kwargs.args) > 1 and call_kwargs.args[1] == auth_token
+    mock_resolve.assert_called_once_with(
+        headers=expected_headers,
+        auth_token=auth_token,
+        require_valid_token=False,
+        protocol="rest",
     )
 
 

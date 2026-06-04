@@ -79,6 +79,11 @@ class TestBuildModelString:
         result = build_model_string("gemini", "gemini-2.0-flash")
         assert result == "google:gemini-2.0-flash"
 
+    def test_google_gla_provider(self):
+        """Legacy google-gla alias maps to pydantic-ai canonical google prefix."""
+        result = build_model_string("google-gla", "gemini-2.0-flash")
+        assert result == "google:gemini-2.0-flash"
+
     def test_openai_provider(self):
         """OpenAI uses openai prefix."""
         result = build_model_string("openai", "gpt-4o")
@@ -194,6 +199,26 @@ class TestAIServiceFactory:
             "provider='google' must return a GoogleModel, not a plain string; "
             "returning a string bypasses API key injection and leaks auth to env vars"
         )
+
+    def test_tenant_google_uses_platform_api_key_when_tenant_key_missing(self):
+        """Tenant provider='google' without api_key inherits platform GEMINI_API_KEY."""
+        from pydantic_ai.models.google import GoogleModel
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "platform-gemini-key"}, clear=True):
+            factory = AIServiceFactory()
+            model = factory.create_model(
+                tenant_ai_config={"provider": "google", "model": "gemini-2.0-flash"},
+            )
+            assert isinstance(model, GoogleModel)
+
+    def test_create_model_raises_when_google_has_no_resolved_api_key(self):
+        """No tenant or platform key must raise instead of pydantic-ai env fallback."""
+        with patch.dict(os.environ, {}, clear=True):
+            factory = AIServiceFactory()
+            with pytest.raises(ValueError, match="No API key available"):
+                factory.create_model(
+                    tenant_ai_config={"provider": "google", "model": "gemini-2.0-flash"},
+                )
 
     def test_create_model_with_tenant_config(self):
         """Factory uses tenant config over platform defaults."""

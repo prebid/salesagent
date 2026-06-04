@@ -13,6 +13,17 @@ class ModelSettings(BaseModel):
     timeout: int = Field(default=30, gt=0)
 
 
+GOOGLE_PROVIDER_ALIASES: frozenset[str] = frozenset({"gemini", "google", "google-gla"})
+CANONICAL_GOOGLE_PROVIDER = "google"
+
+
+def canonicalize_google_provider(provider: str) -> str:
+    """Map legacy Google provider names to pydantic-ai 1.99 canonical form."""
+    if provider in GOOGLE_PROVIDER_ALIASES:
+        return CANONICAL_GOOGLE_PROVIDER
+    return provider
+
+
 class TenantAIConfig(BaseModel):
     """Per-tenant AI configuration stored in database.
 
@@ -60,13 +71,9 @@ def _get_provider_api_key(provider: str) -> str | None:
     Returns:
         API key if found, None otherwise
     """
+    provider = canonicalize_google_provider(provider)
     provider_env_vars = {
-        # All three Google aliases resolve to the same key.
-        # "google" is the pydantic-ai 1.99.0 canonical name;
-        # "gemini" and "google-gla" are legacy/DB-stored aliases.
         "google": "GEMINI_API_KEY",
-        "google-gla": "GEMINI_API_KEY",
-        "gemini": "GEMINI_API_KEY",
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "groq": "GROQ_API_KEY",
@@ -90,10 +97,5 @@ def build_model_string(provider: str, model: str) -> str:
     Returns:
         Pydantic AI model string
     """
-    # Normalize legacy and alias provider names to pydantic-ai canonical form.
-    # "gemini" and "google-gla" are both stored in DB configs; "google-gla:" was
-    # deprecated in pydantic-ai 1.99.0 — map both to the new "google:" prefix.
-    if provider in ("gemini", "google-gla"):
-        provider = "google"
-
+    provider = canonicalize_google_provider(provider)
     return f"{provider}:{model}"

@@ -5,8 +5,10 @@ from functools import lru_cache
 from typing import Any
 
 from src.services.ai.config import (
+    CANONICAL_GOOGLE_PROVIDER,
     TenantAIConfig,
     build_model_string,
+    canonicalize_google_provider,
     get_platform_defaults,
 )
 
@@ -118,14 +120,7 @@ class AIServiceFactory:
         if config.logfire_token:
             configure_logfire(config.logfire_token)
 
-        # Normalize all Google provider aliases to the internal "google-gla" handle.
-        # "gemini" is the legacy DB-stored name; "google-gla" was the pre-1.99.0
-        # pydantic-ai string; "google" is the new pydantic-ai 1.99.0 canonical name.
-        # All three must route through _create_provider_model("google-gla") so that
-        # the explicit GoogleProvider(api_key=api_key) path is taken and tenant API
-        # keys are injected — not silently bypassed via env-var fallback.
-        if provider in ("gemini", "google", "google-gla"):
-            provider = "google-gla"
+        provider = canonicalize_google_provider(provider)
 
         logger.debug(f"Creating Pydantic AI model: {provider}:{model_name}")
 
@@ -140,7 +135,7 @@ class AIServiceFactory:
         avoiding global environment variable mutation.
 
         Args:
-            provider: Normalized provider name (e.g., "google-gla", "anthropic")
+            provider: Normalized provider name (e.g., "google", "anthropic")
             model_name: Model name (e.g., "gemini-2.0-flash")
             api_key: API key for the provider
 
@@ -148,15 +143,15 @@ class AIServiceFactory:
             Configured Model instance
         """
         # Import providers lazily to avoid import errors if not installed
-        if provider == "google-gla":
+        if provider == CANONICAL_GOOGLE_PROVIDER:
             from pydantic_ai.models.google import GoogleModel
             from pydantic_ai.providers.google import GoogleProvider
 
-            # pydantic-ai >= 1.99.0 renamed 'google-gla' -> 'google'; use GoogleProvider()
-            # for both paths so the string literal never leaks past the type boundary.
-            if api_key:
-                return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-            return GoogleModel(model_name, provider=GoogleProvider())
+            if not api_key:
+                raise ValueError(
+                    f"No API key available for provider '{provider}'. Set a tenant api_key or platform GEMINI_API_KEY."
+                )
+            return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
 
         elif provider == "anthropic":
             from pydantic_ai.models.anthropic import AnthropicModel
