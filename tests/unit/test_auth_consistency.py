@@ -84,7 +84,7 @@ class TestMissingTokenConsistency:
         # Pass identity with no principal_id
         identity = _make_identity(principal_id=None)
 
-        with pytest.raises(AdCPAuthenticationError, match="[Mm]issing x-adcp-auth"):
+        with pytest.raises(AdCPAuthenticationError, match="[Aa]uthentication required|x-adcp-auth"):
             _list_creatives_impl(identity=identity)
 
     def test_get_media_buy_delivery_missing_auth_raises(self):
@@ -318,9 +318,7 @@ class TestDiscoveryEndpointsInvalidAuth:
             tenant=mock_tenant,
         )
 
-        with (
-            patch("src.core.database.repositories.uow.get_db_session") as mock_db,
-        ):
+        with patch("src.core.database.repositories.uow.get_db_session") as mock_db:
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
@@ -351,9 +349,7 @@ class TestDiscoveryEndpointsInvalidAuth:
         mock_tenant = {"tenant_id": "test-tenant"}
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
-        with (
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
-        ):
+        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
             mock_reg = MagicMock()
 
             async def mock_list_formats(**kwargs):

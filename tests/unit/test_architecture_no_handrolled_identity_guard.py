@@ -7,7 +7,8 @@ canonical ``AdCPAuthRequiredError`` with a wire code + recovery. They must NOT
 hand-roll the guard via:
 
   - ``assert identity is not None``  — stripped by ``python -O``; emits no wire error.
-  - ``if identity is None [or identity.principal_id is None or identity.tenant_id is None]:``
+  - ``if identity is None [or identity.principal_id is None ...]:`` or the equivalent
+    truthiness form ``if not principal_id [or not identity.tenant_id]:`` followed by
     ``raise ...`` — divergent messages, bypasses the canonical wire envelope, and
     is the byte-identical duplication that accumulates when one ``_impl`` is migrated
     and its sibling is not.
@@ -23,7 +24,9 @@ functions) legitimately guard at the boundary and are out of scope, and a non-ra
 ``if X is None`` branch (graceful degradation — strip pricing for an anonymous caller,
 return minimal capabilities) is legitimate business logic, not a hand-rolled guard.
 
-Allowlist is empty: every business-logic identity guard must route through the helpers.
+Allowlist is empty: every identity guard of the shapes above must route through the helpers.
+(The matcher models these shapes specifically; it does not claim to catch every conceivable
+open-coded form — a mixed ``not x or y is None`` chain, for instance, is not modeled.)
 """
 
 from __future__ import annotations
@@ -74,12 +77,22 @@ def _body_raises(body: list[ast.stmt]) -> bool:
     return any(isinstance(stmt, ast.Raise) for stmt in body)
 
 
+def _is_not_identity_target(test: ast.expr) -> bool:
+    """True if ``test`` is ``not <identity-target>`` (the truthiness form of the None-guard)."""
+    return (
+        isinstance(test, ast.UnaryOp)
+        and isinstance(test.op, ast.Not)
+        and ast.unparse(test.operand) in _IDENTITY_TARGETS
+    )
+
+
 def _if_identity_guard_kind(node: ast.AST) -> str | None:
-    """Return a label if ``node`` is an ``if <identity> is None``-style guard that RAISES.
+    """Return a label if ``node`` is an ``if <identity> is None`` / ``if not <identity>`` guard that RAISES.
 
     Only raising guards are flagged: ``require_identity`` / ``require_principal_id`` /
-    ``require_tenant`` exist to replace the hand-rolled *raise*. A non-raising
-    ``if principal_id is None`` branch (anonymous-caller graceful degradation —
+    ``require_tenant`` exist to replace the hand-rolled *raise*. ``if not principal_id:``
+    (truthiness) and ``if principal_id is None:`` (identity check) are equivalent here and
+    both flagged. A non-raising None/falsy branch (anonymous-caller graceful degradation —
     stripping pricing, returning minimal capabilities) is legitimate and out of scope.
     """
     if not isinstance(node, ast.If) or not _body_raises(node.body):
@@ -88,6 +101,8 @@ def _if_identity_guard_kind(node: ast.AST) -> str | None:
     compares = test.values if (isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or)) else [test]
     if compares and all(_is_x_is_none(c) for c in compares):
         return "if " + " or ".join(f"{ast.unparse(c.left)} is None" for c in compares)  # type: ignore[union-attr]
+    if compares and all(_is_not_identity_target(c) for c in compares):
+        return "if " + " or ".join(f"not {ast.unparse(c.operand)}" for c in compares)  # type: ignore[union-attr]
     return None
 
 

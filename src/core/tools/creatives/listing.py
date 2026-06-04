@@ -19,9 +19,9 @@ from pydantic import Field as PydanticField
 from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_identity, require_tenant
+from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
@@ -191,11 +191,9 @@ def _list_creatives_impl(
     # Authentication - REQUIRED (creatives contain sensitive data)
     # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
     # which are principal-specific and must be access-controlled
-    principal_id = identity.principal_id if identity else None
-    if not principal_id:
-        raise AdCPAuthenticationError("Missing x-adcp-auth header")
-
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
+    # require_identity narrows the type for the tenant lookup below.
+    principal_id = require_principal_id(identity)
     identity = require_identity(identity)
     tenant = require_tenant(identity)
 
