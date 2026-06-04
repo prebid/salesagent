@@ -120,14 +120,14 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     return actions
 
 
-def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: MediaBuyRepository) -> None:
-    """Verify that the principal from context owns the media buy.
+def _verify_principal(media_buy_id: str, identity: "ResolvedIdentity", repo: MediaBuyRepository) -> None:
+    """Verify that the principal from identity owns the media buy.
 
     Uses the provided repository for database access (no own session).
 
     Args:
         media_buy_id: Media buy ID to verify
-        context: ResolvedIdentity with principal info
+        identity: ResolvedIdentity with principal info
         repo: Tenant-scoped MediaBuyRepository for DB lookups
 
     Raises:
@@ -135,10 +135,10 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
         ValueError: Media buy not found
         PermissionError: Principal doesn't own media buy
     """
-    principal_id = require_principal_id(context)
+    principal_id = require_principal_id(identity)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(context)
+    tenant = require_tenant(identity)
 
     # Query database for media buy by ID
     media_buy = repo.get_by_id(media_buy_id)
