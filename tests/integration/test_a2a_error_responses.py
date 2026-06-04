@@ -138,6 +138,7 @@ class TestA2AErrorPropagation:
             artifact_data,
             "VALIDATION_ERROR",
             message_substr="Missing required AdCP parameters",
+            recovery="correctable",
         )
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
@@ -285,7 +286,7 @@ class TestA2AErrorPropagation:
         assert len(result.artifacts) > 0
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="budget")
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="budget", recovery="correctable")
         # The structured field path is propagated from the Pydantic error (drift-proof
         # vs the rendered message substring) — both envelope layers carry it.
         wire_field = artifact_data["errors"][0].get("field") or ""
@@ -382,6 +383,7 @@ class TestA2AErrorPropagation:
             artifact_data,
             "VALIDATION_ERROR",
             message_substr="creatives",
+            recovery="correctable",
         )
 
     async def test_create_media_buy_response_includes_all_adcp_fields(self, handler, test_tenant, test_principal):
@@ -491,7 +493,7 @@ class TestA2AErrorPropagation:
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
 
         # Full two-layer envelope on the wire.
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", recovery="correctable")
         # Per-error message enumerates the missing required fields.
         msg = artifact_data["errors"][0]["message"]
         detail = f"Per-error message must name all missing required fields, got: {msg}"
@@ -533,7 +535,7 @@ class TestA2AErrorPropagation:
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
 
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", recovery="correctable")
         # Per-error message enumerates ONLY the missing fields (not the provided media_buy_id).
         msg = artifact_data["errors"][0]["message"]
         assert "package_id" in msg and "creative_id" in msg, f"Per-error message must name missing fields, got: {msg}"
@@ -623,7 +625,7 @@ class TestA2AErrorPropagation:
         assert result.artifacts is not None and len(result.artifacts) > 0
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="media_buy_id")
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="media_buy_id", recovery="correctable")
 
     @pytest.fixture
     def active_media_buy(self, _seeded):
@@ -1019,7 +1021,7 @@ class TestA2AContextEcho:
         artifact_data = extract_data_from_artifact(result.artifacts[0])
 
         # Two-layer envelope present
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", recovery="correctable")
 
         # CRITICAL: context echoes at top-level of the envelope (NOT nested under errors[]).
         assert "context" in artifact_data, (
