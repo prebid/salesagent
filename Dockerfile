@@ -171,16 +171,15 @@ ENV SKIP_NGINX=false
 # Server-owned adapter schedulers replace the bundled supercronic inventory
 # sweep in the default container runtime. Operators can still opt back into
 # cron by overriding this, but should not run both mechanisms together.
-ENV SKIP_CRON=True
+ENV SKIP_CRON=false
 
 # Expose the unified python port directly. Fly.io / upstream proxy
 # talks to this port; no in-image reverse proxy.
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=5 \
-      CMD ["python", "scripts/healthcheck.py", "8000"]
-
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Use venv Python directly as entrypoint (prepares for hardened images that lack bash)
 ENTRYPOINT ["/app/.venv/bin/python", "scripts/deploy/run_all_services.py"]
