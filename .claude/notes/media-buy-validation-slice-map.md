@@ -78,3 +78,39 @@ refactor proves the wiring; "done" becomes binary, not a judgment of agent outpu
 The 4-transport `MediaBuyCreateEnv` (impl/a2a/mcp/rest, real DB via factories) is a
 sufficient net for an `_impl` change; the Docker/real-HTTP e2e transport is a
 separate, later investment (catches wire/serialization regressions only).
+
+## SDK-breakage spike (4.3.0 → 5.7.0)
+
+Ran `adcp==5.7.0` in a throwaway, measured, reverted.
+
+**Correction to the docs table:** `adcp==5.7.0` (latest *stable*) reports
+`spec 3.1.0-beta.3` — i.e., the latest stable SDK already targets **3.1**, the same
+spec the feature files use. The `docs/adcp-spec-version.md` mapping (5.x = 3.0.7) is
+stale. So a 3.1-aligned SDK is a **stable release**, not a 6.x beta. Resolves cleanly
+(transitively bumps mcp 1.25→1.27.2).
+
+**Breakage surface (bounded — days, not weeks):**
+- **34 unit collection errors**, dominated by **one root cause**: `Account` moved out
+  of `adcp.types.generated_poc.account.sync_accounts_request` (still exported at the
+  public `adcp.types.Account`). We import adcp via the **fragile deep generated path
+  in 85 sites** — that's the real liability the spike exposed.
+- **5 contract-drift failures** (`test_adcp_contract`): request/response shapes changed
+  in 3.1 (sync_creatives, list_creatives, get_products, task_status, all-request-match).
+  Reconcile our extending schemas with 5.7's models.
+- **1 schema-redefinition guard**: 5.7's `GetMediaBuyDeliveryRequest` now *has*
+  `time_granularity`/`include_window_breakdown` — fields we hand-declared. The guard
+  says delete our redeclarations. **This is the thesis confirmed: the SDK subsumes
+  what we hand-rolled.**
+- **1 spec-version guard**: expected — bump `EXPECTED_SPEC_VERSION` 3.0.1 → 3.1.0-beta.3.
+
+**Verdict:** SDK-first is viable and confirms the strategy. The dominant effort is
+**hygiene that pays off regardless**: repoint the 85 deep `generated_poc` imports to
+the public `adcp.types` (decouples us from SDK internals → future upgrades become
+trivial). Then reconcile ~5 schema-drift areas, delete the now-redundant hand-rolled
+fields, bump the spec-version constant. Only caveat: the *spec* is 3.1-beta (the SDK
+release is stable, and the feature files already target it).
+
+**Revised sequence:** (1) map ✓ · (2) **SDK upgrade 4.3→5.7** — repoint deep imports,
+reconcile schema drift, delete hand-rolled fields/validation the models now enforce;
+net with the protocol-level scenarios · (3) extract shared `validate_business_rules()`;
+net with business-rule scenarios.
