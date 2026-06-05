@@ -215,7 +215,7 @@ async def test_create_accepts_property_list_when_adapter_supports(capability_ten
     # *boundary check* doesn't fire, not that the mock adapter creates a
     # real media buy.
     try:
-        await _create_media_buy_impl(req=request, identity=_make_identity())
+        result = await _create_media_buy_impl(req=request, identity=_make_identity())
     except AdCPCapabilityNotSupportedError as e:
         pytest.fail(
             "Adapter declared supports_property_list_targeting=True but the "
@@ -223,6 +223,10 @@ async def test_create_accepts_property_list_when_adapter_supports(capability_ten
             "This indicates raise_if_property_list_unsupported is not honoring the "
             "ClassVar override."
         )
+    assert result.response is not None, (
+        "boundary did not fire, but _impl must return a materialized "
+        f"CreateMediaBuyResult (guards a missing await / silent None); got {result!r}"
+    )
 
 
 @pytest.mark.requires_db
@@ -255,9 +259,12 @@ async def test_create_accepts_request_without_property_list_on_unsupported_adapt
     # specifically must not fire. Downstream failures are not this test's
     # contract.
     try:
-        await _create_media_buy_impl(req=request, identity=_make_identity())
+        result = await _create_media_buy_impl(req=request, identity=_make_identity())
     except AdCPCapabilityNotSupportedError as e:
         pytest.fail(f"Boundary check raised on a request without property_list — false positive. field={e.field!r}")
+    assert result.response is not None, (
+        f"boundary did not fire, but _impl must return a materialized result; got {result!r}"
+    )
 
 
 # ─── update_media_buy boundary check (create/update symmetry) ───────────

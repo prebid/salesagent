@@ -11,10 +11,8 @@ from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.property_list_resolver import resolve_property_list_typed_sync
 from src.core.schemas import *
 from src.services.kevel_site_resolver import (
-    SUPPORTED_IDENTIFIER_TYPES,
     KevelSiteResolver,
     ResolvedSiteIds,
-    identifier_type_str,
 )
 
 
@@ -57,9 +55,12 @@ class Kevel(AdServerAdapter):
         self.userdb_enabled = self.config.get("userdb_enabled", False)
         self.frequency_capping_enabled = self.config.get("frequency_capping_enabled", False)
 
+        # Annotate once above the branch so both arms share the type and the
+        # ``self._site_resolver is None`` guard in _resolve_property_list reads
+        # as the type-narrowing it is, not a disguised ``if self.dry_run``.
+        self._site_resolver: KevelSiteResolver | None = None
         if self.dry_run:
             self.log("Running in dry-run mode - Kevel API calls will be simulated", dry_run_prefix=False)
-            self._site_resolver: KevelSiteResolver | None = None
         elif not self.network_id or not self.api_key:
             raise ValueError("Kevel config is missing 'network_id' or 'api_key'")
         else:
@@ -104,11 +105,7 @@ class Kevel(AdServerAdapter):
         if self._site_resolver is None:
             # Dry-run: identifier-type validation only, no Kevel /v1/site HTTP.
             identifiers = resolve_property_list_typed_sync(ref)
-            unsupported_types: set[str] = set()
-            for ident in identifiers:
-                ident_type = identifier_type_str(ident)
-                if ident_type not in SUPPORTED_IDENTIFIER_TYPES:
-                    unsupported_types.add(ident_type)
+            unsupported_types = KevelSiteResolver.classify_identifier_types(identifiers)
             resolved = ResolvedSiteIds(site_ids=set(), unsupported_types=unsupported_types, unresolvable_values=[])
         else:
             resolved = self._site_resolver.resolve(ref)

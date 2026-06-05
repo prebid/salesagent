@@ -255,8 +255,13 @@ class TestSiteIndexCache:
 
         assert fetch_mock.call_count == 2
 
-    def test_concurrent_cold_cache_resolves_share_same_lookup(self):
+    def test_concurrent_cold_cache_resolves_converge_on_coherent_state(self):
         """Two threads racing on a cold cache produce a consistent final state.
+
+        ``fetch`` call-count is deliberately NOT asserted: the production design
+        keeps the HTTP fetch OUTSIDE ``_cache_lock``, so a cold-cache stampede
+        (both threads fetching) is acceptable. This test pins the atomic,
+        torn-read-free cache write under concurrency — not single-fetch.
 
         ``_cache_lock`` guards cache reads/writes; HTTP stays OUTSIDE the
         lock so two threads on a cold cache may still both fetch (acceptable
@@ -305,14 +310,15 @@ class TestSiteIndexCache:
         cached_lookup, _expires_at = KevelSiteResolver._site_cache[cache_key]
         assert cached_lookup == {"espn.com": 42}, f"Cache state torn after concurrent writes: {cached_lookup!r}"
 
-    def test_concurrent_expired_cache_drop_does_not_raise(self):
-        """Concurrent expiry drops use ``pop`` not ``del`` so a second thread
-        finding an already-popped key cannot ``KeyError``.
+    def test_sequential_expired_cache_redrop_does_not_raise(self):
+        """The expiry-drop branch uses ``pop(key, None)`` not ``del``, so
+        re-entering it after the key is already gone cannot ``KeyError``.
 
-        Both threads call ``self._site_cache.pop(cache_key, None)`` which is
-        a no-op on the second pop. Using ``del`` instead would raise
-        ``KeyError`` when a second thread reaches the expiry branch after
-        the first has already removed the key.
+        Driven with two sequential resolves (the first repopulates inside the
+        lock; the second re-enters the expiry path) — enough to prove the
+        pop-branch is safe. Concurrent safety end-to-end is pinned by the
+        threaded cold-cache test above; using ``del`` here would raise
+        ``KeyError`` once the key was already removed.
         """
         resolver = _resolver()
         cache_key = (resolver.base_url, resolver.network_id)

@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 # Kevel identifier types we can compile to native siteIds.
 # Domain/subdomain map cleanly to Site.Url; other types (ios_bundle, podcast,
 # etc.) would need separate Kevel inventory primitives that aren't wired here.
-# Exposed publicly so the Kevel adapter's dry-run path can type-check
-# identifiers without instantiating a resolver (no HTTP needed).
+# Internal to this module: the adapter classifies identifier types via
+# ``KevelSiteResolver.classify_identifier_types`` rather than importing this set.
 SUPPORTED_IDENTIFIER_TYPES: frozenset[str] = frozenset({"domain", "subdomain"})
 
 
@@ -120,19 +120,31 @@ class KevelSiteResolver:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.timeout_seconds = timeout_seconds
 
+    @classmethod
+    def classify_identifier_types(cls, identifiers: list[Identifier]) -> set[str]:
+        """Return the identifier types Kevel cannot compile to siteIds.
+
+        Shared by the live ``resolve()`` and the adapter's dry-run branch so the
+        membership check against ``SUPPORTED_IDENTIFIER_TYPES`` lives in exactly
+        one place (callable without instantiating a resolver — no HTTP needed).
+        """
+        return {
+            ident_type
+            for ident in identifiers
+            if (ident_type := identifier_type_str(ident)) not in SUPPORTED_IDENTIFIER_TYPES
+        }
+
     def resolve(self, ref: PropertyListReference) -> ResolvedSiteIds:
         """Resolve a property list reference to the set of Kevel siteIds it covers."""
         identifiers = resolve_property_list_typed_sync(ref)
         site_lookup = self._get_site_lookup()
 
+        unsupported_types = self.classify_identifier_types(identifiers)
         site_ids: set[int] = set()
-        unsupported_types: set[str] = set()
         unresolvable_values: list[str] = []
 
         for ident in identifiers:
-            ident_type = identifier_type_str(ident)
-            if ident_type not in SUPPORTED_IDENTIFIER_TYPES:
-                unsupported_types.add(ident_type)
+            if identifier_type_str(ident) not in SUPPORTED_IDENTIFIER_TYPES:
                 continue
             normalized = _normalize_domain(ident.value)
             site_id = site_lookup.get(normalized)
@@ -208,37 +220,45 @@ class KevelSiteResolver:
         return lookup
 
     def _fetch_all_sites(self) -> list[dict]:
-        """Page through Kevel ``GET /v1/site`` and return the aggregated list."""
+        """Page through Kevel ``GET /v1/site`` and return the aggregated list.
+
+        The HTTP client is created once outside the pagination loop so pages
+        reuse the connection (keep-alive). A per-page client would reconnect
+        every page, defeating the cache lock that exists to amortize this fetch.
+        """
         sites: list[dict] = []
         page = 1
-        while True:
-            url = f"{self.base_url}/site?page={page}&pageSize={_KEVEL_SITE_PAGE_SIZE}"
-            try:
-                with httpx.Client(timeout=self.timeout_seconds) as client:
-                    response = client.get(url, headers={"X-Adzerk-ApiKey": self.api_key})
+        with httpx.Client(
+            timeout=self.timeout_seconds,
+            headers={"X-Adzerk-ApiKey": self.api_key},
+        ) as client:
+            while True:
+                url = f"{self.base_url}/site?page={page}&pageSize={_KEVEL_SITE_PAGE_SIZE}"
+                try:
+                    response = client.get(url)
                     response.raise_for_status()
-            except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
-                raise AdCPAdapterError(
-                    f"Failed to fetch Kevel site list (network {self.network_id}, page {page}): {exc}"
-                ) from exc
+                except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
+                    raise AdCPAdapterError(
+                        f"Failed to fetch Kevel site list (network {self.network_id}, page {page}): {exc}"
+                    ) from exc
 
-            payload = response.json()
-            items = payload.get("items")
-            total_pages = payload.get("totalPages")
-            if items is None or total_pages is None:
-                # Distinguish a malformed page (missing/null key) from a
-                # legitimately empty one (``items: []``). Silently coercing a
-                # malformed page to "no sites / single page" would cache a
-                # truncated site index, making every domain identifier resolve
-                # to no-match — a quiet failure. Raise instead.
-                raise AdCPAdapterError(
-                    f"Malformed Kevel site list response (network {self.network_id}, page {page}): "
-                    f"expected 'items' and 'totalPages', got keys {sorted(payload.keys())}"
-                )
-            sites.extend(items)
-            if page >= total_pages:
-                break
-            page += 1
+                payload = response.json()
+                items = payload.get("items")
+                total_pages = payload.get("totalPages")
+                if items is None or total_pages is None:
+                    # Distinguish a malformed page (missing/null key) from a
+                    # legitimately empty one (``items: []``). Silently coercing a
+                    # malformed page to "no sites / single page" would cache a
+                    # truncated site index, making every domain identifier resolve
+                    # to no-match — a quiet failure. Raise instead.
+                    raise AdCPAdapterError(
+                        f"Malformed Kevel site list response (network {self.network_id}, page {page}): "
+                        f"expected 'items' and 'totalPages', got keys {sorted(payload.keys())}"
+                    )
+                sites.extend(items)
+                if page >= total_pages:
+                    break
+                page += 1
         return sites
 
     @classmethod
