@@ -17,6 +17,8 @@ beads: beads-xw7 (universal no-raw-select guard)
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ── Exempt directories and files ────────────────────────────────────
@@ -435,6 +437,7 @@ def _find_raw_selects() -> list[tuple[str, str, str, int]]:
 class TestNoRawSelectOutsideRepositories:
     """No raw select(OrmModel) outside repository/infrastructure files."""
 
+    @pytest.mark.arch_guard
     def test_no_new_raw_selects(self):
         """New raw select(OrmModel) calls fail immediately.
 
@@ -465,6 +468,7 @@ class TestNoRawSelectOutsideRepositories:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection).
 
@@ -483,6 +487,7 @@ class TestNoRawSelectOutsideRepositories:
                 msg_lines.append(f"  ({f!r}, {fn!r}),")
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_violation_count_matches(self):
         """Total violations match expected count.
 

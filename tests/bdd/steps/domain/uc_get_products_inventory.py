@@ -188,7 +188,7 @@ def then_has_property_ids(ctx: dict, expected: str) -> None:
     inner = _get_first_prop(ctx)
     ids = getattr(inner, "property_ids", None) or (inner.get("property_ids") if isinstance(inner, dict) else None)
     assert ids is not None, "property_ids is None"
-    id_strings = [str(pid.root) if hasattr(pid, "root") else str(pid) for pid in ids]
+    id_strings = [str(pid.root) if hasattr(pid, "root") else str(pid) for pid in ids]  # noqa: rootmodel
     assert expected in id_strings, f"Expected {expected!r} in property_ids, got {id_strings}"
 
 
@@ -198,7 +198,7 @@ def then_has_property_tags(ctx: dict, expected: str) -> None:
     inner = _get_first_prop(ctx)
     tags = getattr(inner, "property_tags", None) or (inner.get("property_tags") if isinstance(inner, dict) else None)
     assert tags is not None, "property_tags is None"
-    tag_strings = [str(t.root) if hasattr(t, "root") else str(t) for t in tags]
+    tag_strings = [str(t.root) if hasattr(t, "root") else str(t) for t in tags]  # noqa: rootmodel
     assert expected in tag_strings, f"Expected {expected!r} in property_tags, got {tag_strings}"
 
 

@@ -485,6 +485,27 @@ uv run alembic merge -m "Merge migration heads" heads
 The smoke test in `tests/smoke/test_database_migrations.py` also checks this,
 providing coverage in the CI smoke-tests job before unit tests run.
 
+### PR 4 Hook-Relocation Guards (issue #1234)
+
+These guards replaced grep-based pre-commit hooks. Run via `pytest -m arch_guard`
+or as part of `make quality`.
+
+| Test File | Replaces Hook | What It Enforces |
+|-----------|---------------|------------------|
+| `test_architecture_no_tenant_config.py` | `no-tenant-config` | No `tenant.config` / `tenant["config"]` in `src/` |
+| `test_architecture_jsontype_columns.py` | `enforce-jsontype` | JSON columns use `JSONType`, not plain `JSON` |
+| `test_architecture_no_defensive_rootmodel.py` | `check-rootmodel-access` | No `hasattr(x, "root")` without `# noqa: rootmodel` |
+| `test_architecture_import_usage.py` | `check-import-usage` | Tree-wide import usage check for `src/` |
+| `test_architecture_query_type_safety.py` | `enforce-sqlalchemy-2-0` (partial) | `test_no_legacy_session_query`, `test_models_use_mapped_not_column` |
+| `test_architecture_pre_commit_hook_count.py` | — | Commit-stage hook count ≤12 (D27) |
+| `test_architecture_pre_commit_no_additional_deps.py` | — | No `additional_dependencies` in pre-commit config (PR 2) |
+
+Shared AST helpers live in `tests/unit/_architecture_helpers.py`. Guards use the
+`@pytest.mark.arch_guard` marker (distinct from the entity-marker `architecture`).
+
+CI-only hook enforcement moved to `make quality-ci`: duplication, GAM auth support,
+response attribute access, roundtrip tests. See `.pre-commit-coverage-map.yml`.
+
 ## Adding a New Guard
 
 1. Create `tests/unit/test_architecture_{name}.py`

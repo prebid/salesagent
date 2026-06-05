@@ -23,6 +23,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
 # Exception types that are acceptable to catch with pass/continue
@@ -113,6 +115,7 @@ def _scan_file(filepath: Path) -> list[tuple[str, int, str]]:
     return violations
 
 
+@pytest.mark.arch_guard
 def test_no_silent_broad_except_in_src():
     """No except Exception: pass/continue without logging in src/."""
     all_violations = []
@@ -135,6 +138,7 @@ def test_no_silent_broad_except_in_src():
     )
 
 
+@pytest.mark.arch_guard
 def test_known_violations_not_stale():
     """Every allowlisted violation must still exist in the source."""
     all_violations = []

@@ -24,6 +24,8 @@ beads: beads-bou.2 (guard: WorkflowStep/ObjectWorkflowMapping queries without Co
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 WORKFLOW_REPO_FILE = "src/core/database/repositories/workflow.py"
@@ -99,6 +101,7 @@ class TestWorkflowRepositoryTenantIsolation:
     read or modify another tenant's workflow steps.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_unscoped_workflow_queries(self):
         """No new WorkflowRepository methods query WorkflowStep/ObjectWorkflowMapping
         without a DBContext join."""
@@ -130,6 +133,7 @@ class TestWorkflowRepositoryTenantIsolation:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection).
 

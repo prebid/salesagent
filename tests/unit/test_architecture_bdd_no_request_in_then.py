@@ -53,6 +53,8 @@ from __future__ import annotations
 
 import ast
 
+import pytest
+
 from tests.unit._bdd_guard_helpers import iter_then_functions
 
 # ── Dispatch methods that indicate a When action ────────────────────────
@@ -170,6 +172,7 @@ class TestBddNoDispatchInThen:
     the scenario should have a separate When step for the second request.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_dispatch_in_then(self) -> None:
         """No Then step dispatches a request outside the allowlist."""
         new_violations: list[str] = []
@@ -200,6 +203,7 @@ class TestBddNoDispatchInThen:
 
         assert not errors, "\n\n".join(errors)
 
+    @pytest.mark.arch_guard
     def test_no_new_assert_on_request(self) -> None:
         """No Then step asserts on request-derived values against constants.
 

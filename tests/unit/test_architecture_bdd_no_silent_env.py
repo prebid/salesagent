@@ -20,6 +20,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # ── Pre-existing violations ──────────────────────────────────────────────
@@ -107,6 +109,7 @@ class TestBddNoCtxGetEnv:
     Using ctx.get("env") masks setup failures by returning None.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_ctx_get_env(self):
         """No step function uses ctx.get("env") outside the allowlist."""
         violations = _scan_bdd_steps(_has_ctx_get_env, 'ctx.get("env")')
@@ -117,6 +120,7 @@ class TestBddNoCtxGetEnv:
             + '\n\nThe harness env is guaranteed by the autouse fixture. Use ctx["env"].'
         )
 
+    @pytest.mark.arch_guard
     def test_ctx_get_env_allowlist_not_stale(self):
         """Every allowlisted entry must still exist (forces cleanup)."""
         current = set(_scan_bdd_steps(_has_ctx_get_env, 'ctx.get("env")'))
@@ -133,6 +137,7 @@ class TestBddNoHasattrEnv:
     xfailed at collection time — not silently degraded at step execution.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_hasattr_env(self):
         """No step function uses hasattr(env, ...) outside the allowlist."""
         violations = _scan_bdd_steps(_has_hasattr_env, "hasattr(env, ...)")
@@ -143,6 +148,7 @@ class TestBddNoHasattrEnv:
             + "\n\nIf the env doesn't support a method, xfail the scenario. Don't silently skip."
         )
 
+    @pytest.mark.arch_guard
     def test_hasattr_env_allowlist_not_stale(self):
         """Every allowlisted entry must still exist (forces cleanup)."""
         current = set(_scan_bdd_steps(_has_hasattr_env, "hasattr(env, ...)"))

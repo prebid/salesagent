@@ -14,23 +14,23 @@ class TestBareRegionCodeConversion:
     def test_bare_codes_get_us_prefix(self):
         t = Targeting(**{"geo_region_any_of": ["CA", "NY"]})
         assert t.geo_regions is not None
-        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions]
+        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions]  # noqa: rootmodel
         assert codes == ["US-CA", "US-NY"]
 
     def test_already_iso_codes_unchanged(self):
         t = Targeting(**{"geo_region_any_of": ["US-CA", "US-NY"]})
-        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions]
+        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions]  # noqa: rootmodel
         assert codes == ["US-CA", "US-NY"]
 
     def test_mixed_bare_and_iso(self):
         t = Targeting(**{"geo_region_any_of": ["CA", "US-NY"]})
-        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions]
+        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions]  # noqa: rootmodel
         assert codes == ["US-CA", "US-NY"]
 
     def test_exclude_variant_converted(self):
         t = Targeting(**{"geo_region_none_of": ["TX", "FL"]})
         assert t.geo_regions_exclude is not None
-        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions_exclude]
+        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions_exclude]  # noqa: rootmodel
         assert codes == ["US-TX", "US-FL"]
 
 
@@ -40,26 +40,26 @@ class TestBothPresentGuard:
     def test_country_v2_dropped_when_v3_present(self):
         t = Targeting(**{"geo_country_any_of": ["US"], "geo_countries": ["CA"]})
         # v3 preserved
-        codes = [c.root if hasattr(c, "root") else str(c) for c in t.geo_countries]
+        codes = [c.root if hasattr(c, "root") else str(c) for c in t.geo_countries]  # noqa: rootmodel
         assert codes == ["CA"]
         # v2 not in model_extra
         assert "geo_country_any_of" not in (t.model_extra or {})
 
     def test_country_exclude_v2_dropped(self):
         t = Targeting(**{"geo_country_none_of": ["RU"], "geo_countries_exclude": ["CN"]})
-        codes = [c.root if hasattr(c, "root") else str(c) for c in t.geo_countries_exclude]
+        codes = [c.root if hasattr(c, "root") else str(c) for c in t.geo_countries_exclude]  # noqa: rootmodel
         assert codes == ["CN"]
         assert "geo_country_none_of" not in (t.model_extra or {})
 
     def test_region_v2_dropped_when_v3_present(self):
         t = Targeting(**{"geo_region_any_of": ["CA"], "geo_regions": ["US-NY"]})
-        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions]
+        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions]  # noqa: rootmodel
         assert codes == ["US-NY"]
         assert "geo_region_any_of" not in (t.model_extra or {})
 
     def test_region_exclude_v2_dropped(self):
         t = Targeting(**{"geo_region_none_of": ["TX"], "geo_regions_exclude": ["US-FL"]})
-        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions_exclude]
+        codes = [r.root if hasattr(r, "root") else str(r) for r in t.geo_regions_exclude]  # noqa: rootmodel
         assert codes == ["US-FL"]
         assert "geo_region_none_of" not in (t.model_extra or {})
 
@@ -89,7 +89,7 @@ class TestBothPresentGuard:
 
     def test_empty_v2_list_also_dropped(self):
         t = Targeting(**{"geo_country_any_of": [], "geo_countries": ["US"]})
-        codes = [c.root if hasattr(c, "root") else str(c) for c in t.geo_countries]
+        codes = [c.root if hasattr(c, "root") else str(c) for c in t.geo_countries]  # noqa: rootmodel
         assert codes == ["US"]
         assert "geo_country_any_of" not in (t.model_extra or {})
 

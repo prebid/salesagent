@@ -16,6 +16,8 @@ import importlib
 import inspect
 from pathlib import Path
 
+import pytest
+
 TOOLS_DIR = Path("src/core/tools")
 
 # All _impl functions and their modules
@@ -171,6 +173,7 @@ def _check_wrapper_completeness(
 class TestBoundaryCompleteness:
     """MCP and A2A wrappers must pass all _impl parameters at call sites."""
 
+    @pytest.mark.arch_guard
     def test_mcp_wrappers_pass_all_impl_params(self):
         """Each MCP wrapper must pass all non-identity _impl parameters."""
         violations = []
@@ -183,6 +186,7 @@ class TestBoundaryCompleteness:
 
         assert not violations, "MCP wrappers dropping _impl parameters:\n" + "\n".join(f"  - {v}" for v in violations)
 
+    @pytest.mark.arch_guard
     def test_a2a_wrappers_pass_all_impl_params(self):
         """Each A2A raw wrapper must pass all non-identity _impl parameters."""
         violations = []
@@ -195,6 +199,7 @@ class TestBoundaryCompleteness:
 
         assert not violations, "A2A wrappers dropping _impl parameters:\n" + "\n".join(f"  - {v}" for v in violations)
 
+    @pytest.mark.arch_guard
     def test_known_violations_are_still_violations(self):
         """Known violations in the allowlist must still be actual violations.
 

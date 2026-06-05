@@ -14,6 +14,8 @@ import ast
 import glob
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
@@ -575,6 +577,7 @@ class TestImplNoDirectDbSession:
     repositories and call typed methods, not raw session operations.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_get_db_session_in_impl(self):
         """No _impl function calls get_db_session() outside the allowlist."""
         all_violations = []
@@ -596,6 +599,7 @@ class TestImplNoDirectDbSession:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = set()
@@ -621,6 +625,7 @@ class TestIntegrationTestsNoInlineSessionAdd:
     not scattered across test bodies as raw ORM model construction.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_session_add_in_tests(self):
         """No test function calls session.add() outside the allowlist."""
         all_violations = []
@@ -645,6 +650,7 @@ class TestIntegrationTestsNoInlineSessionAdd:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = set()

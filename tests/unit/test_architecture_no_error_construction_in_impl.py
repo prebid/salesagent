@@ -25,6 +25,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 # Pattern A (``Error(code=...)`` construction in business logic) is fully drained:
 # the cap is empty, so any new site fails the guard immediately. The handful of
 # legitimate per-item advisory ``Error(code=...)`` sites in success envelopes
@@ -81,6 +83,7 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
 class TestNoErrorConstructionInImpl:
     """Pattern A (``Error(code=...)`` in business logic) is forbidden and shrinking."""
 
+    @pytest.mark.arch_guard
     def test_pattern_a_sites_within_caps(self):
         """Every scanned file must be at or below its allowlisted cap. New files fail immediately."""
         from tests.unit._per_file_cap_guard import assert_per_file_caps
@@ -94,12 +97,14 @@ class TestNoErrorConstructionInImpl:
             rel=_rel,
         )
 
+    @pytest.mark.arch_guard
     def test_capped_files_still_exist(self):
         """Stale-cap detection: if a file in the cap dict no longer exists, the cap is stale."""
         from tests.unit._per_file_cap_guard import assert_capped_files_still_exist
 
         assert_capped_files_still_exist(PATTERN_A_PER_FILE_CAP, "PATTERN_A_PER_FILE_CAP", repo_root=REPO_ROOT)
 
+    @pytest.mark.arch_guard
     def test_caps_only_shrink(self):
         """Sites in capped files must equal the cap exactly (or be below it).
 

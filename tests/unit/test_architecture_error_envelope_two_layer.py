@@ -22,6 +22,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 # Anchor scan paths on this file's location so guards work regardless of pytest's
 # working directory (CI runs from repo root; agents/IDEs may launch from a subdir).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -110,6 +112,7 @@ def _function_calls_builder(filepath: str, func_name: str) -> bool:
 class TestBoundaryTranslatorsUseEnvelope:
     """Each boundary must call build_two_layer_error_envelope()."""
 
+    @pytest.mark.arch_guard
     def test_mcp_boundary_uses_envelope(self):
         """``_translate_to_tool_error`` must call build_two_layer_error_envelope()."""
         path, fn = "src/core/tool_error_logging.py", "_translate_to_tool_error"
@@ -118,6 +121,7 @@ class TestBoundaryTranslatorsUseEnvelope:
             f"carries both adcp_error.code and errors[0].code (spec 3.0.0)."
         )
 
+    @pytest.mark.arch_guard
     def test_a2a_boundary_uses_envelope(self):
         """``AdCPRequestHandler._build_error_envelope`` must call build_two_layer_error_envelope().
 
@@ -130,6 +134,7 @@ class TestBoundaryTranslatorsUseEnvelope:
             f"carries the spec two-layer envelope alongside legacy keys."
         )
 
+    @pytest.mark.arch_guard
     def test_rest_boundary_uses_envelope(self):
         """``adcp_error_handler`` must call build_two_layer_error_envelope()."""
         path, fn = "src/app.py", "adcp_error_handler"
@@ -137,6 +142,7 @@ class TestBoundaryTranslatorsUseEnvelope:
             f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so REST responses have the spec two-layer envelope shape."
         )
 
+    @pytest.mark.arch_guard
     def test_envelope_builder_exported(self):
         """The envelope builder is the single source of truth — verify it exists and is callable."""
         from src.core.exceptions import build_two_layer_error_envelope

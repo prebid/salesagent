@@ -18,6 +18,8 @@ beads: salesagent-hr8n
 import ast
 from pathlib import Path
 
+import pytest
+
 TOOLS_DIR = Path(__file__).resolve().parents[2] / "src" / "core" / "tools"
 
 BANNED_METHODS = {"model_dump", "model_dump_internal"}
@@ -70,6 +72,7 @@ def _find_model_dump_in_impl() -> list[tuple[str, int, str, str]]:
 class TestNoModelDumpInImpl:
     """_impl functions must not call .model_dump() or .model_dump_internal()."""
 
+    @pytest.mark.arch_guard
     def test_no_new_model_dump_violations(self):
         """No NEW .model_dump() calls in _impl functions beyond the known allowlist."""
         all_violations = _find_model_dump_in_impl()
@@ -84,6 +87,7 @@ class TestNoModelDumpInImpl:
             f"Serialization belongs in the transport wrapper, not business logic.\n" + "\n".join(new_violations)
         )
 
+    @pytest.mark.arch_guard
     def test_known_violations_not_stale(self):
         """Every entry in KNOWN_VIOLATIONS must still exist in the source.
 
@@ -100,6 +104,7 @@ class TestNoModelDumpInImpl:
             + "\n".join(f"  {path}:{line}" for path, line in sorted(stale))
         )
 
+    @pytest.mark.arch_guard
     def test_violation_count_documented(self):
         """Track the total violation count — should only decrease over time."""
         all_violations = _find_model_dump_in_impl()

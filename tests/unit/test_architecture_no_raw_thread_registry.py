@@ -14,6 +14,8 @@ beads: salesagent-x2h.3 (structural guard — ThreadRegistry consolidation)
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ThreadRegistry's own module is the ONLY allowed dict+Lock pairing.
@@ -87,6 +89,7 @@ def _find_raw_thread_registries() -> list[str]:
     return violations
 
 
+@pytest.mark.arch_guard
 def test_no_raw_thread_dict_with_lock():
     """All thread registries must use ThreadRegistry, not raw dict + Lock."""
     violations = sorted(_find_raw_thread_registries())
@@ -97,6 +100,7 @@ def test_no_raw_thread_dict_with_lock():
     )
 
 
+@pytest.mark.arch_guard
 def test_allowlist_has_no_stale_entries():
     """Allowlisted files that no longer violate must be removed from the allowlist."""
     violations = set(_find_raw_thread_registries())

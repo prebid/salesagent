@@ -6,6 +6,8 @@ accidental renames that would silently break protection coverage.
 
 from __future__ import annotations
 
+import pytest
+
 from scripts.ci.workflow_helpers import load_ci_workflow, rendered_ci_check_names
 
 REQUIRED_RENDERED_CHECKS = {
@@ -32,11 +34,13 @@ REQUIRED_RENDERED_CHECKS = {
 }
 
 
+@pytest.mark.arch_guard
 def test_ci_workflow_name_is_frozen() -> None:
     workflow = load_ci_workflow()
     assert workflow["name"] == "CI", "Workflow name must remain 'CI' for stable rendered check names."
 
 
+@pytest.mark.arch_guard
 def test_required_check_names_are_frozen() -> None:
     rendered = rendered_ci_check_names()
 

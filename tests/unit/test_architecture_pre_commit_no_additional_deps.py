@@ -13,12 +13,15 @@ Fixed in PR 2 of issue #1234.
 
 from pathlib import Path
 
+import pytest
+
 PRE_COMMIT_CONFIG = Path(__file__).resolve().parents[2] / ".pre-commit-config.yaml"
 
 
 class TestPreCommitNoAdditionalDeps:
     """Enforce ADR-001: no additional_dependencies in .pre-commit-config.yaml."""
 
+    @pytest.mark.arch_guard
     def test_no_additional_dependencies(self):
         """Fail if any hook uses additional_dependencies.
 

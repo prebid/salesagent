@@ -10,6 +10,9 @@ quality-ci:
 	uv run ruff check .
 	uv run mypy src/ --config-file=mypy.ini
 	uv run python .pre-commit-hooks/check_code_duplication.py
+	uv run python .pre-commit-hooks/check-gam-auth-support.py
+	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
+	uv run python .pre-commit-hooks/check_roundtrip_tests.py
 
 quality:
 	$(MAKE) quality-ci

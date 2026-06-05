@@ -15,6 +15,8 @@ beads: salesagent-v0kb (structural-guard epic)
 import importlib
 import inspect
 
+import pytest
+
 
 def _get_schemas_source_files() -> list["Path"]:
     """Get all Python source files in the schemas package.
@@ -112,6 +114,7 @@ def _get_class_own_field_names(class_name: str) -> set[str]:
 class TestSchemaInheritance:
     """Every local schema class that has a Library* counterpart must inherit from it."""
 
+    @pytest.mark.arch_guard
     def test_all_library_types_have_local_subclass(self):
         """For each Library* import, a local class with that name exists and inherits from it."""
         mapping = _get_library_type_mapping()
@@ -151,6 +154,7 @@ class TestSchemaInheritance:
             f"  - {v}" for v in violations
         )
 
+    @pytest.mark.arch_guard
     def test_no_field_redefinition_in_subclasses(self):
         """Local subclasses should not redefine fields that exist in the library parent.
 

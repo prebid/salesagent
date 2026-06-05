@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import ast
 
+import pytest
+
 from tests.unit._bdd_guard_helpers import iter_then_functions
 
 # ── Allowlists (ratcheting — may only shrink) ───────────────────────────
@@ -267,6 +269,7 @@ class TestBddAssertionStrength:
     assertions in BDD Then steps.
     """
 
+    @pytest.mark.arch_guard
     def test_no_assert_hasattr(self) -> None:
         """``assert hasattr(obj, attr)`` is always True on Pydantic models.
 
@@ -275,6 +278,7 @@ class TestBddAssertionStrength:
         """
         _assert_no_violations(_find_assert_hasattr, _HASATTR_ALLOWLIST, "assert-hasattr", "_HASATTR_ALLOWLIST")
 
+    @pytest.mark.arch_guard
     def test_no_getattr_existence_only(self) -> None:
         """``assert getattr(obj, attr, None) is not None`` proves presence, not correctness.
 
@@ -287,6 +291,7 @@ class TestBddAssertionStrength:
             "_GETATTR_EXISTENCE_ALLOWLIST",
         )
 
+    @pytest.mark.arch_guard
     def test_no_count_only_assertions(self) -> None:
         """``assert len(items) > 0`` proves existence, not correctness.
 
@@ -300,6 +305,7 @@ class TestBddAssertionStrength:
             "_COUNT_ONLY_ALLOWLIST",
         )
 
+    @pytest.mark.arch_guard
     def test_no_ctx_error_fallback(self) -> None:
         """``if ctx.get("error"): return`` checks test harness, not production code.
 

@@ -25,6 +25,7 @@ REQUIRED_SUMMARY_GATES = frozenset({"unit-tests", "integration-tests", "e2e-test
 class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
 
+    @pytest.mark.arch_guard
     def test_bdd_job_exists(self):
         """BDD aggregate + parallel shard jobs must exist in CI."""
         jobs = load_ci_workflow()["jobs"]
@@ -32,6 +33,7 @@ class TestCISuiteCoverage:
         assert "bdd-tests" in jobs, "No 'bdd-tests' aggregate job in .github/workflows/ci.yml."
         assert "bdd-tests-shard" in jobs, "No 'bdd-tests-shard' matrix job in .github/workflows/ci.yml."
 
+    @pytest.mark.arch_guard
     def test_bdd_shards_run_the_bdd_suite(self):
         """Each BDD shard must resolve paths via shard_paths and run pytest."""
         shard_job = load_ci_workflow()["jobs"]["bdd-tests-shard"]
@@ -47,12 +49,14 @@ class TestCISuiteCoverage:
             "bdd-tests-shard must invoke pytest (via _pytest composite or explicit run)."
         )
 
+    @pytest.mark.arch_guard
     def test_bdd_shards_have_postgres_service(self):
         """BDD harnesses use the integration_db fixture (real PostgreSQL)."""
         services = load_ci_workflow()["jobs"]["bdd-tests-shard"].get("services", {})
 
         assert "postgres" in services, "bdd-tests-shard has no postgres service."
 
+    @pytest.mark.arch_guard
     def test_bdd_aggregate_is_status_proxy_only(self):
         """Aggregate BDD job must gate shard status, not merge coverage."""
         aggregate = load_ci_workflow()["jobs"]["bdd-tests"]
@@ -62,6 +66,7 @@ class TestCISuiteCoverage:
             "bdd-tests aggregate must not merge coverage; that belongs in the Coverage job."
         )
 
+    @pytest.mark.arch_guard
     def test_admin_job_has_postgres_service(self):
         """Admin blueprint tests use integration_db and require PostgreSQL."""
         admin_job = load_ci_workflow()["jobs"]["admin-ui-tests"]
@@ -72,6 +77,7 @@ class TestCISuiteCoverage:
             "the integration_db fixture and require a real PostgreSQL instance."
         )
 
+    @pytest.mark.arch_guard
     def test_integration_job_uses_entity_shards(self):
         """Integration tests must run in parallel entity shards (legacy parity)."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
@@ -91,6 +97,7 @@ class TestCISuiteCoverage:
             "integration-tests must filter pytest with matrix.marker, not run the full suite serially."
         )
 
+    @pytest.mark.arch_guard
     def test_integration_shards_use_strict_partition(self):
         """Shards 2–4 must exclude earlier shard markers to avoid duplicate runs."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
@@ -105,6 +112,7 @@ class TestCISuiteCoverage:
         assert "and not media_buy" in markers["infra"]
         assert "and not delivery" in markers["infra"]
 
+    @pytest.mark.arch_guard
     def test_quality_gate_does_not_run_unit_tests(self):
         """Quality Gate runs static checks only; unit tests run once in unit-tests."""
         quality_job = load_ci_workflow()["jobs"]["quality-gate"]
@@ -113,6 +121,7 @@ class TestCISuiteCoverage:
         assert "make quality-ci" in run_steps, "quality-gate must invoke make quality-ci (no pytest)."
         assert "pytest" not in run_steps, "quality-gate must not re-run unit tests."
 
+    @pytest.mark.arch_guard
     def test_coverage_job_reuses_test_artifacts(self):
         """Coverage gate must not re-run pytest; it combines unit + BDD artifacts."""
         coverage_job = load_ci_workflow()["jobs"]["coverage"]
@@ -194,7 +203,6 @@ class TestCISuiteCoverage:
         run_steps = " ".join(str(step.get("run", "")) for step in type_check.get("steps", []))
         assert "make typecheck" in run_steps, "type-check job must run make typecheck for CI/local parity."
 
-    @pytest.mark.arch_guard
     @pytest.mark.arch_guard
     def test_smoke_tests_do_not_duplicate_skip_guard(self):
         """Skip-decorator enforcement belongs in the smoke suite, not a workflow grep step."""

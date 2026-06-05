@@ -16,6 +16,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Threshold: flag when N or more functions share the same body
@@ -115,6 +117,7 @@ def _scan_bdd_steps() -> list[tuple[str, list[str]]]:
 class TestBddNoDuplicateSteps:
     """Structural guard: step functions must not have identical bodies."""
 
+    @pytest.mark.arch_guard
     def test_no_excessive_duplicate_step_bodies(self):
         """No more than 2 step functions should share the same implementation.
 

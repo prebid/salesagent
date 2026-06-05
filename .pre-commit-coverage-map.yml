@@ -1,0 +1,70 @@
+# Map of pre-commit hooks deleted/moved in PR 4 → replacement enforcement.
+no-tenant-config:
+  enforced_by: guard
+  location: tests/unit/test_architecture_no_tenant_config.py
+enforce-jsontype:
+  enforced_by: guard
+  location: tests/unit/test_architecture_jsontype_columns.py
+check-rootmodel-access:
+  enforced_by: guard
+  location: tests/unit/test_architecture_no_defensive_rootmodel.py
+enforce-sqlalchemy-2-0:
+  enforced_by: guard
+  location: tests/unit/test_architecture_query_type_safety.py::test_no_legacy_session_query
+check-import-usage:
+  enforced_by: guard
+  location: tests/unit/test_architecture_import_usage.py
+check-gam-auth-support:
+  enforced_by: ci-step
+  location: Makefile::quality-ci
+check-response-attribute-access:
+  enforced_by: ci-step
+  location: Makefile::quality-ci
+check-roundtrip-tests:
+  enforced_by: ci-step
+  location: Makefile::quality-ci
+check-code-duplication:
+  enforced_by: ci-step
+  location: Makefile::quality-ci
+check-migration-heads:
+  enforced_by: guard-existing
+  location: tests/unit/test_architecture_single_migration_head.py
+check-parameter-alignment:
+  enforced_by: guard-existing
+  location: tests/unit/test_architecture_boundary_completeness.py
+adcp-contract-tests:
+  enforced_by: pre-push + ci
+  location: stages_prepush + .github/workflows/ci.yml::schema-contract
+mcp-contract-validation:
+  enforced_by: pre-push + ci
+  location: stages_prepush + .github/workflows/ci.yml::schema-contract
+check-docs-links:
+  enforced_by: pre-push
+  location: stages_prepush
+check-route-conflicts:
+  enforced_by: pre-push
+  location: stages_prepush
+type-ignore-no-regression:
+  enforced_by: pre-push
+  location: stages_prepush
+no-skip-integration-v2:
+  enforced_by: deleted
+  location: dead-code (tests/integration_v2/ does not exist)
+mcp-endpoint-tests:
+  enforced_by: deleted
+  location: dead-echo (entry was a printed help message)
+suggest-test-factories:
+  enforced_by: deleted
+  location: advisory (never failed)
+pytest-unit:
+  enforced_by: deleted
+  location: redundant (CI / Unit Tests is authoritative)
+test-migrations:
+  enforced_by: deleted
+  location: dead (sqlite/migrate.py references removed)
+no-skip-tests:
+  enforced_by: consolidated
+  location: .pre-commit-hooks/check_repo_invariants.py
+no-fn-calls:
+  enforced_by: consolidated
+  location: .pre-commit-hooks/check_repo_invariants.py

@@ -28,6 +28,8 @@ beads: #1370 (split assertion guard), #1370 (bare assertion guard)
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = (ROOT / "tests",)
 
@@ -158,6 +160,7 @@ class TestNoWeakMockAssertions:
         mock_impl.assert_called_once_with(x, identity=identity)
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_split_assertions(self):
         """No new test functions use assert_called_once() + call_args together."""
         all_violations = []
@@ -182,6 +185,7 @@ class TestNoWeakMockAssertions:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection).
 
@@ -310,6 +314,7 @@ class TestNoBareAssertCalledOnce:
         mock_repo.update_status.assert_called_once_with("step_123", status="completed")
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_bare_assertions(self):
         """No new test functions use bare assert_called_once() without arg verification."""
         all_violations = []
@@ -337,6 +342,7 @@ class TestNoBareAssertCalledOnce:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection).
 
