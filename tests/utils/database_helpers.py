@@ -297,6 +297,47 @@ def add_targeting_test_product(
         return product
 
 
+def seed_property_list_capability_tenant(
+    session,
+    *,
+    tenant_id: str,
+    tenant_name: str,
+    subdomain: str,
+    access_token: str,
+    product_id: str,
+    product_name: str,
+    property_targeting_allowed: bool,
+) -> None:
+    """Shared seeder for property_list-capability integration tests.
+
+    Both ``test_property_targeting_allowed_enforcement.py`` (the product-flag
+    gate) and ``test_property_list_unsupported_capability.py``
+    (the adapter-capability gate) seed essentially the same shape:
+    a tenant + one (or more) targeting-test products whose
+    ``property_targeting_allowed`` setting controls whether the product-flag gate
+    fires before the adapter-capability gate. Extracting the call pair here keeps both
+    test files from carrying the same boilerplate and breaks the
+    R0801 duplicate-block match window.
+
+    Caller is responsible for ``session.commit()`` after returning so the
+    transaction boundary is explicit in the fixture body.
+    """
+    seed_targeting_test_tenant(
+        session,
+        tenant_id=tenant_id,
+        tenant_name=tenant_name,
+        subdomain=subdomain,
+        access_token=access_token,
+    )
+    add_targeting_test_product(
+        session,
+        tenant_id=tenant_id,
+        product_id=product_id,
+        name=product_name,
+        property_targeting_allowed=property_targeting_allowed,
+    )
+
+
 def seed_media_buy_with_package(
     session,
     *,

@@ -186,6 +186,14 @@ class AdServerAdapter(ABC):
     # Adapter capabilities - override in subclasses
     capabilities: AdapterCapabilities = AdapterCapabilities()
 
+    # Whether this adapter compiles AdCP targeting_overlay.property_list to native
+    # ad-server targeting. Default is False — adapters that silently drop
+    # property_list are explicitly unsupported per AdCP honest-declaration contract
+    # ("Each enabled adapter MUST translate OR raise UNSUPPORTED_FEATURE").
+    # Override to True only when the adapter has a working property_list
+    # compilation path (e.g. resolving the list to native publisher identifiers).
+    supports_property_list_targeting: ClassVar[bool] = False
+
     # Connection config schema - override in subclasses
     connection_config_class: type[BaseConnectionConfig] | None = BaseConnectionConfig
 
@@ -371,6 +379,14 @@ class AdServerAdapter(ABC):
                     )
 
         return errors
+
+    # property_list honest-declaration check lives in
+    # ``_create_media_buy_impl`` / ``_update_media_buy_impl`` via
+    # ``raise_if_property_list_unsupported``. Adapters declare their
+    # capability via the ``supports_property_list_targeting`` ClassVar
+    # above; the runtime guard fires at the _impl boundary, before any
+    # dry_run / approval / execution branch, so every transport (REST,
+    # A2A, MCP) and every adapter honors the contract uniformly.
 
     @abstractmethod
     def create_media_buy(

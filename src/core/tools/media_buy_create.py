@@ -142,7 +142,7 @@ from src.core.tools.financial_validation import validate_max_daily_package_spend
 from src.core.validation_helpers import format_validation_error
 from src.services.activity_feed import activity_feed
 from src.services.targeting_capabilities import (
-    property_list_unsupported_advisories,
+    raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
     validate_geo_overlap,
     validate_overlay_targeting,
@@ -1486,19 +1486,14 @@ def _build_idempotency_hit_result(
     idempotency_key: str | None,
     principal_id: str,
     context: ContextObject | None,
-    req: "CreateMediaBuyRequest | None" = None,
-    adapter: "Any | None" = None,
 ) -> CreateMediaBuyResult:
     """Re-query the winner of an idempotency race and return its result.
 
     Used both for the happy-path idempotency lookup and for the TOCTOU
-    race-condition recovery (IntegrityError on commit).
-
-    ``req`` + ``adapter`` are optional so the property_list advisory can be
-    rebuilt on every replay (rebuild, don't persist — capability could have
-    flipped True between the original call and the replay). Callers that
-    have them in scope pass them; the function tolerates None for callers
-    that don't yet.
+    race-condition recovery (IntegrityError on commit). The property_list
+    capability check raises ``AdCPCapabilityNotSupportedError`` at the boundary
+    on the first request, so a successful replay row is always against an
+    adapter that compiles the field — the replay result carries no advisory.
     """
     from src.core.database.repositories import MediaBuyUoW
 
@@ -1520,13 +1515,6 @@ def _build_idempotency_hit_result(
         except ValueError:
             adcp_status = MediaBuyStatus.pending_start
 
-        # Rebuild the property_list advisory live rather than reading a cached
-        # copy: between the original request and this replay, an adapter could
-        # have flipped supports_property_list_filtering=True. The advisory
-        # must reflect the current capability state, not whatever was true at
-        # the original Day-1 call.
-        advisories = property_list_unsupported_advisories(req.packages, adapter) if req is not None else None
-
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
                 media_buy_id=existing.media_buy_id,
@@ -1534,7 +1522,7 @@ def _build_idempotency_hit_result(
                 status=adcp_status,
                 valid_actions=valid_actions_for_status(adcp_status.value),
                 context=context,
-                errors=advisories,
+                errors=None,
             ),
             status=AdcpTaskStatus.completed.value,
         )
@@ -1634,15 +1622,6 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key,
                     principal_id=principal_id,
                     context=req.context,
-                    req=req,
-                    # FIXME(idempotency-adapter): adapter isn't initialized yet
-                    # at this early happy-path check, so the advisory may
-                    # misfire once Kevel's capability flips to True
-                    # (Kevel tenants would see a stale UNSUPPORTED_FEATURE
-                    # on replay). Today no adapter compiles property_list,
-                    # so the advisory is always correct. Untangle when the
-                    # idempotency probe moves after adapter init.
-                    adapter=None,
                 )
 
     # Context management and workflow step creation - create workflow step FIRST
@@ -2251,6 +2230,16 @@ async def _create_media_buy_impl(
         # Use dry_run from testing context (which comes from config or testing flags)
         adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
 
+        # Honest-declaration check for property_list targeting. Runs once
+        # here — right after adapter resolution, before any dry_run /
+        # approval / execution branch — so every response path (sync, async,
+        # dry_run, manual approval) honors the contract uniformly. Adapters
+        # that declare ``supports_property_list_targeting = False`` reject
+        # the request with ``AdCPCapabilityNotSupportedError`` (recovery=
+        # correctable) carrying ``field`` + ``suggestion`` so the buyer
+        # agent can drop the field and retry or pick a capable seller.
+        raise_if_property_list_unsupported(req.packages, adapter)
+
         # Check if manual approval is required
         # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
         tenant_approval_required = tenant.get("human_review_required", True)
@@ -2427,8 +2416,6 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
                     context=req.context,
-                    req=req,
-                    adapter=adapter,
                 )
 
             # Log to activity feed for manual approval case
@@ -2700,7 +2687,7 @@ async def _create_media_buy_impl(
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
                     context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
+                    errors=None,
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -2859,7 +2846,7 @@ async def _create_media_buy_impl(
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                     workflow_step_id=step.step_id,
                     context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
+                    errors=None,
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -3201,7 +3188,7 @@ async def _create_media_buy_impl(
                 packages=simulated_packages,
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
-                errors=property_list_unsupported_advisories(req.packages, adapter),
+                errors=None,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3302,8 +3289,6 @@ async def _create_media_buy_impl(
                 idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
                 context=req.context,
-                req=req,
-                adapter=adapter,
             )
 
         # Populate media_packages table for structured querying
@@ -3715,7 +3700,7 @@ async def _create_media_buy_impl(
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
-            errors=property_list_unsupported_advisories(req.packages, adapter),
+            errors=None,
         )
 
         # Log activity

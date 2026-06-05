@@ -35,7 +35,7 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
-from src.services.targeting_capabilities import supports_property_list_filtering
+from src.services.targeting_capabilities import supports_property_list_targeting
 
 logger = logging.getLogger(__name__)
 
@@ -162,14 +162,16 @@ def _get_adcp_capabilities_impl(
     features = MediaBuyFeatures(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
-        # property_list_filtering: True iff the bound adapter actually compiles
-        # `targeting_overlay.property_list` into native ad-server targeting.
-        # Today no adapter sets this — capability remains False; create/update
-        # emit per-package UNSUPPORTED_FEATURE advisories on the success envelope
-        # so buyers can see the silent-drop window. Kevel's siteId resolver flips
-        # this True and the other 4 adapters hard-reject — same source of truth
-        # via `supports_property_list_filtering()`.
-        property_list_filtering=supports_property_list_filtering(adapter),
+        # property_list_filtering: True iff the bound adapter actually
+        # compiles ``targeting_overlay.property_list`` into native
+        # ad-server targeting. Today no adapter sets this — capability
+        # remains False; create/update reject ``property_list`` requests
+        # at the ``_impl`` boundary via
+        # ``raise_if_property_list_unsupported`` with
+        # ``AdCPCapabilityNotSupportedError``. The wire flag name is preserved
+        # for spec compatibility (the spec-level rename of this flag to
+        # ``property_list_targeting`` is tracked as a separate follow-up).
+        property_list_filtering=supports_property_list_targeting(adapter),
         # catalog_management: declared False until a sync_catalogs tool ships.
         # AdCP spec binds this flag to the buyer-driven sync_catalogs task
         # (SyncCatalogsRequest with account + catalogs[] + delete_missing) —

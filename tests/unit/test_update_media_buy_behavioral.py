@@ -1759,10 +1759,9 @@ class TestUC003UpdateTargetingOverlay:
         """Update with property_list against a product where property_targeting_allowed=False
         raises AdCPValidationError before persistence — same wire shape as create-time rule.
 
-        PR #1276 round-5 switched this site from return-envelope to raise per
-        reviewer feedback (avoids growing the model_dump _impl allowlist). The
-        boundary translator turns the raise into the spec-compliant two-layer
-        envelope.
+        This site was switched from return-envelope to raise per review feedback
+        (avoids growing the model_dump _impl allowlist). The boundary translator
+        turns the raise into the spec-compliant two-layer envelope.
 
         Covers: UC-003-MAIN-14
         """
@@ -1883,7 +1882,7 @@ class TestUC003UpdateTargetingOverlay:
         assert isinstance(result, UpdateMediaBuySuccess)
         assert mock_pkg.package_config["targeting_overlay"] is not None
 
-    def test_property_list_update_replaces_existing_not_merge(self, standard_mocks):
+    def test_property_list_update_replaces_existing_not_merge(self, standard_mocks, monkeypatch):
         """Update with a NEW property_list.list_id replaces the prior one (not merged).
 
         UC-003-MAIN-13's obligation reads "the response reflects the new
@@ -1895,6 +1894,16 @@ class TestUC003UpdateTargetingOverlay:
 
         Covers: UC-003-MAIN-13
         """
+        # The adapter-capability boundary check would reject this request because
+        # the MagicMock adapter doesn't declare property_list support. The test is
+        # about the REPLACE semantic, not the adapter-capability gate, so pin
+        # the capability True on the mock-adapter class for this test only.
+        monkeypatch.setattr(
+            type(standard_mocks["adapter_instance"]),
+            "supports_property_list_targeting",
+            True,
+            raising=False,
+        )
         _setup_db_session(standard_mocks)
 
         # Pre-existing package state — already has list_id="A" persisted.

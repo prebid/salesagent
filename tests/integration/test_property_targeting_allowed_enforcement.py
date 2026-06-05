@@ -24,7 +24,7 @@ from src.core.schemas import (
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories import PrincipalFactory
-from tests.helpers.adcp_factories import create_test_package_request
+from tests.helpers.adcp_factories import TEST_PROPERTY_LIST_TARGETING_OVERLAY, create_test_package_request
 from tests.utils.database_helpers import (
     add_targeting_test_product,
     future_iso_date_range,
@@ -99,12 +99,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
                 product_id="prod_no_property_targeting",
                 budget=5000.0,
                 pricing_option_id="cpm_usd_fixed",
-                targeting_overlay={
-                    "property_list": {
-                        "agent_url": "https://gov.example",
-                        "list_id": "v1",
-                    },
-                },
+                targeting_overlay=TEST_PROPERTY_LIST_TARGETING_OVERLAY,
             )
         ],
         start_time=start,
@@ -124,8 +119,21 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
 
 
 @pytest.mark.requires_db
-async def test_create_accepts_property_list_when_product_allows(property_targeting_tenant):
-    """Product with property_targeting_allowed=True passes the validation."""
+async def test_create_accepts_property_list_when_product_allows(property_targeting_tenant, monkeypatch):
+    """Product with property_targeting_allowed=True passes the product-flag validation.
+
+    This test isolates the product-flag gate from the adapter-capability gate.
+    The mock adapter default declares ``supports_property_list_targeting=False``
+    so the adapter-capability gate would reject any property_list request.
+    Monkeypatching to True keeps the test focused on what it actually asserts:
+    that ``validate_property_targeting_allowed`` doesn't false-positive when the
+    product permits property targeting. The adapter-capability reject is covered
+    separately in ``test_property_list_unsupported_capability.py``.
+    """
+    from src.adapters.mock_ad_server import MockAdServer
+
+    monkeypatch.setattr(MockAdServer, "supports_property_list_targeting", True)
+
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
@@ -134,12 +142,7 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
                 product_id="prod_yes_property_targeting",
                 budget=5000.0,
                 pricing_option_id="cpm_usd_fixed",
-                targeting_overlay={
-                    "property_list": {
-                        "agent_url": "https://gov.example",
-                        "list_id": "v1",
-                    },
-                },
+                targeting_overlay=TEST_PROPERTY_LIST_TARGETING_OVERLAY,
             )
         ],
         start_time=start,
@@ -236,9 +239,9 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
         ],
     )
 
-    # PR #1276 round-5: validation site raises AdCPValidationError (matches
-    # create-time path exactly). Boundary translator turns it into the
-    # spec-compliant two-layer envelope at the transport edge.
+    # The validation site raises AdCPValidationError (matches the create-time
+    # path exactly). Boundary translator turns it into the spec-compliant
+    # two-layer envelope at the transport edge.
     with pytest.raises(AdCPValidationError) as excinfo:
         _update_media_buy_impl(req=request, identity=_make_identity())
 

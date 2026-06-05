@@ -472,6 +472,11 @@ class MockAdServer(AdServerAdapter):
         Returns:
             CreateMediaBuyResponse with simulated media buy
         """
+        # Honest-declaration property_list reject lives in
+        # ``_create_media_buy_impl``. Adapters declare capability via the
+        # ``supports_property_list_targeting`` ClassVar; the boundary raise
+        # happens once per request, before adapter execution.
+
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
