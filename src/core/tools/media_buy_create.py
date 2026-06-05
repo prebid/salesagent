@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
     from src.core.database.repositories.media_buy import MediaBuyRepository
 
 from adcp import PushNotificationConfig
@@ -1489,6 +1490,9 @@ async def _resolve_property_list_allowed_sets(packages: list | None) -> dict[tup
     resolve). Keyed by ``(agent_url, list_id)`` so a list referenced by several
     packages is fetched once.
     """
+    # Lazy import: the prefetch unit tests patch ``resolve_property_list_typed``
+    # at its source module, so it must resolve at call time (a module-top import
+    # would bind a ref the patch can't reach).
     from src.core.property_list_resolver import resolve_property_list_typed
 
     resolved: dict[tuple[str, str], set[str]] = {}
@@ -1508,6 +1512,7 @@ async def _resolve_property_list_allowed_sets(packages: list | None) -> dict[tup
                 ref.agent_url,
                 ref.list_id,
                 exc,
+                exc_info=True,
             )
             continue
         resolved[key] = {ident.value for ident in identifiers}
@@ -1517,7 +1522,7 @@ async def _resolve_property_list_allowed_sets(packages: list | None) -> dict[tup
 def _emit_property_list_advisories(
     packages: list,
     product_map: dict,
-    authorized_property_repo,
+    authorized_property_repo: "AuthorizedPropertyRepository",
     resolved_allowed_sets: dict[tuple[str, str], set[str]],
 ) -> None:
     """Log an advisory when a buyer's property_list has zero overlap with a package's product.
@@ -1544,6 +1549,9 @@ def _emit_property_list_advisories(
     create_media_buy proceeds, and a list that failed to resolve is absent from
     ``resolved_allowed_sets`` and skipped here.
     """
+    # Lazy imports: ``convert_product_model_to_schema`` is patched at its source
+    # module by the advisory unit/integration tests, so it must resolve at call
+    # time (a module-top import would bind a ref the patch can't reach).
     from src.core.product_conversion import convert_product_model_to_schema
     from src.services.property_intersection import PropertyIntersection
 
@@ -1572,6 +1580,7 @@ def _emit_property_list_advisories(
                 "[INTERSECTION-ADVISORY] Intersection failed for package %s: %s",
                 getattr(package, "package_id", None),
                 exc,
+                exc_info=True,
             )
             continue
         if result.zero_match:

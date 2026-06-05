@@ -1,27 +1,45 @@
-"""3-transport wire envelope tests for ``AdCPCapabilityNotSupportedError`` on property_list.
+"""Wire envelope tests for ``AdCPCapabilityNotSupportedError`` on property_list.
 
 The ``_impl``-level tests in
 ``tests/integration/test_property_list_unsupported_capability.py`` prove the
-exception is raised with the correct fields. These tests prove the exception
-actually traverses each transport boundary (REST, A2A, MCP) and reaches the
-buyer as a spec-compliant wire envelope with ``code=UNSUPPORTED_FEATURE``,
-``recovery=correctable``, ``field``, and ``suggestion``.
+exception is raised with the correct fields on both create and update. These
+tests prove it actually traverses the transport boundaries and reaches the
+buyer as a spec-compliant two-layer envelope (``code=UNSUPPORTED_FEATURE``,
+``recovery=correctable``, ``field``, ``suggestion``):
 
-Covers: UC-002 honest-declaration property_list reject — wire shape
-Covers: UC-003 honest-declaration property_list reject — wire shape
+- create: REST, A2A, and MCP.
+- update: A2A only — per-package property_list targeting is unreachable via the
+  REST update body (no ``packages`` field) and the MCP update wrapper's
+  PackageUpdate schema-alignment, a pre-existing transport asymmetry.
+
+The A2A subtests drive ``handler.on_message_send`` and assert on the real
+``Task`` artifact (DataPart), because the A2A boundary's ``_adcp_to_a2a_error``
+is where ``field``/``suggestion`` could be dropped — a test stopping at the
+skill handler would never observe that loss.
+
+Covers: UC-002 honest-declaration property_list reject — wire shape (create)
+Covers: UC-003 honest-declaration property_list reject — wire shape (update)
 """
 
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import pytest
-from a2a.types import SendMessageRequest, Task
+from a2a.server.context import ServerCallContext
+from a2a.types import Message, SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.database.database_session import get_db_session
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import TEST_PROPERTY_LIST_TARGETING_OVERLAY, create_test_package_request_dict
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
-from tests.utils.database_helpers import future_iso_date_range, seed_property_list_capability_tenant
+from tests.utils.database_helpers import (
+    future_iso_date_range,
+    seed_media_buy_with_package,
+    seed_property_list_capability_tenant,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -73,37 +91,95 @@ def _build_packages() -> list[dict]:
     ]
 
 
-def _assert_unsupported_feature_envelope(envelope: dict) -> None:
-    """Spec-compliant envelope must carry all 5 fields.
+@pytest.fixture
+def wire_media_buy(wire_tenant):
+    """Seed a media buy + package under the wire tenant's ``test_adv`` principal.
 
-    Envelope variants across transports:
-    - REST: flat ``{error_code, message, recovery, field, suggestion}`` (the
-      AdCP ``exc.to_dict()`` shape returned by the global FastAPI handler).
-    - A2A / MCP wrappers: ``{success: false, errors: [{code, message,
-      recovery, field, suggestion}], ...}`` shape per AdCP error-handling.mdx.
-
-    Both shapes must surface ``UNSUPPORTED_FEATURE`` + ``correctable`` +
-    the offending field + a suggestion referencing
-    ``property_list_filtering``.
+    ``seed_property_list_capability_tenant`` creates principal ``test_adv`` with
+    the wire ACCESS_TOKEN, so the token→DB→identity chain resolves to the same
+    principal that owns this buy — the update reaches the capability gate rather
+    than an ownership/not-found rejection. Returns ``(media_buy_id, package_id)``.
     """
-    # Normalize: extract the first error object whether top-level or nested.
-    if "errors" in envelope:
-        assert envelope["errors"], "errors[] must not be empty"
-        err: dict = envelope["errors"][0]
-        code_key = "code"
-    else:
-        err = envelope
-        code_key = "error_code"
-    assert err.get(code_key) == "UNSUPPORTED_FEATURE", f"expected UNSUPPORTED_FEATURE; got {err.get(code_key)!r}"
-    assert err.get("recovery") == "correctable", f"expected recovery=correctable; got {err.get('recovery')!r}"
-    assert err.get("field") == "packages[0].targeting_overlay.property_list", (
+    media_buy_id = "mb_wire_update"
+    package_id = "pkg_wire_update"
+    with get_db_session() as session:
+        seed_media_buy_with_package(
+            session,
+            tenant_id=wire_tenant,
+            principal_id="test_adv",
+            product_id="prod_property_targeting_allowed",
+            media_buy_id=media_buy_id,
+            package_id=package_id,
+        )
+        session.commit()
+    return media_buy_id, package_id
+
+
+def _build_update_packages(package_id: str) -> list[dict]:
+    """Update-request packages that add property_list targeting to an existing package."""
+    return [{"package_id": package_id, "targeting_overlay": TEST_PROPERTY_LIST_TARGETING_OVERLAY}]
+
+
+def _assert_unsupported_envelope(envelope: dict, *, package_index: int = 0) -> None:
+    """Assert the spec two-layer UNSUPPORTED_FEATURE envelope + machine-actionable fields.
+
+    Uses the canonical ``assert_envelope_shape`` (two-layer invariant
+    ``adcp_error.code == errors[0].code``, recovery, message) and additionally
+    pins ``field`` + ``suggestion`` on ``errors[0]`` — the buyer-agent correction
+    context that the A2A boundary's ``_adcp_to_a2a_error`` is prone to dropping,
+    so the wire test must observe it on the real envelope, not a reconstruction.
+    """
+    assert_envelope_shape(
+        envelope,
+        "UNSUPPORTED_FEATURE",
+        recovery="correctable",
+        message_substr="does not support property_list",
+    )
+    err = envelope["errors"][0]
+    assert err.get("field") == f"packages[{package_index}].targeting_overlay.property_list", (
         f"field must identify the offending package; got {err.get('field')!r}"
     )
-    assert err.get("suggestion"), "suggestion must be present so the buyer agent can act"
-    assert "property_list_filtering" in err["suggestion"], (
-        "suggestion must reference the canonical capability flag so the buyer "
-        "agent can locate a capable seller via get_adcp_capabilities"
+    assert err.get("suggestion") and "property_list_filtering" in err["suggestion"], (
+        f"suggestion must reference the property_list_filtering capability flag; got {err.get('suggestion')!r}"
     )
+
+
+def _assert_unsupported_mcp_tool_error(exc: Exception, *, package_index: int = 0) -> None:
+    """Assert the MCP ToolError surfaces the UNSUPPORTED_FEATURE envelope content.
+
+    FastMCP serializes the AdCPError onto the wire by stringifying its args, so
+    the client-side ``ToolError`` carries the envelope fields in its message
+    (there is no structured ``.envelope`` on the client side). Asserting on that
+    serialized content pins OUR envelope fields, not framework-internal text.
+    """
+    msg = str(exc)
+    assert "UNSUPPORTED_FEATURE" in msg, f"MCP ToolError must surface error_code=UNSUPPORTED_FEATURE; got: {msg!r}"
+    assert "correctable" in msg, f"MCP ToolError must surface recovery=correctable; got: {msg!r}"
+    assert f"packages[{package_index}].targeting_overlay.property_list" in msg, (
+        f"MCP ToolError must surface the offending field; got: {msg!r}"
+    )
+    assert "property_list_filtering" in msg, f"MCP ToolError must surface the capability-flag suggestion; got: {msg!r}"
+
+
+async def _drive_a2a_skill(skill_name: str, skill_params: dict, headers: dict[str, str]) -> Task | Message:
+    """Drive a skill through the real A2A boundary (on_message_send + token->DB->identity).
+
+    Populates the AuthContext the SDK transport middleware would build from the
+    wire so the auth chain resolves with no mocked identity seams, then returns
+    the resulting Task for envelope/artifact assertions.
+    """
+    message = create_a2a_message_with_skill(skill_name, skill_params)
+    server_context = ServerCallContext(
+        state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=ACCESS_TOKEN, headers=MappingProxyType(headers))}
+    )
+    return await AdCPRequestHandler().on_message_send(SendMessageRequest(message=message), server_context)
+
+
+def _assert_a2a_unsupported(result: object, *, package_index: int = 0) -> None:
+    """Assert an A2A result is a failed Task whose artifact carries the UNSUPPORTED_FEATURE envelope."""
+    assert isinstance(result, Task), f"A2A error must surface as a failed Task; got {type(result)!r}"
+    assert result.artifacts, "A2A error Task must carry an artifact with the envelope"
+    _assert_unsupported_envelope(extract_data_from_artifact(result.artifacts[0]), package_index=package_index)
 
 
 @pytest.mark.requires_db
@@ -138,7 +214,7 @@ def test_rest_create_media_buy_property_list_unsupported_envelope(wire_tenant):
         f"AdCPCapabilityNotSupportedError must translate to HTTP 422 at the REST boundary; "
         f"got {response.status_code} with body {response.text[:500]}"
     )
-    _assert_unsupported_feature_envelope(response.json())
+    _assert_unsupported_envelope(response.json())
 
 
 @pytest.mark.requires_db
@@ -148,17 +224,12 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
 
     Drives the canonical ``on_message_send`` entry point (not
     ``_handle_explicit_skill`` directly) with the real token -> DB -> identity
-    auth chain, populating the AuthContext the SDK call-context builder would
-    build from the wire. The skill handler raises
-    ``AdCPCapabilityNotSupportedError``; the A2A boundary captures it into a
-    ``Task`` whose ``artifacts[0]`` DataPart carries the spec two-layer envelope
-    — ``code=UNSUPPORTED_FEATURE``, ``recovery=correctable``, ``field``, and
-    ``suggestion`` — the same machine-actionable contract REST and MCP surface.
+    auth chain. The skill handler raises ``AdCPCapabilityNotSupportedError``; the
+    A2A boundary captures it into a ``Task`` whose ``artifacts[0]`` DataPart
+    carries the spec two-layer envelope — ``code=UNSUPPORTED_FEATURE``,
+    ``recovery=correctable``, ``field``, and ``suggestion`` — the same
+    machine-actionable contract REST and MCP surface.
     """
-    from a2a.server.context import ServerCallContext
-
-    from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
-
     start, end = future_iso_date_range()
     skill_params = {
         "brand": {"domain": "testbrand.com"},
@@ -166,44 +237,14 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
         "start_time": start,
         "end_time": end,
     }
-    message = create_a2a_message_with_skill("create_media_buy", skill_params)
-    params = SendMessageRequest(message=message)
-
-    # Populate the AuthContext the SDK transport middleware would build from the
-    # wire, then drive the real on_message_send -> auth chain -> skill dispatch
-    # (no mocked identity seams). x-test-session-id bypasses the setup-checklist
-    # gate, same as the REST test.
+    # x-test-session-id bypasses the setup-checklist gate, same as the REST test.
     headers = {
         "x-adcp-auth": ACCESS_TOKEN,
         "x-adcp-tenant": TENANT_ID,
         "x-test-session-id": "prop-list-wire-a2a-session",
     }
-    server_context = ServerCallContext(
-        state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=ACCESS_TOKEN, headers=headers)}
-    )
-
-    handler = AdCPRequestHandler()
-    result = await handler.on_message_send(params, server_context)
-
-    assert isinstance(result, Task), f"A2A error must surface as a failed Task; got {type(result)!r}"
-    assert result.artifacts, "A2A error Task must carry an artifact with the envelope"
-    artifact_data = extract_data_from_artifact(result.artifacts[0])
-
-    # Two-layer envelope invariant (adcp_error.code == errors[0].code) + recovery + message.
-    assert_envelope_shape(
-        artifact_data,
-        "UNSUPPORTED_FEATURE",
-        recovery="correctable",
-        message_substr="does not support property_list",
-    )
-    # Machine-actionable fields the buyer agent acts on (forwarded into errors[0]).
-    err = artifact_data["errors"][0]
-    assert err.get("field") == "packages[0].targeting_overlay.property_list", (
-        f"A2A envelope must forward the offending field; got {err!r}"
-    )
-    assert err.get("suggestion") and "property_list_filtering" in err["suggestion"], (
-        f"A2A envelope must forward a suggestion referencing the capability flag; got {err!r}"
-    )
+    result = await _drive_a2a_skill("create_media_buy", skill_params, headers)
+    _assert_a2a_unsupported(result)
 
 
 @pytest.mark.requires_db
@@ -244,15 +285,33 @@ async def test_mcp_create_media_buy_property_list_unsupported_envelope(wire_tena
                 with pytest.raises(ToolError) as excinfo:
                     await client.call_tool("create_media_buy", arguments)
 
-    # FastMCP serializes AdCPError onto the wire by stringifying ``args``,
-    # which on the client side surfaces as a ToolError message containing a
-    # parenthesized tuple: ``('CODE', 'message', 'recovery', '{json_details}')``.
-    # Parse the components out and verify each one matches the contract.
-    exc = excinfo.value
-    msg = str(exc)
-    assert "UNSUPPORTED_FEATURE" in msg, f"MCP ToolError must surface error_code=UNSUPPORTED_FEATURE; got: {msg!r}"
-    assert "correctable" in msg, f"MCP ToolError must surface recovery=correctable; got: {msg!r}"
-    assert "packages[0].targeting_overlay.property_list" in msg, (
-        f"MCP ToolError must surface the offending field; got: {msg!r}"
-    )
-    assert "property_list_filtering" in msg, f"MCP ToolError must surface the capability-flag suggestion; got: {msg!r}"
+    _assert_unsupported_mcp_tool_error(excinfo.value)
+
+
+# ─── update_media_buy boundary ──────────────────────────────────────────────
+#
+# Per-package property_list targeting on update is reachable only via A2A: the
+# REST update body (UpdateMediaBuyBody) carries no ``packages`` field, and the
+# MCP update wrapper's PackageUpdate schema-alignment rejects the package shape
+# that ``_update_media_buy_impl`` and the A2A skill accept — a pre-existing
+# three-transport asymmetry tracked separately. The update path runs the SAME
+# raise_if_property_list_unsupported gate as create (after adapter resolution,
+# before the dry_run branch) and has no setup-checklist gate.
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_a2a_update_media_buy_property_list_unsupported_envelope(wire_media_buy):
+    """A2A update_media_buy surfaces UNSUPPORTED_FEATURE as a failed-Task envelope artifact.
+
+    Drives the real ``on_message_send`` -> auth chain -> update-skill dispatch (no
+    mocked identity seams). The skill raises ``AdCPCapabilityNotSupportedError``;
+    the A2A boundary captures it into a ``Task`` whose ``artifacts[0]`` DataPart
+    must carry ``field`` + ``suggestion`` — pinning that ``_adcp_to_a2a_error``
+    does not drop them on the update path.
+    """
+    media_buy_id, package_id = wire_media_buy
+    skill_params = {"media_buy_id": media_buy_id, "packages": _build_update_packages(package_id)}
+    headers = {"x-adcp-auth": ACCESS_TOKEN, "x-adcp-tenant": TENANT_ID}
+    result = await _drive_a2a_skill("update_media_buy", skill_params, headers)
+    _assert_a2a_unsupported(result)
