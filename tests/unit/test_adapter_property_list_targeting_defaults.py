@@ -1,4 +1,4 @@
-"""Pin tests: each concrete adapter declares ``supports_property_list_targeting=False``.
+"""Pin tests: adapters without a compile path declare ``supports_property_list_targeting=False``.
 
 The base class default is False (see ``src/adapters/base.py:195``). Adapters that
 flip this to True without first compiling ``targeting_overlay.property_list``
@@ -7,7 +7,10 @@ breaking the honest-declaration contract that ``_create_media_buy_impl`` /
 ``_update_media_buy_impl`` enforce by raising ``AdCPCapabilityNotSupportedError``.
 
 Until an adapter implements the compile path, its ClassVar must remain False
-so the boundary check fires.
+so the boundary check fires. Kevel is the exception: it compiles
+``targeting_overlay.property_list`` to native ``siteIds`` (see
+``test_kevel_property_list_compilation.py``), so it legitimately declares
+``supports_property_list_targeting=True`` and is excluded from this pin.
 """
 
 from __future__ import annotations
@@ -17,7 +20,6 @@ import pytest
 from src.adapters.base import AdServerAdapter
 from src.adapters.broadstreet import BroadstreetAdapter
 from src.adapters.google_ad_manager import GoogleAdManager
-from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer
 from src.adapters.triton_digital import TritonDigital
 from src.adapters.xandr import XandrAdapter
@@ -29,7 +31,6 @@ from src.adapters.xandr import XandrAdapter
         MockAdServer,
         GoogleAdManager,
         XandrAdapter,
-        Kevel,
         BroadstreetAdapter,
         TritonDigital,
     ],

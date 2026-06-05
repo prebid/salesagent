@@ -163,14 +163,12 @@ def _get_adcp_capabilities_impl(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
         # property_list_filtering: True iff the bound adapter actually
-        # compiles ``targeting_overlay.property_list`` into native
-        # ad-server targeting. Today no adapter sets this — capability
-        # remains False; create/update reject ``property_list`` requests
-        # at the ``_impl`` boundary via
-        # ``raise_if_property_list_unsupported`` with
-        # ``AdCPCapabilityNotSupportedError``. The wire flag name is preserved
-        # for spec compatibility (the spec-level rename of this flag to
-        # ``property_list_targeting`` is tracked as a separate follow-up).
+        # compiles ``targeting_overlay.property_list`` into native ad-server
+        # targeting (Kevel resolves it to siteIds; see kevel_site_resolver).
+        # Adapters that cannot compile it reject ``property_list`` requests at
+        # the ``_impl`` boundary via ``raise_if_property_list_unsupported``
+        # with ``AdCPCapabilityNotSupportedError``. The wire flag name
+        # ``property_list_filtering`` is preserved for spec compatibility.
         property_list_filtering=supports_property_list_targeting(adapter),
         # catalog_management: declared False until a sync_catalogs tool ships.
         # AdCP spec binds this flag to the buyer-driven sync_catalogs task

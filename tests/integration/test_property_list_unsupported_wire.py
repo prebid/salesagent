@@ -14,12 +14,13 @@ Covers: UC-003 honest-declaration property_list reject — wire shape
 from __future__ import annotations
 
 import pytest
-from a2a.types import SendMessageRequest
+from a2a.types import SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.database.database_session import get_db_session
+from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import TEST_PROPERTY_LIST_TARGETING_OVERLAY, create_test_package_request_dict
-from tests.utils.a2a_helpers import create_a2a_message_with_skill
+from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 from tests.utils.database_helpers import future_iso_date_range, seed_property_list_capability_tenant
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -143,19 +144,18 @@ def test_rest_create_media_buy_property_list_unsupported_envelope(wire_tenant):
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tenant):
-    """A2A propagates AdCPCapabilityNotSupportedError through the real on_message_send boundary.
+    """A2A surfaces AdCPCapabilityNotSupportedError as a failed-Task envelope artifact.
 
     Drives the canonical ``on_message_send`` entry point (not
     ``_handle_explicit_skill`` directly) with the real token -> DB -> identity
     auth chain, populating the AuthContext the SDK call-context builder would
-    build from the wire. The error surfaces as an A2A error whose ``data``
-    carries the full envelope — ``code=UNSUPPORTED_FEATURE``,
-    ``recovery=correctable``, ``field``, and ``suggestion`` — the same
-    machine-actionable contract REST and MCP surface (``_adcp_to_a2a_error``
-    forwards field + suggestion).
+    build from the wire. The skill handler raises
+    ``AdCPCapabilityNotSupportedError``; the A2A boundary captures it into a
+    ``Task`` whose ``artifacts[0]`` DataPart carries the spec two-layer envelope
+    — ``code=UNSUPPORTED_FEATURE``, ``recovery=correctable``, ``field``, and
+    ``suggestion`` — the same machine-actionable contract REST and MCP surface.
     """
     from a2a.server.context import ServerCallContext
-    from a2a.utils.errors import A2AError, InternalError
 
     from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
@@ -183,20 +183,26 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
     )
 
     handler = AdCPRequestHandler()
-    with pytest.raises((A2AError, InternalError)) as excinfo:
-        await handler.on_message_send(params, server_context)
+    result = await handler.on_message_send(params, server_context)
 
-    raised = excinfo.value
-    data = getattr(raised, "data", None) or {}
-    assert data.get("error_code") == "UNSUPPORTED_FEATURE", (
-        f"A2A error.data must surface error_code=UNSUPPORTED_FEATURE; got data={data!r}"
+    assert isinstance(result, Task), f"A2A error must surface as a failed Task; got {type(result)!r}"
+    assert result.artifacts, "A2A error Task must carry an artifact with the envelope"
+    artifact_data = extract_data_from_artifact(result.artifacts[0])
+
+    # Two-layer envelope invariant (adcp_error.code == errors[0].code) + recovery + message.
+    assert_envelope_shape(
+        artifact_data,
+        "UNSUPPORTED_FEATURE",
+        recovery="correctable",
+        message_substr="does not support property_list",
     )
-    assert data.get("recovery") == "correctable", f"A2A error.data must surface recovery=correctable; got data={data!r}"
-    assert data.get("field") == "packages[0].targeting_overlay.property_list", (
-        f"A2A error.data must forward the offending field; got data={data!r}"
+    # Machine-actionable fields the buyer agent acts on (forwarded into errors[0]).
+    err = artifact_data["errors"][0]
+    assert err.get("field") == "packages[0].targeting_overlay.property_list", (
+        f"A2A envelope must forward the offending field; got {err!r}"
     )
-    assert data.get("suggestion") and "property_list_filtering" in data["suggestion"], (
-        f"A2A error.data must forward a suggestion referencing the capability flag; got data={data!r}"
+    assert err.get("suggestion") and "property_list_filtering" in err["suggestion"], (
+        f"A2A envelope must forward a suggestion referencing the capability flag; got {err!r}"
     )
 
 

@@ -1481,6 +1481,61 @@ from src.services.setup_checklist_service import SetupIncompleteError, validate_
 from src.services.slack_notifier import get_slack_notifier
 
 
+def _emit_property_list_advisories(
+    packages: list,
+    product_map: dict,
+    authorized_property_repo,
+) -> None:
+    """Log an advisory when a buyer's property_list has zero overlap with a package's product.
+
+    Per the inventory-targeting plan SD2, ``inventory_list_no_match`` must be
+    accept-with-context, not reject. So this helper never raises — it only
+    logs at WARNING so operators can surface mismatches in audit/Slack
+    pipelines, and downstream adapters emit the actual user-facing envelope
+    (Kevel resolves to empty siteIds; B4 adapters emit UNSUPPORTED_FEATURE).
+
+    Resolution is best-effort: any exception while resolving the buyer's list
+    or running the intersection is logged and swallowed so create_media_buy
+    proceeds. The strict property_targeting_allowed validation already ran
+    above this call and rejected the genuinely-illegal case.
+    """
+    from src.core.property_list_resolver import resolve_property_list_typed_sync
+    from src.services.property_intersection import PropertyIntersection
+
+    intersection = PropertyIntersection(authorized_property_repo)
+
+    for package in packages:
+        overlay = getattr(package, "targeting_overlay", None)
+        ref = getattr(overlay, "property_list", None) if overlay else None
+        if ref is None:
+            continue
+        product = product_map.get(package.product_id)
+        if product is None:
+            continue
+        try:
+            identifiers = resolve_property_list_typed_sync(ref)
+            allowed_set = {ident.value for ident in identifiers}
+            result = intersection.filter_products([product], allowed_set)
+        except Exception as exc:
+            logger.warning(
+                "[INTERSECTION-ADVISORY] Failed to resolve property_list for package %s: %s",
+                getattr(package, "package_id", None),
+                exc,
+            )
+            continue
+        if result.zero_match:
+            reason = result.dropped_products[0].reason.value if result.dropped_products else "zero_match"
+            logger.warning(
+                "[INTERSECTION-ADVISORY] Buyer's property_list has zero overlap with product %s "
+                "for package %s (reason=%s, list=%s/%s). Buy proceeds per SD2 accept-with-context.",
+                product.product_id,
+                getattr(package, "package_id", None),
+                reason,
+                ref.agent_url,
+                ref.list_id,
+            )
+
+
 def _build_idempotency_hit_result(
     tenant_id: str,
     idempotency_key: str | None,
@@ -1877,6 +1932,17 @@ async def _create_media_buy_impl(
                     )
                 ]
                 raise_if_property_targeting_violations(property_targeting_violations)
+
+                # Faithful intersection advisory (B5): when the buyer's
+                # property_list resolves to zero overlap with a product's
+                # publisher_properties, log a warning so operators can surface
+                # the mismatch in audit/Slack. Do NOT reject — per the
+                # inventory-targeting plan SD2 the storyboard
+                # ``inventory_list_no_match`` contract requires accept-with-
+                # context, and downstream adapter compilation (Kevel via B3,
+                # raise UNSUPPORTED via B4) emits its own envelope shape.
+                assert validation_uow.authorized_properties is not None
+                _emit_property_list_advisories(req.packages, product_map, validation_uow.authorized_properties)
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)

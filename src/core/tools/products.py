@@ -21,6 +21,7 @@ from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
 from src.core.exceptions import (
+    AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
@@ -411,20 +412,26 @@ async def _get_products_impl(
     _property_list_ref = getattr(req, "property_list", None)
     if isinstance(_property_list_ref, PropertyListReference):
         try:
+            from src.core.database.repositories.uow import ProductUoW as _IntersectionUoW
             from src.core.property_list_resolver import resolve_property_list
+            from src.services.property_intersection import PropertyIntersection
 
             allowed_property_ids = await resolve_property_list(_property_list_ref)
             allowed_set = set(allowed_property_ids)
-            products = filter_products_by_property_list(products, allowed_set)
+            with _IntersectionUoW(tenant["tenant_id"]) as intersection_uow:
+                assert intersection_uow.authorized_properties is not None
+                intersection = PropertyIntersection(intersection_uow.authorized_properties)
+                result = intersection.filter_products(products, allowed_set)
+            products = result.kept_products
             logger.info(
                 f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
-                f"(allowed {len(allowed_set)} properties)"
+                f"(allowed {len(allowed_set)} properties; dropped {len(result.dropped_products)})"
             )
+        except AdCPAdapterError:
+            # Typed adapter errors propagate as-is — they already carry the
+            # spec envelope contract via the AdCPError class.
+            raise
         except Exception as e:
-            from src.core.exceptions import AdCPAdapterError
-
-            if isinstance(e, AdCPAdapterError):
-                raise
             logger.error(f"Property list resolution failed: {e}")
             raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
 
@@ -455,6 +462,7 @@ async def _get_products_impl(
     # Enrich products with dynamic pricing from cached performance metrics
     # Updates pricing_options with price_guidance (floor, recommended) and estimated_exposures
     try:
+        from src.core.database.repositories.uow import ProductUoW
         from src.services.dynamic_pricing_service import DynamicPricingService
 
         # Extract country from request if available (future enhancement: parse from targeting)
@@ -903,12 +911,13 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
     Returns:
         List of Product objects with full pricing options
     """
-    from src.core.database.repositories.uow import ProductUoW
 
     if tenant_id is None:
         from src.core.config_loader import get_current_tenant
 
         tenant_id = get_current_tenant()["tenant_id"]
+
+    from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant_id) as uow:
         assert uow.products is not None
