@@ -13,6 +13,7 @@ from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
 from src.core.database.models import (
     AdapterConfig,
+    AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
     PropertyTag,
@@ -131,3 +132,28 @@ class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     tag_id = Sequence(lambda n: f"tag_{n:04d}")
     name = LazyAttribute(lambda o: f"Tag {o.tag_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+
+
+class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """An AuthorizedProperty row (a publisher property the agent represents).
+
+    ``property_id`` is the slug PK that a product's ``by_id`` selector references;
+    ``identifiers`` carries the concrete values (e.g. domains) a buyer's
+    property_list resolves to. Override both together so the faithful
+    intersection can map id/tag → identifier value.
+    """
+
+    class Meta:
+        model = AuthorizedProperty
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    property_id = Sequence(lambda n: f"prop_{n:04d}")
+    property_type = "website"
+    name = LazyAttribute(lambda o: f"Property {o.property_id}")
+    publisher_domain = "example.com"
+    identifiers = factory.LazyFunction(lambda: [{"type": "domain", "value": "example.com"}])
+    tags = None
+    verification_status = "verified"

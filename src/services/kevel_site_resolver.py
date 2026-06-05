@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
 import httpx
-from adcp.types import PropertyListReference
+from adcp.types import Identifier, PropertyListReference
 
 from src.core.exceptions import AdCPAdapterError
 from src.core.property_list_resolver import resolve_property_list_typed_sync
@@ -45,6 +45,17 @@ logger = logging.getLogger(__name__)
 # Exposed publicly so the Kevel adapter's dry-run path can type-check
 # identifiers without instantiating a resolver (no HTTP needed).
 SUPPORTED_IDENTIFIER_TYPES: frozenset[str] = frozenset({"domain", "subdomain"})
+
+
+def identifier_type_str(ident: Identifier) -> str:
+    """Return an identifier's type as a plain string.
+
+    ``Identifier.type`` is an enum on typed SDK objects but can arrive as a
+    bare string after some deserialization paths; normalize both to the string
+    form used for ``SUPPORTED_IDENTIFIER_TYPES`` membership checks.
+    """
+    return ident.type.value if hasattr(ident.type, "value") else str(ident.type)
+
 
 _KEVEL_SITE_PAGE_SIZE = 200
 _DEFAULT_HTTP_TIMEOUT = 10.0
@@ -119,7 +130,7 @@ class KevelSiteResolver:
         unresolvable_values: list[str] = []
 
         for ident in identifiers:
-            ident_type = ident.type.value if hasattr(ident.type, "value") else str(ident.type)
+            ident_type = identifier_type_str(ident)
             if ident_type not in SUPPORTED_IDENTIFIER_TYPES:
                 unsupported_types.add(ident_type)
                 continue
@@ -212,9 +223,19 @@ class KevelSiteResolver:
                 ) from exc
 
             payload = response.json()
-            items = payload.get("items") or []
+            items = payload.get("items")
+            total_pages = payload.get("totalPages")
+            if items is None or total_pages is None:
+                # Distinguish a malformed page (missing/null key) from a
+                # legitimately empty one (``items: []``). Silently coercing a
+                # malformed page to "no sites / single page" would cache a
+                # truncated site index, making every domain identifier resolve
+                # to no-match — a quiet failure. Raise instead.
+                raise AdCPAdapterError(
+                    f"Malformed Kevel site list response (network {self.network_id}, page {page}): "
+                    f"expected 'items' and 'totalPages', got keys {sorted(payload.keys())}"
+                )
             sites.extend(items)
-            total_pages = payload.get("totalPages") or 1
             if page >= total_pages:
                 break
             page += 1

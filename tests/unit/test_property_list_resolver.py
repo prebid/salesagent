@@ -518,3 +518,72 @@ class TestSSRFProtection:
 
             # AsyncClient should never have been instantiated
             mock_client_cls.assert_not_called()
+
+
+class TestThreadSafety:
+    """The module-level cache is shared across threads — sync adapters
+    (KevelSiteResolver), the async discovery path, and the create-media-buy
+    advisory all touch it. Reads/writes/expiry-drops must be atomic.
+    """
+
+    def test_concurrent_expired_drop_does_not_raise(self):
+        """Concurrent expiry drops use ``pop(key, None)``, not ``del`` — a
+        second thread reaching the expiry branch after the first removed the
+        key must not ``KeyError``. The lock also keeps the cache write atomic
+        so every thread converges on the same identifiers.
+        """
+        import threading
+
+        from src.core import property_list_resolver as plr
+        from src.core.property_list_resolver import resolve_property_list_typed_sync
+
+        ref = _make_ref()
+        agent_url = str(ref.agent_url)
+        # Pre-populate an EXPIRED entry to force the expiry-pop branch on entry.
+        plr._cache[(agent_url, ref.list_id)] = ([], datetime.now(UTC) - timedelta(seconds=1))
+
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        response_json = _make_response_json(
+            identifiers=[{"type": "domain", "value": "fresh.com"}],
+            cache_valid_until=future,
+        )
+
+        def _make_sync_client():
+            client = MagicMock()
+            client.__enter__ = MagicMock(return_value=client)
+            client.__exit__ = MagicMock(return_value=None)
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = response_json
+            resp.raise_for_status = MagicMock()
+            client.get = MagicMock(return_value=resp)
+            return client
+
+        errors: list[BaseException] = []
+        results: list[list] = []
+        results_lock = threading.Lock()
+
+        def _run():
+            try:
+                res = resolve_property_list_typed_sync(ref)
+                with results_lock:
+                    results.append(res)
+            except BaseException as exc:  # noqa: BLE001 — captured for assertion
+                with results_lock:
+                    errors.append(exc)
+
+        with patch(
+            "src.core.property_list_resolver.httpx.Client",
+            side_effect=lambda *a, **k: _make_sync_client(),
+        ):
+            threads = [threading.Thread(target=_run) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5.0)
+
+        assert not errors, f"Concurrent resolve raised (expiry-drop race / torn read): {errors!r}"
+        assert len(results) == 8, f"Expected 8 thread results, got {len(results)} — a thread hung"
+        assert all([ident.value for ident in r] == ["fresh.com"] for r in results), (
+            "Concurrent resolvers returned inconsistent identifiers — cache write was not atomic"
+        )

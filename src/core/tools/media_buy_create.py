@@ -142,12 +142,10 @@ from src.core.tools.financial_validation import validate_max_daily_package_spend
 from src.core.validation_helpers import format_validation_error
 from src.services.activity_feed import activity_feed
 from src.services.targeting_capabilities import (
+    collect_overlay_targeting_violations,
     raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
-    validate_geo_overlap,
-    validate_overlay_targeting,
     validate_property_targeting_allowed,
-    validate_unknown_targeting_fields,
 )
 
 # --- Helper Functions ---
@@ -1481,25 +1479,72 @@ from src.services.setup_checklist_service import SetupIncompleteError, validate_
 from src.services.slack_notifier import get_slack_notifier
 
 
+async def _resolve_property_list_allowed_sets(packages: list | None) -> dict[tuple[str, str], set[str]]:
+    """Resolve each package's buyer ``property_list`` to its identifier-value set.
+
+    Runs BEFORE the create validation transaction opens, so the external HTTP
+    fetch never holds a DB connection, and uses the async resolver so the event
+    loop is not blocked. Best-effort: a resolution failure is logged and that
+    list is omitted (the advisory then skips packages whose list didn't
+    resolve). Keyed by ``(agent_url, list_id)`` so a list referenced by several
+    packages is fetched once.
+    """
+    from src.core.property_list_resolver import resolve_property_list_typed
+
+    resolved: dict[tuple[str, str], set[str]] = {}
+    for package in packages or []:
+        overlay = getattr(package, "targeting_overlay", None)
+        ref = getattr(overlay, "property_list", None) if overlay else None
+        if ref is None:
+            continue
+        key = (str(ref.agent_url), ref.list_id)
+        if key in resolved:
+            continue
+        try:
+            identifiers = await resolve_property_list_typed(ref)
+        except Exception as exc:
+            logger.warning(
+                "[INTERSECTION-ADVISORY] Failed to resolve property_list %s/%s: %s",
+                ref.agent_url,
+                ref.list_id,
+                exc,
+            )
+            continue
+        resolved[key] = {ident.value for ident in identifiers}
+    return resolved
+
+
 def _emit_property_list_advisories(
     packages: list,
     product_map: dict,
     authorized_property_repo,
+    resolved_allowed_sets: dict[tuple[str, str], set[str]],
 ) -> None:
     """Log an advisory when a buyer's property_list has zero overlap with a package's product.
 
     Per the inventory-targeting plan SD2, ``inventory_list_no_match`` must be
     accept-with-context, not reject. So this helper never raises — it only
-    logs at WARNING so operators can surface mismatches in audit/Slack
-    pipelines, and downstream adapters emit the actual user-facing envelope
-    (Kevel resolves to empty siteIds; B4 adapters emit UNSUPPORTED_FEATURE).
+    logs at WARNING (greppable ``[INTERSECTION-ADVISORY]`` marker) so operators
+    can build log-based alerting on these mismatches; it is not wired to the
+    audit log or Slack. Downstream adapters emit the actual user-facing
+    envelope (Kevel resolves to empty siteIds; B4 adapters emit
+    UNSUPPORTED_FEATURE).
 
-    Resolution is best-effort: any exception while resolving the buyer's list
-    or running the intersection is logged and swallowed so create_media_buy
-    proceeds. The strict property_targeting_allowed validation already ran
-    above this call and rejected the genuinely-illegal case.
+    Runs inside the create validation transaction so each ORM product can be
+    converted to its schema form: ``convert_product_model_to_schema`` reads
+    ``effective_properties`` (which traverses the lazy ``inventory_profile``
+    relationship, hence the attached session), and the resulting schema
+    ``Product`` carries the ``publisher_properties`` selector objects the
+    intersection reads — the SAME object get_products hands the intersection, so
+    the two paths stay consistent (the ORM model has no ``publisher_properties``
+    attribute). The buyer property_lists were resolved over HTTP by
+    ``_resolve_property_list_allowed_sets`` BEFORE the transaction opened and are
+    passed in via ``resolved_allowed_sets`` — so no network call is made while a
+    DB connection is held. Best-effort: the intersection is swallowed on error so
+    create_media_buy proceeds, and a list that failed to resolve is absent from
+    ``resolved_allowed_sets`` and skipped here.
     """
-    from src.core.property_list_resolver import resolve_property_list_typed_sync
+    from src.core.product_conversion import convert_product_model_to_schema
     from src.services.property_intersection import PropertyIntersection
 
     intersection = PropertyIntersection(authorized_property_repo)
@@ -1512,13 +1557,19 @@ def _emit_property_list_advisories(
         product = product_map.get(package.product_id)
         if product is None:
             continue
+        allowed_set = resolved_allowed_sets.get((str(ref.agent_url), ref.list_id))
+        if allowed_set is None:
+            continue
         try:
-            identifiers = resolve_property_list_typed_sync(ref)
-            allowed_set = {ident.value for ident in identifiers}
-            result = intersection.filter_products([product], allowed_set)
+            # The intersection reads ``publisher_properties`` (AdCP selector
+            # objects); the ORM model exposes those only via ``effective_properties``,
+            # so convert to the schema Product first — the same object get_products
+            # hands the intersection.
+            schema_product = convert_product_model_to_schema(product)
+            result = intersection.filter_products([schema_product], allowed_set)
         except Exception as exc:
             logger.warning(
-                "[INTERSECTION-ADVISORY] Failed to resolve property_list for package %s: %s",
+                "[INTERSECTION-ADVISORY] Intersection failed for package %s: %s",
                 getattr(package, "package_id", None),
                 exc,
             )
@@ -1887,6 +1938,11 @@ async def _create_media_buy_impl(
         from src.core.database.models import Product as ProductModel
         from src.core.database.repositories import MediaBuyUoW
 
+        # Resolve buyer property_lists (external HTTP) before opening the
+        # validation transaction, so no DB connection is held across a network
+        # call and the event loop isn't blocked. Best-effort; feeds the advisory.
+        property_list_allowed_sets = await _resolve_property_list_allowed_sets(req.packages)
+
         # Get products first to determine currency from pricing options
         with MediaBuyUoW(tenant["tenant_id"]) as validation_uow:
             # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
@@ -1942,7 +1998,9 @@ async def _create_media_buy_impl(
                 # context, and downstream adapter compilation (Kevel via B3,
                 # raise UNSUPPORTED via B4) emits its own envelope shape.
                 assert validation_uow.authorized_properties is not None
-                _emit_property_list_advisories(req.packages, product_map, validation_uow.authorized_properties)
+                _emit_property_list_advisories(
+                    req.packages, product_map, validation_uow.authorized_properties, property_list_allowed_sets
+                )
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
@@ -2221,16 +2279,7 @@ async def _create_media_buy_impl(
         if req.packages:
             for pkg in req.packages:
                 if pkg.targeting_overlay is not None:
-                    # Reject unknown targeting fields (typos, bogus names) via model_extra
-                    unknown_violations = validate_unknown_targeting_fields(pkg.targeting_overlay)
-
-                    # Validate access control (managed-only, removed dimensions)
-                    access_violations = validate_overlay_targeting(pkg.targeting_overlay)
-
-                    # Reject same-value geo inclusion/exclusion overlap (AdCP SHOULD requirement)
-                    geo_overlap_violations = validate_geo_overlap(pkg.targeting_overlay)
-
-                    violations = unknown_violations + access_violations + geo_overlap_violations
+                    violations = collect_overlay_targeting_violations(pkg.targeting_overlay)
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
                         raise AdCPValidationError(

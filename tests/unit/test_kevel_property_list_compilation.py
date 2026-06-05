@@ -155,6 +155,26 @@ class TestRaiseIfUncompilableRejectsIncompatible:
         ):
             assert adapter._raise_if_property_list_uncompilable([_package_with_ref(_ref())]) is None
 
+    def test_field_index_points_to_offending_package(self):
+        """Multi-package: the rejection's field identifies the offending package, not always packages[0]."""
+        adapter = _kevel()
+        pkg0 = MagicMock(spec=MediaPackage)
+        pkg0.package_id = "pkg0"
+        pkg0.targeting_overlay = MagicMock()
+        pkg0.targeting_overlay.property_list = None  # no property_list → skipped
+        pkg1 = _package_with_ref(_ref())
+
+        with patch.object(adapter, "_site_resolver") as mock_resolver:
+            mock_resolver.resolve.return_value = ResolvedSiteIds(
+                site_ids=set(), unsupported_types={"ios_bundle"}, unresolvable_values=[]
+            )
+            with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
+                adapter._raise_if_property_list_uncompilable([pkg0, pkg1])
+
+        assert exc_info.value.field == "packages[1].targeting_overlay.property_list", (
+            f"field must identify the offending package index; got {exc_info.value.field!r}"
+        )
+
 
 class TestBuildTargetingCompilesPropertyList:
     """_build_targeting writes resolved siteIds into the Kevel native payload."""

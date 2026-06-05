@@ -10,7 +10,12 @@ from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.property_list_resolver import resolve_property_list_typed_sync
 from src.core.schemas import *
-from src.services.kevel_site_resolver import SUPPORTED_IDENTIFIER_TYPES, KevelSiteResolver, ResolvedSiteIds
+from src.services.kevel_site_resolver import (
+    SUPPORTED_IDENTIFIER_TYPES,
+    KevelSiteResolver,
+    ResolvedSiteIds,
+    identifier_type_str,
+)
 
 
 class Kevel(AdServerAdapter):
@@ -101,7 +106,7 @@ class Kevel(AdServerAdapter):
             identifiers = resolve_property_list_typed_sync(ref)
             unsupported_types: set[str] = set()
             for ident in identifiers:
-                ident_type = ident.type.value if hasattr(ident.type, "value") else str(ident.type)
+                ident_type = identifier_type_str(ident)
                 if ident_type not in SUPPORTED_IDENTIFIER_TYPES:
                     unsupported_types.add(ident_type)
             resolved = ResolvedSiteIds(site_ids=set(), unsupported_types=unsupported_types, unresolvable_values=[])

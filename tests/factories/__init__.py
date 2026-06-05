@@ -15,6 +15,7 @@ Usage::
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.core import (
     AdapterConfigFactory,
+    AuthorizedPropertyFactory,
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
@@ -45,6 +46,7 @@ ALL_FACTORIES = [
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
+    AuthorizedPropertyFactory,
     PublisherPartnerFactory,
     PrincipalFactory,
     InventoryProfileFactory,
@@ -65,6 +67,7 @@ __all__ = [
     "AccountFactory",
     "AdapterConfigFactory",
     "AgentAccountAccessFactory",
+    "AuthorizedPropertyFactory",
     "CollectionListReferenceFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",

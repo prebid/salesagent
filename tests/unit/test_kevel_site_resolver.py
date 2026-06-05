@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -26,6 +27,7 @@ from src.services.kevel_site_resolver import (
     KevelSiteResolver,
     ResolvedSiteIds,
     _normalize_domain,
+    identifier_type_str,
 )
 
 pytestmark = pytest.mark.unit
@@ -77,6 +79,20 @@ class TestNormalizeDomain:
 
     def test_keeps_non_www_subdomain(self):
         assert _normalize_domain("https://edition.cnn.com/world") == "edition.cnn.com"
+
+
+class TestIdentifierTypeStr:
+    """identifier_type_str normalizes enum-typed and bare-string identifier types."""
+
+    def test_enum_type_returns_value(self):
+        ident = Identifier(type=PropertyIdentifierTypes("domain"), value="espn.com")
+        assert identifier_type_str(ident) == "domain"
+
+    def test_bare_string_type_returns_str(self):
+        # Defensive path: some deserializations leave ``.type`` as a bare string
+        # (no ``.value``). SimpleNamespace mimics that shape without an enum.
+        bare = SimpleNamespace(type="ios_bundle", value="com.example.app")
+        assert identifier_type_str(bare) == "ios_bundle"
 
 
 class TestResolveSupportedTypes:
@@ -363,6 +379,47 @@ class TestPaginationAndFetch:
             pytest.raises(AdCPAdapterError, match="Failed to fetch Kevel site list"),
         ):
             resolver._fetch_all_sites()
+
+    def test_malformed_page_missing_key_raises(self):
+        """A 2xx page missing 'items' or 'totalPages' is malformed → raise.
+
+        Silently coercing it to "no sites / single page" would cache a
+        truncated site index, making every domain identifier mis-resolve to
+        no-match (a quiet failure). The resolver must surface it instead.
+        """
+        resolver = _resolver()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        # 'items' present but 'totalPages' absent → malformed.
+        mock_response = MagicMock(json=MagicMock(return_value={"items": [_kevel_site(1, "https://a.example")]}))
+        mock_response.raise_for_status = MagicMock()
+        mock_client.get = MagicMock(return_value=mock_response)
+
+        with (
+            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            pytest.raises(AdCPAdapterError, match="Malformed Kevel site list"),
+        ):
+            resolver._fetch_all_sites()
+
+    def test_empty_items_page_is_valid(self):
+        """An explicit empty page ('items': []) is valid — not malformed.
+
+        Distinguishes present-but-empty (no sites onboarded) from the
+        missing-key malformed case above.
+        """
+        resolver = _resolver()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        mock_response = MagicMock(json=MagicMock(return_value={"items": [], "totalPages": 1}))
+        mock_response.raise_for_status = MagicMock()
+        mock_client.get = MagicMock(return_value=mock_response)
+
+        with patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client):
+            sites = resolver._fetch_all_sites()
+
+        assert sites == []
 
 
 class TestResolvedSiteIdsDefaults:

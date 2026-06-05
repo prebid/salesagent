@@ -15,6 +15,7 @@ for subsequent value-only lookups (and vice versa).
 """
 
 import logging
+import threading
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -35,6 +36,14 @@ _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 # Stores typed Identifier objects so both .value (for products discovery) and
 # .type (for adapter compilation) are available without re-fetching.
 _cache: dict[tuple[str, str], tuple[list[Identifier], datetime]] = {}
+
+# Guards every read/write/clear of ``_cache``. The async and sync resolver
+# paths plus the create-media-buy advisory share this module-level cache from
+# different threads/event loops; without the lock the expiry-drop could ``del``
+# a key another caller already removed (``KeyError``) or read a torn entry. The
+# HTTP fetch stays OUTSIDE the lock — a concurrent cold-cache double-fetch is
+# acceptable (both produce the same identifiers), only the dict op is atomic.
+_cache_lock = threading.Lock()
 
 
 def _validate_agent_url(agent_url: str) -> None:
@@ -65,12 +74,16 @@ def _build_request(ref: PropertyListReference) -> tuple[str, str, dict[str, str]
 def _check_cache(agent_url: str, list_id: str) -> list[Identifier] | None:
     """Return cached identifiers if present and not expired; drop the entry on expiry."""
     cache_key = (agent_url, list_id)
-    if cache_key not in _cache:
-        return None
-    identifiers, expires_at = _cache[cache_key]
-    if datetime.now(UTC) >= expires_at:
-        del _cache[cache_key]
-        return None
+    with _cache_lock:
+        cached = _cache.get(cache_key)
+        if cached is None:
+            return None
+        identifiers, expires_at = cached
+        if datetime.now(UTC) >= expires_at:
+            # ``pop`` (not ``del``) so a concurrent caller that already
+            # refreshed or removed this key cannot raise ``KeyError``.
+            _cache.pop(cache_key, None)
+            return None
     logger.debug("Cache hit for property list %s/%s", agent_url, list_id)
     return identifiers
 
@@ -80,7 +93,8 @@ def _store_in_cache(agent_url: str, list_id: str, response_data: dict) -> list[I
     parsed = GetPropertyListResponse.model_validate(response_data)
     identifiers = parsed.identifiers or []
     expires_at = parsed.cache_valid_until or (datetime.now(UTC) + timedelta(seconds=_DEFAULT_CACHE_TTL_SECONDS))
-    _cache[(agent_url, list_id)] = (identifiers, expires_at)
+    with _cache_lock:
+        _cache[(agent_url, list_id)] = (identifiers, expires_at)
     logger.debug(
         "Resolved property list %s/%s: %d identifiers (cached until %s)",
         agent_url,
@@ -162,4 +176,5 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
 
 def clear_cache() -> None:
     """Clear the property list cache."""
-    _cache.clear()
+    with _cache_lock:
+        _cache.clear()

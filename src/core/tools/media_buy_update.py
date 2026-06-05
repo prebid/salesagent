@@ -82,12 +82,10 @@ from src.core.tools.financial_validation import (
 )
 from src.core.validation_helpers import format_validation_error
 from src.services.targeting_capabilities import (
+    collect_overlay_targeting_violations,
     raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
-    validate_geo_overlap,
-    validate_overlay_targeting,
     validate_property_targeting_allowed,
-    validate_unknown_targeting_fields,
 )
 
 
@@ -331,9 +329,7 @@ def _update_media_buy_impl(
                 for pkg_update in req.packages:
                     if pkg_update.targeting_overlay is None:
                         continue
-                    overlay_violations.extend(validate_unknown_targeting_fields(pkg_update.targeting_overlay))
-                    overlay_violations.extend(validate_overlay_targeting(pkg_update.targeting_overlay))
-                    overlay_violations.extend(validate_geo_overlap(pkg_update.targeting_overlay))
+                    overlay_violations.extend(collect_overlay_targeting_violations(pkg_update.targeting_overlay))
                 if overlay_violations:
                     raise AdCPValidationError(f"Targeting validation failed: {'; '.join(overlay_violations)}")
 
@@ -368,6 +364,12 @@ def _update_media_buy_impl(
             # capable seller). Both gates fire BEFORE the dry_run branch so
             # all transports + dry_run honor the contract uniformly.
             raise_if_property_list_unsupported(req.packages, adapter)
+
+            # The SD2 zero-overlap advisory (see ``_emit_property_list_advisories``)
+            # is create-only — it surfaces a buyer↔product property mismatch at
+            # initial buy creation. Update enforces the hard gates above (capability
+            # + property_targeting), which shape the response; the soft
+            # operator-visibility advisory is intentionally not duplicated here.
 
             # Dry-run mode: Return simulated response without any database writes
             # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated

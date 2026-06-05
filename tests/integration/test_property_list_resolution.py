@@ -23,7 +23,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    AuthorizedPropertyFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -44,6 +50,11 @@ def _make_property_list_ref(
     if auth_token is not None:
         ref["auth_token"] = auth_token
     return ref
+
+
+def _dom(value: str) -> list[dict]:
+    """AuthorizedProperty ``identifiers`` payload for one domain value."""
+    return [{"type": "domain", "value": value}]
 
 
 def _mock_http_response(
@@ -98,6 +109,10 @@ class TestPropertyListResolution:
         with ProductEnv(tenant_id="proplist-resolve", principal_id="proplist-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-resolve", subdomain="proplist-resolve")
             PrincipalFactory(tenant=tenant, principal_id="proplist-principal")
+            # by_id slugs resolve through the repo to these identifier values (domains).
+            AuthorizedPropertyFactory(tenant=tenant, property_id="prop_alpha", identifiers=_dom("alpha.com"))
+            AuthorizedPropertyFactory(tenant=tenant, property_id="prop_beta", identifiers=_dom("beta.com"))
+            AuthorizedPropertyFactory(tenant=tenant, property_id="prop_gamma", identifiers=_dom("gamma.com"))
 
             # Product with specific property IDs via by_id selector
             p1 = ProductFactory(
@@ -148,8 +163,8 @@ class TestPropertyListResolution:
             )
             PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
 
-            # Mock resolve_property_list to return identifiers matching p1
-            env.set_property_list(["prop_alpha", "prop_beta"])
+            # Buyer's resolved list = the identifier values of p1's properties.
+            env.set_property_list(["alpha.com", "beta.com"])
 
             response = await env.call_impl(
                 brief="property list test",
@@ -312,6 +327,12 @@ class TestPropertyListResolution:
         with ProductEnv(tenant_id="proplist-filter", principal_id="proplist-filter-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-filter", subdomain="proplist-filter")
             PrincipalFactory(tenant=tenant, principal_id="proplist-filter-principal")
+            # by_id slugs resolve through the repo to these identifier values (domains).
+            AuthorizedPropertyFactory(tenant=tenant, property_id="us_site_1", identifiers=_dom("us1.com"))
+            AuthorizedPropertyFactory(tenant=tenant, property_id="us_site_2", identifiers=_dom("us2.com"))
+            AuthorizedPropertyFactory(tenant=tenant, property_id="eu_site_1", identifiers=_dom("eu1.com"))
+            AuthorizedPropertyFactory(tenant=tenant, property_id="eu_site_2", identifiers=_dom("eu2.com"))
+            AuthorizedPropertyFactory(tenant=tenant, property_id="other_site", identifiers=_dom("other.com"))
 
             # Product targeting US sites (specific property IDs)
             p_us = ProductFactory(
@@ -366,9 +387,8 @@ class TestPropertyListResolution:
             )
             PricingOptionFactory(product=p_mixed, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
 
-            # Simulate resolution returning only US identifiers
-            # The external service has already applied countries_all=["US"] AND channels_any=["web"]
-            env.set_property_list(["us_site_1", "us_site_2"])
+            # Simulate resolution returning only US identifiers (the values of us_site_1/us_site_2).
+            env.set_property_list(["us1.com", "us2.com"])
 
             response = await env.call_impl(
                 brief="US property list test",

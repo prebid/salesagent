@@ -429,3 +429,19 @@ def validate_geo_overlap(targeting: Targeting) -> list[str]:
                 )
 
     return violations
+
+
+def collect_overlay_targeting_violations(targeting_overlay: Targeting) -> list[str]:
+    """Run the three per-package overlay-targeting validators and return all violations.
+
+    Shared by ``_create_media_buy_impl`` and ``_update_media_buy_impl`` so a
+    buyer cannot bypass unknown-field rejection, managed-only dimension checks,
+    or geo inclusion/exclusion overlap by routing the same change through a
+    different path. The raise shape differs between create and update, so the
+    callers raise; only the collection is shared here.
+    """
+    return (
+        validate_unknown_targeting_fields(targeting_overlay)
+        + validate_overlay_targeting(targeting_overlay)
+        + validate_geo_overlap(targeting_overlay)
+    )

@@ -15,6 +15,8 @@ so the boundary check fires. Kevel is the exception: it compiles
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from src.adapters.base import AdServerAdapter
@@ -23,6 +25,8 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.mock_ad_server import MockAdServer
 from src.adapters.triton_digital import TritonDigital
 from src.adapters.xandr import XandrAdapter
+from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.services.targeting_capabilities import raise_if_property_list_unsupported
 
 
 @pytest.mark.parametrize(
@@ -51,3 +55,31 @@ def test_adapter_does_not_advertise_property_list_targeting_support(
         f"adapter currently compiles property_list into its ad-server payload. "
         f"Implement the compile path before flipping this ClassVar."
     )
+
+
+def _pkg(*, property_list: bool) -> MagicMock:
+    pkg = MagicMock()
+    pkg.targeting_overlay = MagicMock()
+    pkg.targeting_overlay.property_list = MagicMock() if property_list else None
+    return pkg
+
+
+class _UnsupportedAdapter:
+    """Adapter class declaring no property_list compile path (like every adapter but Kevel)."""
+
+    supports_property_list_targeting = False
+
+
+class TestBoundaryGateFieldIndex:
+    """``raise_if_property_list_unsupported`` tags the offending package by index, not always [0]."""
+
+    def test_field_index_identifies_offending_package(self):
+        # packages[0] has no property_list (skipped); packages[1] is the offender.
+        packages = [_pkg(property_list=False), _pkg(property_list=True)]
+
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
+            raise_if_property_list_unsupported(packages, _UnsupportedAdapter())
+
+        assert exc_info.value.field == "packages[1].targeting_overlay.property_list", (
+            f"field must identify the offending package index, not packages[0]; got {exc_info.value.field!r}"
+        )
