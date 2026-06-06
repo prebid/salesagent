@@ -69,7 +69,19 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_123",
             "name": "Test Banner",
             "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-            "assets": {"banner_image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
+            "assets": {
+                "banner_image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "banner_image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/banner.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            },
             "variants": [],  # Required in adcp 3.6.0
         }
 
@@ -199,7 +211,19 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_456",
             "name": "Legacy Creative",
             "format_id": "display_300x250_image",  # String instead of FormatId object
-            "assets": {"banner_image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
+            "assets": {
+                "banner_image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "banner_image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/banner.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            },
             "variants": [],  # Required in adcp 3.6.0
         }
 
@@ -243,21 +267,57 @@ class TestSyncCreativesFormatValidation:
                 "creative_id": "creative_1",
                 "name": "Valid Creative",
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-                "assets": {"banner_image": {"url": "https://example.com/1.png"}},
+                "assets": {
+                    "banner_image": [
+                        {
+                            "asset_type": "image",
+                            "asset_id": "banner_image",
+                            "item_type": "individual",
+                            "required": True,
+                            "url": "https://example.com/1.png",
+                            "width": 300,
+                            "height": 250,
+                        }
+                    ]
+                },
                 "variants": [],
             },
             {
                 "creative_id": "creative_2",
                 "name": "Invalid Format",
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "unknown_format"},
-                "assets": {"banner_image": {"url": "https://example.com/2.png"}},
+                "assets": {
+                    "banner_image": [
+                        {
+                            "asset_type": "image",
+                            "asset_id": "banner_image",
+                            "item_type": "individual",
+                            "required": True,
+                            "url": "https://example.com/2.png",
+                            "width": 300,
+                            "height": 250,
+                        }
+                    ]
+                },
                 "variants": [],
             },
             {
                 "creative_id": "creative_3",
                 "name": "Valid Creative 2",
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-                "assets": {"banner_image": {"url": "https://example.com/3.png"}},
+                "assets": {
+                    "banner_image": [
+                        {
+                            "asset_type": "image",
+                            "asset_id": "banner_image",
+                            "item_type": "individual",
+                            "required": True,
+                            "url": "https://example.com/3.png",
+                            "width": 300,
+                            "height": 250,
+                        }
+                    ]
+                },
                 "variants": [],
             },
         ]
@@ -353,7 +413,19 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_no_format",
             "name": "Creative Without Format",
             # Missing format_id
-            "assets": {"banner_image": {"url": "https://example.com/banner.png"}},
+            "assets": {
+                "banner_image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "banner_image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/banner.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            },
         }
 
         mock_uow, mock_creative_repo = _make_creative_uow()
@@ -391,7 +463,19 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_unknown",
             "name": "Unknown Format",
             "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format"},
-            "assets": {"image": {"url": "https://example.com/1.png"}},
+            "assets": {
+                "image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/1.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            },
         }
 
         # Test 2: Agent unreachable (network error)
@@ -399,7 +483,19 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_unreachable",
             "name": "Unreachable Agent",
             "format_id": {"agent_url": "https://offline.example.com", "id": "display_300x250_image"},
-            "assets": {"image": {"url": "https://example.com/2.png"}},
+            "assets": {
+                "image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/2.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            },
         }
 
         mock_uow, mock_creative_repo = _make_creative_uow()

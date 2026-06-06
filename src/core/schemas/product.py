@@ -56,7 +56,7 @@ class Placement(LibraryPlacement):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     description: str = Field(..., description="Detailed description of the placement")
-    format_ids: list[FormatId] = Field(  # type: ignore[assignment]
+    format_ids: list[FormatId] = Field(
         ...,
         description="Supported creative formats for this placement",
         min_length=1,
@@ -271,7 +271,7 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
         Used by both MCP (for display) and A2A (for task messages).
         Provides conversational text without adding non-spec fields to the schema.
         """
-        count = len(self.products)
+        count = len(self.products) if self.products else 0
 
         # Base message
         if count == 0:
@@ -285,8 +285,14 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
         # Import here to avoid circular import (schemas -> helpers -> auth -> schemas)
         from src.core.helpers.pricing_helpers import pricing_option_has_rate
 
-        if count > 0 and all(
-            all(not pricing_option_has_rate(po) for po in p.pricing_options) for p in self.products if p.pricing_options
+        if (
+            count > 0
+            and self.products
+            and all(
+                all(not pricing_option_has_rate(po) for po in p.pricing_options)
+                for p in self.products
+                if p.pricing_options
+            )
         ):
             return f"{base_msg} Please connect through an authorized buying agent for pricing data."
 

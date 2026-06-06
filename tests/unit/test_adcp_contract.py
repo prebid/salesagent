@@ -9,6 +9,7 @@ These tests verify that:
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import Enum
 
 import pytest
 from adcp.types import CreativePolicy
@@ -127,17 +128,12 @@ class TestSchemaMatchesLibrary:
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )
 
-        # GetMediaBuyDeliveryRequest - local extends library with spec fields
+        # GetMediaBuyDeliveryRequest - local now matches library exactly
+        # (SDK 5.7 provides time_granularity, include_window_breakdown,
+        # include_package_daily_breakdown — no local extensions needed)
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        # adcp library lags the spec: time_granularity + include_window_breakdown
-        # are defined in get-media-buy-delivery-request.json but not yet in the
-        # adcp library's GetMediaBuyDeliveryRequest (gh-#1299). Declared locally
-        # via Pattern #1 (extend library type) until the library catches up.
-        local_extensions: set[str] = {"time_granularity", "include_window_breakdown"}
-        assert lib_fields == local_fields - local_extensions, (
-            f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
-        )
+        assert lib_fields == local_fields, f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
 
         # Document known drift for other schemas (to be fixed)
         # These assertions document the current state and will fail when fixed
@@ -1584,10 +1580,11 @@ class TestAdCPContract:
         assert "include_assignments" in adcp_response, "Field with default should be present"
         assert adcp_response["include_assignments"] is True, "Default value should match"
 
-        # Verify all spec fields are present (per adcp 4.3 library schema)
+        # Verify all spec fields are present (per adcp 5.7 library schema)
         spec_fields = {
             "account",
             "adcp_major_version",
+            "adcp_version",
             "context",
             "ext",
             "fields",
@@ -1595,10 +1592,13 @@ class TestAdCPContract:
             "include_assignments",
             "include_items",
             "include_pricing",
+            "include_purged",
             "include_snapshot",
             "include_variables",
+            "include_webhook_activity",
             "pagination",
             "sort",
+            "webhook_activity_limit",
         }
         assert set(adcp_response.keys()) == spec_fields, f"Fields should match spec: {set(adcp_response.keys())}"
 
@@ -1840,7 +1840,7 @@ class TestAdCPContract:
         # Verify optional status field (AdCP PR #77 - MCP Status System)
         # Status field is optional and only present when explicitly set
         if "status" in adcp_response:
-            assert isinstance(adcp_response["status"], str), "status must be string when present"
+            assert isinstance(adcp_response["status"], (str, Enum)), "status must be string/enum when present"
 
         # Verify specific field types and constraints
         assert isinstance(adcp_response["products"], list), "products must be array"
@@ -1859,10 +1859,9 @@ class TestAdCPContract:
         assert empty_adcp_response["products"] == [], "Empty products list should be empty array"
         # Verify __str__() provides appropriate empty message
         assert str(empty_response) == "No products matched your requirements."
-        # Allow 2 or 3 fields (status is optional and may not be present, message removed)
-        assert len(empty_adcp_response) >= 2 and len(empty_adcp_response) <= 3, (
-            f"GetProductsResponse should have 2-3 fields (status optional), got {len(empty_adcp_response)}"
-        )
+        # SDK 5.7 protocol envelope includes cache_scope, replayed, status as defaults
+        assert "products" in empty_adcp_response, "products field must be present"
+        assert "errors" in empty_adcp_response, "errors field must be present"
 
     def test_list_creative_formats_response_adcp_compliance(self):
         """Test that ListCreativeFormatsResponse complies with AdCP list-creative-formats-response schema."""
@@ -2496,12 +2495,11 @@ class TestAdCPContract:
         status = TaskStatus.from_operation_state("unknown_operation")
         assert status == TaskStatus.UNKNOWN
 
-        # Test that response schemas no longer have status field (moved to protocol envelope)
-        # Per AdCP PR #113, status is handled at transport layer via ProtocolEnvelope
+        # SDK 5.7: status is part of the protocol envelope (always present as default)
+        # Per AdCP PR #113, status was moved to protocol envelope — SDK 5.7 includes it
         response = GetProductsResponse(products=[])
-
         data = response.model_dump()
-        assert "status" not in data  # Status field removed from domain models
+        assert "products" in data  # Domain field present
 
     def test_package_excludes_internal_fields(self):
         """Test that Package model_dump excludes internal fields from AdCP responses.

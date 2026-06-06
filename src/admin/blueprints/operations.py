@@ -494,6 +494,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         else:
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
                                 task_id=step_data["step_id"],
+                                task_type=step_data.get("tool_name", "create_media_buy"),
                                 result=create_media_buy_approved_result,
                                 status=AdcpTaskStatus.completed,
                             )
@@ -584,6 +585,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     else:
                         create_media_buy_rejected_payload = create_mcp_webhook_payload(
                             task_id=step_data["step_id"],
+                            task_type=step_data.get("tool_name", "create_media_buy"),
                             result=create_media_buy_rejected_result,
                             status=AdcpTaskStatus.rejected,
                         )

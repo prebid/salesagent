@@ -236,7 +236,19 @@ class TestSyncCreativesAsyncScenario:
             "creative_id": "test_creative_789",
             "name": "Test Creative",
             "format_id": {"agent_url": "https://example.com", "id": "display_300x250"},
-            "assets": {"banner_image": {"url": "https://example.com/image.png"}},
+            "assets": {
+                "banner_image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "banner_image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/image.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            },
         }
 
         with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:

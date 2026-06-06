@@ -3713,7 +3713,7 @@ async def _create_media_buy_impl(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
             valid_actions=valid_actions_for_status(media_buy_status),
-            creative_deadline=response.creative_deadline,
+            creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
             errors=property_list_unsupported_advisories(req.packages, adapter),
         )

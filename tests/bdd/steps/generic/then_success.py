@@ -41,7 +41,9 @@ def then_response_status(ctx: dict, status: str) -> None:
     resp_fields = getattr(type(resp), "model_fields", {})
     if "status" in resp_fields:
         actual = resp.status
-        assert actual == status, f"Expected status '{status}', got '{actual}'"
+        # SDK 5.7: status may be a non-StrEnum; extract .value for comparison
+        actual_str = actual.value if hasattr(actual, "value") else str(actual)
+        assert actual_str == status, f"Expected status '{status}', got '{actual_str}'"
         return
 
     # Status-less response: only the completed/success state is representable.

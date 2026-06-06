@@ -10,10 +10,7 @@ from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import (
-    CreativeAction,
-    CreativeStatus,
-)
+from adcp.types import CreativeAction, CreativeStatus
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
     ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
@@ -350,18 +347,44 @@ class SyncSummary(SalesAgentBaseModel):
 
 
 class SyncCreativeResult(LibrarySyncCreativeResult):
-    """Extends library SyncCreativeResult with internal-only fields.
+    """Extends library SyncCreativeResult with locally-owned fields.
 
-    Library provides: creative_id, action (CreativeAction enum), platform_id,
-    changes, errors, warnings, assigned_to, assignment_errors, account,
-    expires_at, preview_url.
+    Library (SDK 5.7) provides: creative_id, action, errors,
+    adcp_major_version, adcp_version.
 
-    Local overrides:
-    - status, review_feedback: Internal fields excluded from responses
-    - changes, errors, warnings: Override to default=[] (library defaults to None)
+    Locally owned (removed from SDK 5.7 but used by this codebase):
+    - assigned_to, assignment_errors: assignment reporting (UC-006)
+    - platform_id, status: internal tracking
+    - changes, warnings: sync operation details
+
+    Internal-only (not in AdCP spec):
+    - review_feedback: excluded from responses
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # SDK 5.7 (adcontextprotocol/adcp-client-python#913): parent declares action
+    # as CreativeAction|str and stores raw strings. CreativeAction is plain Enum
+    # (not StrEnum), so "created" == CreativeAction.created is False. Redeclare
+    # as CreativeAction and coerce via validator until upstream fixes the enum base.
+    action: CreativeAction = Field(description="Action taken for this creative")
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _coerce_action_to_enum(cls, v: Any) -> CreativeAction:
+        if isinstance(v, CreativeAction):
+            return v
+        if isinstance(v, str):
+            return CreativeAction(v)
+        return v
+
+    # --- Fields removed from SDK 5.7 that we own locally ---
+    assigned_to: list[str] | None = Field(None, description="Package IDs this creative was assigned to during sync")
+    assignment_errors: dict[str, str] | None = Field(
+        None, description="Per-package assignment errors {package_id: error_message}"
+    )
+    platform_id: str | None = Field(None, description="Platform-assigned creative identifier")
+    status: str | None = Field(None, description="Internal creative status")
 
     # Internal-only fields (not in AdCP spec)
     review_feedback: str | None = Field(
@@ -446,11 +469,16 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
     Since the error variant is never constructed (ToolError handles failures),
-    we subclass the success variant directly. Fields (creatives, dry_run,
-    context, ext, sandbox) are inherited.
+    we subclass the success variant directly.
+
+    SDK 5.7 collapsed the success envelope — dry_run, sandbox, context, ext
+    removed from parent. Declared locally where needed.
 
     Design decision (salesagent-g3c): error variant never constructed.
     """
+
+    # SDK 5.7 removed these from the parent — declare locally
+    dry_run: bool | None = None
 
     def model_dump(self, **kwargs):
         """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
@@ -461,11 +489,17 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
-        # Count actions from creatives list
-        created = sum(1 for c in self.creatives if c.action == CreativeAction.created)
-        updated = sum(1 for c in self.creatives if c.action == CreativeAction.updated)
-        deleted = sum(1 for c in self.creatives if c.action == CreativeAction.deleted)
-        failed = sum(1 for c in self.creatives if c.action == CreativeAction.failed)
+
+        # Count actions from creatives list. SDK 5.7 stores action as str,
+        # our SyncCreativeResult coerces to CreativeAction enum. Handle both.
+        def _action_str(c: Any) -> str:
+            a = c.action
+            return a.value if hasattr(a, "value") else str(a)
+
+        created = sum(1 for c in self.creatives if _action_str(c) == "created")
+        updated = sum(1 for c in self.creatives if _action_str(c) == "updated")
+        deleted = sum(1 for c in self.creatives if _action_str(c) == "deleted")
+        failed = sum(1 for c in self.creatives if _action_str(c) == "failed")
 
         parts = []
         if created:
@@ -589,7 +623,7 @@ class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResp
     # Override with local subtypes (each extends its library counterpart)
     query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")  # type: ignore[assignment]
     pagination: Pagination = Field(..., description="Pagination information for navigating results")
-    creatives: list[Creative] = Field(..., description="Array of creative assets")  # type: ignore[assignment]
+    creatives: list[Creative] = Field(..., description="Array of creative assets")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

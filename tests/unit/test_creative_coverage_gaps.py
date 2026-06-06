@@ -51,7 +51,19 @@ def _make_creative_dict(creative_id="c1", name="Test Banner"):
         "creative_id": creative_id,
         "name": name,
         "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        "assets": {"banner_image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
+        "assets": {
+            "banner_image": [
+                {
+                    "asset_type": "image",
+                    "asset_id": "banner_image",
+                    "item_type": "individual",
+                    "required": True,
+                    "url": "https://example.com/banner.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            ]
+        },
         "variants": [],
     }
 
@@ -161,7 +173,19 @@ class TestSyncBaseModelNormalization:
             creative_id: str = "c_custom"
             name: str = "Custom Banner"
             format_id: dict = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}
-            assets: dict = {"banner_image": {"url": "https://example.com/banner.png"}}
+            assets: dict = {
+                "banner_image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "banner_image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/banner.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            }
             variants: list = []
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
@@ -642,7 +666,19 @@ class TestValidationEdgeCases:
             creative_id="c1",
             name="Test Banner",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-            assets={"image": {"url": "https://example.com/img.png"}},
+            assets={
+                "image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/img.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            },
             tags=["automotive", "display"],
             variants=[],
         )

@@ -176,7 +176,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
     # adcp 4.3.0: Assets classes are type-discriminated with Literal asset_type fields.
     # ImageFormatAsset = image, VideoFormatAsset = video. Pass asset_type as plain string (not enum).
     if asset_type == "video":
-        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(
+        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(  # type: ignore[valid-type]
             item_type="individual",
             asset_id="primary",
             asset_type="video",
@@ -189,7 +189,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
             asset_type="image",
             required=True,
         )
-    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]
+    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]  # type: ignore[valid-type]
     # Use Format (our extended class) instead of AdcpFormat to include is_standard field
     # Explicitly pass None for optional internal fields to satisfy mypy
     return Format(

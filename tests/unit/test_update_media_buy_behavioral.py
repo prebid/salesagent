@@ -1429,13 +1429,37 @@ class TestUC003UploadInlineCreatives:
                                 "creative_id": "c1",
                                 "name": "Creative 1",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {"main": {"url": "https://example.com/a1.png"}},
+                                "assets": {
+                                    "main": [
+                                        {
+                                            "asset_type": "image",
+                                            "asset_id": "main",
+                                            "item_type": "individual",
+                                            "required": True,
+                                            "url": "https://example.com/a1.png",
+                                            "width": 300,
+                                            "height": 250,
+                                        }
+                                    ]
+                                },
                             },
                             {
                                 "creative_id": "c2",
                                 "name": "Creative 2",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {"main": {"url": "https://example.com/a2.png"}},
+                                "assets": {
+                                    "main": [
+                                        {
+                                            "asset_type": "image",
+                                            "asset_id": "main",
+                                            "item_type": "individual",
+                                            "required": True,
+                                            "url": "https://example.com/a2.png",
+                                            "width": 300,
+                                            "height": 250,
+                                        }
+                                    ]
+                                },
                             },
                         ],
                     }
@@ -1477,7 +1501,19 @@ class TestUC003UploadInlineCreatives:
                                 "creative_id": "c3",
                                 "name": "Creative 3",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {"main": {"url": "https://example.com/a3.png"}},
+                                "assets": {
+                                    "main": [
+                                        {
+                                            "asset_type": "image",
+                                            "asset_id": "main",
+                                            "item_type": "individual",
+                                            "required": True,
+                                            "url": "https://example.com/a3.png",
+                                            "width": 300,
+                                            "height": 250,
+                                        }
+                                    ]
+                                },
                             }
                         ],
                     }
@@ -1523,7 +1559,19 @@ class TestUC003UploadInlineCreatives:
                                 "creative_id": "c_fail",
                                 "name": "Bad Creative",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {"main": {"url": "https://example.com/fail.png"}},
+                                "assets": {
+                                    "main": [
+                                        {
+                                            "asset_type": "image",
+                                            "asset_id": "main",
+                                            "item_type": "individual",
+                                            "required": True,
+                                            "url": "https://example.com/fail.png",
+                                            "width": 300,
+                                            "height": 250,
+                                        }
+                                    ]
+                                },
                             }
                         ],
                     }
@@ -2501,7 +2549,19 @@ class TestUC003ExtK:
                                 "creative_id": "c_fail",
                                 "name": "Fail",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {"main": {"url": "https://example.com/fail.png"}},
+                                "assets": {
+                                    "main": [
+                                        {
+                                            "asset_type": "image",
+                                            "asset_id": "main",
+                                            "item_type": "individual",
+                                            "required": True,
+                                            "url": "https://example.com/fail.png",
+                                            "width": 300,
+                                            "height": 250,
+                                        }
+                                    ]
+                                },
                             }
                         ],
                     }
@@ -2542,7 +2602,19 @@ class TestUC003ExtK:
                                 "creative_id": "c_fail",
                                 "name": "Fail",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {"main": {"url": "https://example.com/fail.png"}},
+                                "assets": {
+                                    "main": [
+                                        {
+                                            "asset_type": "image",
+                                            "asset_id": "main",
+                                            "item_type": "individual",
+                                            "required": True,
+                                            "url": "https://example.com/fail.png",
+                                            "width": 300,
+                                            "height": 250,
+                                        }
+                                    ]
+                                },
                             }
                         ],
                     }

@@ -95,7 +95,7 @@ _ASSET_TYPE_TO_CLASS: dict[str, type] = {
 
 def _make_asset(
     asset_id: str, asset_type: str, required: bool
-) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:
+) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:  # type: ignore[valid-type]
     """Build the correct Assets variant for a given asset type string."""
     cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
     return cls(
@@ -233,7 +233,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[
+                        assets_list: list[  # type: ignore[valid-type]
                             ImageFormatAsset
                             | VideoFormatAsset
                             | AudioFormatAsset

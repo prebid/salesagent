@@ -17,7 +17,10 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 
 from adcp.types import ContextObject
-from adcp.types.generated_poc.core.signal_id import SignalId, SignalId18  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.core.signal_id import (
+    SignalId,
+    SignalId5,
+)  # SDK 5.7: SignalId18 → SignalId5 (same fields: agent_url, id, source)
 from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
@@ -36,7 +39,7 @@ from src.core.testing_hooks import AdCPTestContext
 
 def _agent_signal_id(segment_id: str) -> SignalId:
     """Build a SignalId for an agent-native signal."""
-    return SignalId(SignalId18(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
+    return SignalId(SignalId5(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
 
 
 def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricingOption]:

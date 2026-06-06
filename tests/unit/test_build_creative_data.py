@@ -51,7 +51,22 @@ class TestOptionalFields:
     """Optional fields only included when present in creative model."""
 
     def test_assets_included(self):
-        creative = _make_creative(assets={"main": {"url": "https://example.com/main.png"}})
+        # SDK 5.7: assets values are lists of discriminated-union asset models
+        creative = _make_creative(
+            assets={
+                "main": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "main",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/main.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
+            }
+        )
         data = _build_creative_data(creative, None)
         # Assets are stored as typed Asset models (not dicts)
         assert "assets" in data
@@ -113,7 +128,19 @@ class TestCombined:
             width=728,
             height=90,
             duration=15,
-            assets={"main": {"url": "https://cdn.example.com/banner.png"}},
+            assets={
+                "main": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "main",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://cdn.example.com/banner.png",
+                        "width": 728,
+                        "height": 90,
+                    }
+                ]
+            },
             snippet="<script>tag</script>",
             snippet_type="js",
             template_variables={"cta": "Learn More"},

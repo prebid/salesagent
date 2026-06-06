@@ -9,6 +9,37 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
+def _extract_url_from_asset_value(asset: Any) -> str | None:
+    """Extract a URL from an asset value (dict, RootModel/list, or object).
+
+    adcp SDK 5.7 changed asset values from flat dicts like ``{"url": "..."}``
+    to discriminated-union lists wrapped in ``Assets`` (a RootModel). This
+    helper handles both the legacy dict format and the new list/RootModel
+    format transparently.
+    """
+    if isinstance(asset, dict):
+        return asset.get("url")
+
+    # New SDK format: Assets RootModel wrapping a list of AssetVariant models.
+    # Unwrap .root to get the list, then check first item for .url.
+    items = getattr(asset, "root", None)
+    if isinstance(items, list) and items:
+        first = items[0]
+        # AssetVariant is also a RootModel wrapping the concrete asset
+        inner = getattr(first, "root", first)
+        url = getattr(inner, "url", None)
+        if url:
+            return str(url)
+        # Also try .url on the variant wrapper itself (it proxies)
+        url = getattr(first, "url", None)
+        if url:
+            return str(url)
+        return None
+
+    # Plain object (e.g. a single asset model, not wrapped in list)
+    return getattr(asset, "url", None)
+
+
 def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
     """Extract the best URL from a creative's assets.
 
@@ -31,14 +62,14 @@ def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
     for priority_key in ["main", "image", "video", "creative", "content"]:
         if priority_key in assets:
             asset = assets[priority_key]
-            url = asset.get("url") if isinstance(asset, dict) else getattr(asset, "url", None)
+            url = _extract_url_from_asset_value(asset)
             if url:
                 logger.debug(f"[sync_creatives] Extracted URL from assets.{priority_key}.url")
                 return str(url)
 
     # Priority 2: First available asset URL
     for asset_id, asset_data in assets.items():
-        asset_url = asset_data.get("url") if isinstance(asset_data, dict) else getattr(asset_data, "url", None)
+        asset_url = _extract_url_from_asset_value(asset_data)
         if asset_url:
             logger.debug(f"[sync_creatives] Extracted URL from assets.{asset_id}.url (fallback)")
             return str(asset_url)

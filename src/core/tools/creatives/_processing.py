@@ -750,8 +750,9 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (i6k: model attribute assignment)
+    # SDK 5.7: CreativeAsset is now a RootModel; __getattr__ proxies to .root
     if not creative.creative_id:
-        creative.creative_id = db_creative.creative_id
+        creative.creative_id = db_creative.creative_id  # type: ignore[attr-defined]
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":

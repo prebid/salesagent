@@ -98,16 +98,22 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
         return f"Found {count} account{'s' if count != 1 else ''}."
 
 
-class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSuccess):
+class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSuccess):  # type: ignore[misc]
     """Extends library SyncAccountsResponse success variant.
 
     adcp 3.10: SyncAccountsResponse is a union TypeAlias (not RootModel).
     Since the error variant is never constructed (ToolError handles failures),
-    we subclass the success variant directly. Fields (accounts, dry_run,
-    context, ext) are inherited.
+    we subclass the success variant directly.
+
+    SDK 5.7 collapsed the success envelope to just `status`. Fields previously
+    inherited (accounts, dry_run, context, ext) are now declared locally.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # SDK 5.7 removed these from the parent — declare locally
+    accounts: list[Any] = []
+    dry_run: bool | None = None
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

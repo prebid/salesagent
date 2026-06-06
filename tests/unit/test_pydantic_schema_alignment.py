@@ -66,35 +66,22 @@ SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
 # These have defaults or are managed by the library base class — exclude from all comparisons.
 _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
-# Fields that exist in the online AdCP JSON schema but are NOT yet in the adcp 3.6.0
+# Fields that exist in the online AdCP JSON schema but are NOT yet in the adcp 5.7.0
 # Python library. These are spec-vs-library mismatches, not bugs in our code.
 # See test_schema_account_field_mismatch.py for detailed documentation.
 # FIXME(salesagent-amkf): Remove entries as adcp library adds these fields.
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "/schemas/latest/media-buy/get-products-request.json": {
-        "fields",  # Schema defines field selection, library doesn't have it yet
         "if_catalog_version",  # Schema defines catalog-version pre-flight, library doesn't have it yet
-        "if_pricing_version",  # Schema defines pricing-version pre-flight, library doesn't have it yet
-        "if_wholesale_feed_version",  # Schema defines wholesale feed version pre-flight, library doesn't have it yet
-        "preferred_delivery_types",  # Schema defines delivery type preferences, library doesn't have it yet
-        "refine",  # Schema defines refinement array, library doesn't have it yet
-        "required_policies",  # Schema defines policy IDs, library doesn't have it yet
-        "time_budget",  # Schema defines time budget, library doesn't have it yet
     },
-    "/schemas/latest/media-buy/update-media-buy-request.json": {
-        "account",  # Schema adds account (object) field, not exposed by library or our model yet
-        "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
-        "invoice_recipient",  # Schema refs BusinessEntity type, not in library or our models yet
-    },
-    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": {
-        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
-        "reporting_dimensions",  # Schema defines it, library doesn't have it yet
-        "time_granularity",  # Schema defines per-window slice granularity, library doesn't have it yet
-        "include_window_breakdown",  # Schema defines windowed pull breakdown, library doesn't have it yet
-    },
+    # update-media-buy-request: SDK 5.7 provides account, idempotency_key,
+    # invoice_recipient — no gaps.
+    "/schemas/latest/media-buy/update-media-buy-request.json": set(),
+    # get-media-buy-delivery-request: SDK 5.7 provides all fields (account,
+    # reporting_dimensions, time_granularity, include_window_breakdown) — no gaps.
+    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": set(),
     "/schemas/latest/media-buy/sync-creatives-request.json": {
         "account_id",  # Schema defines 'account_id' (string); library/local model uses 'account' (AccountReference object). Tracked under #1247.
-        "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
     "/schemas/latest/media-buy/list-creatives-request.json": {
         "include_performance",  # Schema defines performance metrics flag, library doesn't have it yet

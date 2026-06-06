@@ -182,7 +182,7 @@ async def _call_webhook_for_creative_status(
             if context_data and isinstance(context_data, dict):
                 context_obj = ContextObject.model_construct(**context_data)
 
-            complete_result = SyncCreativesSuccessResponse(creatives=creatives, dry_run=False, context=context_obj)
+            complete_result = SyncCreativesSuccessResponse(creatives=creatives, dry_run=False, context=context_obj)  # type: ignore[operator]
 
             # build push notification config from step request data
             # this is because we don't store push notification config in the database when creating the creative
@@ -248,10 +248,13 @@ async def _call_webhook_for_creative_status(
                     context_id=step_context_id,
                 )
             else:
-                # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
-                # McpWebhookPayload instead of dict[str, Any] for proper type safety
-                mcp_payload_dict = create_mcp_webhook_payload(step_step_id, GeneratedTaskStatus.completed, result_dict)
-                payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
+                # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type
+                payload = create_mcp_webhook_payload(
+                    step_step_id,
+                    GeneratedTaskStatus.completed,
+                    step_tool_name or "sync_creatives",
+                    result=result_dict,
+                )
 
             metadata = {
                 "task_type": step_tool_name

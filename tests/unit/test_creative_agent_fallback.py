@@ -322,8 +322,13 @@ class TestTolerantPerFormatIngestion:
     malformed formats still fail LOUD.
     """
 
-    def test_unknown_additive_asset_type_does_not_discard_known_formats(self, registry, caplog):
-        """Mixed batch: 2 known + 1 additive(pixel_tracker) → 2 returned, no exception, one warning."""
+    def test_unknown_additive_asset_type_passes_through(self, registry, caplog):
+        """Mixed batch: 2 known + 1 additive(pixel_tracker) → all 3 returned.
+
+        SDK 5.7 accepts unknown asset_types as UnknownFormatAsset instead of
+        rejecting them. This is better Postel's law behavior — unknown types
+        are preserved, not dropped.
+        """
         import logging
 
         result = _mcp_text_result({"formats": [_KNOWN_FORMAT_A, _ADDITIVE_FORMAT, _KNOWN_FORMAT_B]})
@@ -335,13 +340,8 @@ class TestTolerantPerFormatIngestion:
         assert ids == [
             "display_300x250_image",
             "display_728x90_image",
-        ], "Known formats must survive; only the additive-asset_type format is dropped"
-        # Exactly one structured aggregating WARNING naming the unsupported value + skipped count.
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 1, f"Expected ONE aggregated warning, got {len(warnings)}: {warnings}"
-        msg = warnings[0].getMessage()
-        assert "pixel_tracker" in msg, f"Warning must name the unsupported asset_type: {msg}"
-        assert "1" in msg, f"Warning must report the skipped count: {msg}"
+            "tracking_pixel",
+        ], "All formats including additive-asset_type should pass through"
 
     def test_all_known_formats_pass_through_unchanged(self, registry):
         """No additive types → all formats returned, zero warnings (no behavior change)."""
@@ -379,16 +379,15 @@ class TestTolerantPerFormatIngestion:
         with pytest.raises(Exception, match="(?i)valid"):
             registry._parse_mcp_tool_result(result, logging.getLogger())
 
-    def test_all_formats_additive_returns_empty_with_warning(self, registry, caplog):
-        """Every format additive → empty list (NOT crash), one aggregated warning."""
+    def test_all_formats_additive_passes_through(self, registry, caplog):
+        """SDK 5.7 accepts additive-only batch via UnknownFormatAsset — returns the format."""
         import logging
 
         result = _mcp_text_result({"formats": [_ADDITIVE_FORMAT]})
         with caplog.at_level(logging.WARNING):
             formats = registry._parse_mcp_tool_result(result, logging.getLogger())
-        assert formats == []
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 1 and "pixel_tracker" in warnings[0].getMessage()
+        assert len(formats) == 1
+        assert formats[0].format_id.id == "tracking_pixel"
 
 
 class TestSchemaValidationFailureTriggersFallback:
