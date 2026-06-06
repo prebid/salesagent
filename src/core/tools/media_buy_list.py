@@ -97,7 +97,7 @@ def _get_media_buys_impl(
     Returns:
         GetMediaBuysResponse with matching media buys
     """
-    identity = require_identity(identity)
+    identity = require_identity(identity, context=req.context)
 
     if req.account is not None or req.account_id is not None:
         raise AdCPCapabilityNotSupportedError(
@@ -130,7 +130,7 @@ def _get_media_buys_impl(
 
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
     # if no tenant resolved (the principal advisories above take precedence).
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=req.context)
     today = datetime.now(UTC).date()
     tenant_id: str = tenant["tenant_id"]
 

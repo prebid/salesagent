@@ -193,9 +193,9 @@ def _list_creatives_impl(
     # which are principal-specific and must be access-controlled
     # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
     # require_identity narrows the type for the tenant lookup below.
-    principal_id = require_principal_id(identity)
-    identity = require_identity(identity)
-    tenant = require_tenant(identity)
+    principal_id = require_principal_id(identity, context=context)
+    identity = require_identity(identity, context=context)
+    tenant = require_tenant(identity, context=context)
 
     creatives = []
     total_count = 0

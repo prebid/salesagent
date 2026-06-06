@@ -107,7 +107,7 @@ def _get_media_buy_delivery_impl(
     principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=req.context)
 
     # Get the appropriate adapter
     # Use testing_ctx.dry_run if in testing mode, otherwise False

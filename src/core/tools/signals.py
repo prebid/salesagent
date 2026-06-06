@@ -68,8 +68,8 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     _ = identity.principal_id if identity else None
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    identity = require_identity(identity)
-    tenant = require_tenant(identity)
+    identity = require_identity(identity, context=req.context)
+    tenant = require_tenant(identity, context=req.context)
 
     # Mock implementation - in production, this would query from a signal provider
     # or the ad server's available audience segments
@@ -228,9 +228,9 @@ async def _activate_signal_impl(
     """
     start_time = time.time()
 
-    identity = require_identity(identity)
-    principal_id = require_principal_id(identity)
-    require_tenant(identity)
+    identity = require_identity(identity, context=context)
+    principal_id = require_principal_id(identity, context=context)
+    require_tenant(identity, context=context)
 
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)

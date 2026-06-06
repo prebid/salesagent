@@ -96,7 +96,7 @@ def _get_adcp_capabilities_impl(
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
-    identity = require_identity(identity)
+    identity = require_identity(identity, context=req.context if req else None)
 
     tenant_id = tenant["tenant_id"]
     tenant_name = tenant.get("name", "Unknown")

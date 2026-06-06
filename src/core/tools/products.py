@@ -170,11 +170,11 @@ async def _get_products_impl(
         raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
 
     # Extract identity fields
-    identity = require_identity(identity)
+    identity = require_identity(identity, context=req.context)
 
     testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=req.context)
     logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
 
     # Get the Principal object with ad server mappings

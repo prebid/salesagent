@@ -77,9 +77,9 @@ def _sync_creatives_impl(
     # Authentication — principal_id is required for creative sync (NOT NULL in database).
     # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
     # require_identity narrows the type. Tenant is resolved at the transport boundary.
-    principal_id = require_principal_id(identity)
-    identity = require_identity(identity)
-    tenant = require_tenant(identity)
+    principal_id = require_principal_id(identity, context=context)
+    identity = require_identity(identity, context=context)
+    tenant = require_tenant(identity, context=context)
 
     # Track actions per creative for AdCP-compliant response
 

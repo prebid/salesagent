@@ -119,7 +119,13 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     return actions
 
 
-def _verify_principal(media_buy_id: str, identity: "ResolvedIdentity", repo: MediaBuyRepository) -> None:
+def _verify_principal(
+    media_buy_id: str,
+    identity: "ResolvedIdentity",
+    repo: MediaBuyRepository,
+    *,
+    context: ContextObject | None = None,
+) -> None:
     """Verify that the principal from identity owns the media buy.
 
     Uses the provided repository for database access (no own session).
@@ -134,10 +140,10 @@ def _verify_principal(media_buy_id: str, identity: "ResolvedIdentity", repo: Med
         ValueError: Media buy not found
         PermissionError: Principal doesn't own media buy
     """
-    principal_id = require_principal_id(identity)
+    principal_id = require_principal_id(identity, context=context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=context)
 
     # Query database for media buy by ID
     media_buy = repo.get_by_id(media_buy_id)
@@ -185,7 +191,7 @@ def _update_media_buy_impl(
     principal_id = require_principal_id(identity, context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=req.context)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
     # Hoist ``ctx_manager`` and ``step`` out of the try below so the
@@ -214,7 +220,7 @@ def _update_media_buy_impl(
                 raise AdCPValidationError("media_buy_id is required")
 
             # Verify principal owns this media buy
-            _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
+            _verify_principal(media_buy_id_to_use, identity, uow.media_buys, context=req.context)
 
             # State-machine precondition: terminal states reject all mutations,
             # and non-terminal states only accept actions in their valid set.

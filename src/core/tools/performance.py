@@ -56,15 +56,15 @@ def _update_performance_index_impl(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
-    identity = require_identity(identity)
+    identity = require_identity(identity, context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=req.context)
 
     with MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
-        _verify_principal(req.media_buy_id, identity, uow.media_buys)
-    principal_id = require_principal_id(identity)
+        _verify_principal(req.media_buy_id, identity, uow.media_buys, context=req.context)
+    principal_id = require_principal_id(identity, context=req.context)
 
     principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 

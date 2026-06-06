@@ -163,7 +163,7 @@ def _list_creative_formats_impl(
 
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=req.context)
 
     # Get formats from all registered creative agents via registry
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry

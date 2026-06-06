@@ -1562,15 +1562,15 @@ async def _create_media_buy_impl(
             )
 
     # Extract testing context first
-    identity = require_identity(identity)
+    identity = require_identity(identity, context=req.context)
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
     # Authentication and tenant setup
-    principal_id = require_principal_id(identity)
+    principal_id = require_principal_id(identity, context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=req.context)
 
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:

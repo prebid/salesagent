@@ -52,7 +52,7 @@ def _list_authorized_properties_impl(
 
     # Extract principal and tenant from resolved identity (anonymous principal allowed; tenant required)
     principal_id = identity.principal_id if identity else None
-    tenant = require_tenant(identity)
+    tenant = require_tenant(identity, context=req.context)
     tenant_id = tenant["tenant_id"]
 
     # Apply testing hooks
