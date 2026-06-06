@@ -180,7 +180,7 @@ def _update_media_buy_impl(
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
 
-    identity = require_identity(identity)
+    identity = require_identity(identity, context=req.context)
 
     principal_id = require_principal_id(identity, context=req.context)
 

@@ -96,7 +96,7 @@ def _get_media_buy_delivery_impl(
     """
 
     # Validate identity is provided
-    identity = require_identity(identity)
+    identity = require_identity(identity, context=req.context)
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()

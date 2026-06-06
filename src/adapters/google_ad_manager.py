@@ -305,7 +305,7 @@ class GoogleAdManager(AdServerAdapter):
         gam_mappings = self.principal.platform_mappings.get("google_ad_manager", {})
         return bool(gam_mappings.get("gam_admin", False) or gam_mappings.get("is_admin", False))
 
-    def _require_creatives_manager(self):
+    def _require_creatives_manager(self) -> GAMCreativesManager:
         """Return the creatives manager, or raise if the adapter is not configured for it."""
         manager = self.creatives_manager
         if not manager:
@@ -314,7 +314,7 @@ class GoogleAdManager(AdServerAdapter):
             )
         return manager
 
-    def _require_orders_manager(self):
+    def _require_orders_manager(self) -> GAMOrdersManager:
         """Return the orders manager, or raise if the adapter is not configured for it."""
         manager = self.orders_manager
         if not manager:

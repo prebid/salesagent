@@ -102,8 +102,7 @@ def _get_adcp_capabilities_impl(
     tenant_name = tenant.get("name", "Unknown")
 
     # Log activity
-    if identity:
-        log_tool_activity(identity, "get_adcp_capabilities")
+    log_tool_activity(identity, "get_adcp_capabilities")
 
     # Get adapter to determine channels and capabilities
     primary_channels: list[MediaChannel] = []

@@ -375,7 +375,11 @@ def require_tenant(
     return tenant
 
 
-def require_identity(identity: "ResolvedIdentity | None") -> "ResolvedIdentity":
+def require_identity(
+    identity: "ResolvedIdentity | None",
+    *,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> "ResolvedIdentity":
     """Return the resolved identity or raise ``AdCPAuthRequiredError``.
 
     Single source of truth for the "identity is required" guard every ``_impl``
@@ -388,6 +392,7 @@ def require_identity(identity: "ResolvedIdentity | None") -> "ResolvedIdentity":
     if identity is None:
         raise AdCPAuthRequiredError(
             "Identity is required",
+            context=context,
             details={"suggestion": "Provide a valid authentication token"},
         )
     return identity
