@@ -42,8 +42,6 @@ from src.core.exceptions import (
     AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
     AdCPGoneError,
-    AdCPMediaBuyNotFoundError,
-    AdCPPackageNotFoundError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -146,11 +144,8 @@ def _verify_principal(
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=context)
 
-    # Query database for media buy by ID
-    media_buy = repo.get_by_id(media_buy_id)
-
-    if not media_buy:
-        raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found")
+    # Fetch the media buy (raises AdCPMediaBuyNotFoundError if absent)
+    media_buy = repo.get_by_id_or_raise(media_buy_id, context=context)
 
     if media_buy.principal_id != principal_id:
         # Log security violation
@@ -670,12 +665,7 @@ def _update_media_buy_impl(
                             )
 
                         # Resolve media_buy_id
-                        media_buy_obj = uow.media_buys.get_by_id(req.media_buy_id)
-
-                        if not media_buy_obj:
-                            raise AdCPMediaBuyNotFoundError(
-                                f"Media buy '{req.media_buy_id}' not found", context=req.context
-                            )
+                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
 
                         # Use the actual internal media_buy_id
                         actual_media_buy_id = media_buy_obj.media_buy_id
@@ -909,12 +899,7 @@ def _update_media_buy_impl(
                             )
 
                         # Resolve media_buy_id
-                        media_buy_obj = uow.media_buys.get_by_id(req.media_buy_id)
-
-                        if not media_buy_obj:
-                            raise AdCPMediaBuyNotFoundError(
-                                f"Media buy '{req.media_buy_id}' not found", context=req.context
-                            )
+                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
 
                         actual_media_buy_id = media_buy_obj.media_buy_id
 
@@ -927,13 +912,9 @@ def _update_media_buy_impl(
 
                         if all_requested_placement_ids:
                             # Get package to find product_id
-                            pkg_record = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
-
-                            if not pkg_record:
-                                raise AdCPPackageNotFoundError(
-                                    f"Package '{pkg_update.package_id}' not found for media buy '{actual_media_buy_id}'",
-                                    context=req.context,
-                                )
+                            pkg_record = uow.media_buys.get_package_or_raise(
+                                actual_media_buy_id, pkg_update.package_id, context=req.context
+                            )
 
                             product_id = (
                                 pkg_record.package_config.get("product_id") if pkg_record.package_config else None
@@ -1069,13 +1050,9 @@ def _update_media_buy_impl(
                         from sqlalchemy.orm import attributes
 
                         # Get the package via repository
-                        media_package = uow.media_buys.get_package(req.media_buy_id, pkg_update.package_id)
-
-                        if not media_package:
-                            raise AdCPPackageNotFoundError(
-                                f"Package {pkg_update.package_id} not found for media buy {req.media_buy_id}",
-                                context=req.context,
-                            )
+                        media_package = uow.media_buys.get_package_or_raise(
+                            req.media_buy_id, pkg_update.package_id, context=req.context
+                        )
 
                         # property_targeting_allowed validation runs earlier (before dry_run gate);
                         # by this point the request is known-valid against that rule.
@@ -1191,12 +1168,7 @@ def _update_media_buy_impl(
 
                 if update_values:
                     # Get existing media buy to check date range consistency
-                    existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
-
-                    if not existing_mb:
-                        raise AdCPMediaBuyNotFoundError(
-                            f"Media buy '{req.media_buy_id}' not found", context=req.context
-                        )
+                    existing_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
 
                     # Validate date range: end_time must be after start_time
                     # Type guard: Ensure we're working with datetime objects (not SQLAlchemy DateTime)

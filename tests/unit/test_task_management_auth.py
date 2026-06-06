@@ -11,7 +11,7 @@ when principal_id is missing.
 
 import pytest
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.task_management import complete_task, get_task, list_tasks
 
@@ -125,7 +125,9 @@ async def test_get_task_authenticated_proceeds_past_auth_check(
     """Authenticated identity must pass the auth check and proceed to DB access."""
 
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
-    mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id.return_value = None
+    mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError(
+        "Task step-999 not found"
+    )
 
     with pytest.raises(AdCPNotFoundError, match="not found"):
         await get_task(task_id="step-999", identity=_identity_with_principal())
@@ -138,7 +140,9 @@ async def test_complete_task_authenticated_proceeds_past_auth_check(
     """Authenticated identity must pass the auth check and proceed to DB access."""
 
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
-    mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id.return_value = None
+    mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError(
+        "Task step-999 not found"
+    )
 
     with pytest.raises(AdCPNotFoundError, match="not found"):
         await complete_task(task_id="step-999", identity=_identity_with_principal())

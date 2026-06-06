@@ -286,7 +286,7 @@ class TestPlacementIdsValidation:
             # Mock package lookup via repo
             mock_package = MagicMock()
             mock_package.package_config = {"product_id": "prod_no_placements"}
-            mock_uow.media_buys.get_package.return_value = mock_package
+            mock_uow.media_buys.get_package_or_raise.return_value = mock_package
 
             # Mock product with NO placements (empty list) via session
             mock_product = MagicMock()

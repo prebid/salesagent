@@ -103,6 +103,35 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         _default_mb = MagicMock()
         _default_mb.status = "active"
         self._uow_instance.media_buys.get_by_id.return_value = _default_mb
+
+        # The *_or_raise repository helpers delegate to the plain getters and raise
+        # the typed not-found when absent. Wiring the mock the same way lets tests
+        # configure get_by_id / get_package (return_value OR side_effect lists) and
+        # drive both the direct and or-raise call paths with one setup — and the
+        # not-found raise is the real typed error, not a bare MagicMock.
+        _mb_repo = self._uow_instance.media_buys
+
+        def _get_by_id_or_raise(media_buy_id: str, *, context: Any = None) -> Any:
+            media_buy = _mb_repo.get_by_id(media_buy_id)
+            if media_buy is None:
+                from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+                raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found", context=context)
+            return media_buy
+
+        def _get_package_or_raise(media_buy_id: str, package_id: str, *, context: Any = None) -> Any:
+            package = _mb_repo.get_package(media_buy_id, package_id)
+            if package is None:
+                from src.core.exceptions import AdCPPackageNotFoundError
+
+                raise AdCPPackageNotFoundError(
+                    f"Package '{package_id}' not found for media buy '{media_buy_id}'", context=context
+                )
+            return package
+
+        _mb_repo.get_by_id_or_raise.side_effect = _get_by_id_or_raise
+        _mb_repo.get_package_or_raise.side_effect = _get_package_or_raise
+
         self._uow_instance.currency_limits = MagicMock()
         self._uow_instance.__enter__ = MagicMock(return_value=self._uow_instance)
         self._uow_instance.__exit__ = MagicMock(return_value=False)
