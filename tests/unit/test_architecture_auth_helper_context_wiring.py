@@ -32,6 +32,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._ast_helpers import iter_module_trees
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "src" / "core" / "tools"
 
@@ -103,14 +105,8 @@ def _scan_module(tree: ast.Module, rel: str) -> list[tuple[str, str, int, str]]:
 
 def _find_unwired_calls() -> list[tuple[str, str, int, str]]:
     out: list[tuple[str, str, int, str]] = []
-    for py_file in sorted(TOOLS_DIR.rglob("*.py")):
-        if "__pycache__" in str(py_file):
-            continue
-        try:
-            tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        except SyntaxError:
-            continue
-        out.extend(_scan_module(tree, str(py_file.relative_to(REPO_ROOT))))
+    for tree, rel_path in iter_module_trees([TOOLS_DIR]):
+        out.extend(_scan_module(tree, rel_path))
     return out
 
 

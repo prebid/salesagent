@@ -34,6 +34,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._ast_helpers import iter_module_trees
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters"]
 
@@ -124,15 +126,8 @@ def _scan_module(tree: ast.Module, rel_path: str) -> list[tuple[str, str, int, s
 def _find_flatten_sites() -> list[tuple[str, str, int, str]]:
     """All catch-all-flatten sites across the scan dirs."""
     sites: list[tuple[str, str, int, str]] = []
-    for scan_dir in SCAN_DIRS:
-        for py_file in sorted(scan_dir.rglob("*.py")):
-            if "__pycache__" in str(py_file):
-                continue
-            try:
-                tree = ast.parse(py_file.read_text(), filename=str(py_file))
-            except SyntaxError:
-                continue
-            sites.extend(_scan_module(tree, str(py_file.relative_to(REPO_ROOT))))
+    for tree, rel_path in iter_module_trees(SCAN_DIRS):
+        sites.extend(_scan_module(tree, rel_path))
     return sites
 
 

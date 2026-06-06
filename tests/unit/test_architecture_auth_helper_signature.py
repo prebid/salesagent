@@ -29,6 +29,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._ast_helpers import iter_module_trees
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUTH_MODULE = REPO_ROOT / "src" / "core" / "auth.py"
 ADAPTERS_DIR = REPO_ROOT / "src" / "adapters"
@@ -67,17 +69,10 @@ def _find_auth_helpers_missing_context() -> list[tuple[str, str]]:
 
 def _find_adapter_require_helpers_missing_return() -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
-    for py_file in sorted(ADAPTERS_DIR.rglob("*.py")):
-        if "__pycache__" in str(py_file):
-            continue
-        try:
-            tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        except SyntaxError:
-            continue
-        rel = str(py_file.relative_to(REPO_ROOT))
+    for tree, rel_path in iter_module_trees([ADAPTERS_DIR]):
         for node in _iter_functions(tree):
             if node.name.startswith("_require_") and node.returns is None:
-                out.append((rel, node.name))
+                out.append((rel_path, node.name))
     return out
 
 

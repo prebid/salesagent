@@ -18,7 +18,7 @@ from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import (
     AdCPConflictError,
-    AdCPNotFoundError,
+    AdCPTaskNotFoundError,
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
@@ -148,7 +148,7 @@ async def get_task(
         task = uow.workflows.get_by_step_id(task_id)
 
         if not task:
-            raise AdCPNotFoundError(f"Task {task_id} not found")
+            raise AdCPTaskNotFoundError(f"Task {task_id} not found")
 
         mappings = uow.workflows.get_mappings_for_step(task_id)
 
@@ -222,7 +222,7 @@ async def complete_task(
         task = uow.workflows.get_by_step_id(task_id)
 
         if not task:
-            raise AdCPNotFoundError(f"Task {task_id} not found")
+            raise AdCPTaskNotFoundError(f"Task {task_id} not found")
 
         if task.status not in ["pending", "in_progress", "requires_approval"]:
             raise AdCPConflictError(f"Task {task_id} is already {task.status} and cannot be completed")

@@ -49,6 +49,8 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
+    AdCPCreativeNotFoundError,
+    AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
@@ -632,12 +634,12 @@ class TestCreativeIdsNotFound:
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
-            with pytest.raises(AdCPNotFoundError) as exc_info:
+            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
                 env.call_impl(req=req)
 
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
-            assert exc_info.value.error_code == "NOT_FOUND"
+            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
 
     def test_set_difference_logic_detects_missing_creative_ids(self):
         """The set-difference logic (requested - found) correctly identifies missing IDs.
@@ -660,10 +662,10 @@ class TestCreativeIdsNotFound:
         # Verify the AdCPNotFoundError would be raised with the correct error code
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
-            with pytest.raises(AdCPNotFoundError) as exc_info:
-                raise AdCPNotFoundError(error_msg)
+            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
+                raise AdCPCreativeNotFoundError(error_msg)
 
-            assert exc_info.value.error_code == "NOT_FOUND"
+            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 
@@ -1456,14 +1458,14 @@ class TestExtensionObligations:
             mock_registry.get_format = AsyncMock(return_value=None)  # Format not found
             mock_registry_cls.return_value = mock_registry
 
-            with pytest.raises(AdCPNotFoundError) as exc_info:
+            with pytest.raises(AdCPFormatNotFoundError) as exc_info:
                 await _validate_and_convert_format_ids(
                     format_ids=[{"agent_url": "https://creative.example.com", "id": "nonexistent_format"}],
                     tenant_id="test_tenant",
                     package_idx=0,
                 )
 
-            assert exc_info.value.error_code == "NOT_FOUND"
+            assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):
@@ -1639,8 +1641,8 @@ class TestExtensionObligations:
         """
         # This is covered by TestCreativeIdsNotFound above.
         # Verify the error code pattern.
-        error = AdCPNotFoundError("Creative IDs not found: creative_missing")
-        assert error.error_code == "NOT_FOUND"
+        error = AdCPCreativeNotFoundError("Creative IDs not found: creative_missing")
+        assert error.error_code == "CREATIVE_NOT_FOUND"
 
     def test_creative_upload_failed_error_code(self):
         """Creative upload failures raise AdCPAdapterError (wire code SERVICE_UNAVAILABLE).

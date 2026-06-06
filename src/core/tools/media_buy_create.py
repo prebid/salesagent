@@ -42,9 +42,10 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
+    AdCPCreativeNotFoundError,
     AdCPError,
+    AdCPFormatNotFoundError,
     AdCPInvalidRequestError,
-    AdCPNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -1448,11 +1449,10 @@ async def _validate_and_convert_format_ids(
         try:
             format_obj = await registry.get_format(agent_url, format_id)
             if not format_obj:
-                raise AdCPNotFoundError(
+                raise AdCPFormatNotFoundError(
                     f"Package {package_idx + 1}, format_ids[{idx}]: Format not found on agent. "
                     f"agent_url={agent_url}, format_id={format_id!r}. "
                     f"Use list_creative_formats to discover available formats.",
-                    recovery="correctable",
                 )
         except AdCPError:
             raise
@@ -2848,7 +2848,10 @@ async def _create_media_buy_impl(
 
             if not pkg_product:
                 error_msg = f"Package {idx} references unknown product_id: {pkg_product_id}"
-                raise AdCPNotFoundError(error_msg)
+                # Defensive: the primary product-existence check above
+                # (AdCPProductNotFoundError) catches missing products first, so this
+                # per-package branch is suite-invisible — typed for guard parity.
+                raise AdCPProductNotFoundError(error_msg)
 
             # Determine format_ids to use
             format_ids_to_use: list[FormatId] = []
@@ -3376,10 +3379,7 @@ async def _create_media_buy_impl(
                         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-                        raise AdCPNotFoundError(
-                            error_msg,
-                            recovery="correctable",
-                        )
+                        raise AdCPCreativeNotFoundError(error_msg)
 
                     # Validate creative formats against product formats BEFORE creating assignments
                     # This ensures creatives match the product's supported formats

@@ -39,6 +39,15 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # entry so the wire stays spec-compliant. Raise sites can later migrate to
     # specific subclasses; the mappings stay as a safety net.
     "NOT_FOUND": "INVALID_REQUEST",
+    # Entity-specific not-found codes the SDK does not define as standard. The typed
+    # subclasses (AdCPCreativeNotFoundError / AdCPFormatNotFoundError /
+    # AdCPTaskNotFoundError) exist for recovery=correctable + guard-enforceability;
+    # the buyer-visible wire code is INVALID_REQUEST. NOTE: CREATIVE_NOT_FOUND
+    # (singular, a lookup miss) is distinct from the plural CREATIVES_NOT_FOUND →
+    # CREATIVE_REJECTED bulk-sync code below — different keys, no overwrite.
+    "CREATIVE_NOT_FOUND": "INVALID_REQUEST",
+    "FORMAT_NOT_FOUND": "INVALID_REQUEST",
+    "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
@@ -98,6 +107,9 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     {
         "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
+        "CREATIVE_NOT_FOUND",  # AdCPCreativeNotFoundError; wire → INVALID_REQUEST
+        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
+        "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
         "CONFIGURATION_ERROR",  # Server-side config; needs admin, not buyer
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
@@ -619,6 +631,53 @@ class AdCPContextNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "SESSION_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPCreativeNotFoundError(AdCPNotFoundError):
+    """Requested creative does not exist (404, wire → INVALID_REQUEST).
+
+    The SDK has no ``CREATIVE_NOT_FOUND`` standard code, so the raw code is
+    internal and translated to ``INVALID_REQUEST`` at the wire boundary (see
+    ERROR_CODE_MAPPING). The buyer-visible gain over the bare
+    ``AdCPNotFoundError`` is recovery=correctable + a typed identity callers and
+    guards can pin — not a distinct wire code.
+
+    Recovery=correctable: the buyer can correct by supplying a valid creative_id
+    (discoverable via list_creatives / sync_creatives).
+    """
+
+    _default_error_code: ClassVar[str] = "CREATIVE_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPFormatNotFoundError(AdCPNotFoundError):
+    """Requested creative format does not exist on the agent (404, wire → INVALID_REQUEST).
+
+    No standard ``FORMAT_NOT_FOUND`` SDK code exists, so the raw code is internal
+    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
+    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+
+    Recovery=correctable: the buyer can correct by supplying a valid format_id
+    (discoverable via list_creative_formats).
+    """
+
+    _default_error_code: ClassVar[str] = "FORMAT_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPTaskNotFoundError(AdCPNotFoundError):
+    """Requested workflow task/step does not exist (404, wire → INVALID_REQUEST).
+
+    No standard ``TASK_NOT_FOUND`` SDK code exists, so the raw code is internal
+    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
+    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+
+    Recovery=correctable: the buyer can correct by supplying a valid task_id
+    (discoverable via list_tasks).
+    """
+
+    _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
