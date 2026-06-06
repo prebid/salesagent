@@ -28,6 +28,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
+    AdCPContextNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -3078,13 +3079,14 @@ class TestUpdateMediaBuyAdapterFailure:
             "step_1", ANY, status="failed", error_message="GAM API timeout"
         )
 
-    def test_unknown_context_id_raises_validation_error(self):
-        """A buyer-supplied context_id that does not resolve raises AdCPValidationError.
+    def test_unknown_context_id_raises_context_not_found(self):
+        """A buyer-supplied context_id that does not resolve raises AdCPContextNotFoundError.
 
         get_or_create_context returns None only when the referenced context_id is
-        absent (create_context never returns None). AdCP has no context-specific
-        not-found wire code, so an unresolvable context_id surfaces as a correctable
-        VALIDATION_ERROR carrying field="context_id".
+        absent (create_context never returns None). An unresolvable context_id is a
+        not-found condition, so it surfaces as a correctable SESSION_NOT_FOUND (the
+        standard SDK code for an unresolvable session/context) carrying
+        field="context_id" — not a VALIDATION_ERROR.
         """
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -3116,9 +3118,10 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises(AdCPValidationError, match="Context not found") as exc_info:
+            with pytest.raises(AdCPContextNotFoundError, match="Context not found") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity, context_id="ctx_missing")
             assert exc_info.value.field == "context_id"
+            assert exc_info.value.error_code == "SESSION_NOT_FOUND"
 
 
 # ===========================================================================

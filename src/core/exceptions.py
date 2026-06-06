@@ -603,6 +603,25 @@ class AdCPProductNotFoundError(AdCPNotFoundError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+class AdCPContextNotFoundError(AdCPNotFoundError):
+    """Buyer-supplied context_id does not resolve (404, SESSION_NOT_FOUND).
+
+    A ``context_id`` that does not map to a persistent context is a not-found
+    condition, not a gone/expired one: ``Context`` rows have no TTL, expiry, or
+    delete path anywhere in ``src/``, so a non-resolving id never existed. That
+    rules out ``AdCPGoneError`` (``INVALID_STATE``) — the correct wire code is
+    ``SESSION_NOT_FOUND``, the standard SDK code for an unresolvable
+    session/context (passthrough, not in ERROR_CODE_MAPPING).
+
+    Recovery=correctable: the buyer can correct by supplying a valid context_id
+    or omitting it to start a fresh context. Overrides the ``AdCPNotFoundError``
+    ``terminal`` default for the same reason as ``AdCPMediaBuyNotFoundError``.
+    """
+
+    _default_error_code: ClassVar[str] = "SESSION_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
 class AdCPBudgetTooLowError(AdCPError):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 

@@ -200,6 +200,18 @@ class TestRecoveryClassification:
         exc = AdCPPackageNotFoundError("package pkg_xyz not found")
         assert exc.recovery == "correctable"
 
+    def test_context_not_found_error_wire_contract(self):
+        """AdCPContextNotFoundError → 404, SESSION_NOT_FOUND, correctable, passthrough wire code."""
+        from src.core.exceptions import AdCPContextNotFoundError, translate_error_code
+
+        exc = AdCPContextNotFoundError("Context not found: ctx_x", field="context_id")
+        assert exc.status_code == 404
+        assert exc.error_code == "SESSION_NOT_FOUND"
+        assert exc.recovery == "correctable"
+        # SESSION_NOT_FOUND is a standard SDK code → passes through untranslated to the wire.
+        assert translate_error_code(exc.error_code) == "SESSION_NOT_FOUND"
+        assert exc.field == "context_id"
+
     def test_rate_limit_error_defaults_to_transient(self):
         """AdCPRateLimitError defaults to recovery='transient'."""
         from src.core.exceptions import AdCPRateLimitError

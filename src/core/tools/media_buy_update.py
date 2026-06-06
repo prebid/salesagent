@@ -39,6 +39,7 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
+    AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
     AdCPGoneError,
     AdCPMediaBuyNotFoundError,
@@ -274,7 +275,9 @@ def _update_media_buy_impl(
                 # only None when a buyer-supplied context_id does not resolve —
                 # a not-found condition, not a transient adapter outage.
                 if persistent_ctx is None:
-                    raise AdCPValidationError(f"Context not found: {ctx_id}", field="context_id")
+                    raise AdCPContextNotFoundError(
+                        f"Context not found: {ctx_id}", field="context_id", context=req.context
+                    )
 
                 # Create workflow step for this tool call
                 step = ctx_manager.create_workflow_step(
