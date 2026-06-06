@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPError,
     AdCPPolicyViolationError,
     AdCPValidationError,
 )
@@ -343,6 +344,8 @@ async def _get_products_impl(
                 validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
+            except AdCPError:
+                raise
             except Exception as e:
                 error_msg = (
                     f"Product '{product_obj.product_id}' failed to convert to AdCP schema. "
@@ -401,9 +404,9 @@ async def _get_products_impl(
                 f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
                 f"(allowed {len(allowed_set)} properties)"
             )
+        except AdCPError:
+            raise
         except Exception as e:
-            if isinstance(e, AdCPAdapterError):
-                raise
             logger.error(f"Property list resolution failed: {e}")
             raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
 

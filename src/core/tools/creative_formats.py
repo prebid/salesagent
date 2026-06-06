@@ -33,7 +33,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPServiceUnavailableError, AdCPValidationError
+from src.core.exceptions import AdCPError, AdCPServiceUnavailableError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -170,6 +170,8 @@ def _list_creative_formats_impl(
 
     try:
         registry = get_creative_agent_registry()
+    except AdCPError:
+        raise
     except Exception as e:
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
         raise AdCPServiceUnavailableError(

@@ -1454,9 +1454,9 @@ async def _validate_and_convert_format_ids(
                     f"Use list_creative_formats to discover available formats.",
                     recovery="correctable",
                 )
+        except AdCPError:
+            raise
         except Exception as e:
-            if isinstance(e, AdCPError):
-                raise
             logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
             raise AdCPAdapterError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "

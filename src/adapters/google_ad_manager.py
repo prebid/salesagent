@@ -53,6 +53,7 @@ from src.core.exceptions import (
     AdCPBulkUpdateError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
+    AdCPError,
     AdCPGamUpdateError,
     AdCPLineItemError,
     AdCPPackageNotFoundError,
@@ -772,6 +773,8 @@ class GoogleAdManager(AdServerAdapter):
                 # Non-fatal error - order and line items were created successfully
                 self.log(f"[yellow]Warning: Could not approve order {order_id}: {approval_error}[/yellow]")
 
+        except AdCPError:
+            raise
         except Exception as e:
             error_msg = f"Order created but failed to create line items: {str(e)}"
             self.log(f"[red]Error: {error_msg}[/red]")
