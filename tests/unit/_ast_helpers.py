@@ -50,6 +50,26 @@ def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]
                 yield tree, rel(py_file)
 
 
+def walk_with_enclosing_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
+    """Yield ``(node, enclosing_function_name)`` for every node in ``tree``.
+
+    The enclosing name is the nearest ancestor ``FunctionDef``/``AsyncFunctionDef``
+    name, or ``"<module>"`` at module scope. Structural guards that report
+    violations keyed by ``(file, function)`` share this walk instead of each
+    re-implementing the same ``visit(node, func)`` recursion (DRY) — a guard then
+    becomes a predicate over the yielded nodes rather than a copy of the traversal.
+    """
+
+    def visit(node: ast.AST, func_name: str) -> Iterator[tuple[ast.AST, str]]:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            func_name = node.name
+        yield node, func_name
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child, func_name)
+
+    yield from visit(tree, "<module>")
+
+
 def collect_error_aliases(tree: ast.AST) -> set[str]:
     """Collect names that alias the adcp Error type.
 
