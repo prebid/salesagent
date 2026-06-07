@@ -741,6 +741,7 @@ class TestRESTSymmetricValueErrorAndPermissionError:
             assert_envelope_shape(
                 response.json(),
                 "AUTH_REQUIRED",
+                recovery="terminal",
                 message_substr="tenant scope mismatch",
             )
 
