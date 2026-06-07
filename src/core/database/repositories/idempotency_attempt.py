@@ -79,6 +79,7 @@ class IdempotencyAttemptRepository:
         tool_name: str,
         idempotency_key: str,
         response_envelope: dict[str, Any],
+        payload_hash: str | None = None,
         ttl: timedelta = DEFAULT_REPLAY_TTL,
         now: datetime | None = None,
     ) -> IdempotencyAttempt:
@@ -88,6 +89,11 @@ class IdempotencyAttemptRepository:
         must guarantee they haven't already cached for this key (the
         ``find_by_key`` lookup is the natural gate). Catching the
         ``IntegrityError`` on race is the caller's responsibility.
+
+        ``payload_hash`` is the RFC 8785 canonical hash of the request payload
+        (see ``src.core.idempotency_canonical``). It lets the replay lookup tell
+        a true replay (same hash) from an ``IDEMPOTENCY_CONFLICT`` (same key,
+        different hash); ``None`` when the caller does not compute it.
         """
         current = now or datetime.now(UTC)
         attempt = IdempotencyAttempt(
@@ -96,6 +102,7 @@ class IdempotencyAttemptRepository:
             tool_name=tool_name,
             idempotency_key=idempotency_key,
             response_envelope=response_envelope,
+            payload_hash=payload_hash,
             expires_at=current + ttl,
         )
         self._session.add(attempt)

@@ -1009,6 +1009,11 @@ class IdempotencyAttempt(Base):
         comment="Tool that produced the rejection, e.g. 'create_media_buy'",
     )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="RFC 8785 JCS SHA-256 of the request payload (excluded fields stripped); enables IDEMPOTENCY_CONFLICT detection",
+    )
     response_envelope: Mapped[dict] = mapped_column(
         JSONType,
         nullable=False,
