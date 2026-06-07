@@ -77,6 +77,7 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "if_pricing_version",  # Schema defines pricing-version pre-flight, library doesn't have it yet
         "if_wholesale_feed_version",  # Schema defines wholesale feed version pre-flight, library doesn't have it yet
         "preferred_delivery_types",  # Schema defines delivery type preferences, library doesn't have it yet
+        "push_notification_config",  # Schema (latest) defines push notification config, adcp 4.3.0 doesn't have it yet
         "refine",  # Schema defines refinement array, library doesn't have it yet
         "required_policies",  # Schema defines policy IDs, library doesn't have it yet
         "time_budget",  # Schema defines time budget, library doesn't have it yet
