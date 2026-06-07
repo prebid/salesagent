@@ -136,6 +136,19 @@ class TestExceptionHierarchy:
         assert env["adcp_error"]["recovery"] == "terminal"
         assert env["errors"][0]["code"] == "IDEMPOTENCY_EXPIRED"
 
+    def test_replayed_flag_surfaces_in_envelope(self):
+        """exc.replayed=True adds envelope-level replayed:true; default omits it (spec ProtocolEnvelope.replayed)."""
+        from src.core.exceptions import AdCPValidationError, build_two_layer_error_envelope
+
+        fresh = AdCPValidationError("budget too low")
+        assert "replayed" not in build_two_layer_error_envelope(fresh)
+
+        replayed = AdCPValidationError("budget too low")
+        replayed.replayed = True
+        env = build_two_layer_error_envelope(replayed)
+        assert env["replayed"] is True
+        assert env["adcp_error"]["code"] == "VALIDATION_ERROR"
+
     def test_budget_exhausted_error(self):
         """AdCPBudgetExhaustedError must have status_code=422."""
         from src.core.exceptions import AdCPBudgetExhaustedError, AdCPError
