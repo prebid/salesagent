@@ -99,6 +99,43 @@ class TestExceptionHierarchy:
         assert exc.status_code == 410
         assert exc.error_code == "INVALID_STATE"
 
+    def test_idempotency_conflict_error(self):
+        """AdCPIdempotencyConflictError must be a 409 conflict with code IDEMPOTENCY_CONFLICT."""
+        from src.core.exceptions import AdCPConflictError, AdCPError, AdCPIdempotencyConflictError
+
+        exc = AdCPIdempotencyConflictError("idempotency_key reused with a different payload")
+        assert isinstance(exc, AdCPConflictError)
+        assert isinstance(exc, AdCPError)
+        assert exc.status_code == 409
+        assert exc.error_code == "IDEMPOTENCY_CONFLICT"
+
+    def test_idempotency_expired_error(self):
+        """AdCPIdempotencyExpiredError must be a 410 with code IDEMPOTENCY_EXPIRED."""
+        from src.core.exceptions import AdCPError, AdCPIdempotencyExpiredError
+
+        exc = AdCPIdempotencyExpiredError("idempotency replay window expired")
+        assert isinstance(exc, AdCPError)
+        assert exc.status_code == 410
+        assert exc.error_code == "IDEMPOTENCY_EXPIRED"
+
+    def test_idempotency_conflict_wire_envelope(self):
+        """The two-layer envelope carries IDEMPOTENCY_CONFLICT + terminal in both layers."""
+        from src.core.exceptions import AdCPIdempotencyConflictError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPIdempotencyConflictError("dup key"))
+        assert env["adcp_error"]["code"] == "IDEMPOTENCY_CONFLICT"
+        assert env["adcp_error"]["recovery"] == "terminal"
+        assert env["errors"][0]["code"] == "IDEMPOTENCY_CONFLICT"
+
+    def test_idempotency_expired_wire_envelope(self):
+        """The two-layer envelope carries IDEMPOTENCY_EXPIRED + terminal in both layers."""
+        from src.core.exceptions import AdCPIdempotencyExpiredError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPIdempotencyExpiredError("window expired"))
+        assert env["adcp_error"]["code"] == "IDEMPOTENCY_EXPIRED"
+        assert env["adcp_error"]["recovery"] == "terminal"
+        assert env["errors"][0]["code"] == "IDEMPOTENCY_EXPIRED"
+
     def test_budget_exhausted_error(self):
         """AdCPBudgetExhaustedError must have status_code=422."""
         from src.core.exceptions import AdCPBudgetExhaustedError, AdCPError
@@ -220,6 +257,20 @@ class TestRecoveryClassification:
 
         exc = AdCPConflictError("duplicate idempotency key")
         assert exc.recovery == "correctable"
+
+    def test_idempotency_conflict_defaults_to_terminal(self):
+        """AdCPIdempotencyConflictError overrides AdCPConflictError to recovery='terminal'."""
+        from src.core.exceptions import AdCPIdempotencyConflictError
+
+        exc = AdCPIdempotencyConflictError("dup key, different payload")
+        assert exc.recovery == "terminal"
+
+    def test_idempotency_expired_defaults_to_terminal(self):
+        """AdCPIdempotencyExpiredError defaults to recovery='terminal'."""
+        from src.core.exceptions import AdCPIdempotencyExpiredError
+
+        exc = AdCPIdempotencyExpiredError("replay window expired")
+        assert exc.recovery == "terminal"
 
     def test_gone_error_defaults_to_correctable(self):
         """AdCPGoneError defaults to recovery='correctable'.

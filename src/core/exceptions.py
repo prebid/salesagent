@@ -555,6 +555,31 @@ class AdCPCapabilityNotSupportedError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+class AdCPIdempotencyConflictError(AdCPConflictError):
+    """idempotency_key reused with a different request payload (409, IDEMPOTENCY_CONFLICT).
+
+    Recovery=terminal: the buyer must mint a fresh idempotency_key (or reconcile
+    state) rather than retry — replaying the same key with a different canonical
+    payload keeps conflicting. Per the AdCP replay_ttl_seconds capability contract.
+    """
+
+    _default_error_code: ClassVar[str] = "IDEMPOTENCY_CONFLICT"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+
+
+class AdCPIdempotencyExpiredError(AdCPError):
+    """idempotency_key replayed past the retention window (410, IDEMPOTENCY_EXPIRED).
+
+    Recovery=terminal: the cached response is gone, so the buyer must mint a
+    fresh idempotency_key rather than retry the expired one. Per the AdCP
+    replay_ttl_seconds capability contract.
+    """
+
+    _default_status_code: ClassVar[int] = 410
+    _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+
+
 # ---------------------------------------------------------------------------
 # Two-layer envelope serializer — single source of truth for wire shape.
 # ---------------------------------------------------------------------------
