@@ -38,7 +38,13 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError, AdCPBudgetTooLowError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPBudgetTooLowError,
+    AdCPError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -2116,11 +2122,10 @@ class TestExtensionObligations:
                 adapter_error = CreateMediaBuyError(errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")])
                 mock_exec.return_value = adapter_error
 
-                result = await _create_media_buy_impl(req=req, identity=pc.identity)
-
-        # Adapter returned error -> result is error, no persistence
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
+                # Adapter rejection is reconstructed as a typed AdCPError and raised;
+                # no media-buy persistence occurs before the adapter call.
+                with pytest.raises(AdCPError):
+                    await _create_media_buy_impl(req=req, identity=pc.identity)
 
     @pytest.mark.asyncio
     async def test_no_max_daily_spend_configured_check_skipped(self):

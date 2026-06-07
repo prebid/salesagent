@@ -986,9 +986,10 @@ class IdempotencyAttempt(Base):
     would re-run the validation and could legitimately get a different answer
     (e.g. if a product was added in the interim).
 
-    The cached envelope (`response_envelope`) is the full Pydantic-dumped
-    error response (CreateMediaBuyError, UpdateMediaBuyError, etc.) so the
-    boundary can return it verbatim on replay.
+    The cached envelope (`response_envelope`) is the single-layer `{errors, context}`
+    projection of the rejection's wire envelope. On replay it is reconstructed into a
+    typed AdCPError and re-raised, so the boundary re-emits the same two-layer wire
+    shape as the fresh reject (marked `replayed=true`).
 
     `expires_at` enforces an explicit TTL — buyers retrying long after a
     rejection should get a fresh evaluation, not a stale answer. The default
@@ -1017,7 +1018,7 @@ class IdempotencyAttempt(Base):
     response_envelope: Mapped[dict] = mapped_column(
         JSONType,
         nullable=False,
-        comment="Cached rejection envelope (Pydantic .model_dump()); returned verbatim on replay",
+        comment="Cached rejection envelope ({errors, context}); reconstructed + re-raised on replay",
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

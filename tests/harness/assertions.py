@@ -17,13 +17,14 @@ import re
 from typing import Any
 
 from tests.harness.transport import Transport, TransportResult
+from tests.helpers.envelope_assertions import assert_envelope_shape
 
 
 def assert_envelope(result: TransportResult, transport: Transport) -> None:
     """Assert transport-specific envelope shape is correct."""
-    assert (
-        result.envelope.get("transport") == transport.value
-    ), f"Expected envelope transport={transport.value}, got {result.envelope}"
+    assert result.envelope.get("transport") == transport.value, (
+        f"Expected envelope transport={transport.value}, got {result.envelope}"
+    )
 
     if transport == Transport.REST:
         assert_rest_envelope(result)
@@ -31,9 +32,9 @@ def assert_envelope(result: TransportResult, transport: Transport) -> None:
 
 def assert_rest_envelope(result: TransportResult, expected_status: int = 200) -> None:
     """Assert REST-specific envelope: HTTP status + content-type."""
-    assert (
-        result.envelope.get("status_code") == expected_status
-    ), f"Expected HTTP {expected_status}, got {result.envelope.get('status_code')}"
+    assert result.envelope.get("status_code") == expected_status, (
+        f"Expected HTTP {expected_status}, got {result.envelope.get('status_code')}"
+    )
     content_type = result.envelope.get("content_type", "")
     assert "application/json" in content_type, f"Expected JSON content-type, got {content_type}"
 
@@ -45,13 +46,13 @@ def assert_error_result(
 ) -> None:
     """Assert result is an error of the expected type, optionally matching message."""
     assert result.is_error, f"Expected error but got success: {result.payload}"
-    assert isinstance(
-        result.error, expected_type
-    ), f"Expected {expected_type.__name__}, got {type(result.error).__name__}: {result.error}"
+    assert isinstance(result.error, expected_type), (
+        f"Expected {expected_type.__name__}, got {type(result.error).__name__}: {result.error}"
+    )
     if match is not None:
-        assert re.search(
-            match, str(result.error)
-        ), f"Error message {str(result.error)!r} does not match pattern {match!r}"
+        assert re.search(match, str(result.error)), (
+            f"Error message {str(result.error)!r} does not match pattern {match!r}"
+        )
 
 
 def assert_rejected(
@@ -83,16 +84,16 @@ def assert_rejected(
 
     if code is not None:
         error_code = getattr(error, "error_code", None)
-        assert (
-            error_code == code or code in error_str
-        ), f"Expected error code '{code}', got {error_code!r}. Full error: {error_str[:200]}"
+        assert error_code == code or code in error_str, (
+            f"Expected error code '{code}', got {error_code!r}. Full error: {error_str[:200]}"
+        )
 
     if field is not None:
         details = getattr(error, "details", None) or {}
         details_str = str(details)
-        assert (
-            field in error_str or field in details_str
-        ), f"Expected field '{field}' in error. Error: {error_str[:200]}"
+        assert field in error_str or field in details_str, (
+            f"Expected field '{field}' in error. Error: {error_str[:200]}"
+        )
 
     if reason is not None:
         assert reason in error_str, f"Expected reason '{reason}' in error. Got: {error_str[:200]}"
@@ -107,38 +108,29 @@ def assert_replayed_rejection(
     *,
     code: str,
     message_contains: str | None = None,
+    recovery: str | None = None,
 ) -> None:
-    """Assert a *replayed* cached rejection on the SUCCESS payload, not the error path.
+    """Assert a *replayed* cached rejection raised through the boundary as a two-layer envelope.
 
-    A replayed idempotency rejection is returned as a successful transport
-    response (REST HTTP 200; MCP/A2A return a CreateMediaBuyResult with
-    status="failed" WITHOUT raising), so ``result.is_error`` is False and the
-    failed domain envelope rides on ``result.payload``. This helper checks the
-    payload's ``status == "failed"`` and ``response.errors[0]`` instead of the
-    exception path that ``assert_rejected`` inspects.
+    With the raise-based idempotency model, a replayed rejection is re-raised as a
+    typed ``AdCPError`` (``replayed=True``), so it surfaces as an ERROR result
+    carrying the real two-layer wire envelope — byte-identical to the fresh reject,
+    plus the spec ``replayed: true`` marker (``ProtocolEnvelope.replayed``).
 
     Args:
-        result: TransportResult whose payload is a CreateMediaBuyResult.
-        code: Expected ``errors[0].code`` (e.g., "VALIDATION_ERROR").
-        message_contains: Substring that must appear in ``errors[0].message``.
-            When the full cached message is known, pass it for a byte-identical
-            check that the cached envelope round-tripped verbatim.
+        result: TransportResult from a wire transport (REST/A2A/MCP).
+        code: Expected wire error code; must match both envelope layers.
+        message_contains: Substring that must appear in ``errors[0].message``. Pass
+            the full cached message for a byte-identical round-trip check.
+        recovery: Expected recovery hint in both layers (optional).
     """
-    assert result.is_success, f"Expected a (successful) replayed rejection but got error: {result.error}"
-    payload = result.payload
-    status = getattr(payload, "status", None)
-    assert status == "failed", f"Replayed rejection must surface as status='failed', got {status!r}: {payload!r}"
-
-    response = getattr(payload, "response", None)
-    errors = getattr(response, "errors", None)
-    assert errors, f"Replayed rejection payload must carry errors[]. Got response={response!r}"
-
-    assert errors[0].code == code, f"Expected errors[0].code={code!r}, got {errors[0].code!r}"
-
-    if message_contains is not None:
-        assert (
-            message_contains in errors[0].message
-        ), f"Expected {message_contains!r} in errors[0].message. Got {errors[0].message!r}"
+    assert result.is_error, f"Expected a (raised) replayed rejection but got success: {result.payload}"
+    envelope = result.wire_error_envelope or result.synthesized_error_envelope
+    assert envelope is not None, f"Replayed rejection must carry a wire error envelope. Error: {result.error}"
+    assert_envelope_shape(envelope, code, recovery=recovery, message_substr=message_contains)
+    assert envelope.get("replayed") is True, (
+        f"Replayed rejection envelope must carry replayed=true (spec ProtocolEnvelope.replayed). Got: {envelope}"
+    )
 
 
 def assert_rejected_with_suggestion(
@@ -169,9 +161,9 @@ def assert_rejected_with_suggestion(
             f"Error: {error_str[:200]}, Details: {details_str[:200]}"
         )
     else:
-        assert (
-            has_suggestion
-        ), f"Expected suggestion in error with code '{code}'. Error: {error_str[:200]}, Details: {details}"
+        assert has_suggestion, (
+            f"Expected suggestion in error with code '{code}'. Error: {error_str[:200]}, Details: {details}"
+        )
 
 
 def assert_payload_field(

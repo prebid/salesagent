@@ -180,7 +180,10 @@ class McpDispatcher:
         except Exception as exc:
             return TransportResult(
                 error=exc,
-                wire_error_envelope=_envelope_from_mcp_error(exc),
+                # Real wire envelope: parse the raw MCP ToolError JSON when present,
+                # else read the envelope the harness reconstruction stashed on the
+                # AdCPError as ``_wire_error_envelope`` (same path A2A uses).
+                wire_error_envelope=_envelope_from_mcp_error(exc) or _wire_envelope_from_exception(exc),
             )
         return TransportResult(payload=payload, envelope={"transport": "mcp"})
 

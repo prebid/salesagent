@@ -67,3 +67,13 @@ def canonical_payload_hash(payload: dict[str, Any]) -> str:
     stripped = strip_excluded_fields(payload)
     canonical = rfc8785.dumps(stripped)
     return hashlib.sha256(canonical).hexdigest()
+
+
+def canonical_request_hash(request: Any) -> str:
+    """Canonical hash of a Pydantic request model.
+
+    Thin wrapper over :func:`canonical_payload_hash` that performs the
+    ``model_dump(mode="json")`` here, so transport-agnostic ``_impl`` bodies never
+    call ``.model_dump()`` directly (the no-model-dump-in-impl architecture guard).
+    """
+    return canonical_payload_hash(request.model_dump(mode="json"))

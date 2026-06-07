@@ -761,6 +761,8 @@ class TestErrorCodeVocabularyConsistency:
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
+        "IDEMPOTENCY_CONFLICT",  # SDK standard: AdCPIdempotencyConflictError
+        "IDEMPOTENCY_EXPIRED",  # SDK standard: AdCPIdempotencyExpiredError
         # Advisory-on-success Pattern A codes (no dedicated exception subclass —
         # construction sites use Error(code=...) inside success envelopes).
         "CREATIVE_REJECTED",

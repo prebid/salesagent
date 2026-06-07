@@ -1076,7 +1076,6 @@ class TestCreateMediaBuyImplAuth:
         """UC-002-A02: principal not found returns error (not exception).
 
         Spec: UNSPECIFIED (implementation-defined principal resolution)
-        Ported from test_create_media_buy_behavioral.py pattern.
         Covers: UC-002-EXT-I-02
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -1301,10 +1300,11 @@ class TestCreateMediaBuyIdempotency:
 
     @pytest.mark.asyncio
     async def test_idempotency_cached_rejection_replayed(self):
-        """Retry with same idempotency_key after a rejection returns the cached envelope.
+        """Retry with the same idempotency_key after a rejection re-raises the cached envelope.
 
         Covers: UC-002-MAIN-IDEMPOTENCY (rejection replay branch)
         """
+        from src.core.exceptions import AdCPError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         idem_key = "cafebabe-dead-beef-1234-feedface0001"
@@ -1316,7 +1316,7 @@ class TestCreateMediaBuyIdempotency:
                 {
                     "code": "VALIDATION_ERROR",
                     "message": "Currency JPY not enabled for this principal",
-                    "details": None,
+                    "recovery": "correctable",
                 }
             ],
             "context": None,
@@ -1328,6 +1328,7 @@ class TestCreateMediaBuyIdempotency:
         mock_idem_attempts_repo = MagicMock()
         cached_attempt = MagicMock()
         cached_attempt.response_envelope = cached_envelope
+        cached_attempt.payload_hash = None  # no stored hash → replay, never a conflict
         mock_idem_attempts_repo.find_by_key.return_value = cached_attempt
 
         mock_idem_uow = MagicMock()
@@ -1346,13 +1347,13 @@ class TestCreateMediaBuyIdempotency:
             mock_princ.name = "Test Buyer"
             mock_principal.return_value = mock_princ
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            with pytest.raises(AdCPError) as exc_info:
+                await _create_media_buy_impl(req, identity=identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert result.status == "failed"
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.response.errors[0].code == "VALIDATION_ERROR"
-        assert "Currency JPY" in result.response.errors[0].message
+        exc = exc_info.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert "Currency JPY" in exc.message
+        assert exc.replayed is True
         mock_idem_attempts_repo.find_by_key.assert_called_once_with(
             principal_id="test_principal",
             tool_name="create_media_buy",

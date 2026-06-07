@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn, TypedDict, cast
 from urllib.parse import urlparse
 
 from sqlalchemy.exc import IntegrityError
@@ -40,8 +40,12 @@ from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPBudgetTooLowError,
     AdCPError,
+    AdCPIdempotencyConflictError,
     AdCPNotFoundError,
     AdCPValidationError,
+    RecoveryHint,
+    build_two_layer_error_envelope,
+    normalize_to_adcp_error,
 )
 
 
@@ -1481,43 +1485,59 @@ from src.services.setup_checklist_service import SetupIncompleteError, validate_
 from src.services.slack_notifier import get_slack_notifier
 
 
-def _build_idempotency_rejection_replay(
+def _raise_idempotency_rejection_replay(
     cached_envelope: dict[str, Any],
     context: ContextObject | None,
-) -> CreateMediaBuyResult:
-    """Re-hydrate a CreateMediaBuyResult from a cached rejection envelope.
+) -> NoReturn:
+    """Reconstruct the cached rejection as a typed AdCPError and raise it as a replay.
 
-    The cached envelope is the ``CreateMediaBuyError.model_dump()`` of the
-    original rejection. We re-instantiate the error model and wrap it in a
-    failed-status ``CreateMediaBuyResult`` so the boundary returns the same
-    shape it would have returned the first time. The current request's
-    ``context`` is echoed back (correlates the replay with the buyer's
-    new invocation).
+    The cached envelope's ``errors[0]`` carries the original wire code, message,
+    recovery, field, and details. We synthesize an ``AdCPError`` from it (the
+    sanctioned reconstruction path), mark it ``replayed``, and raise so the
+    boundary re-emits the SAME two-layer envelope it produced on the fresh
+    rejection — now additionally carrying ``replayed=true``. The current request's
+    ``context`` is echoed back so the buyer can correlate the replay.
     """
-    cached = dict(cached_envelope)
-    cached["context"] = context.model_dump(mode="json") if context else None
-    error = CreateMediaBuyError.model_validate(cached)
-    return CreateMediaBuyResult(response=error, status=AdcpTaskStatus.failed.value)
+    errors = cached_envelope.get("errors") or []
+    err = errors[0] if errors else {}
+    exc = AdCPError.synthesize(
+        err.get("message", ""),
+        error_code=err.get("code", "VALIDATION_ERROR"),
+        recovery=err.get("recovery"),
+        field=err.get("field"),
+        details=err.get("details"),
+        context=context,
+    )
+    exc.replayed = True
+    raise exc
 
 
 def _cache_rejection_envelope(
     tenant_id: str,
     principal_id: str,
     idempotency_key: str | None,
-    response: CreateMediaBuyError,
+    exc: AdCPError,
+    payload_hash: str | None,
 ) -> None:
-    """Cache a rejection envelope so future retries with the same key replay it.
+    """Cache a rejection's wire envelope so future retries with the same key replay it.
 
-    No-op when ``idempotency_key`` is missing — buyers who don't supply a key
-    are opting out of replay semantics. Race-safe: an ``IntegrityError`` on
-    the unique-index collision is swallowed (someone else already cached the
-    same rejection, which is functionally equivalent).
+    Stores the single-layer ``{errors, context}`` projection of the two-layer wire
+    envelope (the half a replay reconstructs from) plus ``payload_hash`` so a
+    same-key/different-payload retry is detected as ``IDEMPOTENCY_CONFLICT``.
+
+    No-op when ``idempotency_key`` is missing — buyers who don't supply a key are
+    opting out of replay semantics. Race-safe: an ``IntegrityError`` on the
+    unique-index collision is swallowed (someone else already cached the same
+    rejection). Caching is best-effort — a failure here must never shadow the
+    rejection being raised.
     """
     if not idempotency_key:
         return
 
     from src.core.database.repositories import MediaBuyUoW as _CacheUoW
 
+    wire = build_two_layer_error_envelope(exc)
+    cached: dict[str, Any] = {"errors": wire["errors"], "context": wire.get("context")}
     try:
         with _CacheUoW(tenant_id) as cache_uow:
             assert cache_uow.idempotency_attempts is not None
@@ -1525,7 +1545,8 @@ def _cache_rejection_envelope(
                 principal_id=principal_id,
                 tool_name="create_media_buy",
                 idempotency_key=idempotency_key,
-                response_envelope=response.model_dump(mode="json"),
+                response_envelope=cached,
+                payload_hash=payload_hash,
             )
     except IntegrityError:
         logger.info(
@@ -1535,7 +1556,7 @@ def _cache_rejection_envelope(
             idempotency_key,
         )
     except Exception:
-        # Caching is best-effort; a failure here must never block returning the
+        # Caching is best-effort; a failure here must never block raising the
         # rejection to the buyer. Log and continue.
         logger.exception(
             "Failed to cache rejection envelope for tenant=%s principal=%s key=%s",
@@ -1545,28 +1566,22 @@ def _cache_rejection_envelope(
         )
 
 
-def _validation_error_to_adcp_error(exc: Exception) -> Error:
-    """Map a caught ValueError/PermissionError to a generic VALIDATION_ERROR wire ``Error``."""
-    return Error(code="VALIDATION_ERROR", message=str(exc), details=None)
-
-
-def _cache_and_return_rejection(
+def _cache_rejection_and_raise(
+    exc: AdCPError,
     *,
-    errors: list[Error],
     tenant_id: str,
     principal_id: str,
     idempotency_key: str | None,
-    context: ContextObject | None,
-) -> "CreateMediaBuyResult":
-    """Build a rejection envelope from ``errors``, cache it for replay, and return the failed Result."""
-    rejection = CreateMediaBuyError(errors=errors, context=context)
-    _cache_rejection_envelope(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        idempotency_key=idempotency_key,
-        response=rejection,
-    )
-    return CreateMediaBuyResult(response=rejection, status=AdcpTaskStatus.failed.value)
+    payload_hash: str | None,
+) -> NoReturn:
+    """Cache ``exc``'s rejection envelope for replay, then raise it (live reject = cache-then-raise).
+
+    The fresh rejection and a later same-key replay both flow through the
+    transport boundary's ``build_two_layer_error_envelope``, so the wire shape is
+    byte-identical — the replay just additionally carries ``replayed=true``.
+    """
+    _cache_rejection_envelope(tenant_id, principal_id, idempotency_key, exc, payload_hash)
+    raise exc
 
 
 def _build_idempotency_hit_result(
@@ -1709,7 +1724,14 @@ async def _create_media_buy_impl(
     # Two lookups in priority order:
     #   1) MediaBuy table — original request succeeded; replay returns the buy.
     #   2) IdempotencyAttempt table — original request was rejected; replay
-    #      returns the cached rejection envelope.
+    #      re-raises the cached rejection (same wire shape, marked replayed).
+    #
+    # payload_hash (canonical RFC 8785 hash of the request, excluded fields
+    # stripped) lets the rejection lookup tell a true replay (same hash) from an
+    # IDEMPOTENCY_CONFLICT (same key, different payload). Computed once here.
+    from src.core.idempotency_canonical import canonical_request_hash
+
+    payload_hash = canonical_request_hash(req) if req.idempotency_key else None
     if req.idempotency_key:
         from src.core.database.repositories import MediaBuyUoW as _IdempotencyUoW
 
@@ -1745,11 +1767,17 @@ async def _create_media_buy_impl(
                 idempotency_key=req.idempotency_key,
             )
             if cached_rejection is not None:
+                if cached_rejection.payload_hash is not None and cached_rejection.payload_hash != payload_hash:
+                    logger.info("Idempotency conflict: key %s reused with a different payload", req.idempotency_key)
+                    raise AdCPIdempotencyConflictError(
+                        f"idempotency_key {req.idempotency_key} was already used with a different request payload",
+                        suggestion="Use a fresh idempotency_key for a different request, or resend the original payload.",
+                    )
                 logger.info(
                     "Idempotency hit (rejection): replaying cached envelope for key %s",
                     req.idempotency_key,
                 )
-                return _build_idempotency_rejection_replay(cached_rejection.response_envelope, req.context)
+                _raise_idempotency_rejection_replay(cached_rejection.response_envelope, req.context)
 
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
@@ -2302,19 +2330,23 @@ async def _create_media_buy_impl(
                         )
 
     except (AdCPError, ValueError, PermissionError) as e:
-        # Audit-update then re-raise via the shared helper so this early-validation
-        # exit threads the two-layer envelope into workflow_step.response_data the
-        # same way the post-adapter failure exits do — push-notification subscribers
-        # see the same wire shape the synchronous caller receives, and the audit
-        # write is try/except-wrapped so a DB hiccup can't shadow the original error.
-        # Typed AdCPError propagates to the transport boundary which translates to
-        # the spec two-layer wire envelope; ValueError/PermissionError propagate so
-        # the boundary wrappers translate them to AdCPValidationError /
-        # AdCPAuthorizationError with correct wire codes (the prior
-        # "return CreateMediaBuyResult(VALIDATION_ERROR)" path silently mis-tagged
-        # PermissionError as VALIDATION_ERROR).
+        # Audit-update then cache-and-raise: this early-validation exit threads the
+        # two-layer envelope into workflow_step.response_data the same way the
+        # post-adapter failure exits do, and caches the rejection so a same-key
+        # retry replays the SAME envelope. The audit write is try/except-wrapped so
+        # a DB hiccup can't shadow the original error. ValueError/PermissionError
+        # are normalized to typed AdCPError (PermissionError -> AUTH_REQUIRED, not
+        # VALIDATION_ERROR); the typed error propagates to the transport boundary,
+        # which builds the spec two-layer wire envelope.
         ctx_manager.audit_step_failure_if_present(step, e)
-        raise
+        typed = e if isinstance(e, AdCPError) else normalize_to_adcp_error(e)
+        _cache_rejection_and_raise(
+            typed,
+            tenant_id=tenant["tenant_id"],
+            principal_id=principal_id,
+            idempotency_key=req.idempotency_key,
+            payload_hash=payload_hash,
+        )
 
     # Type narrowing: in non-dry_run mode, step and persistent_ctx are guaranteed to exist
     # In dry_run mode, they may be None (database operations are skipped)
@@ -2871,12 +2903,12 @@ async def _create_media_buy_impl(
                 )
                 if step:
                     ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_detail)
-                return _cache_and_return_rejection(
-                    errors=[Error(code="VALIDATION_ERROR", message=msg, details=None) for msg in config_errors],
+                _cache_rejection_and_raise(
+                    AdCPValidationError(error_detail, context=req.context),
                     tenant_id=tenant["tenant_id"],
                     principal_id=principal_id,
                     idempotency_key=req.idempotency_key,
-                    context=req.context,
+                    payload_hash=payload_hash,
                 )
 
         product_auto_create = all(
@@ -3250,12 +3282,12 @@ async def _create_media_buy_impl(
             error_msg = "start_time and end_time are required but were not properly set"
             if step:
                 ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-            return _cache_and_return_rejection(
-                errors=[Error(code="VALIDATION_ERROR", message=error_msg, details=None)],
+            _cache_rejection_and_raise(
+                AdCPValidationError(error_msg, context=req.context),
                 tenant_id=tenant["tenant_id"],
                 principal_id=principal_id,
                 idempotency_key=req.idempotency_key,
-                context=req.context,
+                payload_hash=payload_hash,
             )
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
@@ -3324,24 +3356,34 @@ async def _create_media_buy_impl(
         # Check if adapter returned an error response FIRST (before accessing any fields)
         # With oneOf pattern, response can be CreateMediaBuySuccess or CreateMediaBuyError
         if isinstance(response, CreateMediaBuyError):
-            error_msg = response.errors[0].message if response.errors else "Unknown error"
-            error_code = response.errors[0].code if response.errors else "UNKNOWN"
+            err = response.errors[0] if response.errors else None
+            error_msg = err.message if err else "Unknown error"
+            error_code = err.code if err else "UNKNOWN"
             logger.error(f"[ADAPTER] Adapter returned error response: {error_code} - {error_msg}")
-            # Cache adapter rejections so replay returns the same answer — except for
-            # transient errors (rate limit, service unavailable, timeout), where the
-            # buyer's retry is meant to succeed and a cached failure would defeat that.
-            recovery = response.errors[0].recovery if response.errors else None
-            # ``recovery`` is a Recovery enum member, not a plain str, so compare on
-            # its value — otherwise ``Recovery.transient != "transient"`` is always
-            # True and transient adapter errors get cached, defeating the skip above.
-            if getattr(recovery, "value", recovery) != "transient":
-                _cache_rejection_envelope(
+            # Reconstruct a typed AdCPError from the adapter's rejection so it leaves via
+            # the transport boundary as a two-layer envelope (Pattern A), and cache it for
+            # replay — except transient errors (rate limit, service unavailable, timeout),
+            # where the buyer's retry is meant to succeed and a cached failure would defeat
+            # it. ``recovery`` is a Recovery enum member, so compare on its value.
+            recovery = err.recovery if err else None
+            recovery_value = getattr(recovery, "value", recovery)
+            adapter_exc = AdCPError.synthesize(
+                error_msg,
+                error_code=str(getattr(error_code, "value", error_code)),
+                recovery=cast("RecoveryHint | None", recovery_value),
+                field=err.field if err else None,
+                details=err.details if err else None,
+                context=req.context,
+            )
+            if recovery_value != "transient":
+                _cache_rejection_and_raise(
+                    adapter_exc,
                     tenant_id=tenant["tenant_id"],
                     principal_id=principal_id,
                     idempotency_key=req.idempotency_key,
-                    response=response,
+                    payload_hash=payload_hash,
                 )
-            return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.failed.value)
+            raise adapter_exc
 
         # At this point, response is CreateMediaBuySuccess - safe to access success-specific fields
         # Type narrowing: media_buy_id must be present in successful response

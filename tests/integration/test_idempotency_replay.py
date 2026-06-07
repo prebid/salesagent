@@ -1,17 +1,18 @@
 """Integration tests for replay-after-rejection through _create_media_buy_impl.
 
-Verifies the AdCP idempotency contract item 7: retrying a tool call with the
-same idempotency_key returns the cached rejection envelope verbatim, not a
-fresh evaluation.
+Verifies the AdCP idempotency contract: retrying a tool call with the same
+idempotency_key re-raises the cached rejection as a typed AdCPError (marked
+replayed=true) — byte-identical to the fresh reject — rather than re-evaluating.
+A same key carrying a *different* canonical payload raises IDEMPOTENCY_CONFLICT.
 
 Without these tests the replay path is effectively dead code: if the replay
 lookup were deleted, the _impl-only tests would still pass green. These tests
 pin it so a regression there fails.
 
 Three layers tested:
-1. _build_idempotency_rejection_replay — pure re-hydration of cached dict
-2. _cache_rejection_envelope — DB write via repository
-3. _create_media_buy_impl — full replay through the production entrypoint
+1. _raise_idempotency_rejection_replay — reconstructs a cached dict and raises it
+2. _cache_rejection_envelope — DB write via repository (envelope + payload_hash)
+3. _create_media_buy_impl — full replay (raise) through the production entrypoint
 """
 
 import uuid
@@ -37,62 +38,48 @@ class _RepoEnv(IntegrationEnv):
         return self._session
 
 
-class TestBuildIdempotencyRejectionReplay:
-    """_build_idempotency_rejection_replay re-hydrates a cached dict envelope."""
+class TestRaiseIdempotencyRejectionReplay:
+    """_raise_idempotency_rejection_replay reconstructs a cached dict envelope and raises it."""
 
-    def test_re_hydrates_cached_envelope_to_failed_result(self):
-        from src.core.schemas import (
-            CreateMediaBuyError,
-            CreateMediaBuyResult,
-            Error,
-        )
-        from src.core.tools.media_buy_create import (
-            _build_idempotency_rejection_replay,
-        )
+    def test_reconstructs_cached_envelope_and_raises(self):
+        from src.core.exceptions import AdCPError
+        from src.core.tools.media_buy_create import _raise_idempotency_rejection_replay
 
-        original = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message="start_time required", details=None)],
-            context=None,
-        )
-        cached = original.model_dump(mode="json")
+        cached = {
+            "errors": [{"code": "VALIDATION_ERROR", "message": "start_time required", "recovery": "correctable"}],
+            "context": None,
+        }
 
-        result = _build_idempotency_rejection_replay(cached, context=None)
+        with pytest.raises(AdCPError) as exc_info:
+            _raise_idempotency_rejection_replay(cached, context=None)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        assert result.response.errors is not None
-        assert len(result.response.errors) == 1
-        assert result.response.errors[0].code == "VALIDATION_ERROR"
-        assert result.response.errors[0].message == "start_time required"
+        exc = exc_info.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.message == "start_time required"
+        assert exc.recovery == "correctable"
+        assert exc.replayed is True
 
     def test_echoes_current_request_context_into_replay(self):
         from adcp.types.generated_poc.core.context import ContextObject
 
-        from src.core.schemas import CreateMediaBuyError, Error
-        from src.core.tools.media_buy_create import (
-            _build_idempotency_rejection_replay,
-        )
+        from src.core.exceptions import AdCPError
+        from src.core.tools.media_buy_create import _raise_idempotency_rejection_replay
 
-        original = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message="bad", details=None)],
-            context=None,
-        )
-        cached = original.model_dump(mode="json")
+        cached = {"errors": [{"code": "VALIDATION_ERROR", "message": "bad"}], "context": None}
         new_context = ContextObject(application_context={"retry_attempt": 2})
 
-        result = _build_idempotency_rejection_replay(cached, context=new_context)
+        with pytest.raises(AdCPError) as exc_info:
+            _raise_idempotency_rejection_replay(cached, context=new_context)
 
-        assert result.response.context is not None
-        assert result.response.context.application_context == {"retry_attempt": 2}
+        assert exc_info.value.context is new_context
 
 
 class TestCacheRejectionEnvelopeWritesRow:
-    """_cache_rejection_envelope writes a retrievable IdempotencyAttempt row."""
+    """_cache_rejection_envelope writes a retrievable IdempotencyAttempt row (envelope + payload_hash)."""
 
     def test_cache_then_find_returns_envelope(self, integration_db):
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import CreateMediaBuyError, Error
+        from src.core.exceptions import AdCPValidationError
         from src.core.tools.media_buy_create import _cache_rejection_envelope
         from tests.factories import PrincipalFactory, TenantFactory
 
@@ -105,15 +92,12 @@ class TestCacheRejectionEnvelopeWritesRow:
             principal_id = principal.principal_id
             env.get_session()
 
-        rejection = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message="end_time before start_time", details=None)],
-            context=None,
-        )
         _cache_rejection_envelope(
             tenant_id=tenant_id,
             principal_id=principal_id,
             idempotency_key=idem_key,
-            response=rejection,
+            exc=AdCPValidationError("end_time before start_time"),
+            payload_hash="hash-abc",
         )
 
         with MediaBuyUoW(tenant_id) as uow:
@@ -124,29 +108,30 @@ class TestCacheRejectionEnvelopeWritesRow:
                 idempotency_key=idem_key,
             )
             assert cached is not None
-            assert cached.response_envelope == rejection.model_dump(mode="json")
+            # Cached as the single-layer {errors, context} projection of the wire envelope.
+            assert cached.response_envelope["errors"][0]["code"] == "VALIDATION_ERROR"
+            assert cached.response_envelope["errors"][0]["message"] == "end_time before start_time"
+            assert cached.payload_hash == "hash-abc"
             assert cached.tenant_id == tenant_id
             assert cached.principal_id == principal_id
             assert cached.tool_name == "create_media_buy"
 
     def test_no_key_is_noop(self, integration_db):
-        from src.core.schemas import CreateMediaBuyError, Error
+        from src.core.exceptions import AdCPValidationError
         from src.core.tools.media_buy_create import _cache_rejection_envelope
 
-        rejection = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message="x", details=None)],
-            context=None,
-        )
+        # No idempotency_key → no row written, no error.
         _cache_rejection_envelope(
             tenant_id="any_tenant",
             principal_id="any_principal",
             idempotency_key=None,
-            response=rejection,
+            exc=AdCPValidationError("x"),
+            payload_hash=None,
         )
 
     def test_duplicate_cache_is_swallowed_via_integrity_error(self, integration_db):
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import CreateMediaBuyError, Error
+        from src.core.exceptions import AdCPValidationError
         from src.core.tools.media_buy_create import _cache_rejection_envelope
         from tests.factories import PrincipalFactory, TenantFactory
 
@@ -159,21 +144,13 @@ class TestCacheRejectionEnvelopeWritesRow:
             principal_id = principal.principal_id
             env.get_session()
 
-        rejection = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message="x", details=None)],
-            context=None,
-        )
+        exc = AdCPValidationError("x")
         _cache_rejection_envelope(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            idempotency_key=idem_key,
-            response=rejection,
+            tenant_id=tenant_id, principal_id=principal_id, idempotency_key=idem_key, exc=exc, payload_hash="h1"
         )
+        # Second write for the same key — IntegrityError on the unique index is swallowed.
         _cache_rejection_envelope(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            idempotency_key=idem_key,
-            response=rejection,
+            tenant_id=tenant_id, principal_id=principal_id, idempotency_key=idem_key, exc=exc, payload_hash="h1"
         )
 
         with MediaBuyUoW(tenant_id) as uow:
@@ -193,16 +170,12 @@ class TestImplReplaysCachedRejection:
     _create_media_buy_impl (not just the lower-level helpers).
     """
 
-    async def test_cached_rejection_returned_on_replay(self, integration_db):
+    async def test_cached_rejection_raised_on_replay(self, integration_db):
         from datetime import UTC, datetime
 
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import (
-            CreateMediaBuyError,
-            CreateMediaBuyRequest,
-            CreateMediaBuyResult,
-            Error,
-        )
+        from src.core.exceptions import AdCPError
+        from src.core.schemas import CreateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from tests.factories import PrincipalFactory, TenantFactory
@@ -217,17 +190,17 @@ class TestImplReplaysCachedRejection:
             PrincipalFactory(tenant=tenant, principal_id=principal_id)
             env.get_session()
 
-        original_rejection = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message=original_message, details=None)],
-            context=None,
-        )
+        # Seed a cached rejection (no payload_hash → always a replay, never a conflict).
         with MediaBuyUoW(tenant_id) as seed_uow:
             assert seed_uow.idempotency_attempts is not None
             seed_uow.idempotency_attempts.record_rejection(
                 principal_id=principal_id,
                 tool_name="create_media_buy",
                 idempotency_key=idem_key,
-                response_envelope=original_rejection.model_dump(mode="json"),
+                response_envelope={
+                    "errors": [{"code": "VALIDATION_ERROR", "message": original_message, "recovery": "correctable"}],
+                    "context": None,
+                },
             )
 
         identity = PrincipalFactory.make_identity(
@@ -245,30 +218,25 @@ class TestImplReplaysCachedRejection:
             idempotency_key=idem_key,
         )
 
-        result = await _create_media_buy_impl(req=req, identity=identity)
+        # The replay lookup runs before validation, so the cached rejection is
+        # re-raised (not a fresh evaluation of the empty-packages request).
+        with pytest.raises(AdCPError) as exc_info:
+            await _create_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert result.status == "failed"
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.response.errors is not None
-        assert len(result.response.errors) == 1
-        assert result.response.errors[0].code == "VALIDATION_ERROR"
-        assert result.response.errors[0].message == original_message
+        exc = exc_info.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.message == original_message
+        assert exc.replayed is True
 
     async def test_unrelated_key_does_not_replay(self, integration_db):
-        """Different idempotency_key on the same principal does not pick up
-        an unrelated cached rejection — the lookup is key-scoped, not just
-        principal-scoped.
+        """A different idempotency_key on the same principal does not pick up an
+        unrelated cached rejection — the lookup is key-scoped, not principal-scoped.
         """
         from datetime import UTC, datetime
 
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import (
-            CreateMediaBuyError,
-            CreateMediaBuyRequest,
-            CreateMediaBuyResult,
-            Error,
-        )
+        from src.core.exceptions import AdCPError
+        from src.core.schemas import CreateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from tests.factories import PrincipalFactory, TenantFactory
@@ -283,17 +251,16 @@ class TestImplReplaysCachedRejection:
             PrincipalFactory(tenant=tenant, principal_id=principal_id)
             env.get_session()
 
-        seeded = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message="seeded message", details=None)],
-            context=None,
-        )
         with MediaBuyUoW(tenant_id) as seed_uow:
             assert seed_uow.idempotency_attempts is not None
             seed_uow.idempotency_attempts.record_rejection(
                 principal_id=principal_id,
                 tool_name="create_media_buy",
                 idempotency_key=seeded_key,
-                response_envelope=seeded.model_dump(mode="json"),
+                response_envelope={
+                    "errors": [{"code": "VALIDATION_ERROR", "message": "seeded message"}],
+                    "context": None,
+                },
             )
 
         identity = PrincipalFactory.make_identity(
@@ -311,14 +278,13 @@ class TestImplReplaysCachedRejection:
             idempotency_key=other_key,
         )
 
-        result = await _create_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, CreateMediaBuyResult)
-        if isinstance(result.response, CreateMediaBuyError) and result.response.errors:
-            messages = [e.message for e in result.response.errors]
-            assert (
-                "seeded message" not in messages
-            ), f"Replay incorrectly served seeded envelope for unrelated key: {messages}"
+        # other_key has no cached rejection, so the seeded envelope must never be
+        # served. The call may still fail for unrelated reasons, but never with the
+        # seeded message.
+        try:
+            await _create_media_buy_impl(req=req, identity=identity)
+        except AdCPError as exc:
+            assert "seeded message" not in exc.message, f"Unrelated key replayed the seeded rejection: {exc.message}"
 
 
 class TestWirePathReplay:
@@ -339,9 +305,9 @@ class TestWirePathReplay:
     TypeAdapter strips undeclared fields; the A2A skill / REST body forward it
     explicitly), the matching transport's replay is bypassed and the test fails.
 
-    A replayed rejection is a *successful* transport response carrying a
-    failed-status ``CreateMediaBuyResult`` (REST 200; MCP/A2A no raise), so the
-    payload — not the error path — is asserted via ``assert_replayed_rejection``.
+    A replayed rejection is re-raised as a typed ``AdCPError`` (replayed=true), so it
+    surfaces as an ERROR result carrying the two-layer wire envelope — asserted via
+    ``assert_replayed_rejection`` (which inspects ``result.wire_error_envelope``).
     """
 
     # Valid create_media_buy params shared by all three transports. The replay
@@ -432,8 +398,11 @@ class TestTransientRejectionNotCached:
         The harness installs a happy-path ``side_effect`` on
         ``create_media_buy``; ``side_effect`` takes precedence over
         ``return_value``, so it must be cleared before the error
-        ``return_value`` takes effect. Returns the CreateMediaBuyResult.
+        ``return_value`` takes effect. The impl reconstructs the adapter rejection
+        as a typed AdCPError and raises it; the caller wraps in ``pytest.raises``.
         """
+        from datetime import UTC, datetime, timedelta
+
         from src.core.schemas import CreateMediaBuyError, Error
 
         adapter = env.mock["adapter"].return_value
@@ -442,34 +411,33 @@ class TestTransientRejectionNotCached:
             errors=[Error(code="ADAPTER_ERROR", message=f"adapter {recovery} failure", recovery=recovery)],
             context=None,
         )
+        # Future flight window so the request clears start_time validation and reaches the adapter.
+        now = datetime.now(UTC)
         return env.call_impl(
             brand={"domain": "transient-test.example.com"},
             packages=[{"product_id": product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-            start_time="2026-06-01T00:00:00Z",
-            end_time="2026-06-30T00:00:00Z",
+            start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
             po_number="TRANSIENT-1",
             idempotency_key=idempotency_key,
         )
 
     def test_transient_adapter_rejection_is_not_cached(self, integration_db):
-        """recovery='transient' adapter rejection → NO IdempotencyAttempt row written."""
+        """recovery='transient' adapter rejection → raises, NO IdempotencyAttempt row written."""
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import CreateMediaBuyError, CreateMediaBuyResult
+        from src.core.exceptions import AdCPError
 
         idem_key = f"transient-{uuid.uuid4().hex[:8]}"
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
-            result = self._drive_adapter_rejection(
-                env, recovery="transient", idempotency_key=idem_key, product_id=product.product_id
-            )
+            # The adapter rejection is reconstructed as a typed AdCPError and raised.
+            with pytest.raises(AdCPError):
+                self._drive_adapter_rejection(
+                    env, recovery="transient", idempotency_key=idem_key, product_id=product.product_id
+                )
             tenant_id = env._tenant_id
             principal_id = env._principal_id
-
-        # The flow reached the adapter-rejection branch (failed CreateMediaBuyError).
-        assert isinstance(result, CreateMediaBuyResult)
-        assert result.status == "failed"
-        assert isinstance(result.response, CreateMediaBuyError)
 
         # Transient rejection must NOT be cached — a retry should re-evaluate.
         with MediaBuyUoW(tenant_id) as uow:
@@ -489,21 +457,18 @@ class TestTransientRejectionNotCached:
         "adapter rejections are never cached".
         """
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import CreateMediaBuyError, CreateMediaBuyResult
+        from src.core.exceptions import AdCPError
 
         idem_key = f"terminal-{uuid.uuid4().hex[:8]}"
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
-            result = self._drive_adapter_rejection(
-                env, recovery="terminal", idempotency_key=idem_key, product_id=product.product_id
-            )
+            with pytest.raises(AdCPError):
+                self._drive_adapter_rejection(
+                    env, recovery="terminal", idempotency_key=idem_key, product_id=product.product_id
+                )
             tenant_id = env._tenant_id
             principal_id = env._principal_id
-
-        assert isinstance(result, CreateMediaBuyResult)
-        assert result.status == "failed"
-        assert isinstance(result.response, CreateMediaBuyError)
 
         # Non-transient rejection IS cached so a retry replays the same answer.
         # Read the envelope inside the UoW block — the ORM row is detached after exit.
@@ -517,4 +482,5 @@ class TestTransientRejectionNotCached:
             assert cached is not None, "Non-transient adapter rejection must be cached for replay"
             cached_errors = cached.response_envelope.get("errors")
             assert cached_errors, f"Cached envelope must carry errors[]. Got {cached.response_envelope!r}"
-            assert cached_errors[0]["code"] == "ADAPTER_ERROR"
+            # ADAPTER_ERROR wire-translates to SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING.
+            assert cached_errors[0]["code"] == "SERVICE_UNAVAILABLE"
