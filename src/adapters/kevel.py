@@ -72,7 +72,7 @@ class Kevel(AdServerAdapter):
         # Per-request memoization of property_list resolutions. The adapter
         # instance is constructed per ``create_media_buy`` call via
         # ``get_adapter()``, so this dict is effectively request-scoped.
-        # ``_check_property_list_supported`` and ``_build_targeting`` both
+        # ``_raise_if_property_list_uncompilable`` and ``_build_targeting`` both
         # need the same ``ResolvedSiteIds`` per package; memoizing here keeps
         # the resolver call count at 1 per (agent_url, list_id) per request.
         self._property_list_cache: dict[tuple[str, str], ResolvedSiteIds] = {}
@@ -86,7 +86,7 @@ class Kevel(AdServerAdapter):
     def _resolve_property_list(self, ref: Any) -> ResolvedSiteIds:
         """Resolve a ``PropertyListReference`` once per request, with dry-run support.
 
-        Memoizes by ``(agent_url, list_id)`` so ``_check_property_list_supported``
+        Memoizes by ``(agent_url, list_id)`` so ``_raise_if_property_list_uncompilable``
         and ``_build_targeting`` share a single resolution per package per
         request.
 
@@ -362,7 +362,7 @@ class Kevel(AdServerAdapter):
             error_msg = f"Unsupported targeting features for Kevel: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
             return CreateMediaBuyError(
-                errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg, details={error_msg: error_msg})],
+                errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg, details=None)],
             )
 
         # Generate a media buy ID

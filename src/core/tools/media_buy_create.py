@@ -2000,8 +2000,8 @@ async def _create_media_buy_impl(
 
                 # Faithful intersection advisory (B5): when the buyer's
                 # property_list resolves to zero overlap with a product's
-                # publisher_properties, log a warning so operators can surface
-                # the mismatch in audit/Slack. Do NOT reject — per the
+                # publisher_properties, log a warning operators can build
+                # log-based alerting on. Do NOT reject — per the
                 # inventory-targeting plan SD2 the storyboard
                 # ``inventory_list_no_match`` contract requires accept-with-
                 # context, and downstream adapter compilation (Kevel via B3,
