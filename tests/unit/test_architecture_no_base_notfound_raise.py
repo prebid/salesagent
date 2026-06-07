@@ -16,10 +16,10 @@ Only a fresh ``raise`` of the base is flagged. Catching it in an ``except``
 clause (e.g. ``except AdCPNotFoundError``) is fine and intentionally allowed —
 the base is the right thing to catch, just not to raise.
 
-Allowlist: one sanctioned generic — ``account_helpers.resolve_account`` raises the
-base for an unsupported ``AccountReference`` union variant, a defensive fall-through
-that is unreachable for validated input (the union is exhaustive) and is not a real
-entity-not-found. Every other not-found raise across src/ uses a typed subclass.
+Allowlist is empty: every not-found raise across src/ uses a typed subclass.
+(The former lone entry, ``account_helpers.resolve_account``'s unsupported-variant
+fall-through, was retyped to ``ValueError`` — it is an unreachable internal
+contract violation, not a buyer-facing not-found.)
 """
 
 from __future__ import annotations
@@ -33,11 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src"]
 
 # Keyed by (relative_path, enclosing_function). Must only shrink.
-KNOWN_VIOLATIONS: set[tuple[str, str]] = {
-    # Defensive, unreachable fall-through for an unsupported AccountReference union
-    # variant — a malformed-request guard, not an entity-not-found. Sanctioned generic.
-    ("src/core/helpers/account_helpers.py", "resolve_account"),
-}
+KNOWN_VIOLATIONS: set[tuple[str, str]] = set()
 
 FuncDef = (ast.FunctionDef, ast.AsyncFunctionDef)
 
