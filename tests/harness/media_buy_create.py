@@ -78,54 +78,74 @@ class MediaBuyCreateEnv(IntegrationEnv):
         product, pricing_option = self.setup_product_chain(tenant)
         return tenant, principal, product, pricing_option
 
-    def setup_product_chain(self, tenant: Any) -> tuple[Any, Any]:
-        """Create the Product + PricingOption + PropertyTag chain for a tenant.
+    def setup_product_chain(
+        self,
+        tenant: Any,
+        *,
+        product_id: str = "prod_1",
+        currency: str = "USD",
+        with_pricing: bool = True,
+        format_ids: list[dict[str, str]] | None = None,
+    ) -> tuple:
+        """Seed a real PropertyTag ("all_inventory") + Product + PricingOption row set.
 
-        ``create_media_buy`` resolves each package's ``product_id`` against a DB
-        Product (with a PricingOption matching ``pricing_option_id``), and the
-        Product references the ``all_inventory`` PropertyTag. This builds that
-        chain via factories so a full (non-dry-run) create can reach the adapter.
-
-        Returns (product, pricing_option) ORM instances. The default
-        PricingOption is CPM/USD/fixed, whose generated id is ``cpm_usd_fixed``.
+        The "all_inventory" tag is created once per env (idempotent across repeated
+        calls). Returns ``(product, pricing_option)``; ``pricing_option`` is ``None``
+        when ``with_pricing=False``.
         """
+        from tests.factories import PricingOptionFactory, ProductFactory
         from tests.factories.core import PropertyTagFactory
-        from tests.factories.product import PricingOptionFactory, ProductFactory
 
-        # Product.property_tags references "all_inventory" by factory default.
-        PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
-        product = ProductFactory(tenant=tenant)
-        pricing_option = PricingOptionFactory(product=product)
+        if not getattr(self, "_seeded_all_inventory_tag", False):
+            PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+            self._seeded_all_inventory_tag = True
+
+        if format_ids is None:
+            format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+
+        product = ProductFactory(
+            tenant=tenant,
+            product_id=product_id,
+            delivery_type="non_guaranteed",
+            format_ids=format_ids,
+            property_tags=["all_inventory"],
+        )
+        pricing_option = None
+        if with_pricing:
+            pricing_option = PricingOptionFactory(
+                product=product, pricing_model="cpm", currency=currency, is_fixed=True
+            )
         return product, pricing_option
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
-        """Return a mock context manager covering the create + update call surface.
+        """Mock context manager that delegates create_context / create_workflow_step to the REAL one.
 
-        ``_create_media_buy_impl`` (and the update impl) call the context
-        manager to create/fetch a Context and a WorkflowStep. This mock returns
-        objects exposing ``.context_id`` / ``.step_id`` but creates NO DB rows.
-
-        Limitation: this env therefore supports only the failed / replay paths,
-        which return before a WorkflowStep is FK-linked to a media buy (the
-        rejection-replay tests). A *successful* create reaches
-        ``ObjectWorkflowMapping(step_id=...)`` and would FK-violate against the
-        mock ``step_id``; a future success-create test through this env must
-        replace this mock with real Context + WorkflowStep rows.
+        Persisting real Context / WorkflowStep rows lets the manual-approval path satisfy
+        the ObjectWorkflowMapping foreign keys while the other ContextManager methods stay mocked.
         """
-        ctx_obj = MagicMock()
-        ctx_obj.context_id = f"ctx_{uuid.uuid4().hex[:8]}"
+        from src.core.context_manager import get_context_manager
 
-        step_obj = MagicMock()
-        step_obj.step_id = f"step_{uuid.uuid4().hex[:8]}"
+        real = get_context_manager()
+        mgr = MagicMock()
 
-        ctx_mgr = MagicMock()
-        ctx_mgr.create_context.return_value = ctx_obj
-        ctx_mgr.get_context.return_value = ctx_obj
-        ctx_mgr.get_or_create_context.return_value = ctx_obj
-        ctx_mgr.create_workflow_step.return_value = step_obj
-        ctx_mgr.update_workflow_step.return_value = None
-        ctx_mgr.add_message.return_value = None
-        return ctx_mgr
+        def _create_context(*_args: Any, **kwargs: Any):
+            return real.create_context(
+                tenant_id=kwargs.get("tenant_id", self._tenant_id),
+                principal_id=kwargs.get("principal_id", self._principal_id),
+            )
+
+        def _create_workflow_step(*_args: Any, **kwargs: Any):
+            kwargs.setdefault("step_type", "media_buy_creation")
+            kwargs.setdefault("owner", "system")
+            kwargs.setdefault("tool_name", tool_name)
+            return real.create_workflow_step(**kwargs)
+
+        mgr.create_context.side_effect = _create_context
+        mgr.get_context.return_value = None
+        mgr.create_workflow_step.side_effect = _create_workflow_step
+        mgr.update_workflow_step.return_value = None
+        mgr.add_message.return_value = None
+        return mgr
 
     def seed_rejection(self, idempotency_key: str, message: str) -> None:
         """Persist a cached create_media_buy rejection for this env's principal.

@@ -38,12 +38,7 @@ IMPL_REGISTRY = [
 # Known violations: (module_path, impl_name, wrapper_kind, missing_param)
 # Each entry is a known parameter drop that needs fixing.
 # Format: "module::impl_name::wrapper_kind::param_name"
-KNOWN_VIOLATIONS = {
-    # A2A wrapper for create_media_buy doesn't pass context_id
-    "src.core.tools.media_buy_create::_create_media_buy_impl::a2a::context_id",
-    # A2A wrapper for update_media_buy doesn't pass context_id
-    "src.core.tools.media_buy_update::_update_media_buy_impl::a2a::context_id",
-}
+KNOWN_VIOLATIONS: set[str] = set()
 
 # Parameters resolved at the boundary, not forwarded from the caller
 BOUNDARY_RESOLVED_PARAMS = {"identity"}

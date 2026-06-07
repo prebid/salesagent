@@ -173,11 +173,32 @@ class TestRecoveryClassification:
         assert exc.recovery == "terminal"
 
     def test_not_found_error_defaults_to_terminal(self):
-        """AdCPNotFoundError defaults to recovery='terminal'."""
+        """AdCPNotFoundError (the *base*) defaults to recovery='terminal'.
+
+        Specific typed subclasses (``AdCPMediaBuyNotFoundError``,
+        ``AdCPPackageNotFoundError``) override to ``correctable`` because the
+        buyer holds the lever — they can re-issue with the right id. The base
+        keeps ``terminal`` for genuinely-gone resources without a known
+        recovery path.
+        """
         from src.core.exceptions import AdCPNotFoundError
 
         exc = AdCPNotFoundError("resource missing")
         assert exc.recovery == "terminal"
+
+    def test_media_buy_not_found_error_defaults_to_correctable(self):
+        """AdCPMediaBuyNotFoundError overrides base to recovery='correctable'."""
+        from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+        exc = AdCPMediaBuyNotFoundError("media buy mb_xyz not found")
+        assert exc.recovery == "correctable"
+
+    def test_package_not_found_error_defaults_to_correctable(self):
+        """AdCPPackageNotFoundError overrides base to recovery='correctable'."""
+        from src.core.exceptions import AdCPPackageNotFoundError
+
+        exc = AdCPPackageNotFoundError("package pkg_xyz not found")
+        assert exc.recovery == "correctable"
 
     def test_rate_limit_error_defaults_to_transient(self):
         """AdCPRateLimitError defaults to recovery='transient'."""
@@ -200,11 +221,28 @@ class TestRecoveryClassification:
         exc = AdCPConflictError("duplicate idempotency key")
         assert exc.recovery == "correctable"
 
-    def test_gone_error_defaults_to_terminal(self):
-        """AdCPGoneError defaults to recovery='terminal'."""
+    def test_gone_error_defaults_to_correctable(self):
+        """AdCPGoneError defaults to recovery='correctable'.
+
+        Resource is gone, but the buyer can recover by referencing a fresh
+        resource (new proposal, new media buy) and re-issuing the request.
+        """
         from src.core.exceptions import AdCPGoneError
 
         exc = AdCPGoneError("proposal expired")
+        assert exc.recovery == "correctable"
+
+    def test_account_payment_required_error_defaults_to_terminal(self):
+        """AdCPAccountPaymentRequiredError defaults to recovery='terminal'.
+
+        From the sales agent's perspective there is no in-band remediation —
+        the buyer must settle the outstanding balance externally before
+        resubmitting. Matches the BDD storyboard contract for UC-002
+        account-reference partition/boundary rows.
+        """
+        from src.core.exceptions import AdCPAccountPaymentRequiredError
+
+        exc = AdCPAccountPaymentRequiredError("invoice overdue")
         assert exc.recovery == "terminal"
 
     def test_budget_exhausted_error_defaults_to_correctable(self):
@@ -255,8 +293,20 @@ class TestRecoveryClassification:
 # ---------------------------------------------------------------------------
 
 
+from tests.helpers import assert_envelope_shape  # noqa: E402
+
+
 class TestFastAPIExceptionHandlers:
-    """Verify FastAPI exception handlers return correct HTTP responses."""
+    """Verify FastAPI exception handlers return correct HTTP responses.
+
+    The body is the AdCP spec-compliant two-layer envelope::
+
+        {
+            "adcp_error": {"code": "...", "message": "...", "recovery": "..."},
+            "errors": [{"code": "...", "message": "...", "recovery": "..."}],
+            "context": {...},   # optional, present when raised with context
+        }
+    """
 
     def test_validation_error_returns_400(self):
         """AdCPValidationError raised in a route must return 400."""
@@ -271,9 +321,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/validation")
         assert response.status_code == 400
-        body = response.json()
-        assert body["error_code"] == "VALIDATION_ERROR"
-        assert "test validation error" in body["message"]
+        assert_envelope_shape(response.json(), "VALIDATION_ERROR", message_substr="test validation error")
 
     def test_authentication_error_returns_401(self):
         """AdCPAuthenticationError raised in a route must return 401."""
@@ -287,11 +335,19 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
-        body = response.json()
-        assert body["error_code"] == "AUTH_TOKEN_INVALID"
+        # AdCPAuthenticationError.error_code = "AUTH_TOKEN_INVALID" (spec STANDARD code,
+        # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_TOKEN_INVALID, not
+        # AUTH_REQUIRED (which is for AdCPAuthorizationError).
+        assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID")
 
     def test_not_found_error_returns_404(self):
-        """AdCPNotFoundError raised in a route must return 404."""
+        """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
+
+        The base ``AdCPNotFoundError`` carries the internal ``NOT_FOUND`` code,
+        which the boundary translates to ``INVALID_REQUEST`` (STANDARD) so the
+        wire stays spec-compliant. Status 404 is preserved. Production code
+        should prefer specific subclasses (AdCPMediaBuyNotFoundError, etc.).
+        """
         from src.app import app
         from src.core.exceptions import AdCPNotFoundError
 
@@ -302,8 +358,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/notfound")
         assert response.status_code == 404
-        body = response.json()
-        assert body["error_code"] == "NOT_FOUND"
+        assert_envelope_shape(response.json(), "INVALID_REQUEST")
 
     def test_adapter_error_returns_502(self):
         """AdCPAdapterError raised in a route must return 502."""
@@ -317,8 +372,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/adapter")
         assert response.status_code == 502
-        body = response.json()
-        assert body["error_code"] == "SERVICE_UNAVAILABLE"
+        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE")
 
     def test_conflict_error_returns_409(self):
         """AdCPConflictError raised in a route must return 409."""
@@ -332,8 +386,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        body = response.json()
-        assert body["error_code"] == "CONFLICT"
+        assert_envelope_shape(response.json(), "CONFLICT")
 
     def test_gone_error_returns_410(self):
         """AdCPGoneError raised in a route must return 410."""
@@ -347,8 +400,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/gone")
         assert response.status_code == 410
-        body = response.json()
-        assert body["error_code"] == "INVALID_STATE"
+        assert_envelope_shape(response.json(), "INVALID_STATE")
 
     def test_budget_exhausted_error_returns_422(self):
         """AdCPBudgetExhaustedError raised in a route must return 422."""
@@ -362,8 +414,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/budget")
         assert response.status_code == 422
-        body = response.json()
-        assert body["error_code"] == "BUDGET_EXHAUSTED"
+        assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED")
 
     def test_service_unavailable_error_returns_503(self):
         """AdCPServiceUnavailableError raised in a route must return 503."""
@@ -377,11 +428,10 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/unavailable")
         assert response.status_code == 503
-        body = response.json()
-        assert body["error_code"] == "SERVICE_UNAVAILABLE"
+        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE")
 
-    def test_error_response_has_standard_envelope(self):
-        """Error responses must have {error_code, message, details} envelope."""
+    def test_error_response_has_two_layer_envelope(self):
+        """Error responses use the spec-compliant two-layer envelope shape."""
         from src.app import app
         from src.core.exceptions import AdCPValidationError
 
@@ -392,12 +442,31 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test-exc/envelope")
         body = response.json()
-        assert "error_code" in body
-        assert "message" in body
-        assert "details" in body
-        assert body["details"] == {"field": "x"}
-        assert "recovery" in body
-        assert body["recovery"] == "correctable"
+        assert_envelope_shape(body, "VALIDATION_ERROR")
+        # Both layers carry recovery
+        assert body["adcp_error"]["recovery"] == "correctable"
+        assert body["errors"][0]["recovery"] == "correctable"
+        # Details propagate into both layers
+        assert body["adcp_error"]["details"] == {"field": "x"}
+        assert body["errors"][0]["details"] == {"field": "x"}
+
+    def test_error_response_echoes_context(self):
+        """When raised with context, the envelope echoes it (spec 3.0.0)."""
+        from adcp.types import ContextObject
+
+        from src.app import app
+        from src.core.exceptions import AdCPValidationError
+
+        @app.get("/test-exc/with-context")
+        def raise_with_context():
+            raise AdCPValidationError("bad", context=ContextObject(correlation_id="trace-xyz"))
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/test-exc/with-context")
+        body = response.json()
+        assert body["context"] == {"correlation_id": "trace-xyz"}
+        # The two-layer envelope contains recovery inside each layer.
+        assert body["errors"][0]["recovery"] == "correctable"
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +482,7 @@ class TestNoDeadA2AMap:
         import src.core.exceptions as exc_module
 
         assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), (
-            "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
+            "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
         )
 
     def test_no_to_a2a_error_code_in_exceptions(self):
@@ -421,7 +490,7 @@ class TestNoDeadA2AMap:
         import src.core.exceptions as exc_module
 
         assert not hasattr(exc_module, "to_a2a_error_code"), (
-            "to_a2a_error_code() is dead code — A2A translation lives in _adcp_to_a2a_error() in adcp_a2a_server.py"
+            "to_a2a_error_code() is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
         )
 
 
@@ -459,9 +528,35 @@ class TestErrorCodeWireTranslation:
 
         assert translate_error_code("VALIDATION_ERROR") == "VALIDATION_ERROR"
         assert translate_error_code("MEDIA_BUY_NOT_FOUND") == "MEDIA_BUY_NOT_FOUND"
-        # Internal-only codes pass through at the helper layer; transport-specific
-        # behavior (e.g., redaction) happens at the boundary handler if needed.
-        assert translate_error_code("NOT_FOUND") == "NOT_FOUND"
+        # Genuinely-unmapped codes pass through; INTERNAL_CODES that used to pass
+        # through (NOT_FOUND, CONFIGURATION_ERROR, INTERNAL_ERROR) are now
+        # explicitly mapped to STANDARD_ERROR_CODES targets — see
+        # test_internal_codes_translated_to_wire_safe_codes below.
+        assert translate_error_code("SOME_UNKNOWN_CODE_THAT_IS_NOT_MAPPED") == "SOME_UNKNOWN_CODE_THAT_IS_NOT_MAPPED"
+
+    def test_internal_codes_translated_to_wire_safe_codes(self):
+        """Base-class codes that should never reach the wire are translated to STANDARD targets.
+
+        Catches accidental leaks: AdCPError, AdCPNotFoundError, AdCPConfigurationError
+        instances that escape to the boundary now produce STANDARD_ERROR_CODES output
+        instead of the previously-leaking internal codes.
+        """
+        from adcp.server.helpers import STANDARD_ERROR_CODES
+
+        from src.core.exceptions import INTERNAL_CODES, translate_error_code
+
+        # Every INTERNAL_CODES entry that could plausibly reach a buyer either:
+        #   (a) has an explicit translation to a STANDARD code, OR
+        #   (b) is documented as adapter-internal (never raised at the boundary).
+        wire_safe = {
+            "NOT_FOUND": "INVALID_REQUEST",
+            "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
+            "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
+        }
+        for internal, expected_wire in wire_safe.items():
+            assert internal in INTERNAL_CODES, f"{internal} should be in INTERNAL_CODES"
+            assert translate_error_code(internal) == expected_wire
+            assert expected_wire in STANDARD_ERROR_CODES
 
     def test_wire_error_code_property_translates(self):
         """``wire_error_code`` exposes the translated code on an instance."""

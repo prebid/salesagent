@@ -461,6 +461,12 @@ Tenant → CurrencyLimit (USD required for budget validation)
 - **tests/admin/**: Admin UI tests
 - **tests/bdd/**: BDD behavioral tests (pytest-bdd)
 
+### Error Verification
+**New error-path tests must assert on the wire envelope, not reconstructed exceptions.**
+The test harness reconstructs `AdCPError` from wire responses, but this reconstruction is lossy.
+Use `assert_envelope_shape(result.wire_error_envelope, code, recovery=...)` as the primary authority.
+See `tests/CLAUDE.md` § "Error Verification Policy" for the full policy, helpers, and migration path.
+
 ### Entity Markers
 Tests are auto-tagged with entity markers by filename pattern. Use `-m` to run entity-scoped slices:
 ```bash

@@ -79,7 +79,9 @@ class TestSchemaLibraryInheritance:
         V3 Migration: Property class requires property-specific Identifier from
         adcp.types.generated_poc.core.property.Identifier, not generic Identifier.
         """
-        from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier  # TODO: no stable alias (property-specific, different from adcp.types.Identifier)
+        from adcp.types.generated_poc.core.property import (
+            Identifier as PropertySpecificIdentifier,
+        )  # TODO: no stable alias (property-specific, different from adcp.types.Identifier)
 
         from src.core.schemas import PropertyIdentifier
 

@@ -356,25 +356,31 @@ class TestHighRiskA2A:
     # H8 ---------------------------------------------------------------
     @pytest.mark.asyncio
     async def test_a2a_validation_error_missing_params(self):
-        """H8: A2A handler returns validation error dict when params are empty.
+        """H8: A2A handler raises typed AdCPValidationError when params are empty.
 
         Covers: #30 T-UC-009-ext-b-rest
         Identity is resolved at transport boundary so the handler receives it directly.
+
+        Skill handlers raise typed AdCPError on validation failure; the outer
+        dispatcher's _build_failed_skill_result produces the two-layer envelope
+        on the wire.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPValidationError
 
         handler = AdCPRequestHandler()
         mock_identity = _make_identity()
 
-        result = await handler._handle_update_performance_index_skill(
-            parameters={},
-            identity=mock_identity,
-        )
+        with pytest.raises(AdCPValidationError) as exc_info:
+            await handler._handle_update_performance_index_skill(
+                parameters={},
+                identity=mock_identity,
+            )
 
-        assert isinstance(result, dict)
-        assert result["success"] is False
-        assert "required_parameters" in result
-        assert result["required_parameters"] == ["media_buy_id", "performance_data"]
+        # Validation error mentions the required fields
+        msg = str(exc_info.value)
+        assert "media_buy_id" in msg or "performance_data" in msg
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     # H9 ---------------------------------------------------------------
     @pytest.mark.asyncio

@@ -29,11 +29,17 @@ from typing import Any
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
-from adcp.types import Error as AdCPResponseError, ImageFormatAsset
+from adcp.types import Error as AdCPResponseError
+from adcp.types import ImageFormatAsset
 from pydantic import ValidationError
 from yarl import URL
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPRateLimitError,
+    AdCPServiceUnavailableError,
+)
 from src.core.schemas import Format, FormatId, url
 
 
@@ -77,7 +83,10 @@ def _as_format_dict(fmt: Any) -> dict[str, Any]:
     model_dump = getattr(fmt, "model_dump", None)
     if callable(model_dump):
         return model_dump(mode="json")
-    raise AdCPAdapterError(f"Unexpected format item type from creative agent: {type(fmt)!r}")
+    raise AdCPAdapterError(
+        f"Unexpected format item type from creative agent: {type(fmt)!r}",
+        recovery="terminal",
+    )
 
 
 def _unknown_asset_types(fmt_data: dict[str, Any]) -> set[str]:
@@ -404,7 +413,10 @@ class CreativeAgentRegistry:
             if result.status == "completed":
                 formats_data = result.data
                 if formats_data is None:
-                    raise AdCPAdapterError("Completed status but no data in response")
+                    raise AdCPAdapterError(
+                        "Completed status but no data in response",
+                        recovery="terminal",
+                    )
 
                 logger.info(
                     f"_fetch_formats_from_agent: Got response with {len(formats_data.formats) if hasattr(formats_data, 'formats') else 'N/A'} formats"
@@ -423,7 +435,10 @@ class CreativeAgentRegistry:
                 return _validate_formats_tolerant(format_dicts, logger)
 
             elif result.status == "submitted":
-                raise AdCPAdapterError(f"Unexpected submitted status for list_creative_formats from {agent.name}")
+                raise AdCPAdapterError(
+                    f"Unexpected submitted status for list_creative_formats from {agent.name}",
+                    recovery="terminal",
+                )
 
             elif result.status == "failed":
                 # Log detailed error information for debugging
@@ -464,20 +479,23 @@ class CreativeAgentRegistry:
                 raise AdCPAdapterError(f"Creative agent format fetch failed: {error_msg}")
 
             else:
-                raise AdCPAdapterError(f"Unexpected result status from {agent.name}: {result.status}")
+                raise AdCPAdapterError(
+                    f"Unexpected result status from {agent.name}: {result.status}",
+                    recovery="terminal",
+                )
 
         except ADCPAuthenticationError as e:
             logger.error(f"Authentication failed for creative agent {agent.name}: {e.message}")
-            raise RuntimeError(f"Authentication failed: {e.message}") from e
+            raise AdCPAuthenticationError(f"Authentication failed: {e.message}") from e
         except ADCPTimeoutError as e:
             logger.error(f"Request to creative agent {agent.name} timed out: {e.message}")
-            raise RuntimeError(f"Request timed out: {e.message}") from e
+            raise AdCPServiceUnavailableError(f"Request timed out: {e.message}") from e
         except ADCPConnectionError as e:
             logger.error(f"Failed to connect to creative agent {agent.name}: {e.message}")
-            raise RuntimeError(f"Connection failed: {e.message}") from e
+            raise AdCPServiceUnavailableError(f"Connection failed: {e.message}") from e
         except ADCPError as e:
             logger.error(f"AdCP error with creative agent {agent.name}: {e.message}")
-            raise RuntimeError(str(e.message)) from e
+            raise AdCPAdapterError(str(e.message)) from e
 
     async def _fetch_formats_raw_mcp(self, agent: CreativeAgent) -> list[Format]:
         """Fallback: fetch formats via raw HTTP when adcp SDK rejects TextContent.
@@ -531,7 +549,23 @@ class CreativeAgentRegistry:
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
-                raise RuntimeError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
+                if exc.response.status_code == 429:
+                    raise AdCPRateLimitError(
+                        f"Creative agent rate-limited: {mcp_url}",
+                        details={"retry_after": exc.response.headers.get("Retry-After")},
+                    ) from exc
+                if exc.response.status_code >= 500:
+                    raise AdCPServiceUnavailableError(
+                        f"Creative agent unavailable (HTTP {exc.response.status_code}): {mcp_url}"
+                    ) from exc
+                # 4xx non-429 from an external agent is a buyer-side error
+                # (bad request, unauthorized, not found, etc.); retrying the
+                # same request won't help, so override the class default
+                # ``transient`` with ``terminal``.
+                raise AdCPAdapterError(
+                    f"Creative agent HTTP error: {exc.response.status_code}",
+                    recovery="terminal",
+                ) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < max_retries - 1:
@@ -539,13 +573,13 @@ class CreativeAgentRegistry:
                     await asyncio.sleep(2**attempt)
                     continue
                 logger.error(f"Creative agent fallback timed out: {mcp_url}")
-                raise RuntimeError(f"Request timed out: {mcp_url}") from exc
+                raise AdCPServiceUnavailableError(f"Request timed out: {mcp_url}") from exc
             except httpx.RequestError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
-                raise RuntimeError(f"Connection failed: {mcp_url} — {exc}") from exc
+                raise AdCPServiceUnavailableError(f"Connection failed: {mcp_url} — {exc}") from exc
         else:
-            raise RuntimeError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
+            raise AdCPServiceUnavailableError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
 
         # Parse SSE or JSON response
         content_type = response.headers.get("content-type", "")
@@ -560,7 +594,10 @@ class CreativeAgentRegistry:
             if "result" in data:
                 return self._parse_mcp_tool_result(data["result"], logger)
 
-        raise AdCPAdapterError(f"No parseable result in MCP response from {agent.agent_url}")
+        raise AdCPAdapterError(
+            f"No parseable result in MCP response from {agent.agent_url}",
+            recovery="terminal",
+        )
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
         """Parse formats from an MCP tools/call result."""
@@ -574,7 +611,10 @@ class CreativeAgentRegistry:
                 formats = _validate_formats_tolerant(formats_list, logger)
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
-        raise AdCPAdapterError("No text content in MCP tool result")
+        raise AdCPAdapterError(
+            "No text content in MCP tool result",
+            recovery="terminal",
+        )
 
     async def get_formats_for_agent(
         self,

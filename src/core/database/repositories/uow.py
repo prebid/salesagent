@@ -40,6 +40,7 @@ from src.core.database.repositories.currency_limit import CurrencyLimitRepositor
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
@@ -228,6 +229,27 @@ class AccountUoW(BaseUoW):
 
     def _clear_repos(self) -> None:
         self.accounts = None
+
+
+class PushNotificationConfigUoW(BaseUoW):
+    """Unit of Work for PushNotificationConfig operations.
+
+    Wraps a database session and provides a tenant-scoped
+    ``PushNotificationConfigRepository``. Auto-commits on clean exit,
+    rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    push_notification_configs: PushNotificationConfigRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.push_notification_configs = PushNotificationConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.push_notification_configs = None
 
 
 class CreativeUoW(BaseUoW):

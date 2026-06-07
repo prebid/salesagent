@@ -17,12 +17,12 @@ dependencies = [
     "flask>=3.1.3",
     "flask-caching>=2.3.0", # Response caching for improved performance
     "psycopg2-binary>=2.9.9",
-    "authlib>=1.6.11",  # GHSA-jj8c-mmj3-mmgv
+    "authlib>=1.6.12",  # GHSA-jj8c-mmj3-mmgv; PYSEC-2026-188
     "requests-oauthlib>=1.3.1",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "beautifulsoup4>=4.12.0",
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.14.0",  # CVE-2026-34993
     "alembic>=1.13.0",
     "sqlalchemy>=2.0.0",
     "watchdog>=6.0.0",
@@ -44,7 +44,7 @@ dependencies = [
     "logfire>=4.16.0",
     "pydantic-ai>=0.3.0",
     # Security patches for transitive dependencies
-    "pyjwt>=2.12.0",  # GHSA-752w-5fwx-jx9f
+    "pyjwt>=2.13.0",  # GHSA-752w-5fwx-jx9f; PYSEC-2026-175/177/178/179
     "filelock>=3.20.3",  # GHSA-qmgc-5h2g-mvrw
     "urllib3>=2.7.0",  # GHSA-38jv-5279-wg99 + GHSA-qccp-gfcp-xxvc + GHSA-mf9v-mfxr-j63j
     "werkzeug>=3.1.6",  # GHSA-87hc-h4r5-73f7 + GHSA-29vq-49wr-vm6x
@@ -79,10 +79,10 @@ dev = [
     "types-waitress>=3.0.1.20250801",
 ]
 ui-tests = [
-    "playwright==1.48.0",
+    "playwright==1.60.0",
     "pytest-playwright>=0.7.2",  # 0.6.x caps pytest<9.0.0; bump to allow pytest>=9.0.3 (GHSA-6w46-j5rx-g56g)
     "pytest-asyncio>=1.1.0",
-    "allure-pytest==2.13.5",
+    "allure-pytest==2.16.0",
 ]
 
 [project.urls]

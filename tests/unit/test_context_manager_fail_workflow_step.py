@@ -3,7 +3,7 @@
 Validates the two contracts the helper exists to enforce:
 
 1. Webhook subscribers see the same wire shape as synchronous callers —
-   ``response_data`` carries the two-layer envelope's ``errors[]`` payload,
+   ``response_data`` carries the full two-layer envelope (``adcp_error`` + ``errors[]``),
    not just an opaque ``error_message`` string. Without this, async push
    notifications fire with empty bodies (see ``_send_push_notifications`` at
    ``context_manager.py:715-726``).
@@ -38,17 +38,18 @@ def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
 def _expected_response_data(
     code: str, message: str, *, recovery: str, field: str | None = None, details: dict | None = None
 ) -> dict:
-    """Build the wire-shape ``response_data`` the helper must emit.
+    """Build the two-layer wire-shape ``response_data`` the helper must emit.
 
-    Uses the same SDK helper the production code uses, so the test asserts on
-    EXACTLY the dict shape ``update_workflow_step`` will receive — no
-    inspection or partial matching needed (per the
-    ``test_architecture_weak_mock_assertions`` guard).
+    Constructs a temporary ``AdCPError`` and calls
+    ``build_two_layer_error_envelope`` — the same function the production code
+    now uses — so the test asserts on EXACTLY the dict shape
+    ``update_workflow_step`` will receive.
     """
-    from adcp.server.helpers import adcp_error as sdk_adcp_error
+    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
 
-    payload = sdk_adcp_error(code, message, recovery=recovery, field=field, details=details)
-    return {"errors": payload["errors"]}
+    exc = AdCPError(message, field=field, details=details, recovery=recovery)
+    exc.error_code = code
+    return build_two_layer_error_envelope(exc)
 
 
 class TestFailWorkflowStepForExceptionWebhookPayload:
