@@ -29,6 +29,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+SCAN_DIRS = (ROOT / "tests",)
 
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was introduced. Allowlist shrinks as tests
@@ -79,6 +80,23 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
+    # FIXME(beads-bou.5): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
+    ("tests/bdd/steps/generic/then_media_buy.py", "then_slack_notification_sent"),
+    ("tests/integration/test_auth_header_propagation.py", "test_creative_agent_custom_auth_header_propagation"),
+    ("tests/integration/test_auth_header_propagation.py", "test_signals_agent_custom_auth_header_propagation"),
+    ("tests/integration/test_creative_async_lifecycle_obligations.py", "test_async_input_required_response"),
+    (
+        "tests/integration/test_delivery_service_behavioral.py",
+        "test_hmac_signature_header_present_when_secret_configured",
+    ),
+    ("tests/integration/test_delivery_service_behavioral.py", "test_bearer_token_sent_in_authorization_header"),
+    (
+        "tests/integration/test_delivery_service_behavioral.py",
+        "test_happy_path_delivers_payload_to_configured_endpoint",
+    ),
+    ("tests/integration/test_delivery_webhooks_force.py", "test_trigger_report_for_media_buy_public_method"),
+    ("tests/integration/test_gam_tenant_setup.py", "test_command_line_parsing_network_code_optional"),
+    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_endpoint"),
 }
 
 
@@ -143,9 +161,10 @@ class TestNoWeakMockAssertions:
     def test_no_new_split_assertions(self):
         """No new test functions use assert_called_once() + call_args together."""
         all_violations = []
-        for test_file in sorted((ROOT / "tests" / "unit").rglob("*.py")):
-            rel = str(test_file.relative_to(ROOT))
-            all_violations.extend(_find_split_assertions(rel))
+        for scan_dir in SCAN_DIRS:
+            for test_file in sorted(scan_dir.rglob("*.py")):
+                rel = str(test_file.relative_to(ROOT))
+                all_violations.extend(_find_split_assertions(rel))
 
         new_violations = [(f, fn, line) for f, fn, line in all_violations if (f, fn) not in WEAK_ASSERTION_ALLOWLIST]
 
@@ -170,10 +189,11 @@ class TestNoWeakMockAssertions:
         WEAK_ASSERTION_ALLOWLIST — this test enforces that.
         """
         all_violations: set[tuple[str, str]] = set()
-        for test_file in sorted((ROOT / "tests" / "unit").rglob("*.py")):
-            rel = str(test_file.relative_to(ROOT))
-            for f, fn, _line in _find_split_assertions(rel):
-                all_violations.add((f, fn))
+        for scan_dir in SCAN_DIRS:
+            for test_file in sorted(scan_dir.rglob("*.py")):
+                rel = str(test_file.relative_to(ROOT))
+                for f, fn, _line in _find_split_assertions(rel):
+                    all_violations.add((f, fn))
 
         stale = WEAK_ASSERTION_ALLOWLIST - all_violations
         if stale:
@@ -222,6 +242,15 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_transport_tenant_resolution.py", "test_db_queried_only_once"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_positive_budget_persists_to_db"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_valid_date_range_persists_to_db"),
+    # FIXME(beads-6kh): pre-existing bare assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
+    ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_review_workflow_with_slack"),
+    ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_background_ai_review_submitted"),
+    ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_slack_notification_sent"),
+    ("tests/harness/test_harness_delivery_poll.py", "test_pricing_options"),
+    ("tests/integration/test_auth_header_propagation.py", "test_auth_header_used_in_actual_request"),
+    ("tests/integration/test_delivery_poll_behavioral.py", "test_adapter_failure_writes_audit_log"),
+    ("tests/integration/test_delivery_webhook_behavioral.py", "test_ssrf_validation_records_failure_metrics"),
+    ("tests/integration/test_gam_tenant_setup.py", "test_admin_ui_network_detection_endpoint"),
 }
 
 
@@ -286,11 +315,12 @@ class TestNoBareAssertCalledOnce:
     def test_no_new_bare_assertions(self):
         """No new test functions use bare assert_called_once() without arg verification."""
         all_violations = []
-        for test_file in sorted((ROOT / "tests" / "unit").rglob("*.py")):
-            if "test_architecture_" in test_file.name:
-                continue
-            rel = str(test_file.relative_to(ROOT))
-            all_violations.extend(_find_bare_assertions(rel))
+        for scan_dir in SCAN_DIRS:
+            for test_file in sorted(scan_dir.rglob("*.py")):
+                if "test_architecture_" in test_file.name:
+                    continue
+                rel = str(test_file.relative_to(ROOT))
+                all_violations.extend(_find_bare_assertions(rel))
 
         new_violations = [(f, fn, line) for f, fn, line in all_violations if (f, fn) not in BARE_ASSERTION_ALLOWLIST]
 
@@ -316,12 +346,13 @@ class TestNoBareAssertCalledOnce:
         BARE_ASSERTION_ALLOWLIST — this test enforces that.
         """
         all_violations: set[tuple[str, str]] = set()
-        for test_file in sorted((ROOT / "tests" / "unit").rglob("*.py")):
-            if "test_architecture_" in test_file.name:
-                continue
-            rel = str(test_file.relative_to(ROOT))
-            for f, fn, _line in _find_bare_assertions(rel):
-                all_violations.add((f, fn))
+        for scan_dir in SCAN_DIRS:
+            for test_file in sorted(scan_dir.rglob("*.py")):
+                if "test_architecture_" in test_file.name:
+                    continue
+                rel = str(test_file.relative_to(ROOT))
+                for f, fn, _line in _find_bare_assertions(rel):
+                    all_violations.add((f, fn))
 
         stale = BARE_ASSERTION_ALLOWLIST - all_violations
         if stale:

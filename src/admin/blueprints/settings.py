@@ -20,6 +20,7 @@ from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
+from src.services.ai.config import CANONICAL_GOOGLE_PROVIDER, canonicalize_google_provider
 
 logger = logging.getLogger(__name__)
 
@@ -557,7 +558,7 @@ def update_ai(tenant_id):
                 new_config["api_key"] = api_key
             elif existing_config.get("api_key"):
                 new_config["api_key"] = existing_config["api_key"]
-            elif tenant.gemini_api_key and provider == "gemini":
+            elif tenant.gemini_api_key and canonicalize_google_provider(provider) == CANONICAL_GOOGLE_PROVIDER:
                 # Migrate legacy gemini_api_key to new ai_config
                 new_config["api_key"] = tenant.gemini_api_key
 
@@ -624,7 +625,7 @@ def test_ai_connection(tenant_id):
                 test_config["api_key"] = api_key
             elif tenant.ai_config and tenant.ai_config.get("api_key"):
                 test_config["api_key"] = tenant.ai_config["api_key"]
-            elif tenant.gemini_api_key and provider == "gemini":
+            elif tenant.gemini_api_key and canonicalize_google_provider(provider) == CANONICAL_GOOGLE_PROVIDER:
                 test_config["api_key"] = tenant.gemini_api_key
 
         if not test_config.get("api_key"):

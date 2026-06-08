@@ -41,6 +41,17 @@ def _pydantic_json_serializer(obj: Any) -> str:
     return pydantic_core.to_json(obj, fallback=str).decode()
 
 
+def _int_env(name: str, default: str) -> int:
+    """Parse an integer environment variable with a friendly error on invalid values."""
+    raw = os.environ.get(name, default)
+    if raw == "":
+        raw = default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer value for {name}: {raw!r}") from exc
+
+
 def _is_pgbouncer_connection(connection_string: str) -> bool:
     """Check if connection string uses PgBouncer (port 6543) or USE_PGBOUNCER is set.
 
@@ -88,9 +99,9 @@ def get_engine():
             raise ValueError("Only PostgreSQL is supported. Use DATABASE_URL=postgresql://...")
 
         # Get timeout configuration from environment
-        query_timeout = int(os.environ.get("DATABASE_QUERY_TIMEOUT", "30"))  # 30s default
-        connect_timeout = int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "10"))  # 10s default
-        pool_timeout = int(os.environ.get("DATABASE_POOL_TIMEOUT", "30"))  # 30s default
+        query_timeout = _int_env("DATABASE_QUERY_TIMEOUT", "30")  # 30s default
+        connect_timeout = _int_env("DATABASE_CONNECT_TIMEOUT", "10")  # 10s default
+        pool_timeout = _int_env("DATABASE_POOL_TIMEOUT", "30")  # 30s default
 
         # Detect PgBouncer usage (typically port 6543)
         # PgBouncer requires different pooling strategy since it manages connections
@@ -124,8 +135,8 @@ def get_engine():
             # preventing postgres max_connections exhaustion in GHA runners (D40).
             _engine = create_engine(
                 connection_string,
-                pool_size=int(os.environ.get("DB_POOL_SIZE", "10")),
-                max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "20")),
+                pool_size=_int_env("DB_POOL_SIZE", "10"),
+                max_overflow=_int_env("DB_MAX_OVERFLOW", "20"),
                 pool_timeout=pool_timeout,  # Seconds to wait for connection from pool
                 pool_recycle=3600,  # Recycle connections after 1 hour
                 pool_pre_ping=True,  # Test connections before use
