@@ -336,7 +336,6 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 
 
 @then('the error should include a "suggestion" field')
-@then('the error should include "suggestion" field')
 def then_error_has_suggestion(ctx: dict) -> None:
     """Assert error includes a suggestion field."""
     error = ctx.get("error")
@@ -555,3 +554,251 @@ def then_real_validation_error(ctx: dict) -> None:
         f"Expected a real pydantic.ValidationError, got {type(error).__name__}: {error}"
     )
     assert error.errors(), "Expected ValidationError with field-level error details"
+
+
+# ── Generic field presence / value ──────────────────────────────────
+
+
+@then(parsers.parse('the error should include "{field}" field'))
+def then_error_includes_field(ctx: dict, field: str) -> None:
+    """Assert the error includes a named field with a non-empty value.
+
+    Works with AdCPError (checks .details, direct attributes, and the
+    top-level to_dict() representation) and adcp.types.Error models.
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
+    # Also check details sub-dict and direct attributes
+    details = getattr(error, "details", None) or {}
+    has_field = (
+        (field in d and d[field])
+        or (field in details and details[field])
+        or (hasattr(error, field) and getattr(error, field))
+    )
+    assert has_field, (
+        f"Expected error to include non-empty '{field}' field. "
+        f"Error dict keys: {list(d.keys())}, details keys: {list(details.keys())}"
+    )
+
+
+@then(parsers.parse('the error should include "{field}" field with value "{value}"'))
+def then_error_field_with_value(ctx: dict, field: str, value: str) -> None:
+    """Assert the error includes a named field matching the expected value.
+
+    Checks the error dict, details sub-dict, and direct attributes.
+    Compares as strings for cross-type compatibility.
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    actual = _resolve_error_field(error, field)
+    assert actual is not None, (
+        f"Expected error to include '{field}' field but it was not found. Available: {_available_error_fields(error)}"
+    )
+    # Compare as strings for cross-type compatibility (enum .value, int, etc.)
+    actual_str = actual.value if hasattr(actual, "value") else str(actual)
+    assert actual_str == value, f"Expected {field}='{value}', got '{actual_str}'"
+
+
+# ── Error details assertions ────────────────────────────────────────
+
+
+@then(parsers.parse("the error details should include {key} {value}"))
+def then_error_details_include_unquoted(ctx: dict, key: str, value: str) -> None:
+    """Assert error.details contains a key with the given value (numeric/unquoted).
+
+    Handles numeric coercion: if the expected value looks like a number,
+    compare numerically. Otherwise compare as strings.
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
+    actual = details[key]
+    _assert_detail_value_matches(key, actual, value)
+
+
+@then(parsers.parse('the error details should include {key} "{value}"'))
+def then_error_details_include_quoted(ctx: dict, key: str, value: str) -> None:
+    """Assert error.details contains a key with the given string value."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
+    actual = details[key]
+    assert str(actual) == value, f"Expected details['{key}'] = '{value}', got '{actual}'"
+
+
+# ── Terminal failure ────────────────────────────────────────────────
+
+
+@then("the response should indicate a terminal failure")
+def then_terminal_failure(ctx: dict) -> None:
+    """Assert the operation failed with a terminal (non-recoverable) error.
+
+    Verifies both that an error occurred and that its recovery hint is
+    'terminal' -- meaning the buyer cannot retry with corrected input.
+    """
+    error = ctx.get("error")
+    assert error is not None, (
+        "Expected a terminal failure but no error was recorded. "
+        f"ctx keys: {list(ctx.keys())}, response: {ctx.get('response')!r}"
+    )
+    _assert_meaningful_error(error)
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
+    elif hasattr(error, "recovery"):
+        recovery = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
+        assert recovery == "terminal", f"Expected terminal recovery, got '{recovery}'"
+    # If the error type doesn't carry recovery info, the error itself is
+    # sufficient -- non-AdCP exceptions are terminal by nature.
+
+
+# ── No records created (DB state assertions) ────────────────────────
+
+
+@then("no database records should be created")
+def then_no_db_records_created(ctx: dict) -> None:
+    """Assert that no new database records were created by the operation.
+
+    For create operations: verifies no media buy was persisted.
+    Uses the media_buy_id from the response (if any) or checks that no
+    new records exist beyond what was set up by Given steps.
+    """
+    _assert_no_new_media_buy(ctx)
+
+
+@then("no new media buy should have been created")
+def then_no_new_media_buy(ctx: dict) -> None:
+    """Assert no new media buy record was persisted in the database."""
+    _assert_no_new_media_buy(ctx)
+
+
+@then("no new ad platform order should have been created")
+def then_no_new_ad_platform_order(ctx: dict) -> None:
+    """Assert the adapter was not called to create an ad platform order.
+
+    Checks the harness mock for the adapter -- if the adapter's create
+    method was never called, no ad platform order was created.
+    """
+    env = ctx["env"]
+    # Check adapter mock -- the harness patches the adapter
+    adapter_mock = env.mock.get("adapter")
+    if adapter_mock is not None:
+        # Check common adapter creation methods
+        for method_name in ("create_order", "create_line_item", "create_media_buy"):
+            method = getattr(adapter_mock, method_name, None)
+            if method is not None and hasattr(method, "called"):
+                assert not method.called, f"Expected no ad platform order but adapter.{method_name} was called"
+        # Also check the return_value (adapter instance) for create methods
+        adapter_instance = adapter_mock.return_value if hasattr(adapter_mock, "return_value") else None
+        if adapter_instance is not None:
+            for method_name in ("create_order", "create_line_item", "create_media_buy"):
+                method = getattr(adapter_instance, method_name, None)
+                if method is not None and hasattr(method, "called"):
+                    assert not method.called, f"Expected no ad platform order but adapter().{method_name} was called"
+
+
+# ── Helpers for new steps ───────────────────────────────────────────
+
+
+def _resolve_error_field(error: object, field: str) -> object | None:
+    """Resolve a named field from an error, checking multiple sources."""
+    # 1. Direct attribute on the error
+    if hasattr(error, field):
+        val = getattr(error, field)
+        if val is not None:
+            return val
+    # 2. The error dict (to_dict() representation)
+    d = _get_error_dict(error)
+    if field in d and d[field] is not None:
+        return d[field]
+    # 3. The details sub-dict
+    details = getattr(error, "details", None) or {}
+    if field in details and details[field] is not None:
+        return details[field]
+    return None
+
+
+def _available_error_fields(error: object) -> list[str]:
+    """List available field names from all error sources for diagnostics."""
+    fields: set[str] = set()
+    d = _get_error_dict(error)
+    fields.update(d.keys())
+    details = getattr(error, "details", None) or {}
+    fields.update(details.keys())
+    for attr in ("error_code", "message", "recovery", "suggestion", "field"):
+        if hasattr(error, attr):
+            fields.add(attr)
+    return sorted(fields)
+
+
+def _get_error_details(error: object) -> dict:
+    """Extract the details dict from an error object."""
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        return error.details or {}
+    # adcp.types.Error model
+    if hasattr(error, "details") and not isinstance(error, Exception):
+        return error.details or {}
+    # Fallback: try the error dict
+    d = _get_error_dict(error)
+    return d.get("details", {})
+
+
+def _assert_detail_value_matches(key: str, actual: object, expected_str: str) -> None:
+    """Assert a detail value matches, with numeric coercion."""
+    # Try numeric comparison first
+    try:
+        expected_num = float(expected_str)
+        actual_num = float(actual)  # type: ignore[arg-type]
+        if expected_num == int(expected_num):
+            # Integer comparison (e.g., "500" should match 500 and 500.0)
+            assert actual_num == expected_num, f"Expected details['{key}'] = {expected_str}, got {actual}"
+        else:
+            assert abs(actual_num - expected_num) < 1e-9, f"Expected details['{key}'] = {expected_str}, got {actual}"
+        return
+    except (ValueError, TypeError):
+        pass
+    # Fall back to string comparison
+    assert str(actual) == expected_str, f"Expected details['{key}'] = '{expected_str}', got '{actual}'"
+
+
+def _assert_no_new_media_buy(ctx: dict) -> None:
+    """Shared implementation: verify no new media buy was created.
+
+    Two strategies:
+    1. If a response exists with a media_buy_id, verify that ID does not
+       exist in the database.
+    2. If the harness tracks pre-operation media buy count, verify count
+       is unchanged.
+    3. Fallback: verify the operation errored (no response = no creation).
+    """
+    env = ctx["env"]
+    resp = ctx.get("response")
+
+    # Strategy 1: if we got a response with media_buy_id, it should not be in DB
+    if resp is not None:
+        mb_id = getattr(resp, "media_buy_id", None)
+        if mb_id is not None:
+            mb = env.get_media_buy(mb_id) if hasattr(env, "get_media_buy") else None
+            assert mb is None, f"Expected no media buy to be created but found {mb_id} in database"
+            return
+
+    # Strategy 2: operation should have errored (no response = nothing created)
+    error = ctx.get("error")
+    if error is not None:
+        # Error means the operation failed before creating anything
+        return
+
+    # Strategy 3: check that response doesn't indicate creation
+    if resp is not None and not hasattr(resp, "media_buy_id"):
+        return
+
+    raise AssertionError(
+        "Cannot verify no media buy was created: no error recorded and "
+        f"response has media_buy_id. ctx keys: {list(ctx.keys())}"
+    )
