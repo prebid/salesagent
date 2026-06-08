@@ -349,13 +349,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/gcp_service_account_service.py", "delete_service_account"),
     ("src/services/gcp_service_account_service.py", "get_service_account_email"),
     ("src/services/media_buy_status_scheduler.py", "_are_creatives_approved"),
-    ("src/services/order_approval_service.py", "_mark_approval_complete"),
-    ("src/services/order_approval_service.py", "_mark_approval_failed"),
     # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
-    ("src/services/order_approval_service.py", "_send_approval_webhook"),
-    ("src/services/order_approval_service.py", "_update_approval_progress"),
-    ("src/services/order_approval_service.py", "get_approval_status"),
-    ("src/services/order_approval_service.py", "start_order_approval_background"),
     ("src/services/policy_service.py", "_update_currencies"),
     ("src/services/policy_service.py", "get_policies"),
     ("src/services/policy_service.py", "update_policies"),

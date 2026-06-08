@@ -78,6 +78,39 @@ class PushNotificationConfigRepository:
             ).all()
         )
 
+    def find_most_recent_active_for_principal(self, principal_id: str) -> PushNotificationConfig | None:
+        """Return the principal's most recently created active webhook config.
+
+        Used by the order-approval background polling service to route the
+        completion / failure notification when the admin caller didn't pass
+        an explicit URL. Returns ``None`` when the principal has not
+        registered a webhook.
+        """
+        stmt = (
+            select(PushNotificationConfig)
+            .where(
+                PushNotificationConfig.tenant_id == self._tenant_id,
+                PushNotificationConfig.principal_id == principal_id,
+                PushNotificationConfig.is_active.is_(True),
+            )
+            .order_by(PushNotificationConfig.created_at.desc())
+        )
+        return self._session.scalars(stmt).first()
+
+    def find_active_by_url(self, principal_id: str, url: str) -> PushNotificationConfig | None:
+        """Return the active webhook config matching a specific URL, or ``None``.
+
+        Used by the webhook delivery path to look up the auth config (bearer
+        token, basic credentials, validation token) for an outbound POST.
+        """
+        stmt = select(PushNotificationConfig).filter_by(
+            tenant_id=self._tenant_id,
+            principal_id=principal_id,
+            url=url,
+            is_active=True,
+        )
+        return self._session.scalars(stmt).first()
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------

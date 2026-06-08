@@ -35,11 +35,13 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
@@ -269,6 +271,55 @@ class CreativeUoW(BaseUoW):
     def _clear_repos(self) -> None:
         self.creatives = None
         self.assignments = None
+
+
+class SyncJobUoW(BaseUoW):
+    """Unit of Work for SyncJob operations.
+
+    Wraps a database session and provides a tenant-scoped SyncJobRepository.
+    Auto-commits on clean exit, rolls back on exception.
+
+    Background polling threads should open a short ``SyncJobUoW`` per
+    operation rather than holding one session open across the whole
+    polling window.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    sync_jobs: SyncJobRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.sync_jobs = SyncJobRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.sync_jobs = None
+
+
+class AdapterConfigUoW(BaseUoW):
+    """Unit of Work for ``AdapterConfig`` operations.
+
+    Wraps a database session and provides a tenant-scoped
+    ``AdapterConfigRepository``. Auto-commits on clean exit, rolls back
+    on exception.
+
+    Background polling threads open a short ``AdapterConfigUoW`` to
+    resolve adapter credentials at the start of each polling window,
+    rather than holding a session open across the whole window.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    adapter_configs: AdapterConfigRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.adapter_configs = AdapterConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.adapter_configs = None
 
 
 class AdminCreativeUoW(BaseUoW):

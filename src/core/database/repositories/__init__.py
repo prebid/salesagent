@@ -21,12 +21,15 @@ from src.core.database.repositories.currency_limit import CurrencyLimitRepositor
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.uow import (
     AccountUoW,
+    AdapterConfigUoW,
     MediaBuyUoW,
     ProductUoW,
     PushNotificationConfigUoW,
+    SyncJobUoW,
     TenantConfigUoW,
     WorkflowUoW,
 )
@@ -36,6 +39,7 @@ __all__ = [
     "AccountRepository",
     "AccountUoW",
     "AdapterConfigRepository",
+    "AdapterConfigUoW",
     "TenantNotConfiguredError",
     "CurrencyLimitRepository",
     "MediaBuyRepository",
@@ -44,6 +48,8 @@ __all__ = [
     "ProductUoW",
     "PushNotificationConfigRepository",
     "PushNotificationConfigUoW",
+    "SyncJobRepository",
+    "SyncJobUoW",
     "TenantConfigRepository",
     "TenantConfigUoW",
     "WorkflowRepository",
