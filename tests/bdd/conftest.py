@@ -36,12 +36,15 @@ pytest_plugins = [
     "tests.bdd.steps.generic.given_auth",
     "tests.bdd.steps.generic.given_config",
     "tests.bdd.steps.generic.given_entities",
+    "tests.bdd.steps.generic.given_media_buy",
     "tests.bdd.steps.generic.when_request",
     "tests.bdd.steps.generic.then_success",
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
+    "tests.bdd.steps.domain.uc003_update_media_buy",
+    "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
@@ -2476,11 +2479,49 @@ def ctx(request: pytest.FixtureRequest) -> dict:
     return d
 
 
+def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal: object, product: object) -> None:
+    """Create an existing media buy + package for UC-003 update scenarios.
+
+    Seeds the database with a committed media buy and one package, then
+    stores references in ctx so Given/When/Then steps can find them.
+    Also registers the package label mapping for Gherkin "pkg_001".
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from tests.factories import MediaBuyFactory, MediaPackageFactory
+
+    mb = MediaBuyFactory(
+        tenant=tenant,
+        principal=principal,
+        status="pending_approval",
+        currency="USD",
+        start_time=datetime.now(UTC),
+        end_time=datetime.now(UTC) + timedelta(days=30),
+    )
+    pkg = MediaPackageFactory(
+        media_buy=mb,
+        package_config={
+            "package_id": "pkg_001",
+            "product_id": product.product_id,
+            "budget": 5000.0,
+        },
+    )
+    env._commit_factory_data()
+    ctx["existing_media_buy"] = mb
+    ctx["existing_package"] = pkg
+    # Register Gherkin label → real package_id mapping (see uc003 _register_package)
+    from tests.bdd.steps.domain.uc003_update_media_buy import _register_package
+
+    _register_package(ctx, "pkg_001", pkg)
+
+
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags."""
     marker_names = {m.name for m in request.node.iter_markers()}
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
+    if any(t.startswith("T-UC-003") for t in marker_names):
+        return "UC-003"
     if any(t.startswith("T-UC-006") for t in marker_names):
         return "UC-006"
     if any(t.startswith("T-UC-005") for t in marker_names):
@@ -2553,8 +2594,77 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with MediaBuyAccountEnv() as env:
                 ctx["env"] = env
                 yield
+        elif any(t.startswith("T-UC-002-ext-") for t in marker_names):
+            # Extension/error scenarios: budget validation, pricing errors, etc.
+            # Use MediaBuyCreateEnv which calls _create_media_buy_impl with real DB.
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with MediaBuyCreateEnv() as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                ctx["dispatch_mode"] = "create"
+                yield
         else:
             pytest.xfail("UC-002 harness not yet wired for non-account scenarios")
+
+    elif uc == "UC-003":
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if any(t.startswith("T-UC-003-ext-") for t in marker_names):
+            # Extension/error scenarios (ext-a through ext-r): budget, currency,
+            # auth, creative, placement validation on update path.
+            # Uses MediaBuyCreateEnv (integration DB) with additional patches for
+            # the update module so _update_media_buy_impl can run against real DB.
+            request.getfixturevalue("integration_db")
+            from unittest.mock import MagicMock, patch
+
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            _UPDATE_PATCHES = {
+                "src.core.tools.media_buy_update.get_adapter": "adapter",
+                "src.core.tools.media_buy_update.get_audit_logger": "audit",
+                "src.core.tools.media_buy_update.get_context_manager": "ctx_mgr",
+            }
+
+            with MediaBuyCreateEnv() as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                # Create an existing media buy + package for update scenarios
+                _setup_existing_media_buy(ctx, env, tenant, principal, product)
+                # Patch update module externals so _update_media_buy_impl
+                # doesn't hit real adapter/audit/context manager
+                patchers = []
+                for target, name in _UPDATE_PATCHES.items():
+                    p = patch(target)
+                    mock_obj = p.start()
+                    patchers.append(p)
+                    env.mock[f"update_{name}"] = mock_obj
+                # Configure happy-path adapter mock for update
+                mock_adapter = MagicMock()
+                mock_adapter.update_media_buy.return_value = None
+                mock_adapter.validate_media_buy_request.return_value = None
+                mock_adapter.manual_approval_required = False
+                mock_adapter.manual_approval_operations = []
+                mock_adapter.add_creative_assets.return_value = None
+                mock_adapter.associate_creatives.return_value = None
+                env.mock["update_adapter"].return_value = mock_adapter
+                env.mock["update_audit"].return_value = MagicMock()
+                env.mock["update_ctx_mgr"].return_value = env._build_mock_context_manager(tool_name="update_media_buy")
+                try:
+                    yield
+                finally:
+                    for p in reversed(patchers):
+                        p.stop()
+        else:
+            pytest.xfail("UC-003 harness not yet wired for non-extension scenarios")
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}

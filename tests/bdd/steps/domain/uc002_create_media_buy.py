@@ -441,10 +441,36 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 
 @when("the Buyer Agent sends the create_media_buy request")
 def when_send_create_media_buy(ctx: dict) -> None:
-    """Send the create_media_buy request and capture the result or error."""
-    from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
+    """Send the create_media_buy request and capture the result or error.
 
-    resolve_account_or_error(ctx)
+    Two dispatch modes:
+    - "create": builds CreateMediaBuyRequest from ctx["request_kwargs"] and
+      dispatches through the harness (for budget/pricing validation scenarios).
+    - default: resolves account reference only (for account resolution scenarios).
+    """
+    if ctx.get("dispatch_mode") == "create":
+        _dispatch_full_create(ctx)
+    else:
+        from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
+
+        resolve_account_or_error(ctx)
+
+
+def _dispatch_full_create(ctx: dict) -> None:
+    """Build CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
+    from pydantic import ValidationError
+
+    from src.core.schemas import CreateMediaBuyRequest
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    kwargs = ctx.get("request_kwargs", {})
+    try:
+        req = CreateMediaBuyRequest(**kwargs)
+    except ValidationError as e:
+        ctx["error"] = e
+        return
+
+    dispatch_request(ctx, req=req)
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -1050,12 +1076,8 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the tenant is configured for auto-approval")
-def given_tenant_auto_approval(ctx: dict) -> None:
-    """Configure the tenant for auto-approval (no manual review required)."""
-    ctx["tenant_auto_approval"] = True
-    ctx.setdefault("tenant_config", {})["human_review_required"] = False
-    ctx.setdefault("tenant_config", {})["auto_create_media_buys"] = True
+# Step "the tenant is configured for auto-approval" is defined in
+# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
 
 
 @given(parsers.parse("a valid create_media_buy request with:\n{datatable}"))
@@ -1104,10 +1126,8 @@ def given_package_positive_budget(ctx: dict) -> None:
     ctx["package_budget_valid"] = True
 
 
-@given("the ad server adapter is available")
-def given_adapter_available(ctx: dict) -> None:
-    """Mark the ad server adapter as available for the scenario."""
-    ctx["adapter_available"] = True
+# Step "the ad server adapter is available" is defined in
+# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
 
 
 @given("the request does NOT include an idempotency_key")

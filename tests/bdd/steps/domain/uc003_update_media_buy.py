@@ -48,6 +48,15 @@ def _resolve_package_id(ctx: dict, label: str) -> str:
     return ctx.get("package_labels", {}).get(label, label)
 
 
+def _resolve_media_buy_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin media buy label to the real media_buy_id.
+
+    Falls back to returning the label itself for scenarios where the label
+    matches the real ID (e.g. when the conftest doesn't set media_buy_labels).
+    """
+    return ctx.get("media_buy_labels", {}).get(label, label)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — Background + request construction
 # ═══════════════════════════════════════════════════════════════════════
@@ -61,6 +70,25 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
     AND database persistence to prevent phantom media buys that exist only in
     test state.  Uses MediaBuyRepository (not raw select) per repository pattern.
     """
+    _verify_existing_media_buy(ctx)
+
+
+@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{media_buy_id}"'))
+def given_buyer_owns_media_buy_by_id(ctx: dict, media_buy_id: str) -> None:
+    """Verify the existing media buy is in ctx, persisted in DB, and register its label.
+
+    The media_buy_id from Gherkin (e.g. "mb_existing") is a label — the actual
+    factory-generated ID may differ. This step registers the label mapping so
+    subsequent steps (update_kwargs, assertions) can use the Gherkin label.
+    """
+    _verify_existing_media_buy(ctx)
+    mb = ctx["existing_media_buy"]
+    # Register the Gherkin label → real media_buy_id mapping
+    ctx.setdefault("media_buy_labels", {})[media_buy_id] = mb.media_buy_id
+
+
+def _verify_existing_media_buy(ctx: dict) -> None:
+    """Shared verification: existing_media_buy is in ctx and persisted in DB."""
     from src.core.database.repositories.media_buy import MediaBuyRepository
 
     mb = ctx.get("existing_media_buy")
@@ -173,7 +201,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             f"Add handling for '{field}' if it's a valid UpdateMediaBuyRequest field."
         )
         if field == "media_buy_id":
-            kwargs["media_buy_id"] = value
+            # Resolve Gherkin label (e.g. "mb_existing") to real factory ID
+            kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
         elif field == "start_time":
@@ -202,15 +231,8 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
         kwargs.pop(field, None)
 
 
-@given("the request does NOT include an idempotency_key")
-def given_request_omits_idempotency_key(ctx: dict) -> None:
-    """Declarative guard — ensure idempotency_key is NOT in update_kwargs.
-
-    The default update_kwargs only contains media_buy_id, so idempotency_key is
-    already absent. This step explicitly strips it in case prior Given steps added it.
-    """
-    kwargs = _ensure_update_defaults(ctx)
-    kwargs.pop("idempotency_key", None)
+# Step "the request does NOT include an idempotency_key" is defined in
+# tests/bdd/steps/domain/uc002_create_media_buy.py (shared across UC-002/003).
 
 
 @given("the request does not include any updatable fields")

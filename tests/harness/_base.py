@@ -283,6 +283,25 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     return exc
 
 
+class _TestClock:
+    """Simple clock for BDD date token resolution ({now}, {N days from now}, etc.)."""
+
+    def now_iso(self) -> str:
+        from datetime import UTC, datetime
+
+        return datetime.now(UTC).isoformat()
+
+    def future_iso(self, days: int) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        return (datetime.now(UTC) + timedelta(days=days)).isoformat()
+
+    def past_iso(self, days: int) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        return (datetime.now(UTC) - timedelta(days=days)).isoformat()
+
+
 class BaseTestEnv:
     """Base test environment for _impl function testing.
 
@@ -343,6 +362,7 @@ class BaseTestEnv:
         self._session: Session | None = None
         self._identity_cache: dict[str, ResolvedIdentity] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
+        self.clock = _TestClock()  # BDD steps may use env.clock for date tokens
 
     # -- Identity (one function, all transports) ----------------------------
 
