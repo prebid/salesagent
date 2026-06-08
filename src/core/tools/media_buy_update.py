@@ -82,6 +82,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
+    validate_budget_positive,
     validate_max_campaign_budget,
     validate_max_daily_package_spend,
     validate_min_package_budget,
@@ -1093,9 +1094,10 @@ def _update_media_buy_impl(
                     total_budget = float(req.budget.total)
                     budget_currency = str(req.budget.currency) if req.budget.currency else "USD"
 
-                if total_budget <= 0:
+                budget_positive_err = validate_budget_positive(Decimal(str(total_budget)), field="budget")
+                if budget_positive_err:
                     raise AdCPBudgetTooLowError(
-                        f"Invalid budget: {total_budget}. Budget must be positive.",
+                        budget_positive_err,
                         suggestion="Set the budget to a positive amount.",
                         field="budget",
                         context=req.context,

@@ -140,6 +140,7 @@ from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testin
 from src.core.tool_context import ToolContext
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
+    validate_budget_positive,
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
@@ -1712,12 +1713,12 @@ async def _create_media_buy_impl(
 
     try:
         # Validate input parameters
-        # 1. Budget validation
+        # 1. Budget validation (shared validator)
         total_budget = req.get_total_budget()
-        if total_budget <= 0:
-            error_msg = f"Invalid budget: {total_budget}. Budget must be positive."
+        budget_err = validate_budget_positive(total_budget, field=package_field_path("budget"))
+        if budget_err:
             raise AdCPBudgetTooLowError(
-                error_msg,
+                budget_err,
                 suggestion="Set each package budget to a positive amount.",
                 field=package_field_path("budget"),
             )
@@ -2404,7 +2405,7 @@ async def _create_media_buy_impl(
                     tenant_id=tenant["tenant_id"],
                     principal_name=principal_name,
                     media_buy_id=media_buy_id,
-                    budget=total_budget,
+                    budget=float(total_budget),
                     duration_days=duration_days,
                     action="pending_approval",  # Different action to indicate awaiting approval
                 )
@@ -2785,7 +2786,7 @@ async def _create_media_buy_impl(
                     "workflow_step_id": step.step_id,
                     "context_id": persistent_ctx.context_id,
                     "auto_create_enabled": auto_create_enabled,
-                    "product_auto_create": product_auto_create,
+                    "product_auto_create": product_auto_create,  # type: ignore[dict-item]
                 }
 
                 slack_notifier.notify_media_buy_event(
@@ -3058,7 +3059,7 @@ async def _create_media_buy_impl(
                     name=pkg_product.name,
                     delivery_type=delivery_type_value,
                     cpm=cpm,
-                    impressions=int(total_budget / cpm * 1000),
+                    impressions=int(float(total_budget) / cpm * 1000),
                     format_ids=cast(list[Any], format_ids_to_use),
                     targeting_overlay=cast(
                         "Targeting | None",
@@ -3672,7 +3673,7 @@ async def _create_media_buy_impl(
                 tenant_id=tenant["tenant_id"],
                 principal_name=principal_name,
                 media_buy_id=response.media_buy_id,
-                budget=total_budget,  # Extract total budget
+                budget=float(total_budget),
                 duration_days=duration_days,
                 action="created",
             )
@@ -3688,7 +3689,7 @@ async def _create_media_buy_impl(
             "create_media_buy",
             campaign_info,
             media_buy_id=adcp_response.media_buy_id,
-            spend_amount=total_budget,
+            spend_amount=float(total_budget),
         )
 
         # Only mutation that survives: test_ prefix on media_buy_id in dry-run mode

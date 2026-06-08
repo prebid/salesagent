@@ -6,6 +6,7 @@
 
 import warnings
 from datetime import date, datetime
+from decimal import Decimal
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
@@ -1496,19 +1497,18 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
         """Extract date from end_time for display purposes."""
         return self.end_time.date() if self.end_time else None
 
-    def get_total_budget(self) -> float:
+    def get_total_budget(self) -> Decimal:
         """Calculate total budget by summing all package budgets.
 
         Per AdCP spec, budget is specified at the package level, not the media buy level.
-        This method calculates the total by summing all package budgets.
+        Returns Decimal — budget is money, float is wrong for money.
         """
+        total = Decimal(0)
         if self.packages:
-            total = 0.0
             for package in self.packages:
                 if package.budget:
-                    total += float(package.budget)
-            return total
-        return 0.0
+                    total += Decimal(str(package.budget))
+        return total
 
     def get_product_ids(self) -> list[str]:
         """Extract unique product IDs from packages per AdCP spec.
