@@ -53,6 +53,8 @@ def make_image_assets(
 def make_video_assets(
     asset_id: str = "video",
     url: str = "https://example.com/video.mp4",
+    width: int = 640,
+    height: int = 360,
     **extra: object,
 ) -> dict:
     """Build SDK 5.7 discriminated-union video assets dict with custom values."""
@@ -62,6 +64,8 @@ def make_video_assets(
         "item_type": "individual",
         "required": True,
         "url": url,
+        "width": width,
+        "height": height,
     }
     entry.update(extra)
     return {asset_id: [entry]}

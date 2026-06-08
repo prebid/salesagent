@@ -847,7 +847,10 @@ class TestListCreativeObjectConstruction:
             response = env.call_impl()
 
         assert len(response.creatives) == 1
-        assert response.creatives[0].status == "pending_review"
+        # SDK 5.7: CreativeStatus is plain Enum, not StrEnum; compare via .value
+        status = response.creatives[0].status
+        status_str = status.value if hasattr(status, "value") else str(status)
+        assert status_str == "pending_review"
 
     def test_creative_with_tags(self, integration_db):
         """Spec: creative tags from data dict are included in response."""

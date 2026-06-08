@@ -11,7 +11,7 @@ UC-006-CREATIVE-SCHEMA-COMPLIANCE-09, UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
 from __future__ import annotations
 
 import pytest
-from adcp.types import CreativeAction, CreativeAsset
+from adcp.types import CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
 
 from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
@@ -103,7 +103,7 @@ class TestAllAssetTypesAcceptedThroughSync:
             for asset_type in self.ASSET_TYPES:
                 cid = f"c_{asset_type}"
                 assert cid in actions, f"Missing result for creative with {asset_type} asset"
-                assert actions[cid] == CreativeAction.created, (
+                assert actions[cid] == "created", (
                     f"Creative with {asset_type} asset should be created, got {actions[cid]}"
                 )
 
@@ -123,7 +123,7 @@ class TestAllAssetTypesAcceptedThroughSync:
                     assets={asset_type: [_asset_sample(asset_type, asset_type)]},
                 )
                 response = env.call_impl(creatives=[creative])
-                assert response.creatives[0].action == CreativeAction.created
+                assert response.creatives[0].action == "created"
 
         # Now list and verify assets are preserved (tenant/principal already created above)
         with CreativeListEnv() as env:
@@ -156,7 +156,7 @@ class TestCreativeModelDumpListingSchema:
             env.setup_default_data()
             creative = _make_creative_asset(creative_id="c_listing_fields", name="Listing Fields Test")
             response = env.call_impl(creatives=[creative])
-            assert response.creatives[0].action == CreativeAction.created
+            assert response.creatives[0].action == "created"
 
         with CreativeListEnv() as env:
             list_response = env.call_impl()
@@ -300,7 +300,7 @@ class TestCreativeActionEnumThroughSync:
 
             assert len(response.creatives) == 1
             result = response.creatives[0]
-            assert result.action == CreativeAction.created
+            assert result.action == "created"
 
     def test_updated_action_for_existing_creative(self, integration_db):
         """Syncing an existing creative with changes returns 'updated' action.
@@ -313,7 +313,7 @@ class TestCreativeActionEnumThroughSync:
             # First sync: create
             creative = _make_creative_asset(creative_id="c_action_update", name="Original Name")
             response1 = env.call_impl(creatives=[creative])
-            assert response1.creatives[0].action == CreativeAction.created
+            assert response1.creatives[0].action == "created"
 
             # Second sync: update (change name)
             updated = _make_creative_asset(creative_id="c_action_update", name="Updated Name")
@@ -361,7 +361,7 @@ class TestCreativeActionEnumThroughSync:
             actions = {r.creative_id: r.action for r in response.creatives}
             # c_delete should be deleted
             assert "c_delete" in actions, "Deleted creative should appear in results"
-            assert actions["c_delete"] == CreativeAction.deleted
+            assert actions["c_delete"] == "deleted"
 
     def test_failed_action_for_invalid_creative(self, integration_db):
         """Invalid creative input returns 'failed' action.
@@ -381,15 +381,17 @@ class TestCreativeActionEnumThroughSync:
             # Should have at least one result
             assert len(response.creatives) >= 1
             # Find the failed result
-            failed = [r for r in response.creatives if r.action == CreativeAction.failed]
+            failed = [r for r in response.creatives if r.action == "failed"]
             if failed:
-                assert failed[0].action == CreativeAction.failed
+                assert failed[0].action == "failed"
 
     def test_all_action_enum_values_exist(self, integration_db):
         """CreativeAction enum contains all 5 spec-required values.
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-09
         """
+        from adcp.types import CreativeAction
+
         expected = {"created", "updated", "unchanged", "failed", "deleted"}
         actual = {action.value for action in CreativeAction}
         assert expected.issubset(actual), f"Missing actions: {expected - actual}"

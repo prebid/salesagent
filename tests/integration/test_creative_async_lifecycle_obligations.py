@@ -90,13 +90,14 @@ class TestAsyncSubmittedLifecycle:
                 assert db_creative.status == "pending_review"
 
             # Verify AdCP async submitted schema can represent this state
-            submitted = SyncCreativesSubmitted(context=None, ext=None)
+            # SDK 5.7: task_id is now required on SyncCreativesSubmitted
+            submitted = SyncCreativesSubmitted(task_id="test-task-1", context=None, ext=None)
             assert "context" in SyncCreativesSubmitted.model_fields
             assert "ext" in SyncCreativesSubmitted.model_fields
 
-            # Can be constructed with no args (all optional per spec)
-            empty = SyncCreativesSubmitted()
-            assert empty.context is None
+            # task_id is required; verify with a value
+            s2 = SyncCreativesSubmitted(task_id="test-task-2")
+            assert s2.context is None
 
             # Serialization roundtrip
             data = submitted.model_dump()
