@@ -13,7 +13,7 @@ Fixed in PR 2 of issue #1234.
 
 from pathlib import Path
 
-PRE_COMMIT_CONFIG = Path(".pre-commit-config.yaml")
+PRE_COMMIT_CONFIG = Path(__file__).resolve().parents[2] / ".pre-commit-config.yaml"
 
 
 class TestPreCommitNoAdditionalDeps:

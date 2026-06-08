@@ -30,7 +30,7 @@
 # - GHSA-5239-wwwm-4pmq (Pygments AdlLexer ReDoS) — resolved by bumping
 #   Pygments to 2.20.0.
 # - GHSA-cqp8-fcvh-x7r3 / CVE-2026-46678: pydantic-ai RCE via unsafe deserialization.
-#   Resolved: pydantic-ai bumped to >=1.99.0 + fastmcp to >=3.3.1 (PR 2 of #1234).
+#   Resolved: pydantic-ai-slim bumped to >=1.99.0; fastmcp kept at <3.3.0 (PR 2 of #1234).
 # - PYSEC-2026-161: starlette 0.50.0 BadHost / CVE-2026-48710.
 #   Resolved: fastapi bumped to >=0.133.0 (starlette 1.0+ support) (PR 2 of #1234).
 #

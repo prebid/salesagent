@@ -215,7 +215,9 @@ class TestAIServiceFactory:
         """No tenant or platform key must raise instead of pydantic-ai env fallback."""
         with patch.dict(os.environ, {}, clear=True):
             factory = AIServiceFactory()
-            with pytest.raises(ValueError, match="No API key available"):
+            from src.core.exceptions import AdCPConfigurationError
+
+            with pytest.raises(AdCPConfigurationError, match="No API key available"):
                 factory.create_model(
                     tenant_ai_config={"provider": "google", "model": "gemini-2.0-flash"},
                 )

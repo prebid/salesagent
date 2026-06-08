@@ -4,6 +4,7 @@ import logging
 from functools import lru_cache
 from typing import Any
 
+from src.core.exceptions import AdCPConfigurationError
 from src.services.ai.config import (
     CANONICAL_GOOGLE_PROVIDER,
     TenantAIConfig,
@@ -101,7 +102,7 @@ class AIServiceFactory:
             This can be passed directly to Agent(model=...).
 
         Raises:
-            ValueError: If no API key is available for the configured provider
+            AdCPConfigurationError: If no API key is available for the configured provider
         """
         # Parse tenant config if provided as dict
         if isinstance(tenant_ai_config, dict):
@@ -147,8 +148,10 @@ class AIServiceFactory:
             from pydantic_ai.models.google import GoogleModel
             from pydantic_ai.providers.google import GoogleProvider
 
+            # Google requires explicit api_key via GoogleProvider; other providers may
+            # fall back to string-format and pydantic-ai env-var resolution.
             if not api_key:
-                raise ValueError(
+                raise AdCPConfigurationError(
                     f"No API key available for provider '{provider}'. Set a tenant api_key or platform GEMINI_API_KEY."
                 )
             return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
