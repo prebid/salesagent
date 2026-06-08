@@ -14,6 +14,7 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import ProductFilters as LibraryFilters
+from adcp.types import PushNotificationConfig as LibraryPushNotificationConfig
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -247,6 +248,11 @@ class GetProductsRequest(LibraryGetProductsRequest):
     buying_mode: str | None = Field(  # type: ignore[assignment]
         None,
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
+    )
+
+    push_notification_config: LibraryPushNotificationConfig | None = Field(
+        None,
+        description="Webhook configuration for async terminal notifications (brief/refine only per AdCP spec)",
     )
 
     # Internal-only fields (not in AdCP spec)
