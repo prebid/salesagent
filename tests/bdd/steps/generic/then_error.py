@@ -629,6 +629,56 @@ def then_error_details_include_quoted(ctx: dict, key: str, value: str) -> None:
     assert str(actual) == value, f"Expected details['{key}'] = '{value}', got '{actual}'"
 
 
+@then(parsers.parse('the error "details" object should include "{key}" with value {value:d}'))
+def then_error_details_object_numeric(ctx: dict, key: str, value: int) -> None:
+    """Assert error.details contains a key with an integer value.
+
+    Feature-file pattern: 'the error "details" object should include "minimum_budget" with value 500'
+    Delegates to the same _get_error_details / _assert_detail_value_matches helpers
+    as the unquoted-key variant above.
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
+    actual = details[key]
+    _assert_detail_value_matches(key, actual, str(value))
+
+
+@then(parsers.parse('the error "details" object should include "{key}" with value "{value}"'))
+def then_error_details_object_string(ctx: dict, key: str, value: str) -> None:
+    """Assert error.details contains a key with a string value.
+
+    Feature-file pattern: 'the error "details" object should include "currency" with value "USD"'
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
+    actual = details[key]
+    assert str(actual) == value, f"Expected details['{key}'] = '{value}', got '{actual}'"
+
+
+@then(parsers.parse('the "{field}" value should match ISO 4217 alphabetic format'))
+def then_field_matches_iso4217(ctx: dict, field: str) -> None:
+    """Assert the given field value in error details matches ISO 4217 format.
+
+    ISO 4217 alphabetic codes are exactly 3 uppercase ASCII letters (e.g., USD, EUR, GBP).
+    """
+    import re
+
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    actual = details.get(field)
+    assert actual is not None, f"Field '{field}' not found in error details. Available keys: {list(details.keys())}"
+    assert isinstance(actual, str), f"Expected '{field}' to be a string, got {type(actual).__name__}: {actual!r}"
+    assert re.fullmatch(r"[A-Z]{3}", actual), (
+        f"Expected '{field}' value '{actual}' to match ISO 4217 alphabetic format "
+        "(exactly 3 uppercase ASCII letters, e.g., USD)"
+    )
+
+
 # ── Terminal failure ────────────────────────────────────────────────
 
 

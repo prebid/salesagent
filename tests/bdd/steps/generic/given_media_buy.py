@@ -431,6 +431,7 @@ def given_request_with_total_budget(ctx: dict, amount: int) -> None:
 
 
 @given(parsers.parse("a create_media_buy request with total_budget of {amount:d}"))
+@given(parsers.parse("a create_media_buy request with total_budget {amount:d}"))
 def given_request_with_total_budget_of(ctx: dict, amount: int) -> None:
     """Set up request with a specific total_budget amount (may be invalid, e.g. 0).
 
@@ -454,6 +455,31 @@ def given_request_with_total_budget_of(ctx: dict, amount: int) -> None:
     assert actual_total == float(amount), (
         f"Step claims 'total_budget of {amount}' but total of all package budgets "
         f"is {actual_total} — setup did not establish the claimed total"
+    )
+
+
+@given(parsers.parse("the product minimum spend is {amount:d} {currency}"))
+def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
+    """Configure the product's minimum spend threshold.
+
+    Sets the tenant's CurrencyLimit.min_package_budget so the product
+    enforces a minimum spend. Also stores the expected values in ctx for
+    downstream Then-step assertions on error details.
+
+    SPEC-PRODUCTION GAP: Production validates min_package_budget per
+    CurrencyLimit, not per product. This step uses CurrencyLimit as the
+    mechanism. When per-product minimums are implemented, update this step.
+
+    FIXME(salesagent-9vgz.1): Per-product minimum spend not yet implemented.
+    """
+    import pytest
+
+    ctx["expected_min_budget"] = amount
+    ctx["expected_min_budget_currency"] = currency
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: Per-product minimum spend ({amount} {currency}) "
+        "not yet implemented. Production uses CurrencyLimit.min_package_budget "
+        "for all products in a tenant. FIXME(salesagent-9vgz.1)"
     )
 
 

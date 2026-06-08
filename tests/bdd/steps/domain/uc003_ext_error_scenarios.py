@@ -701,6 +701,33 @@ def then_no_db_records_modified(ctx: dict) -> None:
                 )
 
 
+@given(parsers.parse("the seller's minimum budget for this media buy is {amount:d} {currency}"))
+def given_seller_minimum_budget(ctx: dict, amount: int, currency: str) -> None:
+    """Configure the seller's minimum budget for the media buy under update.
+
+    SPEC-PRODUCTION GAP: Production does not carry per-media-buy minimum
+    budget metadata on the seller side. The v3.1 spec expects BUDGET_TOO_LOW
+    errors to include structured details (minimum_budget, currency), but
+    production validation uses CurrencyLimit.min_package_budget which does
+    not populate error details with those fields.
+
+    This step stores the expected values in ctx so downstream Then steps
+    can assert on error details shape when the gap is closed.
+
+    FIXME(salesagent-9vgz.1): Wire seller minimum budget to production
+    validation and error details.
+    """
+    import pytest
+
+    ctx["expected_min_budget"] = amount
+    ctx["expected_min_budget_currency"] = currency
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: Seller minimum budget ({amount} {currency}) "
+        "not carried in production. v3.1 BUDGET_TOO_LOW error details "
+        "(minimum_budget, currency) not populated. FIXME(salesagent-9vgz.1)"
+    )
+
+
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
 def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     """Assert error suggestion contains either text1 or text2 (case-insensitive)."""
