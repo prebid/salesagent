@@ -184,12 +184,17 @@ class TestMCPToolRoundtripMinimal:
                             "height": 250,
                         },
                         "assets": {
-                            "image": {
-                                "url": "https://example.com/preview.jpg",
-                                "width": 300,
-                                "height": 250,
-                            },
-                            "click_url": {"url": "https://example.com"},
+                            "image": [
+                                {
+                                    "asset_type": "image",
+                                    "asset_id": "image",
+                                    "item_type": "individual",
+                                    "required": True,
+                                    "url": "https://example.com/preview.jpg",
+                                    "width": 300,
+                                    "height": 250,
+                                }
+                            ],
                         },
                     }
                 ]

@@ -28,7 +28,7 @@ from adcp.types.generated_poc.account.sync_accounts_request import (
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
@@ -41,31 +41,11 @@ from src.core.schemas.account import (
     ListAccountsResponse,
     SyncAccountsRequest,
     SyncAccountsResponse,
+    SyncResponseAccount,
 )
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
-
-
-# SDK 5.7 removed the per-account result type from sync_accounts_response.
-# Define locally — this is the shape of each account element in sync response.
-class SyncResponseAccount(BaseModel):
-    """Per-account result in a sync_accounts response.
-
-    SDK 4.3 provided this as adcp.types.generated_poc.account.sync_accounts_response.Account.
-    SDK 5.7 restructured the response; we now own this model.
-    """
-
-    brand: Any | None = None
-    operator: str | None = None
-    action: str | None = None
-    status: str | None = None
-    account_id: str | None = None
-    name: str | None = None
-    billing: str | None = None
-    sandbox: bool | None = None
-    errors: list[Any] | None = None
-    setup: Any | None = None
 
 
 def _db_account_to_schema(db_account: DBAccount) -> Account:

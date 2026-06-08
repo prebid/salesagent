@@ -73,6 +73,7 @@ _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "/schemas/latest/media-buy/get-products-request.json": {
         "if_catalog_version",  # Schema defines catalog-version pre-flight, library doesn't have it yet
+        "push_notification_config",  # Schema defines push notification config, SDK 5.7 doesn't model it for get_products yet
     },
     # update-media-buy-request: SDK 5.7 provides account, idempotency_key,
     # invoice_recipient — no gaps.

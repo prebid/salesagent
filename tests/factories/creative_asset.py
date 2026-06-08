@@ -28,6 +28,60 @@ DEFAULT_IMAGE_ASSETS: dict = {
 }
 
 
+def make_image_assets(
+    asset_id: str = "banner",
+    url: str = "https://example.com/banner.png",
+    width: int = 300,
+    height: int = 250,
+) -> dict:
+    """Build SDK 5.7 discriminated-union image assets dict with custom values."""
+    return {
+        asset_id: [
+            {
+                "asset_type": "image",
+                "asset_id": asset_id,
+                "item_type": "individual",
+                "required": True,
+                "url": url,
+                "width": width,
+                "height": height,
+            }
+        ]
+    }
+
+
+def make_video_assets(
+    asset_id: str = "video",
+    url: str = "https://example.com/video.mp4",
+    **extra: object,
+) -> dict:
+    """Build SDK 5.7 discriminated-union video assets dict with custom values."""
+    entry: dict = {
+        "asset_type": "video",
+        "asset_id": asset_id,
+        "item_type": "individual",
+        "required": True,
+        "url": url,
+    }
+    entry.update(extra)
+    return {asset_id: [entry]}
+
+
+def make_text_assets(asset_id: str, content: str) -> dict:
+    """Build SDK 5.7 discriminated-union text assets dict."""
+    return {
+        asset_id: [
+            {
+                "asset_type": "text",
+                "asset_id": asset_id,
+                "item_type": "individual",
+                "required": True,
+                "content": content,
+            }
+        ]
+    }
+
+
 class CreativeAssetFactory(factory.Factory):
     """Factory for AdCP CreativeAsset Pydantic models.
 

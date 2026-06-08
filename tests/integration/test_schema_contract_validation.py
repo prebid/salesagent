@@ -377,11 +377,17 @@ class TestCreativeSchemaContract:
             "name": "Creative Contract Test",
             "format_id": FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             "assets": {
-                "banner_image": {
-                    "url": "https://example.com/creative.jpg",
-                    "width": 300,
-                    "height": 250,
-                }
+                "banner_image": [
+                    {
+                        "asset_type": "image",
+                        "asset_id": "banner_image",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/creative.jpg",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ]
             },
             "status": "approved",
             "principal_id": "test_principal",
@@ -406,12 +412,17 @@ class TestCreativeSchemaContract:
             "name": "Video Creative Contract Test",
             "format_id": FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_640x480"),
             "assets": {
-                "video_file": {
-                    "url": "https://example.com/video.mp4",
-                    "width": 1920,
-                    "height": 1080,
-                    "duration_ms": 30000,  # 30 seconds in milliseconds
-                }
+                "video_file": [
+                    {
+                        "asset_type": "video",
+                        "asset_id": "video_file",
+                        "item_type": "individual",
+                        "required": True,
+                        "url": "https://example.com/video.mp4",
+                        "width": 1920,
+                        "height": 1080,
+                    }
+                ]
             },
             "status": "approved",  # Use valid status per adcp 2.5.0 Creative enum
             "principal_id": "test_principal",

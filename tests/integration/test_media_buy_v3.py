@@ -689,10 +689,10 @@ class TestGetMediaBuysResponseFields:
     @pytest.mark.parametrize(
         ("persisted_status", "expected"),
         [
-            ("completed", MediaBuyStatus.completed),
-            ("paused", MediaBuyStatus.paused),
-            ("rejected", MediaBuyStatus.rejected),
-            ("canceled", MediaBuyStatus.canceled),
+            ("completed", "completed"),
+            ("paused", "paused"),
+            ("rejected", "rejected"),
+            ("canceled", "canceled"),
         ],
     )
     @pytest.mark.asyncio

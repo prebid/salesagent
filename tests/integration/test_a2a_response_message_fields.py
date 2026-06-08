@@ -128,12 +128,17 @@ class TestA2AMessageFieldValidation:
                         "format_id": "display_300x250",
                         "name": "Test Creative",
                         "assets": {
-                            "main_image": {
-                                "asset_type": "image",
-                                "url": "https://example.com/image.jpg",
-                                "width": 300,
-                                "height": 250,
-                            }
+                            "main_image": [
+                                {
+                                    "asset_type": "image",
+                                    "asset_id": "main_image",
+                                    "item_type": "individual",
+                                    "required": True,
+                                    "url": "https://example.com/image.jpg",
+                                    "width": 300,
+                                    "height": 250,
+                                }
+                            ]
                         },
                     }
                 ],

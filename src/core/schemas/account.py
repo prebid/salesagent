@@ -9,11 +9,15 @@ beads: salesagent-x79
 from typing import Any
 
 from adcp.types import Account as LibraryAccountDomain
+from adcp.types import ContextObject as LibraryContextObject
+from adcp.types import Error as LibraryError
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
+from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
-from pydantic import ConfigDict
+from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
+from pydantic import BaseModel, ConfigDict
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import NestedModelSerializerMixin
@@ -98,6 +102,28 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
         return f"Found {count} account{'s' if count != 1 else ''}."
 
 
+class SyncResponseAccount(BaseModel):
+    """Per-account result in a sync_accounts response.
+
+    SDK 4.3 provided this as adcp.types.generated_poc.account.sync_accounts_response.Account.
+    SDK 5.7 restructured the response; we now own this model.
+
+    Fields are typed with adcp library models (Error, Setup) so Pydantic
+    reconstructs them properly on transport roundtrip (A2A/MCP/REST).
+    """
+
+    brand: LibraryBrandReference | None = None
+    operator: str | None = None
+    action: str | None = None
+    status: str | None = None
+    account_id: str | None = None
+    name: str | None = None
+    billing: str | None = None
+    sandbox: bool | None = None
+    errors: list[LibraryError] | None = None
+    setup: LibrarySetup | None = None
+
+
 class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSuccess):  # type: ignore[misc]
     """Extends library SyncAccountsResponse success variant.
 
@@ -111,9 +137,12 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # SDK 5.7 removed these from the parent — declare locally
-    accounts: list[Any] = []
+    # SDK 5.7 removed these from the parent — declare locally.
+    # Typed as SyncResponseAccount for proper deserialization on transport roundtrip.
+    accounts: list[SyncResponseAccount] = []
     dry_run: bool | None = None
+    context: LibraryContextObject | dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
@@ -128,4 +157,5 @@ __all__ = [
     "ListAccountsResponse",
     "SyncAccountsRequest",
     "SyncAccountsResponse",
+    "SyncResponseAccount",
 ]

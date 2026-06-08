@@ -12,11 +12,19 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
+from tests.factories.creative_asset import (
+    DEFAULT_IMAGE_ASSETS,
+)
+from tests.factories.creative_asset import (
+    make_image_assets as _image_assets,
+)
+from tests.factories.creative_asset import (
+    make_text_assets as _text_assets,
+)
 from tests.harness import CreativeSyncEnv
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
@@ -37,7 +45,7 @@ def _creative(**overrides) -> dict:
         "creative_id": "c_proc_1",
         "name": "Processing Test",
         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-        "assets": {"banner": {"url": "https://example.com/banner.png"}},
+        "assets": dict(DEFAULT_IMAGE_ASSETS),
     }
     defaults.update(overrides)
     return defaults
@@ -85,7 +93,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_msg",
                         format_id=fmt,
-                        assets={"message": {"content": "Initial prompt"}},
+                        assets=_text_assets("message", "Initial prompt"),
                     )
                 ]
             )
@@ -99,12 +107,12 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_msg",
                         format_id=fmt,
-                        assets={"message": {"content": "Updated holiday banner"}},
+                        assets=_text_assets("message", "Updated holiday banner"),
                     )
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
             call_args = env.mock["registry"].return_value.build_creative.call_args
             assert call_args is not None
             assert call_args[1]["message"] == "Updated holiday banner"
@@ -120,7 +128,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_brief",
                         format_id=fmt,
-                        assets={"message": {"content": "Initial"}},
+                        assets=_text_assets("message", "Initial"),
                     )
                 ]
             )
@@ -131,12 +139,12 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_brief",
                         format_id=fmt,
-                        assets={"brief": {"content": "Promote summer sale"}},
+                        assets=_text_assets("brief", "Promote summer sale"),
                     )
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
             call_args = env.mock["registry"].return_value.build_creative.call_args
             assert call_args[1]["message"] == "Promote summer sale"
 
@@ -151,7 +159,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_inputs",
                         format_id=fmt,
-                        assets={"message": {"content": "Initial"}},
+                        assets=_text_assets("message", "Initial"),
                     )
                 ]
             )
@@ -166,7 +174,7 @@ class TestGenerativeUpdatePromptExtraction:
             creative["inputs"] = [{"name": "campaign_brief", "context_description": "Design for Q4 campaign"}]
 
             result = env.call_impl(creatives=[creative])
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
             call_args = env.mock["registry"].return_value.build_creative.call_args
             assert call_args[1]["message"] == "Design for Q4 campaign"
 
@@ -194,7 +202,7 @@ class TestGenerativeUpdateNoPrompt:
                     _creative(
                         creative_id="c_gen_no_prompt",
                         format_id=fmt,
-                        assets={"message": {"content": "Initial prompt"}},
+                        assets=_text_assets("message", "Initial prompt"),
                     )
                 ]
             )
@@ -212,7 +220,7 @@ class TestGenerativeUpdateNoPrompt:
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
             # build_creative should NOT have been called
             assert not env.mock["registry"].return_value.build_creative.called
 
@@ -246,7 +254,7 @@ class TestGenerativeUpdateUserAssets:
                     _creative(
                         creative_id="c_gen_user_assets",
                         format_id=fmt,
-                        assets={"message": {"content": "Initial"}},
+                        assets=_text_assets("message", "Initial"),
                     )
                 ]
             )
@@ -259,14 +267,14 @@ class TestGenerativeUpdateUserAssets:
                         creative_id="c_gen_user_assets",
                         format_id=fmt,
                         assets={
-                            "message": {"content": "Refine it"},
-                            "hero_image": {"url": "https://user-provided.com/img.png"},
+                            **_text_assets("message", "Refine it"),
+                            **_image_assets("hero_image", url="https://user-provided.com/img.png"),
                         },
                     )
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
             # build_creative was called (message present)
             assert env.mock["registry"].return_value.build_creative.called
 
@@ -294,7 +302,7 @@ class TestGenerativeUpdatePromotedOfferings:
                     _creative(
                         creative_id="c_gen_promo",
                         format_id=fmt,
-                        assets={"message": {"content": "Initial"}},
+                        assets=_text_assets("message", "Initial"),
                     )
                 ]
             )
@@ -306,14 +314,14 @@ class TestGenerativeUpdatePromotedOfferings:
                         creative_id="c_gen_promo",
                         format_id=fmt,
                         assets={
-                            "message": {"content": "Build with offerings"},
-                            "promoted_offerings": {"content": "Widget Pro | $99"},
+                            **_text_assets("message", "Build with offerings"),
+                            **_text_assets("promoted_offerings", "Widget Pro | $99"),
                         },
                     )
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
             call_args = env.mock["registry"].return_value.build_creative.call_args
             assert call_args[1]["promoted_offerings"] is not None
 
@@ -336,7 +344,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
                     _creative(
                         creative_id="c_no_gemini_up",
                         format_id=fmt,
-                        assets={"message": {"content": "Initial"}},
+                        assets=_text_assets("message", "Initial"),
                     )
                 ]
             )
@@ -349,13 +357,13 @@ class TestGenerativeUpdateGeminiKeyMissing:
                     _creative(
                         creative_id="c_no_gemini_up",
                         format_id=fmt,
-                        assets={"message": {"content": "Try to update"}},
+                        assets=_text_assets("message", "Try to update"),
                     )
                 ]
             )
 
             creative_result = result.creatives[0]
-            assert creative_result.action == CreativeAction.failed
+            assert creative_result.action == "failed"
             assert any("GEMINI_API_KEY" in e for e in _error_messages(creative_result.errors))
 
 
@@ -387,7 +395,7 @@ class TestApprovalModeUpdate:
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_auto_up")).first()
@@ -421,7 +429,7 @@ class TestApprovalModeUpdate:
                     ]
                 )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_ai_up")).first()
@@ -479,7 +487,7 @@ class TestStaticPreviewUpdate:
             )
 
             creative_result = result.creatives[0]
-            assert creative_result.action == CreativeAction.failed
+            assert creative_result.action == "failed"
             assert any(
                 "no previews" in e.lower() or "no media_url" in e.lower()
                 for e in _error_messages(creative_result.errors)
@@ -507,7 +515,7 @@ class TestStaticPreviewUpdate:
             creative["url"] = "https://example.com/banner.png"
 
             result = env.call_impl(creatives=[creative])
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
 
     def test_update_agent_exception_fails(self, integration_db):
         """Update when creative agent throws exception → action=failed.
@@ -541,7 +549,7 @@ class TestStaticPreviewUpdate:
             )
 
             creative_result = result.creatives[0]
-            assert creative_result.action == CreativeAction.failed
+            assert creative_result.action == "failed"
             assert any(
                 "unreachable" in e.lower() or "retry" in e.lower() for e in _error_messages(creative_result.errors)
             )
@@ -600,7 +608,7 @@ class TestStaticPreviewDimensionExtraction:
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_dims_up")).first()
@@ -639,7 +647,7 @@ class TestStaticPreviewDimensionExtraction:
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_dims_create")).first()
@@ -679,7 +687,7 @@ class TestFormatChangeOnUpdate:
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.updated
+            assert result.creatives[0].action == "updated"
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_fmt_change")).first()
@@ -716,7 +724,7 @@ class TestCreateNameFallback:
                 ]
             )
 
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
             call_args = env.mock["registry"].return_value.build_creative.call_args
             assert "Holiday Sale Banner" in call_args[1]["message"]
 
@@ -737,7 +745,7 @@ class TestCreateAutoApprove:
             env.identity.tenant["approval_mode"] = "auto-approve"
 
             result = env.call_impl(creatives=[_creative(creative_id="c_auto_create")])
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_auto_create")).first()
@@ -769,7 +777,7 @@ class TestCreateAIPoweredApproval:
             ):
                 result = env.call_impl(creatives=[_creative(creative_id="c_ai_create")])
 
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_ai_create")).first()
@@ -787,7 +795,7 @@ class TestCreateServerGeneratedId:
             env.setup_default_data()
 
             result = env.call_impl(creatives=[_creative(creative_id="")])
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
             # Server should have generated an ID (UUID format)
             generated_id = result.creatives[0].creative_id
             assert generated_id is not None

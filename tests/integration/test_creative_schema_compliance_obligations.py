@@ -14,6 +14,7 @@ import pytest
 from adcp.types import CreativeAction, CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
 
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -27,7 +28,7 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
         "creative_id": "c_test_1",
         "name": "Test Banner",
         "format_id": AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
-        "assets": {"banner": {"url": "https://example.com/banner.png"}},
+        "assets": dict(DEFAULT_IMAGE_ASSETS),
     }
     defaults.update(overrides)
     return CreativeAsset(**defaults)
@@ -36,6 +37,23 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
 # ---------------------------------------------------------------------------
 # UC-006-CREATIVE-SCHEMA-COMPLIANCE-10: All 11 asset types accepted through sync
 # ---------------------------------------------------------------------------
+
+
+def _asset_sample(asset_type: str, asset_id: str) -> dict:
+    """Build a valid SDK 5.7 discriminated-union asset entry for the given type."""
+    base = {"asset_type": asset_type, "asset_id": asset_id, "item_type": "individual", "required": True}
+    url_placeholder = "https://example.com/test_asset"
+    if asset_type in ("image", "video"):
+        return {**base, "url": url_placeholder, "width": 300, "height": 250}
+    if asset_type == "audio":
+        return {**base, "url": url_placeholder}
+    if asset_type in ("text", "markdown", "html", "css", "javascript"):
+        return {**base, "content": f"test {asset_type} content"}
+    if asset_type in ("vast", "daast"):
+        return {"asset_type": asset_type, "delivery_type": "url", "url": url_placeholder}
+    if asset_type == "catalog":
+        return {"asset_type": "catalog", "type": "product", "url": url_placeholder}
+    return {**base, "content": f"test {asset_type} content"}
 
 
 class TestAllAssetTypesAcceptedThroughSync:
@@ -56,7 +74,7 @@ class TestAllAssetTypesAcceptedThroughSync:
         "javascript",
         "vast",
         "daast",
-        "promoted_offerings",
+        "catalog",
     ]
 
     def test_all_11_asset_types_accepted(self, integration_db):
@@ -73,7 +91,7 @@ class TestAllAssetTypesAcceptedThroughSync:
                     _make_creative_asset(
                         creative_id=f"c_{asset_type}",
                         name=f"Test {asset_type}",
-                        assets={asset_type: {"content": f"test {asset_type} content"}},
+                        assets={asset_type: [_asset_sample(asset_type, asset_type)]},
                     )
                 )
 
@@ -102,7 +120,7 @@ class TestAllAssetTypesAcceptedThroughSync:
                 creative = _make_creative_asset(
                     creative_id=f"c_rt_{asset_type}",
                     name=f"Roundtrip {asset_type}",
-                    assets={asset_type: {"content": f"{asset_type} data"}},
+                    assets={asset_type: [_asset_sample(asset_type, asset_type)]},
                 )
                 response = env.call_impl(creatives=[creative])
                 assert response.creatives[0].action == CreativeAction.created
@@ -283,7 +301,6 @@ class TestCreativeActionEnumThroughSync:
             assert len(response.creatives) == 1
             result = response.creatives[0]
             assert result.action == CreativeAction.created
-            assert result.action.value == "created"
 
     def test_updated_action_for_existing_creative(self, integration_db):
         """Syncing an existing creative with changes returns 'updated' action.
@@ -303,8 +320,7 @@ class TestCreativeActionEnumThroughSync:
             response2 = env.call_impl(creatives=[updated])
             assert len(response2.creatives) == 1
             result = response2.creatives[0]
-            assert result.action in (CreativeAction.updated, CreativeAction.unchanged)
-            assert result.action.value in ("updated", "unchanged")
+            assert result.action in ("updated", "unchanged")
 
     def test_unchanged_action_for_identical_creative(self, integration_db):
         """Syncing an identical creative returns 'unchanged' action.
@@ -324,8 +340,7 @@ class TestCreativeActionEnumThroughSync:
             assert len(response.creatives) == 1
             result = response.creatives[0]
             # Should be unchanged since nothing changed
-            assert result.action in (CreativeAction.unchanged, CreativeAction.updated)
-            assert result.action.value in ("unchanged", "updated")
+            assert result.action in ("unchanged", "updated")
 
     def test_deleted_action_with_delete_missing(self, integration_db):
         """delete_missing=True marks absent creatives as deleted.
@@ -347,7 +362,6 @@ class TestCreativeActionEnumThroughSync:
             # c_delete should be deleted
             assert "c_delete" in actions, "Deleted creative should appear in results"
             assert actions["c_delete"] == CreativeAction.deleted
-            assert actions["c_delete"].value == "deleted"
 
     def test_failed_action_for_invalid_creative(self, integration_db):
         """Invalid creative input returns 'failed' action.
@@ -369,7 +383,7 @@ class TestCreativeActionEnumThroughSync:
             # Find the failed result
             failed = [r for r in response.creatives if r.action == CreativeAction.failed]
             if failed:
-                assert failed[0].action.value == "failed"
+                assert failed[0].action == CreativeAction.failed
 
     def test_all_action_enum_values_exist(self, integration_db):
         """CreativeAction enum contains all 5 spec-required values.

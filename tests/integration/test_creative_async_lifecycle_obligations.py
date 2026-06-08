@@ -18,7 +18,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import CreativeAction
 from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
     Reason,
     SyncCreativesInputRequired,
@@ -33,6 +32,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
 from tests.harness import CreativeSyncEnv
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
@@ -46,7 +46,7 @@ def _creative(**overrides) -> dict:
         "creative_id": "c_async_1",
         "name": "Async Lifecycle Test",
         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-        "assets": {"banner": {"url": "https://example.com/banner.png"}},
+        "assets": dict(DEFAULT_IMAGE_ASSETS),
     }
     defaults.update(overrides)
     return defaults
@@ -81,7 +81,7 @@ class TestAsyncSubmittedLifecycle:
 
             # Creative was created successfully
             assert len(result.creatives) == 1
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             # Verify DB state: creative is in pending_review (queued for review = submitted)
             with get_db_session() as session:
@@ -141,7 +141,7 @@ class TestAsyncWorkingLifecycle:
 
             # Creative was created successfully
             assert len(result.creatives) == 1
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             # Verify DB state: creative is pending_review (AI review in progress = working)
             with get_db_session() as session:
@@ -199,7 +199,7 @@ class TestAsyncInputRequiredLifecycle:
 
             # Creative was created successfully
             assert len(result.creatives) == 1
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             # Verify DB state: creative needs human input
             with get_db_session() as session:

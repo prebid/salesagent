@@ -41,12 +41,13 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from adcp.types import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from tests.factories import PrincipalFactory, TenantFactory
+from tests.factories.creative_asset import make_image_assets as _image_assets
+from tests.factories.creative_asset import make_video_assets as _video_assets
 from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -176,13 +177,13 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "preserve-url-001",
                         "name": "User Creative with URL",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
-                        "assets": {"banner_image": {"url": user_url, "width": 300, "height": 250}},
+                        "assets": _image_assets(asset_id="banner_image", url=user_url),
                     }
                 ],
             )
 
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == CreativeAction.created
+        assert result.creatives[0].action == "created"
 
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(creative_id="preserve-url-001")
@@ -241,7 +242,7 @@ class TestCreativeSyncDataPreservation:
             )
 
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == CreativeAction.created
+        assert result.creatives[0].action == "created"
 
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(creative_id="preserve-dims-001")
@@ -288,17 +289,22 @@ class TestCreativeSyncDataPreservation:
                 }
             )
 
-            # User-provided assets (ImageAsset adds asset_type/alt_text/format/provenance defaults after parsing)
+            # User-provided assets (SDK 5.7: assets are discriminated-union lists)
             user_assets = {
-                "banner_image": {
-                    "asset_type": "image",
-                    "url": "https://user-creative.example.com/banner.png",
-                    "width": 300,
-                    "height": 250,
-                    "alt_text": None,
-                    "format": None,
-                    "provenance": None,
-                }
+                "banner_image": [
+                    {
+                        "asset_type": "image",
+                        "url": "https://user-creative.example.com/banner.png",
+                        "width": 300,
+                        "height": 250,
+                        "format": None,
+                        "alt_text": None,
+                        "provenance": None,
+                        "asset_id": "banner_image",
+                        "item_type": "individual",
+                        "required": True,
+                    }
+                ]
             }
 
             result = env.call_impl(
@@ -307,19 +313,16 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "preserve-assets-001",
                         "name": "User Creative with Assets",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_generative"},
-                        "assets": {
-                            "banner_image": {
-                                "url": "https://user-creative.example.com/banner.png",
-                                "width": 300,
-                                "height": 250,
-                            }
-                        },
+                        "assets": _image_assets(
+                            asset_id="banner_image",
+                            url="https://user-creative.example.com/banner.png",
+                        ),
                     }
                 ],
             )
 
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == CreativeAction.created
+        assert result.creatives[0].action == "created"
 
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(creative_id="preserve-assets-001")
@@ -365,13 +368,13 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "preserve-gen-url-001",
                         "name": "User Video Creative",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "video_generative"},
-                        "assets": {"video": {"url": user_url, "duration": 30}},
+                        "assets": _video_assets(url=user_url, duration=30),
                     }
                 ],
             )
 
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == CreativeAction.created
+        assert result.creatives[0].action == "created"
 
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(creative_id="preserve-gen-url-001")
@@ -419,7 +422,7 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "update-preserve-001",
                         "name": "Creative to Update",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
-                        "assets": {"banner_image": {"url": original_url, "width": 300, "height": 250}},
+                        "assets": _image_assets(asset_id="banner_image", url=original_url),
                     }
                 ],
             )
@@ -432,13 +435,13 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "update-preserve-001",
                         "name": "Creative to Update",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
-                        "assets": {"banner_image": {"url": new_user_url, "width": 300, "height": 250}},
+                        "assets": _image_assets(asset_id="banner_image", url=new_user_url),
                     }
                 ],
             )
 
         assert len(result.creatives) == 1
-        assert result.creatives[0].action in [CreativeAction.updated, CreativeAction.unchanged]
+        assert result.creatives[0].action in ["updated", "unchanged"]
 
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(creative_id="update-preserve-001")

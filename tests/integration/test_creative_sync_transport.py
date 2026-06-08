@@ -19,12 +19,12 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from adcp.types import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 
 
@@ -122,6 +122,8 @@ class TestSyncCreativeCreateTransport:
             assert db_creative is None, "Dry-run creative should NOT be in the database"
 
 
+from tests.factories.creative_asset import make_text_assets as _text_assets
+
 DEFAULT_AGENT_URL = "https://example.com/agent"
 DEFAULT_FORMAT_ID = {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL}
 
@@ -132,7 +134,7 @@ def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
         "creative_id": creative_id,
         "name": name,
         "format_id": DEFAULT_FORMAT_ID,
-        "assets": {"banner": {"url": "https://example.com/image.png"}},
+        "assets": dict(DEFAULT_IMAGE_ASSETS),
     }
     defaults.update(overrides)
     return defaults
@@ -163,7 +165,7 @@ class TestSyncUpsertReturnsUpdatedTransport:
         assert len(result.payload.creatives) == 1
         upserted = result.payload.creatives[0]
         assert upserted.creative_id == "c_upsert"
-        assert upserted.action == CreativeAction.updated
+        assert upserted.action == "updated"
 
         # DB verification: upserted creative exists in DB
         with get_db_session() as session:
@@ -201,9 +203,9 @@ class TestSyncSavepointIsolationTransport:
         assert len(result.payload.creatives) == 3
 
         results_by_id = {r.creative_id: r for r in result.payload.creatives}
-        assert results_by_id["c_bad"].action == CreativeAction.failed
-        assert results_by_id["c_good_1"].action != CreativeAction.failed
-        assert results_by_id["c_good_2"].action != CreativeAction.failed
+        assert results_by_id["c_bad"].action == "failed"
+        assert results_by_id["c_good_1"].action != "failed"
+        assert results_by_id["c_good_2"].action != "failed"
 
         # DB verification: good creatives persisted, bad creative did not
         from sqlalchemy import select
@@ -302,7 +304,7 @@ class TestSyncFormatValidationTransport:
         assert_envelope(result, transport)
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
-        assert creative_result.action == CreativeAction.failed
+        assert creative_result.action == "failed"
         assert any("list_creative_formats" in e for e in _error_messages(creative_result.errors))
 
 
@@ -361,7 +363,7 @@ class TestGenerativeBuildClassification:
                         "creative_id": "c_gen_01",
                         "name": "Generative Banner",
                         "format_id": fmt,
-                        "assets": {"message": {"content": "Build me a banner"}},
+                        "assets": _text_assets("message", "Build me a banner"),
                     }
                 ],
             )
@@ -369,7 +371,7 @@ class TestGenerativeBuildClassification:
             assert result.is_success, f"Expected success but got error: {result.error}"
             assert_envelope(result, transport)
             assert len(result.payload.creatives) == 1
-            assert result.payload.creatives[0].action == CreativeAction.created
+            assert result.payload.creatives[0].action == "created"
 
             # Verify build_creative was called (generative path)
             registry = env.mock["registry"].return_value
@@ -406,7 +408,7 @@ class TestGenerativeBuildPromptMessage:
                         "creative_id": "c_gen_02",
                         "name": "Message Test",
                         "format_id": fmt,
-                        "assets": {"message": {"content": "Create a holiday banner"}},
+                        "assets": _text_assets("message", "Create a holiday banner"),
                     }
                 ],
             )
@@ -440,7 +442,7 @@ class TestGenerativeBuildPromptBrief:
                         "creative_id": "c_gen_03",
                         "name": "Brief Test",
                         "format_id": fmt,
-                        "assets": {"brief": {"content": "Promote summer sale"}},
+                        "assets": _text_assets("brief", "Promote summer sale"),
                     }
                 ],
             )
@@ -474,7 +476,7 @@ class TestGenerativeBuildPromptRole:
                         "creative_id": "c_gen_04",
                         "name": "Prompt Role Test",
                         "format_id": fmt,
-                        "assets": {"prompt": {"content": "Design a Q4 campaign banner"}},
+                        "assets": _text_assets("prompt", "Design a Q4 campaign banner"),
                     }
                 ],
             )
@@ -575,7 +577,7 @@ class TestGenerativeBuildUpdatePreserve:
                         "creative_id": "c_gen_07",
                         "name": "Preserve Test",
                         "format_id": fmt,
-                        "assets": {"message": {"content": "Initial prompt"}},
+                        "assets": _text_assets("message", "Initial prompt"),
                     }
                 ],
             )
@@ -646,8 +648,8 @@ class TestGenerativeBuildUserAssetPriority:
                         "name": "Asset Priority Test",
                         "format_id": fmt,
                         "assets": {
-                            "message": {"content": "Build me a banner"},
-                            "headline": {"content": "User-provided headline"},
+                            **_text_assets("message", "Build me a banner"),
+                            **_text_assets("headline", "User-provided headline"),
                         },
                         "url": "https://user.example.com/image.png",
                     }
@@ -699,7 +701,7 @@ class TestFormatValidationAdapter:
                         "creative_id": "c_adapter_fmt",
                         "name": "Adapter Format Creative",
                         "format_id": {"id": "billboard", "agent_url": "broadstreet://default"},
-                        "assets": {"banner": {"url": "https://example.com/ad.png"}},
+                        "assets": dict(DEFAULT_IMAGE_ASSETS),
                     }
                 ],
             )
@@ -707,7 +709,7 @@ class TestFormatValidationAdapter:
             assert result.is_success
             assert_envelope(result, transport)
             assert len(result.payload.creatives) == 1
-            assert result.payload.creatives[0].action == CreativeAction.created
+            assert result.payload.creatives[0].action == "created"
 
             # registry.get_format should NOT be called for adapter formats
             registry = env.mock["registry"].return_value
@@ -740,7 +742,7 @@ class TestFormatValidationUnreachable:
         assert_envelope(result, transport)
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
-        assert creative_result.action == CreativeAction.failed
+        assert creative_result.action == "failed"
         assert any("unreachable" in e.lower() for e in _error_messages(creative_result.errors))
 
 
@@ -984,7 +986,7 @@ class TestEmptyNameFails:
         assert_envelope(result, transport)
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
-        assert creative_result.action == CreativeAction.failed
+        assert creative_result.action == "failed"
         assert creative_result.errors
 
 
@@ -1014,7 +1016,7 @@ class TestMissingFormatFails:
                     {
                         "creative_id": "c_no_format",
                         "name": "No Format Creative",
-                        "assets": {"banner": {"url": "https://example.com/ad.png"}},
+                        "assets": dict(DEFAULT_IMAGE_ASSETS),
                     }
                 ],
                 validation_mode="lenient",
@@ -1027,7 +1029,7 @@ class TestMissingFormatFails:
             # impl/a2a/rest: _impl handled it, returned action=failed
             assert_envelope(result, transport)
             creative_result = result.payload.creatives[0]
-            assert creative_result.action == CreativeAction.failed
+            assert creative_result.action == "failed"
             assert creative_result.errors
 
 
@@ -1085,7 +1087,7 @@ class TestStaticPreviewFailed:
             # impl/a2a/rest: _impl handles it, returns action=failed
             assert_envelope(result, transport)
             creative_result = result.payload.creatives[0]
-            assert creative_result.action == CreativeAction.failed
+            assert creative_result.action == "failed"
             assert any(
                 "no previews" in e.lower() or "no media_url" in e.lower()
                 for e in _error_messages(creative_result.errors)
@@ -1116,7 +1118,7 @@ class TestGeminiKeyMissing:
                         "creative_id": "c_no_gemini",
                         "name": "No Gemini Key",
                         "format_id": fmt,
-                        "assets": {"message": {"content": "Build a banner"}},
+                        "assets": _text_assets("message", "Build a banner"),
                     }
                 ],
                 validation_mode="lenient",
@@ -1125,7 +1127,7 @@ class TestGeminiKeyMissing:
         assert result.is_success
         assert_envelope(result, transport)
         creative_result = result.payload.creatives[0]
-        assert creative_result.action == CreativeAction.failed
+        assert creative_result.action == "failed"
         assert any("gemini" in e.lower() for e in _error_messages(creative_result.errors))
 
 
@@ -1220,7 +1222,7 @@ class TestAIReviewTrigger:
             assert result.is_success
             assert_envelope(result, transport)
             creative_result = result.payload.creatives[0]
-            assert creative_result.action == CreativeAction.created
+            assert creative_result.action == "created"
             # status is exclude=True (stripped in REST serialization), verify via DB
             with get_db_session() as session:
                 db_creative = session.scalars(select(DBCreative).filter_by(creative_id="c_ai_review")).first()
