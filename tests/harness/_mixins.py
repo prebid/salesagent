@@ -559,3 +559,26 @@ class ProductMixin:
             **extra,
         )
         return await _get_products_impl(req, identity)
+
+
+def make_adapter_update_side_effect() -> Any:
+    """Return a side_effect callable for adapter.update_media_buy.
+
+    Generates an UpdateMediaBuySuccess with affected_packages derived from
+    the packages in the request.
+    """
+
+    def _update_response(*args: Any, **kwargs: Any) -> Any:
+        from src.core.schemas._base import UpdateMediaBuySuccess
+
+        req_obj = kwargs.get("request") or (args[0] if args else None)
+        affected = []
+        if req_obj and hasattr(req_obj, "packages") and req_obj.packages:
+            for pkg in req_obj.packages:
+                pkg_id = pkg.get("package_id") if isinstance(pkg, dict) else getattr(pkg, "package_id", "pkg_001")
+                affected.append({"package_id": pkg_id, "paused": False})
+        if not affected:
+            affected = [{"package_id": "pkg_001", "paused": False}]
+        return UpdateMediaBuySuccess(affected_packages=affected)
+
+    return _update_response

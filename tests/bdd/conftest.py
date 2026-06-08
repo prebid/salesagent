@@ -2525,6 +2525,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-006"
     if any(t.startswith("T-UC-005") for t in marker_names):
         return "UC-005"
+    if any(t.startswith("T-UC-003") for t in marker_names):
+        return "UC-003"
     if any(t.startswith("T-UC-004") for t in marker_names):
         return "UC-004"
     if any(t.startswith("T-UC-011") for t in marker_names):
@@ -2585,7 +2587,23 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     if uc == "UC-002":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if "account" in marker_names:
+        # Tags that need the full create_media_buy flow (MediaBuyCreateEnv)
+        # rather than account resolution only (MediaBuyAccountEnv).
+        _UC002_CREATE_FLOW_TAGS = {"T-UC-002-ext-d"}
+        if marker_names & _UC002_CREATE_FLOW_TAGS:
+            # Validation / error-path scenarios — full create flow via MediaBuyCreateEnv
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with MediaBuyCreateEnv() as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                yield
+        elif "account" in marker_names:
             # Account resolution scenarios only — MediaBuyAccountEnv handles resolve_account
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_account import MediaBuyAccountEnv
@@ -2675,6 +2693,20 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                         p.stop()
         else:
             pytest.xfail("UC-003 harness not yet wired for non-extension scenarios")
+
+    elif uc == "UC-003":
+        # Update media buy — needs existing media buy + update dispatch
+        request.getfixturevalue("integration_db")
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        with MediaBuyDualEnv() as env:
+            tenant, principal, product, pricing_option = env.setup_media_buy_data()
+            ctx["env"] = env
+            ctx["tenant"] = tenant
+            ctx["principal"] = principal
+            ctx["default_product"] = product
+            ctx["default_pricing_option"] = pricing_option
+            yield
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
