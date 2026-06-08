@@ -277,7 +277,7 @@ class TestSyncCreativeResultSchema:
         assert "status" not in data
         assert "review_feedback" not in data
         assert data["creative_id"] == "c_1"
-        assert data["action"] == "created" or data["action"] == "created"
+        assert data["action"] == "created"
 
     def test_empty_lists_excluded(self):
         """Empty changes/errors/warnings lists should be omitted.
