@@ -329,11 +329,26 @@ jobs:
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
-      - uses: ./.github/actions/_pytest
+      - name: Run BDD tests
+        env:
+          COVERAGE_FILE: .coverage.bdd
+        run: |
+          uv run pytest tests/bdd/ -n auto --dist=loadfile -q --tb=line \
+            --cov=src --cov-report=xml:coverage-bdd.xml --cov-report= --timeout=60
+          shopt -s nullglob
+          fragments=(.coverage.bdd.*)
+          if [ "${#fragments[@]}" -gt 0 ]; then
+            uv run coverage combine --data-file=.coverage.bdd .coverage.bdd "${fragments[@]}"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
         with:
-          paths: tests/bdd/
-          with_coverage: "true"
-          extra_args: -n auto --dist=loadfile --timeout=60
+          name: bdd-coverage
+          path: |
+            .coverage.bdd
+            coverage-bdd.xml
+          include-hidden-files: true
+          if-no-files-found: error
 
   migration-roundtrip:
     name: Migration Roundtrip
@@ -372,7 +387,8 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    needs: [unit-tests]
+    needs: [unit-tests, bdd-tests]
+    if: ${{ needs.unit-tests.result == 'success' && needs.bdd-tests.result == 'success' }}
     permissions:
       contents: read
     steps:
@@ -386,10 +402,22 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: unit-coverage
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bdd-coverage
       - name: Coverage gate
         run: |
           fail_under="$(tr -d '[:space:]' < .coverage-baseline)"
-          uv run coverage report --fail-under="${fail_under}"
+          if [ ! -f .coverage ]; then
+            echo "Unit coverage data file missing."
+            exit 1
+          fi
+          if [ ! -f .coverage.bdd ]; then
+            echo "BDD coverage data file missing."
+            exit 1
+          fi
+          uv run coverage combine --data-file=.coverage.combined .coverage .coverage.bdd
+          uv run coverage report --data-file=.coverage.combined --fail-under="${fail_under}"
 
   summary:
     name: Summary

@@ -120,8 +120,8 @@ class TestCISuiteCoverage:
         assert "make quality-ci" in run_steps, "quality-gate must invoke make quality-ci (no pytest)."
         assert "pytest" not in run_steps, "quality-gate must not re-run unit tests."
 
-    def test_coverage_job_reuses_unit_test_artifact(self):
-        """Coverage gate must not re-run pytest; it consumes unit-tests artifacts."""
+    def test_coverage_job_reuses_test_artifacts(self):
+        """Coverage gate must not re-run pytest; it combines unit + BDD artifacts."""
         coverage_job = load_ci_workflow()["jobs"]["coverage"]
         needs = coverage_job.get("needs", [])
         steps_text = " ".join(
@@ -129,9 +129,11 @@ class TestCISuiteCoverage:
         )
 
         assert "unit-tests" in needs, "coverage job must depend on unit-tests."
-        assert "download-artifact" in steps_text, "coverage job must download unit test coverage data."
+        assert "bdd-tests" in needs, "coverage job must depend on bdd-tests."
+        assert steps_text.count("download-artifact") >= 2, "coverage job must download unit and BDD coverage artifacts."
         run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
-        assert "pytest" not in run_steps, "coverage job must not re-run unit tests."
+        assert "pytest" not in run_steps, "coverage job must not re-run tests."
+        assert "coverage combine" in run_steps, "coverage job must combine unit and BDD coverage data."
 
     def test_summary_gates_bdd_and_e2e(self):
         """summary must depend on AND fail for bdd + e2e.
