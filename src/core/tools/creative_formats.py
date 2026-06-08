@@ -2,6 +2,11 @@
 
 This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [valid-type] on lines ~98, ~236: SDK asset class unions (ImageFormatAsset |
+  VideoFormatAsset | ...) are dynamically resolved type factories; mypy cannot
+  validate the union. Permanent until upstream ships StrEnum.
 """
 
 import logging

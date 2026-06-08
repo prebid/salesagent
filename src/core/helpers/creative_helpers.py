@@ -1,4 +1,11 @@
-"""Creative format parsing and asset conversion helpers."""
+"""Creative format parsing and asset conversion helpers.
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [attr-defined] on lines ~694, ~696, ~816, ~826, ~884, ~896:
+  AssetSpec (ImageFormatAsset) is a RootModel proxy; .asset_type and .asset_id
+  exist at runtime but mypy cannot see through __getattr__. Fixable when the SDK
+  ships typed accessors or a shared unwrapper helper.
+"""
 
 import logging
 from typing import TYPE_CHECKING, Any, TypedDict

@@ -1,5 +1,10 @@
 """Creative Agent Registry for dynamic format discovery per AdCP v2.4.
 
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [valid-type] on lines ~179, ~192: ImageFormatAsset | VideoFormatAsset union
+  annotation. SDK asset classes are dynamically resolved type factories; mypy
+  cannot validate the union. Permanent until upstream ships StrEnum.
+
 This module provides:
 1. Creative agent registry (system defaults + tenant-specific)
 2. Dynamic format discovery via MCP

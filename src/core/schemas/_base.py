@@ -1,3 +1,9 @@
+# SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+# - [misc] on lines ~339, ~415: UpdateMediaBuySuccess/Error class defs.
+#   Pydantic metaclass interaction in SDK hierarchy; permanent.
+# - [assignment] on lines ~1449, ~1450, ~1637, ~1638: account/idempotency_key
+#   overrides (required -> optional). Architectural; permanent.
+
 import warnings
 from datetime import date, datetime
 

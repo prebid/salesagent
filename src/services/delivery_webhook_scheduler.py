@@ -309,6 +309,15 @@ class DeliveryWebhookScheduler:
                     is_active=True,
                 )
 
+            # Wire vs internal task_type distinction:
+            # - metadata["task_type"] = "media_buy_delivery" -- internal logging/dedup label
+            #   used by protocol_webhook_service guards and WebhookDeliveryLog queries.
+            # - SDK task_type = "update_media_buy" -- AdCP spec TaskType enum value
+            #   for the wire payload (delivery reports are status updates on media buys).
+            # These are intentionally different: the internal label predates the SDK enum
+            # and is used for DB filtering, while the wire value must be spec-compliant.
+            # Renaming the metadata key is not safe without migrating DB records and
+            # updating all 6 protocol_webhook_service guard checks.
             metadata = {
                 "task_type": "media_buy_delivery",
                 "tenant_id": media_buy.tenant_id,

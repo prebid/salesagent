@@ -1,4 +1,10 @@
-"""Creative create/update logic: DB persistence, agent validation, preview extraction."""
+"""Creative create/update logic: DB persistence, agent validation, preview extraction.
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [attr-defined] on line ~769: CreativeAsset is a RootModel proxy; .creative_id
+  assignment exists at runtime but mypy cannot see through __setattr__. Fixable
+  when the SDK ships typed accessors or a shared unwrapper helper.
+"""
 
 from __future__ import annotations
 

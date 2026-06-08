@@ -4,6 +4,12 @@ Extends adcp library account types per pattern #1 (schema inheritance).
 All classes are re-exported from ``src.core.schemas`` for backward compatibility.
 
 beads: salesagent-x79
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [misc] on line ~127: SyncAccountsResponse class def. Pydantic metaclass
+  interaction in SDK hierarchy; permanent.
+- [assignment] on line ~79: idempotency_key override (required -> optional).
+  Architectural; permanent.
 """
 
 from typing import Any
