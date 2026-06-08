@@ -19,7 +19,16 @@ from adcp.types import CreativeAction
 from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
-from tests.harness import make_mock_uow
+from tests.factories.creative_asset import make_image_assets
+from tests.helpers.creative_test_helpers import (
+    make_creative_dict as _make_creative_dict,
+)
+from tests.helpers.creative_test_helpers import (
+    make_creative_uow as _make_creative_uow_raw,
+)
+from tests.helpers.creative_test_helpers import (
+    sync_patches as _sync_patches,
+)
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -46,79 +55,8 @@ def mock_format_spec():
     return spec
 
 
-def _make_creative_dict(creative_id="c1", name="Test Banner"):
-    return {
-        "creative_id": creative_id,
-        "name": name,
-        "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        "assets": {
-            "banner_image": [
-                {
-                    "asset_type": "image",
-                    "asset_id": "banner_image",
-                    "item_type": "individual",
-                    "required": True,
-                    "url": "https://example.com/banner.png",
-                    "width": 300,
-                    "height": 250,
-                }
-            ]
-        },
-        "variants": [],
-    }
-
-
 def _make_creative_uow():
-    """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
-    mock_creative_repo = MagicMock()
-    mock_creative_repo.get_provenance_policies.return_value = []
-    mock_creative_repo.get_by_id.return_value = None
-    mock_creative_repo.begin_nested.return_value.__enter__ = MagicMock(return_value=None)
-    mock_creative_repo.begin_nested.return_value.__exit__ = MagicMock(return_value=None)
-
-    # create() must return a mock with proper string attributes (Pydantic validation)
-    def mock_create(**kwargs):
-        db_creative = MagicMock()
-        db_creative.creative_id = kwargs.get("creative_id", "c_unknown")
-        db_creative.status = kwargs.get("status", "approved")
-        return db_creative
-
-    mock_creative_repo.create.side_effect = mock_create
-
-    _, mock_uow = make_mock_uow(repos={"creatives": mock_creative_repo})
-    return mock_uow, mock_creative_repo
-
-
-def _sync_patches():
-    """Context manager returning (mock_creative_repo, mock_registry) with standard patches."""
-    from contextlib import contextmanager
-
-    @contextmanager
-    def ctx(mock_format_spec_arg=None):
-        async def mock_list_all_formats(tenant_id=None):
-            return [mock_format_spec_arg] if mock_format_spec_arg else []
-
-        async def mock_get_format(agent_url, format_id):
-            return mock_format_spec_arg
-
-        mock_registry = Mock()
-        mock_registry.list_all_formats = mock_list_all_formats
-        mock_registry.get_format = mock_get_format
-
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        with (
-            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
-            patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry),
-            patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._sync.log_tool_activity"),
-            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_wf_uow,
-        ):
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-            mock_uow_cls.return_value.__exit__.return_value = None
-            yield mock_creative_repo, mock_registry
-
-    return ctx
+    return _make_creative_uow_raw()
 
 
 # ===========================================================================
@@ -666,19 +604,7 @@ class TestValidationEdgeCases:
             creative_id="c1",
             name="Test Banner",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-            assets={
-                "image": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "image",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/img.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            },
+            assets=make_image_assets("image", "https://example.com/img.png"),
             tags=["automotive", "display"],
             variants=[],
         )

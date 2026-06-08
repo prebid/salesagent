@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
 
 
 class TestSyncCreativesCreativeIdsFilter:
@@ -244,19 +245,7 @@ class TestUpdateMediaBuyCreativeAssignments:
                     "creative_id": "new_c1",
                     "name": "New Creative",
                     "format_id": {"agent_url": "https://example.com/", "id": "display_300x250"},
-                    "assets": {
-                        "banner": [
-                            {
-                                "asset_type": "image",
-                                "asset_id": "banner",
-                                "item_type": "individual",
-                                "required": True,
-                                "url": "https://example.com/banner.png",
-                                "width": 300,
-                                "height": 250,
-                            }
-                        ]
-                    },
+                    "assets": dict(DEFAULT_IMAGE_ASSETS),
                     "weight": 75,
                     "placement_ids": ["pl_1"],
                 },

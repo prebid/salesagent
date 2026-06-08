@@ -6,18 +6,9 @@ Verifies URL extraction priority: top-level url > named asset keys
 Beads: salesagent-dmn
 """
 
-from adcp.types import CreativeAsset, FormatId
-
 from src.core.tools.creatives import _extract_url_from_assets
-
-_FMT = FormatId(id="banner", agent_url="http://agent.test")
-
-
-def _make_creative(**extra: object) -> CreativeAsset:
-    """Build a minimal CreativeAsset with optional extra fields."""
-    defaults: dict = {"creative_id": "test", "name": "test", "format_id": _FMT, "assets": {}}
-    defaults.update(extra)
-    return CreativeAsset(**defaults)
+from tests.factories.creative_asset import make_creative_asset_minimal as _make_creative
+from tests.factories.creative_asset import make_image_assets
 
 
 class TestTopLevelUrl:
@@ -31,19 +22,7 @@ class TestTopLevelUrl:
     def test_top_level_url_beats_assets(self):
         creative = _make_creative(
             url="https://top.com/ad.png",
-            assets={
-                "main": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "main",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://asset.com/ad.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            },
+            assets=make_image_assets("main", "https://asset.com/ad.png"),
         )
         assert _extract_url_from_assets(creative) == "https://top.com/ad.png"
 
@@ -52,84 +31,22 @@ class TestPriorityKeys:
     """Named asset keys are tried in priority order."""
 
     def test_main_key(self):
-        creative = _make_creative(
-            assets={
-                "main": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "main",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/main.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            }
-        )
+        creative = _make_creative(assets=make_image_assets("main", "https://example.com/main.png"))
         assert _extract_url_from_assets(creative) == "https://example.com/main.png"
 
     def test_image_key(self):
-        creative = _make_creative(
-            assets={
-                "image": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "image",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/image.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            }
-        )
+        creative = _make_creative(assets=make_image_assets("image", "https://example.com/image.png"))
         assert _extract_url_from_assets(creative) == "https://example.com/image.png"
 
     def test_video_key(self):
-        creative = _make_creative(
-            assets={
-                "video": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "video",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/video.mp4",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            }
-        )
+        creative = _make_creative(assets=make_image_assets("video", "https://example.com/video.mp4"))
         assert _extract_url_from_assets(creative) == "https://example.com/video.mp4"
 
     def test_main_beats_image(self):
         creative = _make_creative(
             assets={
-                "image": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "image",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/image.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ],
-                "main": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "main",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/main.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ],
+                **make_image_assets("image", "https://example.com/image.png"),
+                **make_image_assets("main", "https://example.com/main.png"),
             },
         )
         assert _extract_url_from_assets(creative) == "https://example.com/main.png"
@@ -139,21 +56,7 @@ class TestFallback:
     """Falls back to first available asset URL."""
 
     def test_unknown_key_fallback(self):
-        creative = _make_creative(
-            assets={
-                "custom_banner": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "custom_banner",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/banner.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            }
-        )
+        creative = _make_creative(assets=make_image_assets("custom_banner", "https://example.com/banner.png"))
         assert _extract_url_from_assets(creative) == "https://example.com/banner.png"
 
 

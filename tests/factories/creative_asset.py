@@ -82,6 +82,22 @@ def make_text_assets(asset_id: str, content: str) -> dict:
     }
 
 
+def make_creative_asset_minimal(**extra: object) -> CreativeAsset:
+    """Build a minimal CreativeAsset with optional extra fields.
+
+    Shared helper for unit tests that need a bare-bones CreativeAsset
+    (e.g. test_build_creative_data, test_extract_url_from_assets).
+    """
+    defaults: dict = {
+        "creative_id": "test",
+        "name": "test",
+        "format_id": FormatId(id="banner", agent_url="http://agent.test"),
+        "assets": {},
+    }
+    defaults.update(extra)
+    return CreativeAsset(**defaults)
+
+
 class CreativeAssetFactory(factory.Factory):
     """Factory for AdCP CreativeAsset Pydantic models.
 

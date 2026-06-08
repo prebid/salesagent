@@ -74,6 +74,7 @@ from src.core.schemas import (
     SyncCreativesResponse,
 )
 from tests.factories import PrincipalFactory
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS, make_image_assets
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -116,8 +117,6 @@ def _make_creative(**overrides) -> Creative:
 
 
 def _make_creative_asset(**overrides) -> CreativeAsset:
-    from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
-
     defaults = {
         "creative_id": "c_test_1",
         "name": "Test Banner",
@@ -927,19 +926,7 @@ class TestCreativeValidation:
                 creative_id="c_test_1",
                 name="No Format",
                 format_id=None,
-                assets={
-                    "banner": [
-                        {
-                            "asset_type": "image",
-                            "asset_id": "banner",
-                            "item_type": "individual",
-                            "required": True,
-                            "url": "https://example.com/banner.png",
-                            "width": 300,
-                            "height": 250,
-                        }
-                    ]
-                },
+                assets=dict(DEFAULT_IMAGE_ASSETS),
             )
 
     def test_adapter_format_skips_external_validation(self):
@@ -1103,21 +1090,7 @@ class TestBuildCreativeData:
         """
         from src.core.tools.creatives._assets import _build_creative_data
 
-        creative = _make_creative_asset(
-            assets={
-                "main": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "main",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/main.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            }
-        )
+        creative = _make_creative_asset(assets=make_image_assets("main", "https://example.com/main.png"))
         data = _build_creative_data(creative, None)
         assert "assets" in data
         assert "main" in data["assets"]
@@ -2135,19 +2108,7 @@ class TestGenerativeCreativeBuild:
 
             # No message/brief/prompt in assets; provide inputs instead
             creative = _make_creative_asset(
-                assets={
-                    "image": [
-                        {
-                            "asset_type": "image",
-                            "asset_id": "image",
-                            "item_type": "individual",
-                            "required": True,
-                            "url": "https://example.com/img.png",
-                            "width": 300,
-                            "height": 250,
-                        }
-                    ]
-                },
+                assets=make_image_assets("image", "https://example.com/img.png"),
             )
             # Set inputs with context_description
             creative.inputs = [{"context_description": "Create a display ad for running shoes"}]
