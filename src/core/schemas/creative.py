@@ -477,6 +477,10 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     # SDK 5.7 removed these from the parent — declare locally
     dry_run: bool | None = None
 
+    # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
+    # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.
+    creatives: list[SyncCreativeResult] = []  # type: ignore[assignment]
+
     def model_dump(self, **kwargs):
         """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
         result = super().model_dump(**kwargs)
