@@ -253,9 +253,8 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
     return asgn.assignment_id
 
 
-# Patch where it's used (the blueprint's binding), not where it's defined: the blueprint
-# does `from ...media_buy_create import push_creative_to_existing_buy` at module load, so
-# patching the source module never intercepts the call.
+# Patch at the use site: creatives.py binds this name via `from ... import`, so the
+# definition module (src.core.tools.media_buy_create) is not where the call resolves.
 _PUSH_PATCH = "src.admin.blueprints.creatives.push_creative_to_existing_buy"
 
 
