@@ -1182,6 +1182,16 @@ def then_response_should_succeed(ctx: dict) -> None:
     assert "response" in ctx, "No response recorded in ctx"
 
 
+@then("the budget validation should pass")
+def then_budget_validation_passes(ctx: dict) -> None:
+    """Assert budget validation passed -- no error, response has media_buy_id."""
+    assert "error" not in ctx, f"Expected budget validation to pass but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found (budget validation may have failed silently)"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, "Expected media_buy_id in response -- budget validation passed but no media buy created"
+
+
 @then(parsers.parse('the response should include a "{field}"'))
 def then_response_includes_field(ctx: dict, field: str) -> None:
     """Assert the response includes the specified field."""

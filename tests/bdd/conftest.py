@@ -537,8 +537,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-003-ext-a-unknown": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
             "T-UC-003-ext-b": "production returns ValueError, spec expects PRODUCT_NOT_FOUND",
             "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
-            "T-UC-003-ext-d": "production returns invalid_budget, spec expects BUDGET_TOO_LOW",
-            "T-UC-003-ext-d-negative": "production returns invalid_budget, spec expects BUDGET_TOO_LOW",
+            # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             "T-UC-003-ext-h": "production returns missing_package_id, spec expects INVALID_REQUEST",
             # Production doesn't validate these cases at all
             "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
@@ -2610,7 +2609,18 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["dispatch_mode"] = "create"
                 yield
         else:
-            pytest.xfail("UC-002 harness not yet wired for non-account scenarios")
+            # Non-account scenarios (budget validation, etc.) — full create path
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with MediaBuyCreateEnv() as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                yield
 
     elif uc == "UC-003":
         marker_names = {m.name for m in request.node.iter_markers()}
@@ -2762,6 +2772,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-003":
+        from tests.harness.media_buy_update import MediaBuyUpdateEnv
+
+        with MediaBuyUpdateEnv() as env:
+            ctx["env"] = env
+            yield
     elif uc == "UC-GET-PRODUCTS":
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv

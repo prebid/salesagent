@@ -1094,8 +1094,9 @@ def _update_media_buy_impl(
                     budget_currency = str(req.budget.currency) if req.budget.currency else "USD"
 
                 if total_budget <= 0:
-                    raise AdCPValidationError(
+                    raise AdCPBudgetTooLowError(
                         f"Invalid budget: {total_budget}. Budget must be positive.",
+                        suggestion="Set the budget to a positive amount.",
                         field="budget",
                         context=req.context,
                     )

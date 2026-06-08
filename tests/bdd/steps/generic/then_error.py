@@ -51,8 +51,8 @@ def _get_error_message(error: object) -> str:
     return str(error)
 
 
-def _get_error_dict(error: Exception) -> dict:
-    """Convert exception to dict for field-presence checks."""
+def _get_error_dict(error: object) -> dict:
+    """Convert exception or Error model to dict for field-presence checks."""
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
@@ -62,6 +62,20 @@ def _get_error_dict(error: Exception) -> dict:
         d["code"] = d.get("error_code", "")
         if error.details and "suggestion" in error.details:
             d["suggestion"] = error.details["suggestion"]
+        return d
+    # adcp.types.Error model (from partial success response.errors) — has code,
+    # message, suggestion, recovery, field as direct attributes.
+    if hasattr(error, "code") and not isinstance(error, Exception):
+        d: dict = {"code": error.code, "message": getattr(error, "message", "")}
+        suggestion = getattr(error, "suggestion", None)
+        if suggestion:
+            d["suggestion"] = suggestion
+        recovery = getattr(error, "recovery", None)
+        if recovery is not None:
+            d["recovery"] = recovery.value if hasattr(recovery, "value") else str(recovery)
+        field = getattr(error, "field", None)
+        if field:
+            d["field"] = field
         return d
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 

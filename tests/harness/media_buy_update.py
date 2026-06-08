@@ -58,6 +58,29 @@ _WRAPPER_UNSUPPORTED_FIELDS = (
 )
 
 
+class _SimpleClock:
+    """Minimal clock for BDD date token resolution.
+
+    Provides future_iso/past_iso/now_iso used by _resolve_date_token in
+    given_media_buy.py. No-op for scenarios that don't use date tokens.
+    """
+
+    def now_iso(self) -> str:
+        from datetime import UTC, datetime
+
+        return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    def future_iso(self, days: int) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        return (datetime.now(UTC) + timedelta(days=days)).isoformat().replace("+00:00", "Z")
+
+    def past_iso(self, days: int) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        return (datetime.now(UTC) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+
+
 class MediaBuyUpdateEnv(BaseTestEnv):
     """Unit test environment for _update_media_buy_impl.
 
@@ -89,6 +112,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._uow_instance: MagicMock | None = None
+        self.clock = _SimpleClock()
 
     def _configure_mocks(self) -> None:
         mock_session = MagicMock()
@@ -176,6 +200,20 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         mock_cm.__exit__ = MagicMock(return_value=False)
         self.mock["db"].return_value = mock_cm
 
+    def setup_default_data(self) -> tuple[Any, Any]:
+        """Return mock tenant + principal for BDD Background steps.
+
+        Unit env has no real DB. Returns lightweight mocks that satisfy
+        the ctx["tenant"] / ctx["principal"] expectations from Background steps.
+        """
+        tenant = MagicMock()
+        tenant.tenant_id = self._tenant_id
+        tenant.name = "Test Tenant"
+        principal = MagicMock()
+        principal.principal_id = self._principal_id
+        principal.name = "Test Principal"
+        return tenant, principal
+
     # -- Fluent setup helpers -----------------------------------------------
 
     def set_media_buy(
@@ -224,9 +262,31 @@ class MediaBuyUpdateEnv(BaseTestEnv):
     # -- Impl call ----------------------------------------------------------
 
     def call_impl(self, media_buy_id: str = "mb-001", **kwargs: Any) -> Any:
-        """Build an UpdateMediaBuyRequest and call _update_media_buy_impl."""
+        """Build an UpdateMediaBuyRequest and call _update_media_buy_impl.
+
+        Accepts either ``req=<UpdateMediaBuyRequest>`` for pre-built requests
+        (used by BDD dispatch_request) or flat kwargs to build a new request.
+        """
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id=media_buy_id, **kwargs)
-        return _update_media_buy_impl(req=req, identity=self.identity)
+        req = kwargs.pop("req", None)
+        if req is None:
+            identity = kwargs.pop("identity", self.identity)
+            req = UpdateMediaBuyRequest(media_buy_id=media_buy_id, **kwargs)
+        else:
+            identity = kwargs.pop("identity", self.identity)
+        return _update_media_buy_impl(req=req, identity=identity)
+
+    def call_via(self, transport: Any, **kwargs: Any) -> Any:
+        """Route all transports through call_impl for unit env.
+
+        Unit env has no real transport wrappers. All 4 transports exercise
+        the same _update_media_buy_impl code path via call_impl. This is
+        correct for testing validation logic that runs before any
+        transport-specific code.
+        """
+        from tests.harness.dispatchers import ImplDispatcher
+
+        kwargs.setdefault("identity", self.identity)
+        return ImplDispatcher().dispatch(self, **kwargs)
