@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
+from src.core.validation_helpers import package_field_path
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
@@ -325,7 +326,7 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
     if violations:
         raise AdCPValidationError(
             f"Targeting validation failed: {'; '.join(violations)}",
-            field="packages[].targeting_overlay.property_list",
+            field=package_field_path("targeting_overlay.property_list"),
             details={"violations": violations},
         )
 

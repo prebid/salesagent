@@ -1,9 +1,31 @@
 """Unit tests for validation error handling in create_media_buy."""
 
-from pydantic import ValidationError
+import pytest
+from pydantic import BaseModel, ValidationError
 
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import first_validation_error_field, format_validation_error
+
+
+def test_first_validation_error_field_uses_bracket_notation():
+    """first_validation_error_field renders list indices as [i] (bracket form).
+
+    The boundary-derived field path must match the hand-rolled field= strings
+    raised inside the _impl layer (e.g. packages[].budget), so the wire
+    envelope's `field` attribute has one consistent shape regardless of where
+    the validation error originated.
+    """
+
+    class _Pkg(BaseModel):
+        budget: float
+
+    class _Req(BaseModel):
+        packages: list[_Pkg]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _Req(packages=[{"budget": "not-a-number"}])
+
+    assert first_validation_error_field(exc_info.value) == "packages[0].budget"
 
 
 def test_brand_target_audience_must_be_string():

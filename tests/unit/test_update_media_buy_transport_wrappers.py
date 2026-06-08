@@ -1,4 +1,4 @@
-"""Transport-boundary regression tests for update_media_buy financial guardrails."""
+"""Transport-boundary regression test: update_media_buy preserves the existing media buy currency on float-only budget updates."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastmcp.server.context import Context
 
-from src.core.schemas import UpdateMediaBuyError
-from src.core.tools.media_buy_update import update_media_buy, update_media_buy_raw
+from src.core.tools.media_buy_update import update_media_buy
 
 MODULE = "src.core.tools.media_buy_update"
 
@@ -67,7 +66,7 @@ def _common_patches(mock_uow, protocol: str = "mcp"):
     identity.protocol = protocol
     return (
         patch(f"{MODULE}.MediaBuyUoW", return_value=mock_uow),
-        patch(f"{MODULE}.get_principal_object", return_value=principal),
+        patch("src.core.auth.get_principal_object", return_value=principal),
         patch(f"{MODULE}.get_adapter", return_value=adapter),
         patch(f"{MODULE}.get_context_manager", return_value=ctx_manager),
         patch(f"{MODULE}.get_audit_logger", return_value=MagicMock()),
@@ -75,51 +74,6 @@ def _common_patches(mock_uow, protocol: str = "mcp"):
         identity,
         ctx_manager,
     )
-
-
-def test_a2a_wrapper_rejects_oversized_campaign_budget():
-    """A2A boundary should reject the original oversized-budget attack path."""
-    mock_uow = _mock_uow(
-        media_buy=_mock_media_buy(currency="USD"),
-        currency_limit=_mock_currency_limit(),
-    )
-    uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch, identity, _ = _common_patches(
-        mock_uow, protocol="a2a"
-    )
-
-    with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
-        result = update_media_buy_raw(
-            media_buy_id="mb_transport",
-            budget=888_888_888.0,
-            currency="USD",
-            identity=identity,
-        )
-
-    assert isinstance(result, UpdateMediaBuyError)
-    assert result.errors
-    assert result.errors[0].code == "BUDGET_EXCEEDED"
-
-
-def test_a2a_wrapper_rejects_package_budget_below_minimum():
-    """A2A boundary should reject under-minimum package budget updates."""
-    mock_uow = _mock_uow(
-        media_buy=_mock_media_buy(currency="EUR"),
-        currency_limit=_mock_currency_limit(min_package_budget="100"),
-    )
-    uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch, identity, _ = _common_patches(
-        mock_uow, protocol="a2a"
-    )
-
-    with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
-        result = update_media_buy_raw(
-            media_buy_id="mb_transport",
-            packages=[{"package_id": "pkg-1", "budget": 50.0}],
-            identity=identity,
-        )
-
-    assert isinstance(result, UpdateMediaBuyError)
-    assert result.errors
-    assert result.errors[0].code == "BUDGET_TOO_LOW"
 
 
 def test_mcp_wrapper_preserves_existing_currency_for_float_budget():

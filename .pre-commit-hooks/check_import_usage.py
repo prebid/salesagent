@@ -45,9 +45,31 @@ class ImportCollector(ast.NodeVisitor):
         self.imports.add(node.name)
         self.generic_visit(node)
 
+    def _add_params(self, node):
+        """Function parameters are locally-defined names, not imports.
+
+        Without this, a parameter used as a callable (dependency injection /
+        factory pattern, e.g. ``def f(exc_type): raise exc_type(...)``) is
+        falsely flagged as a missing import.
+        """
+        args = node.args
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            self.imports.add(arg.arg)
+        if args.vararg:
+            self.imports.add(args.vararg.arg)
+        if args.kwarg:
+            self.imports.add(args.kwarg.arg)
+
     def visit_FunctionDef(self, node):
-        """Track function definitions (they don't need imports)."""
+        """Track function definitions and their parameters (they don't need imports)."""
         self.imports.add(node.name)
+        self._add_params(node)
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node):
+        """Track async function definitions and their parameters."""
+        self.imports.add(node.name)
+        self._add_params(node)
         self.generic_visit(node)
 
     def visit_Assign(self, node):

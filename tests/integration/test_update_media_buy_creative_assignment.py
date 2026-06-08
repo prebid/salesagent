@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.exceptions import AdCPCreativeRejectedError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -112,7 +113,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
     with (
         patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -293,7 +293,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
 
     with (
         patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -422,7 +421,6 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
 
     with (
         patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -437,7 +435,7 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
         mock_ctx_manager_inst.create_workflow_step.return_value = MagicMock(step_id="step_789")
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
-        # Call update_media_buy with non-existent creative IDs
+        # Call update_media_buy with non-existent creative IDs — should raise.
         req = UpdateMediaBuyRequest(
             media_buy_id="test_buy_789",
             packages=[
@@ -447,14 +445,8 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, identity=identity)
-
-    # Verify error response
-    assert isinstance(response, UpdateMediaBuyResponse)
-    assert response.errors is not None
-    assert len(response.errors) > 0
-    assert response.errors[0].code == "CREATIVE_REJECTED"
-    assert "nonexistent_creative" in response.errors[0].message
+        with pytest.raises(AdCPCreativeRejectedError, match="nonexistent_creative"):
+            _update_media_buy_impl(req=req, identity=identity)
 
 
 @pytest.mark.requires_db
@@ -559,7 +551,6 @@ def test_creative_assignments_with_weights(integration_db):
     )
 
     with (
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -720,7 +711,6 @@ def test_creative_assignments_replaces_all(integration_db):
     )
 
     with (
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):

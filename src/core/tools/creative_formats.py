@@ -4,6 +4,8 @@ This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
 """
 
+import asyncio
+import concurrent.futures
 import logging
 import time
 from collections.abc import Sequence
@@ -31,7 +33,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPError, AdCPServiceUnavailableError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -54,8 +56,10 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
 
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
+from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error
 
 
@@ -159,39 +163,25 @@ def _list_creative_formats_impl(
 
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
-    tenant = identity.tenant if identity else None
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(identity, context=req.context)
 
     # Get formats from all registered creative agents via registry
-    import asyncio
-
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
 
-    # Decision: docs/design/error-propagation-in-format-discovery.md
-    # Registry creation failure → return empty formats + errors (FD-ERR-03)
     try:
         registry = get_creative_agent_registry()
+    except AdCPError:
+        raise
     except Exception as e:
-        from adcp.types import Error as AdCPResponseError
-
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
-        return ListCreativeFormatsResponse(
-            formats=[],
-            errors=[
-                AdCPResponseError(
-                    code="SERVICE_UNAVAILABLE",
-                    message=f"Creative agent registry initialization failed: {e}",
-                )
-            ],
+        raise AdCPServiceUnavailableError(
+            f"Creative agent registry initialization failed: {e}",
             context=req.context,
-        )
+        ) from e
 
     # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
     try:
         loop = asyncio.get_running_loop()
-        import concurrent.futures
-
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(
                 lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
@@ -566,7 +556,5 @@ def list_creative_formats_raw(
         ListCreativeFormatsResponse with all available formats
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return _list_creative_formats_impl(req, identity)

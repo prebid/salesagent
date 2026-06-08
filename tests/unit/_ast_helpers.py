@@ -9,6 +9,7 @@ quietly break a sibling guard.
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 # Repo root anchored to this file's location — guards work regardless of CWD.
@@ -29,6 +30,44 @@ def safe_parse(filepath: Path) -> ast.Module | None:
         return ast.parse(filepath.read_text(), filename=str(filepath))
     except SyntaxError:
         return None
+
+
+def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]:
+    """Yield ``(parsed_tree, repo_relative_path)`` for every parseable ``.py`` under ``scan_dirs``.
+
+    Skips ``__pycache__`` and files with syntax errors. Shared by the structural
+    guards so the file-walk boilerplate lives in one place (DRY) rather than being
+    re-copied into each guard's ``_find_*`` function.
+    """
+    for scan_dir in scan_dirs:
+        if not scan_dir.exists():
+            continue
+        for py_file in sorted(scan_dir.rglob("*.py")):
+            if "__pycache__" in str(py_file):
+                continue
+            tree = safe_parse(py_file)
+            if tree is not None:
+                yield tree, rel(py_file)
+
+
+def walk_with_enclosing_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
+    """Yield ``(node, enclosing_function_name)`` for every node in ``tree``.
+
+    The enclosing name is the nearest ancestor ``FunctionDef``/``AsyncFunctionDef``
+    name, or ``"<module>"`` at module scope. Structural guards that report
+    violations keyed by ``(file, function)`` share this walk instead of each
+    re-implementing the same ``visit(node, func)`` recursion (DRY) — a guard then
+    becomes a predicate over the yielded nodes rather than a copy of the traversal.
+    """
+
+    def visit(node: ast.AST, func_name: str) -> Iterator[tuple[ast.AST, str]]:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            func_name = node.name
+        yield node, func_name
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child, func_name)
+
+    yield from visit(tree, "<module>")
 
 
 def collect_error_aliases(tree: ast.AST) -> set[str]:

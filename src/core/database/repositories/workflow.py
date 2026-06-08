@@ -60,6 +60,21 @@ class WorkflowRepository:
             )
         ).first()
 
+    def get_by_step_id_or_raise(self, step_id: str) -> WorkflowStep:
+        """Get a workflow step by ID or raise ``AdCPTaskNotFoundError``.
+
+        Collapses the task fetch-and-raise guard shared by get_task/complete_task.
+        No ``context`` parameter by design: those tools carry the FastMCP transport
+        ``Context``, not an AdCP ``ContextObject``, so the task not-found envelope
+        stays context-less rather than echoing a transport object into a repository.
+        """
+        step = self.get_by_step_id(step_id)
+        if step is None:
+            from src.core.exceptions import AdCPTaskNotFoundError
+
+            raise AdCPTaskNotFoundError(f"Task {step_id} not found")
+        return step
+
     def list_by_tenant(
         self,
         *,
@@ -156,15 +171,12 @@ class WorkflowRepository:
         ).first()
 
     def get_step_by_id(self, step_id: str) -> WorkflowStep | None:
-        """Get a workflow step by its primary key within the tenant."""
-        return self._session.scalars(
-            select(WorkflowStep)
-            .join(DBContext)
-            .where(
-                WorkflowStep.step_id == step_id,
-                DBContext.tenant_id == self._tenant_id,
-            )
-        ).first()
+        """Alias of :meth:`get_by_step_id` (identical tenant-scoped lookup).
+
+        Retained for the admin/service callers that use this name; delegates so
+        the query lives in exactly one place.
+        """
+        return self.get_by_step_id(step_id)
 
     def get_mappings_for_step(self, step_id: str) -> list[ObjectWorkflowMapping]:
         """Get all object mappings for a workflow step within the tenant."""

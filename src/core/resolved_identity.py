@@ -176,7 +176,6 @@ def resolve_identity(
                 raise AdCPAuthenticationError(
                     f"Authentication token is invalid for tenant '{tenant_id or 'any'}'. "
                     f"The token may be expired, revoked, or associated with a different tenant.",
-                    details={"error_code": "INVALID_AUTH_TOKEN"},
                 )
             # For discovery endpoints, continue without auth
         elif not tenant_context and token_tenant:

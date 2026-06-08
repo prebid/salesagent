@@ -138,7 +138,7 @@ class TestAuthenticationRequirements:
         )
         # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _verify_principal(media_buy_id="test_buy", context=no_auth_identity, repo=MagicMock())
+            _verify_principal(media_buy_id="test_buy", identity=no_auth_identity, repo=MagicMock())
 
         error_msg = str(exc_info.value)
         assert "Authentication required" in error_msg
@@ -158,7 +158,7 @@ class TestAuthenticationRequirements:
 
         # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _verify_principal(media_buy_id="test_buy", context=invalid_identity, repo=MagicMock())
+            _verify_principal(media_buy_id="test_buy", identity=invalid_identity, repo=MagicMock())
 
         assert "Authentication required" in str(exc_info.value)
 
@@ -214,15 +214,19 @@ class TestAuthenticationRequirements:
 
         from src.core.tools.signals import _activate_signal_impl
 
-        # Call without identity (no auth) — _impl raises an error before proceeding.
-        # May raise RuntimeError (no tenant context), AdCPAuthenticationError, or AdCPValidationError.
+        # Call without identity (no auth) — require_identity rejects before proceeding.
         with pytest.raises((AdCPAuthenticationError, AdCPValidationError, RuntimeError)) as exc_info:
             asyncio.run(
                 _activate_signal_impl(signal_agent_segment_id="test_signal", media_buy_id="test_buy", identity=None)
             )
 
         error_msg = str(exc_info.value).lower()
-        assert "authentication required" in error_msg or "context" in error_msg or "tenant" in error_msg
+        assert (
+            "identity is required" in error_msg
+            or "authentication required" in error_msg
+            or "context" in error_msg
+            or "tenant" in error_msg
+        )
 
 
 class TestAuthenticationWithMockedContext:
@@ -283,7 +287,7 @@ class TestAuthenticationErrorMessages:
         )
         # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _verify_principal(media_buy_id="test", context=no_auth, repo=MagicMock())
+            _verify_principal(media_buy_id="test", identity=no_auth, repo=MagicMock())
 
         error_msg = str(exc_info.value)
         # Should explain what's missing

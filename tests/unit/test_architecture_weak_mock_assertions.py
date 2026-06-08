@@ -1,15 +1,18 @@
 """Guard: Tests must not use weak mock assertions.
 
+Both ``assert_called()`` and ``assert_called_once()`` are matched, since
+neither verifies the arguments a mock was called with.
+
 Two anti-patterns are guarded:
 
-1. **Split assertion** (assert_called_once + call_args):
+1. **Split assertion** (bare assert + call_args):
 
     mock.assert_called_once()               # only checks call count
     assert mock.call_args.kwargs["x"] == y  # separately checks args
 
    Weaker than the atomic form: mock.assert_called_once_with(x=y)
 
-2. **Bare assertion** (assert_called_once without ANY arg verification):
+2. **Bare assertion** (bare assert without ANY arg verification):
 
     mock.assert_called_once()               # only checks call count
     # no call_args check at all — args completely unverified
@@ -42,6 +45,7 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_a2a_parameter_mapping.py", "test_update_media_buy_uses_packages_parameter"),
     ("tests/unit/test_a2a_tenant_detection_order.py", "test_a2a_delegates_to_resolve_identity"),
     ("tests/unit/test_a2a_testing_context_extraction.py", "test_dry_run_header_passed_to_resolve_identity"),
+    ("tests/unit/test_auth_bearer_header.py", "test_x_adcp_auth_takes_precedence_over_authorization_bearer"),
     ("tests/unit/test_auth_context_middleware_population.py", "test_resolve_auth_passes_extracted_token"),
     ("tests/unit/test_authorized_properties_behavioral.py", "test_audit_called_on_failure"),
     ("tests/unit/test_authorized_properties_behavioral.py", "test_audit_called_on_success"),
@@ -56,9 +60,11 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_creative_coverage_gaps.py", "test_slack_notification_for_rejected_creative"),
     ("tests/unit/test_creative_repository.py", "test_creates_and_flushes"),
     ("tests/unit/test_creative_repository.py", "test_creates_assignment"),
+    ("tests/unit/test_delivery.py", "test_adapter_failure_audit_logged"),
     ("tests/unit/test_external_domain_routing.py", "test_index_route_external_domain_with_tenant"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_excludes_weight_when_default"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_includes_weight_when_non_default"),
+    ("tests/unit/test_gam_creatives_manager.py", "test_line_item_matching_no_match_logs_warning"),
     ("tests/unit/test_gam_service_account_auth.py", "test_service_account_credentials_creation"),
     ("tests/unit/test_get_media_buys.py", "test_snapshot_requested_calls_adapter"),
     ("tests/unit/test_mcp_auth_middleware.py", "test_auth_required_tool_stores_identity"),
@@ -74,6 +80,7 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_rest_depends_auth.py", "test_passes_auth_token_to_resolve_identity"),
     ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
+    ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
 }
 
 
@@ -97,12 +104,12 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
         has_call_args = False
 
         for child in ast.walk(node):
-            # Bare assert_called_once() — exactly zero arguments
+            # Bare assert_called()/assert_called_once() — exactly zero arguments
             if isinstance(child, ast.Call):
                 func = child.func
                 if (
                     isinstance(func, ast.Attribute)
-                    and func.attr == "assert_called_once"
+                    and func.attr in {"assert_called", "assert_called_once"}
                     and len(child.args) == 0
                     and len(child.keywords) == 0
                 ):
@@ -197,6 +204,7 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_a2a_auth_optional.py", "test_list_authorized_properties_without_auth"),
     ("tests/unit/test_a2a_auth_optional.py", "test_list_creative_formats_with_auth"),
     ("tests/unit/test_a2a_auth_optional.py", "test_list_creative_formats_without_auth"),
+    ("tests/unit/test_auth_setup_mode.py", "test_disable_setup_mode_succeeds_when_sso_enabled"),
     ("tests/unit/test_creative.py", "test_a2a_slack_notification_require_human"),
     ("tests/unit/test_creative.py", "test_audit_log_sync_succeeds_without_principal_in_db"),
     ("tests/unit/test_creative_repository.py", "test_flushes_session"),
@@ -214,6 +222,8 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_products_transport_wrappers.py", "test_rest_applies_version_compat"),
     ("tests/unit/test_review_agent.py", "test_returns_approval"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_db_queried_only_once"),
+    ("tests/unit/test_update_media_buy_behavioral.py", "test_positive_budget_persists_to_db"),
+    ("tests/unit/test_update_media_buy_behavioral.py", "test_valid_date_range_persists_to_db"),
 }
 
 
@@ -239,12 +249,12 @@ def _find_bare_assertions(file_path: str) -> list[tuple[str, str, int]]:
         has_call_args = False
 
         for child in ast.walk(node):
-            # Bare assert_called_once() — exactly zero arguments
+            # Bare assert_called()/assert_called_once() — exactly zero arguments
             if isinstance(child, ast.Call):
                 func = child.func
                 if (
                     isinstance(func, ast.Attribute)
-                    and func.attr == "assert_called_once"
+                    and func.attr in {"assert_called", "assert_called_once"}
                     and len(child.args) == 0
                     and len(child.keywords) == 0
                 ):
@@ -254,7 +264,7 @@ def _find_bare_assertions(file_path: str) -> list[tuple[str, str, int]]:
             if isinstance(child, ast.Attribute) and child.attr == "call_args":
                 has_call_args = True
 
-        # Only flag if bare assert_called_once() WITHOUT call_args
+        # Only flag if bare assertion WITHOUT call_args
         # (with call_args is the split pattern, handled by the other guard)
         if has_bare_called_once and not has_call_args:
             violations.append((file_path, node.name, node.lineno))

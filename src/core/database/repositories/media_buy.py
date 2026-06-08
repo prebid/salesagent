@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage
+
+if TYPE_CHECKING:
+    from adcp.types import ContextObject
 
 
 class MediaBuyRepository:
@@ -59,6 +62,24 @@ class MediaBuyRepository:
                 MediaBuy.media_buy_id == media_buy_id,
             )
         ).first()
+
+    def get_by_id_or_raise(
+        self, media_buy_id: str, *, context: ContextObject | dict[str, Any] | None = None
+    ) -> MediaBuy:
+        """Get a media buy by ID or raise ``AdCPMediaBuyNotFoundError``.
+
+        Collapses the "look up the media buy, raise the typed not-found if it
+        does not exist" guard duplicated across the update tool into one place.
+        ``context`` is echoed into the error envelope so buyer agents can
+        correlate the failure. Coexists with ``get_by_id`` — callers that
+        deliberately tolerate ``None`` keep using that.
+        """
+        media_buy = self.get_by_id(media_buy_id)
+        if media_buy is None:
+            from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+            raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found", context=context)
+        return media_buy
 
     def find_by_idempotency_key(self, idempotency_key: str, principal_id: str) -> MediaBuy | None:
         """Find an existing media buy by idempotency_key within (tenant, principal).
@@ -149,6 +170,24 @@ class MediaBuyRepository:
                 MediaPackage.package_id == package_id,
             )
         ).first()
+
+    def get_package_or_raise(
+        self, media_buy_id: str, package_id: str, *, context: ContextObject | dict[str, Any] | None = None
+    ) -> MediaPackage:
+        """Get a package or raise ``AdCPPackageNotFoundError``.
+
+        Collapses the package fetch-and-raise guard duplicated across the update
+        tool. ``context`` is echoed into the error envelope. Coexists with
+        ``get_package`` for callers that tolerate ``None``.
+        """
+        package = self.get_package(media_buy_id, package_id)
+        if package is None:
+            from src.core.exceptions import AdCPPackageNotFoundError
+
+            raise AdCPPackageNotFoundError(
+                f"Package '{package_id}' not found for media buy '{media_buy_id}'", context=context
+            )
+        return package
 
     def get_packages_for_ids(self, media_buy_ids: list[str]) -> dict[str, list[MediaPackage]]:
         """Get packages for multiple media buys, grouped by media_buy_id.
