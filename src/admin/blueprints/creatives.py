@@ -15,8 +15,6 @@ from adcp.types import (
     ContextObject,
     CreativeAction,
     McpWebhookPayload,
-    SyncCreativeResult,
-    SyncCreativesSuccessResponse,
 )
 from adcp.webhooks import GeneratedTaskStatus
 
@@ -24,6 +22,7 @@ from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -182,7 +181,7 @@ async def _call_webhook_for_creative_status(
             if context_data and isinstance(context_data, dict):
                 context_obj = ContextObject.model_construct(**context_data)
 
-            complete_result = SyncCreativesSuccessResponse(creatives=creatives, dry_run=False, context=context_obj)  # type: ignore[operator]
+            complete_result = SyncCreativesResponse(creatives=creatives, dry_run=False, context=context_obj)
 
             # build push notification config from step request data
             # this is because we don't store push notification config in the database when creating the creative

@@ -10,6 +10,7 @@ from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
+from adcp.types import ContextObject as LibraryContextObject
 from adcp.types import CreativeStatus
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
@@ -381,7 +382,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         None, description="Per-package assignment errors {package_id: error_message}"
     )
     platform_id: str | None = Field(None, description="Platform-assigned creative identifier")
-    status: str | None = Field(None, description="Internal creative status")
+    status: str | None = Field(None, exclude=True, description="Internal creative status")
 
     # Internal-only fields (not in AdCP spec)
     review_feedback: str | None = Field(
@@ -395,21 +396,14 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
 
     def model_dump(self, **kwargs):
-        """Override to exclude non-AdCP fields for spec compliance.
+        """Override to strip empty lists for AdCP spec compliance.
 
-        The AdCP spec (sync-creatives-response.json) only allows specific fields
-        with "additionalProperties": false. We exclude internal fields:
-        - status: Internal approval status tracking
-        - review_feedback: Internal review process feedback
-
-        Also excludes None values and empty lists to match AdCP spec where optional
-        fields should be omitted rather than set to null/empty.
+        Internal fields (status, review_feedback) are excluded via Field(exclude=True).
+        This override handles empty-list stripping: changes, errors, warnings are
+        optional in the AdCP spec, so omit them when empty rather than serializing [].
         """
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Exclude internal fields that aren't in AdCP spec
-            exclude.update({"status", "review_feedback"})
-            kwargs["exclude"] = exclude
+        exclude = set(kwargs.get("exclude") or ())
+        kwargs["exclude"] = exclude
 
         # Exclude None values by default for AdCP compliance
         if "exclude_none" not in kwargs:
@@ -418,14 +412,10 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         # Call parent model_dump
         result = super().model_dump(**kwargs)
 
-        # Also exclude empty lists for cleaner responses (only include fields with data)
-        # Per AdCP spec: changes, errors, warnings are optional, so omit if empty
-        if "changes" in result and not result["changes"]:
-            result.pop("changes", None)
-        if "errors" in result and not result["errors"]:
-            result.pop("errors", None)
-        if "warnings" in result and not result["warnings"]:
-            result.pop("warnings", None)
+        # Strip empty lists for cleaner responses (AdCP spec: optional, omit if empty)
+        for key in ("changes", "errors", "warnings"):
+            if key in result and not result[key]:
+                result.pop(key, None)
 
         return result
 
@@ -476,6 +466,8 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     # SDK 5.7 removed these from the parent — declare locally
     dry_run: bool | None = None
+    context: LibraryContextObject | dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.
@@ -491,16 +483,11 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
 
-        # SDK 5.7: action is always str (our validator normalizes enum→str).
-        # Library Creative objects also store str. Direct comparison works.
-        def _act(c: Any) -> str:
-            a = c.action
-            return a.value if hasattr(a, "value") else str(a)
-
-        created = sum(1 for c in self.creatives if _act(c) == "created")
-        updated = sum(1 for c in self.creatives if _act(c) == "updated")
-        deleted = sum(1 for c in self.creatives if _act(c) == "deleted")
-        failed = sum(1 for c in self.creatives if _act(c) == "failed")
+        # action is always str: our field_validator normalizes enum→str on construction.
+        created = sum(1 for c in self.creatives if c.action == "created")
+        updated = sum(1 for c in self.creatives if c.action == "updated")
+        deleted = sum(1 for c in self.creatives if c.action == "deleted")
+        failed = sum(1 for c in self.creatives if c.action == "failed")
 
         parts = []
         if created:

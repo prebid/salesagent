@@ -23,10 +23,10 @@ from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas._base import NestedModelSerializerMixin
+from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel
 
 # ---------------------------------------------------------------------------
 # Core domain Account (used in ListAccountsResponse.accounts)
@@ -108,7 +108,7 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
         return f"Found {count} account{'s' if count != 1 else ''}."
 
 
-class SyncResponseAccount(BaseModel):
+class SyncResponseAccount(SalesAgentBaseModel):
     """Per-account result in a sync_accounts response.
 
     SDK 4.3 provided this as adcp.types.generated_poc.account.sync_accounts_response.Account.
