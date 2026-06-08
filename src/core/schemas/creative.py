@@ -10,7 +10,7 @@ from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import CreativeAction, CreativeStatus
+from adcp.types import CreativeStatus
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
     ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
@@ -365,18 +365,15 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     # SDK 5.7 (adcontextprotocol/adcp-client-python#913): parent declares action
     # as CreativeAction|str and stores raw strings. CreativeAction is plain Enum
-    # (not StrEnum), so "created" == CreativeAction.created is False. Redeclare
-    # as CreativeAction and coerce via validator until upstream fixes the enum base.
-    action: CreativeAction = Field(description="Action taken for this creative")
+    # (not StrEnum), so "created" == CreativeAction.created is False.
+    # Store as string; compare with strings everywhere until upstream ships StrEnum.
+    action: str = Field(description="Action taken for this creative")
 
     @field_validator("action", mode="before")
     @classmethod
-    def _coerce_action_to_enum(cls, v: Any) -> CreativeAction:
-        if isinstance(v, CreativeAction):
-            return v
-        if isinstance(v, str):
-            return CreativeAction(v)
-        return v
+    def _normalize_action_to_str(cls, v: Any) -> str:
+        """Normalize CreativeAction enum to its string value."""
+        return v.value if hasattr(v, "value") else str(v)
 
     # --- Fields removed from SDK 5.7 that we own locally ---
     assigned_to: list[str] | None = Field(None, description="Package IDs this creative was assigned to during sync")
@@ -490,16 +487,16 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
 
-        # Count actions from creatives list. SDK 5.7 stores action as str,
-        # our SyncCreativeResult coerces to CreativeAction enum. Handle both.
-        def _action_str(c: Any) -> str:
+        # SDK 5.7: action is always str (our validator normalizes enum→str).
+        # Library Creative objects also store str. Direct comparison works.
+        def _act(c: Any) -> str:
             a = c.action
             return a.value if hasattr(a, "value") else str(a)
 
-        created = sum(1 for c in self.creatives if _action_str(c) == "created")
-        updated = sum(1 for c in self.creatives if _action_str(c) == "updated")
-        deleted = sum(1 for c in self.creatives if _action_str(c) == "deleted")
-        failed = sum(1 for c in self.creatives if _action_str(c) == "failed")
+        created = sum(1 for c in self.creatives if _act(c) == "created")
+        updated = sum(1 for c in self.creatives if _act(c) == "updated")
+        deleted = sum(1 for c in self.creatives if _act(c) == "deleted")
+        failed = sum(1 for c in self.creatives if _act(c) == "failed")
 
         parts = []
         if created:

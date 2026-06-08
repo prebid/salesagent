@@ -7,7 +7,6 @@ to ensure consistent validation across all creative operations.
 from unittest.mock import Mock, patch
 
 import pytest
-from adcp.types import CreativeAction
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
@@ -90,7 +89,7 @@ class TestSyncCreativesFormatValidation:
 
             # Verify format was validated
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.created
+            assert response.creatives[0].action == "created"
             assert response.creatives[0].creative_id == "creative_123"
 
     def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
@@ -123,7 +122,7 @@ class TestSyncCreativesFormatValidation:
 
             # Verify creative failed with appropriate error
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == "failed"
             assert response.creatives[0].creative_id == "creative_123"
             assert len(response.creatives[0].errors) == 1
 
@@ -162,7 +161,7 @@ class TestSyncCreativesFormatValidation:
 
             # Verify creative failed with network error message
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == "failed"
             assert len(response.creatives[0].errors) == 1
 
             error_msg = response.creatives[0].errors[0].message
@@ -207,7 +206,7 @@ class TestSyncCreativesFormatValidation:
             # Verify creative failed validation (string format_id rejected by schema)
             # AdCP spec requires format_id to be a FormatId object with agent_url and id
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == "failed"
             assert response.creatives[0].creative_id == "creative_456"
             # Error message will be from Pydantic validation, not our format validation
 
@@ -256,16 +255,16 @@ class TestSyncCreativesFormatValidation:
 
             # First creative: success
             assert response.creatives[0].creative_id == "creative_1"
-            assert response.creatives[0].action == CreativeAction.created
+            assert response.creatives[0].action == "created"
 
             # Second creative: failed (unknown format)
             assert response.creatives[1].creative_id == "creative_2"
-            assert response.creatives[1].action == CreativeAction.failed
+            assert response.creatives[1].action == "failed"
             assert "Unknown format 'unknown_format'" in response.creatives[1].errors[0].message
 
             # Third creative: success
             assert response.creatives[2].creative_id == "creative_3"
-            assert response.creatives[2].action == CreativeAction.created
+            assert response.creatives[2].action == "created"
 
     def test_format_validation_caching(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation uses in-memory cache (doesn't call agent twice for same format)."""
@@ -304,8 +303,8 @@ class TestSyncCreativesFormatValidation:
 
             # Verify both creatives succeeded
             assert len(response.creatives) == 2
-            assert response.creatives[0].action == CreativeAction.created
-            assert response.creatives[1].action == CreativeAction.created
+            assert response.creatives[0].action == "created"
+            assert response.creatives[1].action == "created"
 
     def test_format_validation_missing_format_id(self, identity, mock_tenant):
         """Test that validation fails when format_id is missing."""
@@ -340,7 +339,7 @@ class TestSyncCreativesFormatValidation:
 
             # Verify creative failed with format validation error
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == "failed"
             # Error message comes from Pydantic schema validation
             assert "format_id" in response.creatives[0].errors[0].message
 

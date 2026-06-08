@@ -1536,12 +1536,11 @@ class TestUC003UploadInlineCreatives:
         _setup_db_session(standard_mocks)
 
         # Mock _sync_creatives_impl to return a failure
-        from adcp.types import CreativeAction
 
         mock_sync_response = MagicMock()
         failed_creative = MagicMock()
         failed_creative.creative_id = "c_fail"
-        failed_creative.action = CreativeAction.failed
+        failed_creative.action = "failed"
         mock_error = MagicMock()
         mock_error.message = "Upload failed"
         failed_creative.errors = [mock_error]
@@ -2526,12 +2525,10 @@ class TestUC003ExtK:
         """
         _setup_db_session(standard_mocks)
 
-        from adcp.types import CreativeAction
-
         mock_sync_response = MagicMock()
         failed = MagicMock()
         failed.creative_id = "c_fail"
-        failed.action = CreativeAction.failed
+        failed.action = "failed"
         mock_err = MagicMock()
         mock_err.message = "Network error"
         failed.errors = [mock_err]
@@ -2579,12 +2576,10 @@ class TestUC003ExtK:
         """
         _setup_db_session(standard_mocks)
 
-        from adcp.types import CreativeAction
-
         mock_sync_response = MagicMock()
         failed = MagicMock()
         failed.creative_id = "c_fail"
-        failed.action = CreativeAction.failed
+        failed.action = "failed"
         mock_err = MagicMock()
         mock_err.message = "Error"
         failed.errors = [mock_err]

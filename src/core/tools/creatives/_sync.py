@@ -243,7 +243,7 @@ def _sync_creatives_impl(
                         )
 
                         # Handle failed updates
-                        if update_result.action == CreativeAction.failed:
+                        if update_result.action == "failed":
                             failed_creatives.append(
                                 {
                                     "creative_id": existing_creative.creative_id,
@@ -256,7 +256,7 @@ def _sync_creatives_impl(
                             continue
 
                         # Track counts
-                        if update_result.action == CreativeAction.updated:
+                        if update_result.action == "updated":
                             updated_count += 1
                         else:
                             unchanged_count += 1
@@ -279,7 +279,7 @@ def _sync_creatives_impl(
                             creatives_needing_approval.append(creative_info)
 
                         # Add provenance warning if applicable
-                        if provenance_warning and update_result.action != CreativeAction.failed:
+                        if provenance_warning and update_result.action != "failed":
                             update_result.warnings.append(provenance_warning)
                             # Flag for review when provenance is missing
                             existing_creative.status = "pending_review"
@@ -303,7 +303,7 @@ def _sync_creatives_impl(
                         )
 
                         # Handle failed creates
-                        if create_result.action == CreativeAction.failed:
+                        if create_result.action == "failed":
                             creative_id = creative.creative_id or "unknown"
                             failed_creatives.append(
                                 {
@@ -332,7 +332,7 @@ def _sync_creatives_impl(
                             creatives_needing_approval.append(creative_info)
 
                         # Add provenance warning if applicable
-                        if provenance_warning and create_result.action != CreativeAction.failed:
+                        if provenance_warning and create_result.action != "failed":
                             create_result.warnings.append(provenance_warning)
                             needs_approval = True
 

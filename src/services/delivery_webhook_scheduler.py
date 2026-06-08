@@ -316,10 +316,12 @@ class DeliveryWebhookScheduler:
                 "media_buy_id": media_buy.media_buy_id,
             }
 
-            # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type
+            # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
+            # Delivery reports are status updates on existing media buys,
+            # so we use update_media_buy as the canonical task type.
             media_buy_delivery_payload = create_mcp_webhook_payload(
                 task_id=media_buy.media_buy_id,
-                task_type="media_buy_delivery",
+                task_type="update_media_buy",
                 result=delivery_response,
                 status=AdcpTaskStatus.completed,
             )

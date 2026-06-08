@@ -813,6 +813,15 @@ class ContextManager(DatabaseManager):
                     except ValueError:
                         status_enum = GeneratedTaskStatus.unknown
 
+                    # SDK 5.7 validates task_type against TaskType enum.
+                    # Fall back to update_media_buy for non-standard actions.
+                    from adcp.types import TaskType as _TaskType
+
+                    try:
+                        _TaskType(task_type_str)
+                    except ValueError:
+                        task_type_str = "update_media_buy"
+
                     payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
                     if protocol == "a2a":
                         payload = create_a2a_webhook_payload(

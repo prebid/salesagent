@@ -26,7 +26,7 @@ from pydantic import Field
 #: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
 MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
 
-from adcp.types import ContextObject, CreativeAction, Error, ReportingWebhook, TargetingOverlay
+from adcp.types import ContextObject, Error, ReportingWebhook, TargetingOverlay
 from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -959,7 +959,7 @@ def _update_media_buy_impl(
                         )
 
                         # Check for sync errors
-                        failed_creatives = [r for r in sync_response.creatives if r.action == CreativeAction.failed]
+                        failed_creatives = [r for r in sync_response.creatives if r.action == "failed"]
                         if failed_creatives:
                             error_msgs = [
                                 f"{r.creative_id}: {', '.join(e.message for e in (r.errors or []))}"

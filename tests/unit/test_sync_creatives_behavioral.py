@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from adcp.types import CreativeAction
 
 from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
@@ -319,7 +318,7 @@ class TestLenientAssignmentSkip:
         assert "Package not found" in results[0].assignment_errors["nonexistent_pkg"]
 
         # Creative itself still has action=created (not failed)
-        assert results[0].action == CreativeAction.created
+        assert results[0].action == "created"
 
     def test_lenient_mode_format_mismatch_skips(self, tenant, _make_db_package):
         """rule-039-inv6: lenient mode skips format-mismatched assignment with error."""

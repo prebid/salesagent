@@ -77,7 +77,7 @@ class TestSyncPushNotificationConfig:
                 identity=identity,
                 push_notification_config={"url": "https://hook.example.com"},
             )
-        assert response.creatives[0].action == CreativeAction.created
+        assert response.creatives[0].action == "created"
 
     def test_push_notification_config_model_form(self, identity, mock_format_spec):
         """Line 120-121: typed PushNotificationConfig with URL."""
@@ -96,7 +96,7 @@ class TestSyncPushNotificationConfig:
                 identity=identity,
                 push_notification_config=config,
             )
-        assert response.creatives[0].action == CreativeAction.created
+        assert response.creatives[0].action == "created"
 
 
 class TestSyncBaseModelNormalization:
@@ -158,7 +158,7 @@ class TestSyncDryRunExistingCreative:
             )
 
         assert len(response.creatives) == 1
-        assert response.creatives[0].action == CreativeAction.updated
+        assert response.creatives[0].action == "updated"
 
 
 class TestSyncUnchangedCount:
@@ -198,7 +198,7 @@ class TestSyncUnchangedCount:
                 )
 
         assert len(response.creatives) == 1
-        assert response.creatives[0].action == CreativeAction.unchanged
+        assert response.creatives[0].action == "unchanged"
 
 
 class TestSyncAiReviewReasonOnUpdate:
@@ -252,7 +252,7 @@ class TestSyncAiReviewReasonOnUpdate:
                 )
 
         assert len(response.creatives) == 1
-        assert response.creatives[0].action == CreativeAction.updated
+        assert response.creatives[0].action == "updated"
 
 
 class TestSyncProvenanceWarningOnUpdate:
@@ -358,8 +358,8 @@ class TestSyncMixedMessageSuffix:
 
         # Should have 1 created + 1 updated
         actions = {r.action for r in response.creatives}
-        assert CreativeAction.created in actions
-        assert CreativeAction.updated in actions
+        assert "created" in actions
+        assert "updated" in actions
 
 
 # ===========================================================================

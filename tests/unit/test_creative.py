@@ -277,7 +277,7 @@ class TestSyncCreativeResultSchema:
         assert "status" not in data
         assert "review_feedback" not in data
         assert data["creative_id"] == "c_1"
-        assert data["action"] == CreativeAction.created or data["action"] == "created"
+        assert data["action"] == "created" or data["action"] == "created"
 
     def test_empty_lists_excluded(self):
         """Empty changes/errors/warnings lists should be omitted.
@@ -1176,7 +1176,7 @@ class TestApprovalWorkflow:
             )
 
             assert needs_approval is True
-            assert result.action == CreativeAction.created
+            assert result.action == "created"
 
     def test_default_approval_mode_is_require_human(self):
         """Tenant with no approval_mode setting defaults to require-human.
