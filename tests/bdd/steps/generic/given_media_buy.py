@@ -154,6 +154,7 @@ def given_tenant_auto_approval(ctx: dict) -> None:
 
 
 @given("the tenant is configured for manual approval")
+@given("the tenant requires manual approval")
 @given(parsers.parse('the tenant has "human_review_required" set to true'))
 @given("tenant human_review_required is true")
 @given("approval path is manual")
@@ -308,9 +309,11 @@ def given_persistence_timing_boundary(ctx: dict, config: str) -> None:
     _configure_persistence_timing(ctx, approval, adapter_result)
 
 
-@given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))
-def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
-    """Configure tenant max daily package spend on the CurrencyLimit (USD)."""
+def _set_max_daily_package_spend(ctx: dict, amount: int) -> None:
+    """Configure tenant max daily package spend on the CurrencyLimit (USD).
+
+    Shared helper for both the parameterized and bare 'configured' steps.
+    """
     from decimal import Decimal
 
     from sqlalchemy import select
@@ -327,6 +330,22 @@ def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
         assert cl is not None, f"No CurrencyLimit(USD) for tenant {tenant.tenant_id}"
         cl.max_daily_package_spend = Decimal(str(amount))
         session.commit()
+
+
+@given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))
+def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
+    """Configure tenant max daily package spend on the CurrencyLimit (USD)."""
+    _set_max_daily_package_spend(ctx, amount)
+
+
+@given("the tenant has max_daily_package_spend configured")
+def given_tenant_max_daily_spend_default(ctx: dict) -> None:
+    """Configure tenant max daily package spend with a default value (1000 USD).
+
+    Used by legacy-mode scenarios where the exact cap amount is not specified
+    in the Gherkin step text -- the scenario only asserts that a cap EXISTS.
+    """
+    _set_max_daily_package_spend(ctx, 1000)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2490,6 +2509,22 @@ def given_request_with_proposal_and_budget(ctx: dict, amount: int) -> None:
     kwargs["total_budget"] = {"amount": float(amount), "currency": "USD"}
 
 
+@given("a valid create_media_buy request in proposal mode with a proposal_id and total_budget")
+def given_request_proposal_mode(ctx: dict) -> None:
+    """Set up a proposal-mode request with proposal_id and total_budget.
+
+    In proposal mode the buyer supplies a proposal_id and total_budget but
+    does NOT supply a manual packages array -- the seller derives packages
+    from the proposal's product allocations.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["proposal_id"] = f"prop-{uuid.uuid4().hex[:8]}"
+    kwargs["total_budget"] = {"amount": 5000.0, "currency": "USD"}
+    # Remove the packages array to signal proposal mode (seller derives packages)
+    kwargs.pop("packages", None)
+    ctx["proposal_mode"] = True
+
+
 @given(parsers.parse('proposal "{proposal_id}" does not exist or has expired'))
 @given(parsers.parse('But proposal "{proposal_id}" does not exist or has expired'))
 def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
@@ -2617,6 +2652,37 @@ def given_adapter_success(ctx: dict) -> None:
 def given_bare_create_request(ctx: dict) -> None:
     """Set up a bare create_media_buy request with valid defaults."""
     _ensure_request_defaults(ctx)
+
+
+@given("the request uses legacy mode with no per-package budgets")
+def given_legacy_mode_no_packages(ctx: dict) -> None:
+    """Convert request to legacy mode: total_budget only, no packages array.
+
+    In legacy mode (v3.1 BR-RULE-012 INV-5), the buyer sends a total_budget
+    without per-package budget breakdowns. The daily cap is validated against
+    the total budget treated as a single daily figure.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    # Capture the total from existing packages before removing them
+    total = sum(pkg.get("budget", 0) for pkg in kwargs.get("packages", []))
+    if total <= 0:
+        total = 5000.0
+    kwargs["total_budget"] = {"amount": total, "currency": "USD"}
+    # Remove the packages array to signal legacy mode
+    kwargs.pop("packages", None)
+    ctx["legacy_mode"] = True
+
+
+@given("the request supplies no buyer packages array")
+def given_no_packages_array(ctx: dict) -> None:
+    """Remove the packages array from the request.
+
+    In proposal mode, the buyer does not supply a manual packages array --
+    the seller derives packages from the proposal's product allocations.
+    The product-uniqueness check (BR-RULE-010) has no applicable buyer input.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs.pop("packages", None)
 
 
 @given(parsers.parse("a valid create_media_buy request that passes all validation"))
