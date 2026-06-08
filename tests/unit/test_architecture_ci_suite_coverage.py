@@ -13,15 +13,7 @@ No allowlist — zero tolerance. Every locally-run suite must have a gating
 CI job, or a broken suite can silently land on main again.
 """
 
-import pathlib
-
-import yaml
-
-WORKFLOW_PATH = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
-
-
-def _load_workflow() -> dict:
-    return yaml.safe_load(WORKFLOW_PATH.read_text())
+from tests.unit.workflow_helpers import load_ci_workflow
 
 
 class TestCISuiteCoverage:
@@ -33,7 +25,7 @@ class TestCISuiteCoverage:
         Before this guard, ``tests/bdd/`` was never executed in CI, so any
         PR could break every BDD scenario and still show green.
         """
-        jobs = _load_workflow()["jobs"]
+        jobs = load_ci_workflow()["jobs"]
 
         assert "bdd-tests" in jobs, (
             "No 'bdd-tests' job in .github/workflows/ci.yml. The BDD suite "
@@ -49,7 +41,7 @@ class TestCISuiteCoverage:
         A job that exists but doesn't run the suite is worse than no job —
         it gives false confidence.
         """
-        bdd_job = _load_workflow()["jobs"]["bdd-tests"]
+        bdd_job = load_ci_workflow()["jobs"]["bdd-tests"]
         run_steps = " ".join(str(step.get("run", "")) for step in bdd_job.get("steps", []))
         pytest_inputs = " ".join(
             str(step.get("with", {}).get("paths", ""))
@@ -68,7 +60,7 @@ class TestCISuiteCoverage:
         Without a Postgres service the BDD job cannot run, so the gate would
         be hollow.
         """
-        bdd_job = _load_workflow()["jobs"]["bdd-tests"]
+        bdd_job = load_ci_workflow()["jobs"]["bdd-tests"]
         services = bdd_job.get("services", {})
 
         assert "postgres" in services, (
@@ -148,7 +140,7 @@ class TestCISuiteCoverage:
         checked in the aggregation step) leaves the gate soft — exactly the
         leak that let PR #1299 land red.
         """
-        workflow = _load_workflow()
+        workflow = load_ci_workflow()
         summary = workflow["jobs"]["summary"]
         needs = summary["needs"]
 
@@ -173,7 +165,7 @@ class TestCISuiteCoverage:
         Cost-aware: it must reuse the existing pull_request trigger, not add
         new triggers.
         """
-        workflow = _load_workflow()
+        workflow = load_ci_workflow()
         # PyYAML parses the bare ``on:`` key as the boolean True.
         triggers = workflow.get("on", workflow.get(True))
 

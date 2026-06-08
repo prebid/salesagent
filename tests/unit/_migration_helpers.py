@@ -113,8 +113,9 @@ def resolve_roundtrip_downgrade_target(head_revision: str | None = None) -> str:
     """Return an explicit Alembic downgrade target one step back from head.
 
     ``alembic downgrade -1`` is ambiguous at merge heads (multiple parents).
-    Merge migrations require a comma-separated parent list; single-parent
-    heads use the parent revision id directly.
+    Merge migrations require downgrading to one parent revision id; Alembic
+    restores all branch tips from the merge. Single-parent heads use the
+    parent revision id directly.
     """
     if head_revision is None:
         heads = get_migration_heads()
@@ -132,7 +133,9 @@ def resolve_roundtrip_downgrade_target(head_revision: str | None = None) -> str:
             raise ValueError(msg)
         if len(down_revisions) == 1:
             return down_revisions[0]
-        return ",".join(down_revisions)
+        # At a merge head, Alembic downgrade to any parent revision undoes the
+        # merge and restores all branch tips (see alembic branches docs).
+        return down_revisions[0]
 
     msg = f"Migration file not found for head revision {head_revision}"
     raise ValueError(msg)

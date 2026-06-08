@@ -44,8 +44,8 @@ class TestSingleMigrationHead:
 class TestRoundtripDowngradeTarget:
     """CI migration roundtrip must resolve explicit downgrade targets."""
 
-    def test_merge_head_downgrade_target_lists_both_parents(self):
-        """Merge head downgrade uses comma-separated parent revisions."""
+    def test_merge_head_downgrade_target_uses_first_parent(self):
+        """Merge head downgrade uses one parent revision (Alembic restores all branch tips)."""
         heads = get_migration_heads()
         assert len(heads) == 1
         head = next(iter(heads))
@@ -60,8 +60,7 @@ class TestRoundtripDowngradeTarget:
         assert len(down_revisions) > 1, "Expected current head to be a merge migration."
 
         target = resolve_roundtrip_downgrade_target()
-        for parent in down_revisions:
-            assert parent in target.split(",")
+        assert target == down_revisions[0]
 
     def test_non_merge_revision_downgrade_target_is_single_parent(self):
         """Single-parent revisions downgrade to their explicit down_revision."""
