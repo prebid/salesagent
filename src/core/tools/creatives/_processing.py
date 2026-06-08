@@ -22,62 +22,12 @@ from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.validation_helpers import run_async_in_sync_context
 
-from ._assets import _build_creative_data, _extract_url_from_assets
+from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_text_from_asset_value(asset: Any) -> str | None:
-    """Extract text content from an SDK 5.7 asset value.
-
-    SDK 5.7 wraps asset slot values in Assets RootModel → list[AssetVariant RootModel].
-    AssetVariant proxies attributes via __getattr__ to the inner typed asset (e.g.
-    TextAsset).  Handles both old-style dicts and new typed models.
-    """
-    # Plain dict (legacy/test code may still pass these)
-    if isinstance(asset, dict):
-        return asset.get("content") or asset.get("text")
-
-    # SDK 5.7 RootModel: unwrap first variant
-    if hasattr(asset, "root"):
-        items = asset.root
-        if items:
-            first = items[0]
-            # AssetVariant is also a RootModel; __getattr__ proxies work
-            text = getattr(first, "content", None) or getattr(first, "text", None)
-            if text:
-                return str(text)
-
-    # Flat object with .content or .text (pre-5.7 asset models)
-    return getattr(asset, "content", None) or getattr(asset, "text", None)
-
-
-def _extract_message_from_assets(creative: CreativeAsset) -> str | None:
-    """Extract message/brief/prompt from creative assets using role priority.
-
-    Checks 'message', 'brief', 'prompt' roles in priority order.
-    Falls through to inputs[0].context_description if no asset role matches.
-    Returns None when no message is found.
-    """
-    if creative.assets:
-        for role, asset in creative.assets.items():
-            if role in ["message", "brief", "prompt"]:
-                text = _extract_text_from_asset_value(asset)
-                if text:
-                    return text
-
-    if creative.inputs:
-        inputs = creative.inputs or []
-        if inputs:
-            first_input = inputs[0]
-            if isinstance(first_input, dict):
-                return first_input.get("context_description")
-            return getattr(first_input, "context_description", None)
-
-    return None
 
 
 def _failed_sync_result(creative_id: str, error_msg: str) -> SyncCreativeResult:

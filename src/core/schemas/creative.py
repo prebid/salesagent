@@ -50,6 +50,7 @@ from pydantic import (
 )
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.enum_helpers import enum_value
 from src.core.schemas._base import (
     ApprovalStatus,
     FormatId,
@@ -374,7 +375,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     @classmethod
     def _normalize_action_to_str(cls, v: Any) -> str:
         """Normalize CreativeAction enum to its string value."""
-        return v.value if hasattr(v, "value") else str(v)
+        return enum_value(v)
 
     # --- Fields removed from SDK 5.7 that we own locally ---
     assigned_to: list[str] | None = Field(None, description="Package IDs this creative was assigned to during sync")

@@ -43,6 +43,7 @@ from src.core.exceptions import (
     AdCPNotFoundError,
     AdCPValidationError,
 )
+from src.core.helpers import enum_value
 
 
 class PackageAssignmentDict(TypedDict):
@@ -797,11 +798,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         logger.error(f"[APPROVAL] {error_msg}")
                         return False, error_msg
 
-                    delivery_type_str = (
-                        product.delivery_type.value
-                        if hasattr(product.delivery_type, "value")
-                        else str(product.delivery_type)
-                    )
+                    delivery_type_str = enum_value(product.delivery_type)
 
                     # Validate delivery_type is a valid literal
                     if delivery_type_str not in ["guaranteed", "non_guaranteed"]:

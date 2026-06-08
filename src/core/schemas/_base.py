@@ -12,6 +12,8 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
+from src.core.enum_helpers import enum_value
+
 if TYPE_CHECKING:
     from src.core.schemas.creative import Creative, CreativeApproval
 
@@ -1003,7 +1005,7 @@ class Targeting(TargetingOverlay):
             form_factors: set[str] = set()
             for platform in dp:
                 # Handle both enum values and raw strings
-                p = platform.value if hasattr(platform, "value") else str(platform)
+                p = enum_value(platform)
                 form_factors.update(_PLATFORM_TO_FORM_FACTORS.get(p, []))
             if form_factors:
                 values["device_type_any_of"] = sorted(form_factors)

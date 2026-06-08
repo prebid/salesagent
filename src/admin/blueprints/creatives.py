@@ -247,11 +247,11 @@ async def _call_webhook_for_creative_status(
                     context_id=step_context_id,
                 )
             else:
-                # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type
+                # SDK 5.7: returns McpWebhookPayload directly
                 payload = create_mcp_webhook_payload(
-                    step_step_id,
-                    GeneratedTaskStatus.completed,
-                    step_tool_name or "sync_creatives",
+                    task_id=step_step_id,
+                    status=GeneratedTaskStatus.completed,
+                    task_type=step_tool_name or "sync_creatives",
                     result=result_dict,
                 )
 

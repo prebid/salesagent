@@ -37,6 +37,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -347,7 +348,7 @@ def _list_creative_formats_impl(
         # Normalize requested asset types to string values for comparison.
         # adcp 3.6.0: req.asset_types contains AssetContentType enums; use .value to get string.
         # Format assets now use plain string literals, so must compare using .value not str(enum).
-        requested_types = {at.value if hasattr(at, "value") else str(at) for at in req.asset_types}
+        requested_types = {enum_value(at) for at in req.asset_types}
         formats = [f for f in formats if get_format_asset_types(f) & requested_types]
 
     # Filter by dimension constraints

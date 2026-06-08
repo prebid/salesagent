@@ -31,6 +31,7 @@ from fastmcp.tools.tool import ToolResult
 
 from src.core.auth import get_principal_object
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -297,7 +298,7 @@ async def get_adcp_capabilities(
     response = _get_adcp_capabilities_impl(req, identity)
 
     # Build human-readable summary
-    protocols = [p.value if hasattr(p, "value") else str(p) for p in response.supported_protocols]
+    protocols = [enum_value(p) for p in response.supported_protocols]
     summary_parts = [
         f"AdCP v{response.adcp.major_versions[0].root} Capabilities",
         f"Supported protocols: {', '.join(protocols)}",
@@ -308,7 +309,7 @@ async def get_adcp_capabilities(
         if portfolio.description:
             summary_parts.append(f"Portfolio: {portfolio.description}")
         if portfolio.primary_channels:
-            channels = [c.value if hasattr(c, "value") else str(c) for c in portfolio.primary_channels]
+            channels = [enum_value(c) for c in portfolio.primary_channels]
             summary_parts.append(f"Channels: {', '.join(channels)}")
 
     summary = "\n".join(summary_parts)

@@ -21,7 +21,7 @@ from pydantic import ValidationError
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
-from src.core.helpers import log_tool_activity
+from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
@@ -436,9 +436,9 @@ async def list_creatives(
     # at the boundary so spec-compliant payloads are honored instead of silently dropped.
     if sort is not None:
         if sort.field is not None:
-            sort_by = sort.field.value if hasattr(sort.field, "value") else str(sort.field)
+            sort_by = enum_value(sort.field)
         if sort.direction is not None:
-            sort_order = sort.direction.value if hasattr(sort.direction, "value") else str(sort.direction)
+            sort_order = enum_value(sort.direction)
     if pagination is not None and pagination.max_results is not None:
         limit = pagination.max_results
 

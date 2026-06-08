@@ -34,6 +34,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -143,7 +144,7 @@ def _list_accounts_impl(
         # Apply status filter if requested
         status_filter = getattr(req, "status", None)
         if status_filter is not None:
-            status_str = status_filter.value if hasattr(status_filter, "value") else str(status_filter)
+            status_str = enum_value(status_filter)
             db_accounts = [a for a in db_accounts if a.status == status_str]
 
         # Apply sandbox filter if requested
@@ -252,9 +253,7 @@ def _generate_account_name(brand_domain: str, operator: str, brand_id: str | Non
 
 def _enum_to_str(val: Any) -> str | None:
     """Extract string value from an enum or return as-is. Returns None for None."""
-    if val is None:
-        return None
-    return val.value if hasattr(val, "value") else str(val)
+    return enum_value(val)
 
 
 def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:

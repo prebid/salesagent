@@ -831,11 +831,11 @@ class ContextManager(DatabaseManager):
                             result=step.response_data or {},
                         )
                     else:
-                        # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type
+                        # SDK 5.7: returns McpWebhookPayload directly
                         payload = create_mcp_webhook_payload(
-                            step.step_id,
-                            status_enum,
-                            task_type_str,
+                            task_id=step.step_id,
+                            status=status_enum,
+                            task_type=task_type_str,
                             result=step.response_data,
                         )
 
