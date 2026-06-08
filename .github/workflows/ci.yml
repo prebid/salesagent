@@ -367,10 +367,7 @@ jobs:
           database-url: ${{ env.DATABASE_URL }}
           run-migrations: "false"
       - name: Migration roundtrip
-        run: |
-          uv run alembic upgrade head
-          uv run alembic downgrade -1
-          uv run alembic upgrade head
+        run: uv run python scripts/ci/migration_roundtrip.py
 
   coverage:
     name: Coverage
