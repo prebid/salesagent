@@ -50,7 +50,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/xandr.py", "DeliveryMeasurement"),
     ("src/adapters/xandr.py", "DeliveryType"),
     # FIXME(#1360): admin blueprints import SDK types directly
-    ("src/admin/blueprints/creatives.py", "SyncCreativeResult"),
     ("src/admin/blueprints/operations.py", "Package"),
     # FIXME(#1360): core modules import SDK types directly
     ("src/core/creative_agent_registry.py", "ListCreativeFormatsRequest"),

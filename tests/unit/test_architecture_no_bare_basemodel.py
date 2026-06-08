@@ -22,12 +22,7 @@ from pathlib import Path
 # ── Allowlist ────────────────────────────────────────────────────────────
 # Format: (filename, class_name)
 # Every entry must have a matching FIXME comment at the source location.
-ALLOWLIST: set[tuple[str, str]] = {
-    # SyncResponseAccount was extracted from SDK 5.7 as a plain BaseModel.
-    # It should be migrated to SalesAgentBaseModel with model_config.
-    # FIXME(#1360): migrate SyncResponseAccount to SalesAgentBaseModel
-    ("account.py", "SyncResponseAccount"),
-}
+ALLOWLIST: set[tuple[str, str]] = set()  # Empty — all schema classes use proper base
 
 
 def _get_schema_files() -> list[Path]:

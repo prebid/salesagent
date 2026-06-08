@@ -15,8 +15,7 @@ beads: salesagent-6xt9
 
 from adcp.types import CreativeAsset
 
-from src.core.tools.creatives._assets import _extract_url_from_asset_value
-from src.core.tools.creatives._processing import _extract_text_from_asset_value
+from src.core.tools.creatives._assets import _extract_text_from_asset_value, _extract_url_from_asset_value
 
 
 def _build_creative_with_assets(assets_dict: dict) -> CreativeAsset:
