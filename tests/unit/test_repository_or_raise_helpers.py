@@ -40,11 +40,23 @@ class TestMediaBuyOrRaise:
         assert exc.value.error_code == "MEDIA_BUY_NOT_FOUND"
         assert "mb-missing" in str(exc.value)
 
-    def test_get_by_id_or_raise_accepts_context(self):
-        """context= is plumbed through to the raised error (echoed into the envelope)."""
+    def test_get_by_id_or_raise_echoes_context_into_envelope(self):
+        """context= is carried onto the raised error AND echoed into the wire envelope.
+
+        Not just accepted: a regression that takes ``context=`` and drops it would
+        still satisfy a signature-only test. Assert the value lands on the exception
+        and survives into the two-layer envelope (assert_envelope_shape does not
+        check context, so we assert envelope["context"] directly).
+        """
+        from src.core.exceptions import build_two_layer_error_envelope
+
         repo = _repo_with_first(MediaBuyRepository, None)
-        with pytest.raises(AdCPMediaBuyNotFoundError):
-            repo.get_by_id_or_raise("mb-missing", context={"context_id": "ctx-9"})
+        ctx = {"context_id": "ctx-9"}
+        with pytest.raises(AdCPMediaBuyNotFoundError) as exc:
+            repo.get_by_id_or_raise("mb-missing", context=ctx)
+
+        assert exc.value.context == ctx
+        assert build_two_layer_error_envelope(exc.value)["context"] == ctx
 
     def test_get_package_or_raise_returns_when_present(self):
         package = MagicMock()

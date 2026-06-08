@@ -374,6 +374,80 @@ class TestFastAPIExceptionHandlers:
         assert response.status_code == 404
         assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="terminal")
 
+    def test_context_not_found_error_returns_404(self):
+        """AdCPContextNotFoundError raised in a route must return 404 with SESSION_NOT_FOUND.
+
+        SESSION_NOT_FOUND is a standard SDK code (passthrough, not in
+        ERROR_CODE_MAPPING). recovery=correctable: the buyer can supply a valid
+        context_id or omit it for a fresh context.
+        """
+        from src.app import app
+        from src.core.exceptions import AdCPContextNotFoundError
+
+        @app.get("/test-exc/context-not-found")
+        def raise_context_not_found():
+            raise AdCPContextNotFoundError("Context not found: ctx_x")
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/test-exc/context-not-found")
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "SESSION_NOT_FOUND", recovery="correctable")
+
+    def test_creative_not_found_error_returns_404(self):
+        """AdCPCreativeNotFoundError → 404, wire INVALID_REQUEST, correctable.
+
+        The internal CREATIVE_NOT_FOUND code translates to INVALID_REQUEST at the
+        boundary (ERROR_CODE_MAPPING). recovery=correctable distinguishes it from
+        the base AdCPNotFoundError (terminal) — that override is the regression this pins.
+        """
+        from src.app import app
+        from src.core.exceptions import AdCPCreativeNotFoundError
+
+        @app.get("/test-exc/creative-not-found")
+        def raise_creative_not_found():
+            raise AdCPCreativeNotFoundError("Creative not found: cr_x")
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/test-exc/creative-not-found")
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+
+    def test_format_not_found_error_returns_404(self):
+        """AdCPFormatNotFoundError → 404, wire INVALID_REQUEST, correctable.
+
+        FORMAT_NOT_FOUND translates to INVALID_REQUEST at the boundary;
+        recovery=correctable distinguishes it from the base (terminal).
+        """
+        from src.app import app
+        from src.core.exceptions import AdCPFormatNotFoundError
+
+        @app.get("/test-exc/format-not-found")
+        def raise_format_not_found():
+            raise AdCPFormatNotFoundError("Unknown format_id 'display_300x250'")
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/test-exc/format-not-found")
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+
+    def test_task_not_found_error_returns_404(self):
+        """AdCPTaskNotFoundError → 404, wire INVALID_REQUEST, correctable.
+
+        TASK_NOT_FOUND translates to INVALID_REQUEST at the boundary;
+        recovery=correctable distinguishes it from the base (terminal).
+        """
+        from src.app import app
+        from src.core.exceptions import AdCPTaskNotFoundError
+
+        @app.get("/test-exc/task-not-found")
+        def raise_task_not_found():
+            raise AdCPTaskNotFoundError("Task nonexistent not found")
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/test-exc/task-not-found")
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+
     def test_adapter_error_returns_502(self):
         """AdCPAdapterError raised in a route must return 502."""
         from src.app import app
