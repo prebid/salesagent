@@ -8,8 +8,8 @@ Beads: salesagent-55b
 """
 
 from src.core.tools.creatives import _build_creative_data
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.creative_asset import make_creative_asset_minimal as _make_creative
-from tests.factories.creative_asset import make_image_assets
 
 
 class TestStandardFields:
@@ -42,8 +42,7 @@ class TestOptionalFields:
     """Optional fields only included when present in creative model."""
 
     def test_assets_included(self):
-        # SDK 5.7: assets values are lists of discriminated-union asset models
-        creative = _make_creative(assets=make_image_assets("main", "https://example.com/main.png"))
+        creative = _make_creative(assets=build_assets(image_spec("main", url="https://example.com/main.png")))
         data = _build_creative_data(creative, None)
         # Assets are stored as typed Asset models (not dicts)
         assert "assets" in data
@@ -105,19 +104,7 @@ class TestCombined:
             width=728,
             height=90,
             duration=15,
-            assets={
-                "main": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "main",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://cdn.example.com/banner.png",
-                        "width": 728,
-                        "height": 90,
-                    }
-                ]
-            },
+            assets=build_assets(image_spec("main", url="https://cdn.example.com/banner.png", width=728, height=90)),
             snippet="<script>tag</script>",
             snippet_type="js",
             template_variables={"cta": "Learn More"},

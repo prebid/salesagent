@@ -74,7 +74,7 @@ from src.core.schemas import (
     SyncCreativesResponse,
 )
 from tests.factories import PrincipalFactory
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS, make_image_assets, make_text_assets
+from tests.factories.creative_asset import asset_spec, build_assets, image_spec, text_spec, video_spec
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -106,7 +106,7 @@ def _make_creative(**overrides) -> Creative:
         "variants": [],
         "name": "Test Banner",
         "format_id": _format_id(),
-        "assets": make_image_assets("banner", "https://example.com/banner.png"),
+        "assets": build_assets(image_spec("banner", url="https://example.com/banner.png")),
         "principal_id": "principal_1",
         "status": "pending_review",
         "created_date": datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
@@ -121,7 +121,7 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
         "creative_id": "c_test_1",
         "name": "Test Banner",
         "format_id": _adcp_format_id(),
-        "assets": dict(DEFAULT_IMAGE_ASSETS),
+        "assets": build_assets(image_spec("banner", url="https://example.com/banner.png")),
     }
     defaults.update(overrides)
     return CreativeAsset(**defaults)
@@ -926,7 +926,7 @@ class TestCreativeValidation:
                 creative_id="c_test_1",
                 name="No Format",
                 format_id=None,
-                assets=dict(DEFAULT_IMAGE_ASSETS),
+                assets=build_assets(image_spec("banner", url="https://example.com/banner.png")),
             )
 
     def test_adapter_format_skips_external_validation(self):
@@ -1090,7 +1090,7 @@ class TestBuildCreativeData:
         """
         from src.core.tools.creatives._assets import _build_creative_data
 
-        creative = _make_creative_asset(assets=make_image_assets("main", "https://example.com/main.png"))
+        creative = _make_creative_asset(assets=build_assets(image_spec("main", url="https://example.com/main.png")))
         data = _build_creative_data(creative, None)
         assert "assets" in data
         assert "main" in data["assets"]
@@ -1836,7 +1836,7 @@ class TestGenerativeCreativeBuild:
                 "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
-            creative = _make_creative_asset(assets=make_text_assets("message", "Create a banner ad"))
+            creative = _make_creative_asset(assets=build_assets(text_spec("message", content="Create a banner ad")))
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -1889,11 +1889,11 @@ class TestGenerativeCreativeBuild:
             }
 
             creative = _make_creative_asset(
-                assets={
-                    **make_text_assets("message", "Create a banner ad for shoes"),
-                    **make_text_assets("brief", "Shoes ad brief"),
-                    **make_text_assets("prompt", "Shoes prompt"),
-                }
+                assets=build_assets(
+                    text_spec("message", content="Create a banner ad for shoes"),
+                    text_spec("brief", content="Shoes ad brief"),
+                    text_spec("prompt", content="Shoes prompt"),
+                )
             )
             result, _ = _create_new_creative(
                 creative=creative,
@@ -1947,7 +1947,7 @@ class TestGenerativeCreativeBuild:
             }
 
             # Only 'brief' role, no 'message'
-            creative = _make_creative_asset(assets=make_text_assets("brief", "Shoes ad brief"))
+            creative = _make_creative_asset(assets=build_assets(text_spec("brief", content="Shoes ad brief")))
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -1997,7 +1997,9 @@ class TestGenerativeCreativeBuild:
             }
 
             # Only 'prompt' role -- no message or brief
-            creative = _make_creative_asset(assets=make_text_assets("prompt", "Design a banner for running shoes"))
+            creative = _make_creative_asset(
+                assets=build_assets(text_spec("prompt", content="Design a banner for running shoes"))
+            )
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -2048,7 +2050,7 @@ class TestGenerativeCreativeBuild:
 
             # No message/brief/prompt in assets; provide inputs instead
             creative = _make_creative_asset(
-                assets=make_image_assets("image", "https://example.com/img.png"),
+                assets=build_assets(image_spec("image", url="https://example.com/img.png")),
             )
             # Set inputs with context_description
             creative.inputs = [{"context_description": "Create a display ad for running shoes"}]
@@ -2104,7 +2106,7 @@ class TestGenerativeCreativeBuild:
             # No message/brief/prompt in assets, no inputs -- falls back to name
             creative = _make_creative_asset(
                 name="Running Shoes Banner",
-                assets=make_image_assets("image", "https://example.com/img.png"),
+                assets=build_assets(image_spec("image", url="https://example.com/img.png")),
             )
 
             result, _ = _create_new_creative(
@@ -2165,7 +2167,7 @@ class TestGenerativeCreativeBuild:
 
             # Update with no message/brief/prompt in assets -- should preserve existing data
             creative = _make_creative_asset(
-                assets=make_image_assets("image", "https://example.com/img.png"),
+                assets=build_assets(image_spec("image", url="https://example.com/img.png")),
             )
 
             result, _ = _update_existing_creative(
@@ -2223,7 +2225,7 @@ class TestGenerativeCreativeBuild:
             }
 
             # User provides their own assets -- these should take priority
-            user_assets = make_image_assets("banner", "https://user.example.com/my-ad.png")
+            user_assets = build_assets(image_spec("banner", url="https://user.example.com/my-ad.png"))
             creative = _make_creative_asset(
                 assets=user_assets,
             )
@@ -2276,7 +2278,7 @@ class TestGenerativeCreativeBuild:
             }
 
             creative = _make_creative_asset(
-                assets=make_text_assets("message", "Create a banner"),
+                assets=build_assets(text_spec("message", content="Create a banner")),
             )
             result, _ = _create_new_creative(
                 creative=creative,
@@ -2996,101 +2998,30 @@ class TestCreativeAssetTypes:
         has its own required fields (image needs url/width/height, text needs
         content, vast/daast need delivery_type + content, etc.).
         """
-        # Map asset_type -> minimal valid asset dict
-        asset_type_examples = {
-            "image": {
-                "asset_type": "image",
-                "asset_id": "image",
-                "item_type": "individual",
-                "required": True,
-                "url": "https://example.com/img.png",
-                "width": 300,
-                "height": 250,
-            },
-            "video": {
-                "asset_type": "video",
-                "asset_id": "video",
-                "item_type": "individual",
-                "required": True,
-                "url": "https://example.com/vid.mp4",
-                "width": 1920,
-                "height": 1080,
-            },
-            "audio": {
-                "asset_type": "audio",
-                "asset_id": "audio",
-                "item_type": "individual",
-                "required": True,
-                "url": "https://example.com/audio.mp3",
-            },
-            "text": {
-                "asset_type": "text",
-                "asset_id": "text",
-                "item_type": "individual",
-                "required": True,
-                "content": "test text content",
-            },
-            "markdown": {
-                "asset_type": "markdown",
-                "asset_id": "markdown",
-                "item_type": "individual",
-                "required": True,
-                "content": "# test markdown",
-            },
-            "html": {
-                "asset_type": "html",
-                "asset_id": "html",
-                "item_type": "individual",
-                "required": True,
-                "content": "<div>test html</div>",
-            },
-            "css": {
-                "asset_type": "css",
-                "asset_id": "css",
-                "item_type": "individual",
-                "required": True,
-                "content": "body { color: red; }",
-            },
-            "javascript": {
-                "asset_type": "javascript",
-                "asset_id": "javascript",
-                "item_type": "individual",
-                "required": True,
-                "content": "console.log('test')",
-            },
-            "vast": {
-                "asset_type": "vast",
-                "delivery_type": "inline",
-                "asset_id": "vast",
-                "item_type": "individual",
-                "required": True,
-                "content": "<VAST>test</VAST>",
-            },
-            "daast": {
-                "asset_type": "daast",
-                "delivery_type": "inline",
-                "asset_id": "daast",
-                "item_type": "individual",
-                "required": True,
-                "content": "<DAAST>test</DAAST>",
-            },
-            "catalog": {
-                "asset_type": "catalog",
-                "asset_id": "catalog",
-                "item_type": "individual",
-                "required": True,
-                "type": "product",
-            },
-        }
-        for asset_type, asset_data in asset_type_examples.items():
+        # One AssetSpec per asset type, each emitting the SDK list shape
+        # (multiple=True) so the discriminated-union list path is exercised.
+        asset_type_specs = [
+            image_spec("image", url="https://example.com/img.png", multiple=True),
+            video_spec("video", url="https://example.com/vid.mp4", width=1920, height=1080, multiple=True),
+            asset_spec("audio", "audio", multiple=True, url="https://example.com/audio.mp3"),
+            text_spec("text", content="test text content", multiple=True),
+            asset_spec("markdown", "markdown", multiple=True, content="# test markdown"),
+            asset_spec("html", "html", multiple=True, content="<div>test html</div>"),
+            asset_spec("css", "css", multiple=True, content="body { color: red; }"),
+            asset_spec("javascript", "javascript", multiple=True, content="console.log('test')"),
+            asset_spec("vast", "vast", multiple=True, delivery_type="inline", content="<VAST>test</VAST>"),
+            asset_spec("daast", "daast", multiple=True, delivery_type="inline", content="<DAAST>test</DAAST>"),
+            asset_spec("catalog", "catalog", multiple=True, type="product"),
+        ]
+        for spec in asset_type_specs:
             creative = CreativeAsset(
-                creative_id=f"c_{asset_type}",
-                name=f"Test {asset_type}",
+                creative_id=f"c_{spec.role}",
+                name=f"Test {spec.role}",
                 format_id=_adcp_format_id(),
-                assets={asset_type: [asset_data]},
+                assets=build_assets(spec),
             )
             assert creative.assets is not None
-            assert asset_type in creative.assets
+            assert spec.role in creative.assets
 
 
 # ============================================================================
@@ -4249,19 +4180,7 @@ class TestExtensionGaps:
                     {
                         "creative_id": "c_no_name",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        "assets": {
-                            "banner": [
-                                {
-                                    "asset_type": "image",
-                                    "asset_id": "banner",
-                                    "item_type": "individual",
-                                    "required": True,
-                                    "url": "https://example.com/b.png",
-                                    "width": 300,
-                                    "height": 250,
-                                }
-                            ]
-                        },
+                        "assets": build_assets(image_spec("banner", url="https://example.com/b.png", multiple=True)),
                     }
                 ],
                 identity=identity,

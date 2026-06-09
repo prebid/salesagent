@@ -13,7 +13,7 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.schemas import Creative, Format
 from src.core.schemas import FormatId as SchemasFormatId
-from tests.factories.creative_asset import make_image_assets, make_video_assets
+from tests.factories.creative_asset import build_assets, image_spec, video_spec
 
 
 class TestExtractFormatInfo:
@@ -307,7 +307,7 @@ class TestAdapterAssetConversion:
                 width=300,
                 height=250,
             ),
-            assets=make_image_assets("banner_image", "https://example.com/banner.jpg"),
+            assets=build_assets(image_spec("banner_image", url="https://example.com/banner.jpg", multiple=True)),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
@@ -330,7 +330,7 @@ class TestAdapterAssetConversion:
                 height=1080,
                 duration_ms=30000,
             ),
-            assets=make_video_assets("video", "https://example.com/video.mp4"),
+            assets=build_assets(video_spec("video", url="https://example.com/video.mp4", multiple=True)),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
@@ -351,7 +351,7 @@ class TestAdapterAssetConversion:
                 id="display_static",
                 # No width/height
             ),
-            assets=make_image_assets("banner_image", "https://example.com/banner.jpg"),
+            assets=build_assets(image_spec("banner_image", url="https://example.com/banner.jpg", multiple=True)),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
@@ -371,7 +371,7 @@ class TestAdapterAssetConversion:
                 width=728,
                 height=90,
             ),
-            assets=make_image_assets("banner_image", "https://example.com/leaderboard.jpg"),
+            assets=build_assets(image_spec("banner_image", url="https://example.com/leaderboard.jpg", multiple=True)),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])

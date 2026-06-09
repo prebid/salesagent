@@ -19,7 +19,7 @@ from adcp.types import CreativeAction
 from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
-from tests.factories.creative_asset import make_creative_asset_minimal, make_image_assets
+from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
 from tests.helpers.creative_test_helpers import (
     make_creative_dict as _make_creative_dict,
 )
@@ -111,19 +111,7 @@ class TestSyncBaseModelNormalization:
             creative_id: str = "c_custom"
             name: str = "Custom Banner"
             format_id: dict = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}
-            assets: dict = {
-                "banner_image": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "banner_image",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/banner.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            }
+            assets: dict = build_assets(image_spec("banner_image", url="https://example.com/banner.png"))
             variants: list = []
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
@@ -602,7 +590,7 @@ class TestValidationEdgeCases:
             creative_id="c1",
             name="Test Banner",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-            assets=make_image_assets("image", "https://example.com/img.png"),
+            assets=build_assets(image_spec("image", url="https://example.com/img.png")),
             tags=["automotive", "display"],
             variants=[],
         )

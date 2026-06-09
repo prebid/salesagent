@@ -16,6 +16,7 @@ beads: salesagent-6xt9
 from adcp.types import CreativeAsset
 
 from src.core.tools.creatives._assets import _extract_text_from_asset_value, _extract_url_from_asset_value
+from tests.factories.creative_asset import build_assets, image_spec, text_spec, video_spec
 
 
 def _build_creative_with_assets(assets_dict: dict) -> CreativeAsset:
@@ -37,19 +38,7 @@ class TestExtractUrlFromAssetValueRootModel:
     def test_rootmodel_image_asset_extracts_url(self):
         """URL is extracted from an ImageAsset wrapped in Assets RootModel."""
         ca = _build_creative_with_assets(
-            {
-                "img": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "img",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/image.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            }
+            build_assets(image_spec("img", url="https://example.com/image.png", multiple=True))
         )
         asset = ca.assets["img"]
 
@@ -62,20 +51,11 @@ class TestExtractUrlFromAssetValueRootModel:
     def test_rootmodel_video_asset_extracts_url(self):
         """URL is extracted from a VideoAsset wrapped in Assets RootModel."""
         ca = _build_creative_with_assets(
-            {
-                "vid": [
-                    {
-                        "asset_type": "video",
-                        "asset_id": "vid",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/video.mp4",
-                        "width": 1920,
-                        "height": 1080,
-                        "duration": 30.0,
-                    }
-                ]
-            }
+            build_assets(
+                video_spec(
+                    "vid", url="https://example.com/video.mp4", width=1920, height=1080, multiple=True, duration=30.0
+                )
+            )
         )
         asset = ca.assets["vid"]
         assert hasattr(asset, "root")
@@ -117,19 +97,7 @@ class TestExtractTextFromAssetValueRootModel:
 
     def test_rootmodel_text_asset_extracts_content(self):
         """Text content is extracted from a TextAsset wrapped in Assets RootModel."""
-        ca = _build_creative_with_assets(
-            {
-                "message": [
-                    {
-                        "asset_type": "text",
-                        "asset_id": "msg",
-                        "item_type": "individual",
-                        "required": True,
-                        "content": "Hello world",
-                    }
-                ]
-            }
-        )
+        ca = _build_creative_with_assets(build_assets(text_spec("message", content="Hello world", multiple=True)))
         asset = ca.assets["message"]
 
         # Confirm this is actually a RootModel wrapper

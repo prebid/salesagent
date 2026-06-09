@@ -10,7 +10,7 @@ import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
-from tests.factories.creative_asset import make_image_assets
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.creative_test_helpers import (
     make_creative_dict,
 )
@@ -312,7 +312,7 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_no_format",
             "name": "Creative Without Format",
             # Missing format_id
-            "assets": make_image_assets("banner_image", "https://example.com/banner.png"),
+            "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
         }
 
         mock_uow, mock_creative_repo = _make_creative_uow()
@@ -350,7 +350,7 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_unknown",
             "name": "Unknown Format",
             "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format"},
-            "assets": make_image_assets("image", "https://example.com/1.png"),
+            "assets": build_assets(image_spec("image", url="https://example.com/1.png")),
         }
 
         # Test 2: Agent unreachable (network error)
@@ -358,7 +358,7 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_unreachable",
             "name": "Unreachable Agent",
             "format_id": {"agent_url": "https://offline.example.com", "id": "display_300x250_image"},
-            "assets": make_image_assets("image", "https://example.com/2.png"),
+            "assets": build_assets(image_spec("image", url="https://example.com/2.png")),
         }
 
         mock_uow, mock_creative_repo = _make_creative_uow()
