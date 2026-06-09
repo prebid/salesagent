@@ -20,6 +20,7 @@ dependencies = [
     "authlib>=1.6.12",  # GHSA-jj8c-mmj3-mmgv; PYSEC-2026-188
     "requests-oauthlib>=1.3.1",
     "fastapi>=0.133.0",  # 0.133.0 adds starlette 1.0+ support (PYSEC-2026-161)
+    "starlette>=1.0.1",  # PYSEC-2026-161 / CVE-2026-48710 (BadHost); explicit pin — fastapi allows 0.50.x
     "uvicorn>=0.23.0",
     "beautifulsoup4>=4.12.0",
     "aiohttp>=3.14.0",  # CVE-2026-34993
