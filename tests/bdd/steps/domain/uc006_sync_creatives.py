@@ -21,7 +21,7 @@ from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-from tests.factories.creative_asset import make_image_assets, make_text_assets
+from tests.factories.creative_asset import make_image_asset, make_image_assets, make_text_assets, make_url_asset
 from tests.factories.principal import PrincipalFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -45,12 +45,8 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
             _E2E_FORMAT_ID,
             _E2E_AGENT_URL,
             {
-                "banner_image": {
-                    "url": "https://example.com/banner.png",
-                    "width": 300,
-                    "height": 250,
-                },
-                "click_url": {"url": "https://example.com/landing"},
+                **make_image_asset("banner_image", url="https://example.com/banner.png"),
+                **make_url_asset("click_url", url="https://example.com/landing"),
             },
         )
     # SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role

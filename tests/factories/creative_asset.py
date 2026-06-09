@@ -86,6 +86,59 @@ def make_text_assets(asset_id: str, content: str) -> dict:
     }
 
 
+def make_url_assets(asset_id: str, url: str, url_type: str | None = None) -> dict:
+    """Build an SDK 5.7 LIST-shape url asset slot ``{asset_id: [{asset_type: url, ...}]}``.
+
+    For multi-count url slots (format ``slots[].max > 1``). For an individual url slot use
+    the single-object form :func:`make_url_asset`.
+    """
+    entry: dict = {
+        "asset_type": "url",
+        "asset_id": asset_id,
+        "item_type": "individual",
+        "required": True,
+        "url": url,
+    }
+    if url_type is not None:
+        entry["url_type"] = url_type
+    return {asset_id: [entry]}
+
+
+# ---------------------------------------------------------------------------
+# Single-object (flat) helpers — AdCP 3.1 individual-slot shape
+#
+# AdCP 3.1 (creative-manifest) lets a slot value be EITHER a single asset object
+# (individual slots) OR a list of asset objects (multi-count slots, ``slots[].max > 1``).
+# The adcp 5.7 SDK accepts and round-trips both. These helpers emit the single-object
+# shape (just the typed asset fields — no asset_id/item_type/required, which belong to the
+# format's requirements, not the manifest value). Use the ``*_assets`` (plural) helpers
+# above for the list shape. Centralising both keeps the shapes out of inline test dicts (#1391).
+# ---------------------------------------------------------------------------
+
+
+def make_image_asset(
+    asset_id: str = "banner",
+    url: str = "https://example.com/banner.png",
+    width: int = 300,
+    height: int = 250,
+) -> dict:
+    """AdCP 3.1 single-object image asset for an individual slot: ``{asset_id: {asset_type: image, ...}}``."""
+    return {asset_id: {"asset_type": "image", "url": url, "width": width, "height": height}}
+
+
+def make_text_asset(asset_id: str, content: str) -> dict:
+    """AdCP 3.1 single-object text asset for an individual slot: ``{asset_id: {asset_type: text, content}}``."""
+    return {asset_id: {"asset_type": "text", "content": content}}
+
+
+def make_url_asset(asset_id: str, url: str, url_type: str | None = None) -> dict:
+    """AdCP 3.1 single-object url asset for an individual slot: ``{asset_id: {asset_type: url, url, [url_type]}}``."""
+    asset: dict = {"asset_type": "url", "url": url}
+    if url_type is not None:
+        asset["url_type"] = url_type
+    return {asset_id: asset}
+
+
 def make_legacy_asset_dict(asset_id: str, **fields: object) -> dict:
     """Build a LEGACY (AdCP v1) single-dict asset entry: ``{asset_id: {**fields}}``.
 

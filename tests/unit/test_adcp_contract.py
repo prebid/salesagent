@@ -56,7 +56,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     Product as ProductSchema,
 )
-from tests.factories.creative_asset import make_image_assets, make_video_assets
+from tests.factories.creative_asset import make_image_asset, make_image_assets, make_url_asset, make_video_assets
 
 
 class TestSchemaMatchesLibrary:
@@ -845,13 +845,8 @@ class TestAdCPContract:
             name="Test AdCP Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
-                "banner_image": {
-                    "url": "https://example.com/creative.jpg",
-                    "width": 300,
-                    "height": 250,
-                    "asset_type": "image",
-                },
-                "click_url": {"url": "https://example.com/landing", "url_type": "clickthrough"},
+                **make_image_asset("banner_image", url="https://example.com/creative.jpg"),
+                **make_url_asset("click_url", url="https://example.com/landing", url_type="clickthrough"),
             },
             tags=["display", "banner"],
             # Internal fields (optional, added by sales agent)
@@ -1377,13 +1372,8 @@ class TestAdCPContract:
             name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
-                "banner_image": {
-                    "url": "https://example.com/creative.jpg",
-                    "width": 300,
-                    "height": 250,
-                    "asset_type": "image",
-                },
-                "click_url": {"url": "https://example.com/click", "url_type": "clickthrough"},
+                **make_image_asset("banner_image", url="https://example.com/creative.jpg"),
+                **make_url_asset("click_url", url="https://example.com/click", url_type="clickthrough"),
             },
             tags=["sports", "premium"],
             # Internal fields (added by sales agent during processing)
