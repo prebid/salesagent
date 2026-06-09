@@ -20,6 +20,16 @@ import requests
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 
 
+def e2e_host() -> str:
+    """Host for e2e server URLs.
+
+    'localhost' on the host path (Docker publishes host ports); a compose service
+    name (e.g. 'proxy') when the runner is in-network and reaches the server over
+    the compose network with no published ports (ADCP_TEST_HOST).
+    """
+    return os.getenv("ADCP_TEST_HOST", "localhost")
+
+
 def port_scan_start(start_port: int, end_port: int, pid: int | None = None) -> int:
     """Deterministic per-process scan origin inside [start_port, end_port).
 
@@ -134,7 +144,7 @@ def docker_services_e2e(request):
         start_time = time.time()
         for _ in range(max_wait // 2):
             try:
-                response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
+                response = requests.get(f"http://{e2e_host()}:{mcp_port}/health", timeout=2)
                 if response.status_code == 200:
                     elapsed = int(time.time() - start_time)
                     print(f"✓ Server is healthy ({elapsed}s)")
@@ -222,7 +232,7 @@ def docker_services_e2e(request):
         server_ready = False
 
         print(f"Waiting for server (max {max_wait}s)...")
-        print(f"  Health: http://localhost:{mcp_port}/health")
+        print(f"  Health: http://{e2e_host()}:{mcp_port}/health")
 
         while time.time() - start_time < max_wait:
             elapsed = int(time.time() - start_time)
@@ -247,7 +257,7 @@ def docker_services_e2e(request):
             # confirms the FastAPI app is actually serving (not just nginx).
             if not server_ready:
                 try:
-                    response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
+                    response = requests.get(f"http://{e2e_host()}:{mcp_port}/health", timeout=2)
                     if response.status_code == 200:
                         print(f"✓ Server is ready (after {elapsed}s)")
                         server_ready = True
@@ -343,7 +353,7 @@ def docker_services_e2e(request):
     # After init_database_ci.py populates data, we need to flush those connections.
     print("🔄 Resetting MCP server database connection pool...")
     try:
-        reset_response = requests.post(f"http://localhost:{mcp_port}/_internal/reset-db-pool", timeout=5)
+        reset_response = requests.post(f"http://{e2e_host()}:{mcp_port}/_internal/reset-db-pool", timeout=5)
         if reset_response.status_code == 200:
             print("✓ Database connection pool reset successfully")
             print(f"  Response: {reset_response.json()}")
@@ -357,7 +367,7 @@ def docker_services_e2e(request):
     # Check MCP server's view of database via debug endpoint
     print("🔍 Checking MCP server's database view...")
     try:
-        db_state_response = requests.get(f"http://localhost:{mcp_port}/debug/db-state", timeout=5)
+        db_state_response = requests.get(f"http://{e2e_host()}:{mcp_port}/debug/db-state", timeout=5)
         if db_state_response.status_code == 200:
             db_state = db_state_response.json()
             print(f"   MCP server sees: {db_state['total_products']} total products")
@@ -452,13 +462,20 @@ def live_server(docker_services_e2e):
     # Get dynamically allocated ports from docker_services_e2e fixture
     ports = docker_services_e2e
 
+    host = e2e_host()
+    # DB host: in-network there is no published Postgres port, so honor the
+    # service-name DATABASE_URL (postgres:5432); else fall back to localhost:port.
+    pg_url = os.getenv("DATABASE_URL") or (
+        f"postgresql://adcp_user:secure_password_change_me@localhost:{ports['postgres_port']}/adcp"
+    )
+    pg_host = os.getenv("ADCP_TEST_DB_HOST", "localhost")
     return {
-        "mcp": f"http://localhost:{ports['mcp_port']}",
-        "a2a": f"http://localhost:{ports['a2a_port']}",
-        "admin": f"http://localhost:{ports['admin_port']}",
-        "postgres": f"postgresql://adcp_user:secure_password_change_me@localhost:{ports['postgres_port']}/adcp",
+        "mcp": f"http://{host}:{ports['mcp_port']}",
+        "a2a": f"http://{host}:{ports['a2a_port']}",
+        "admin": f"http://{host}:{ports['admin_port']}",
+        "postgres": pg_url,
         "postgres_params": {
-            "host": "localhost",
+            "host": pg_host,
             "port": ports["postgres_port"],
             "user": "adcp_user",
             "password": "secure_password_change_me",
