@@ -1397,4 +1397,3 @@ Feature: BR-UC-023 Sync Product Catalogs
       | key present, prior record exists, payload has all fields changed              | a prior record exists but every payload field differs                     | error "IDEMPOTENCY_CONFLICT" with suggestion                             |
       | key present, prior request still in flight (not yet committed)                | the first request under this key is still being processed                 | error "IDEMPOTENCY_IN_FLIGHT" with suggestion                            |
       | key present, prior record exists, replay arrives exactly at replay_ttl_seconds boundary | a prior record exists and the replay arrives exactly at the replay_ttl_seconds boundary | error "IDEMPOTENCY_EXPIRED" with suggestion                  |
-

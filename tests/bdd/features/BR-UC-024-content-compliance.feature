@@ -1206,4 +1206,3 @@ Feature: BR-UC-024 Content Compliance
     And the error should include "suggestion" field
     # POST-F2: policy reference is structured, not free text
     # POST-F3: buyer can fetch policy text and revise
-

@@ -1816,4 +1816,3 @@ Feature: BR-UC-001 Discover Available Inventory
       | malformed authority / non-ToASCII host / IPv6 zone id                | invalid   |
       | reserved id slot populated                                          | invalid   |
       | agent_url absent                                                    | invalid   |
-

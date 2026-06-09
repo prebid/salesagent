@@ -1,0 +1,9 @@
+# Placeholder rule — no patterns enforced yet.
+# BDD structural guard rules go here as .yml files when needed.
+# See: https://ast-grep.github.io/guide/rule-config.html
+id: bdd-placeholder
+message: placeholder
+severity: warning
+language: Python
+rule:
+  pattern: __ast_grep_placeholder_that_never_matches__

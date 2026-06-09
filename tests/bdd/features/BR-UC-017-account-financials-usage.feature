@@ -1320,4 +1320,3 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And error.details conforms to /schemas/error-details/account-setup-required.json
     And error.details.setup_url is an absolute URI
     And error.details.setup_steps is a non-empty array of human-readable step descriptions
-

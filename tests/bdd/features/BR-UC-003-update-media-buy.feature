@@ -2668,4 +2668,3 @@ Feature: BR-UC-003 Update Media Buy
       | boundary                                  | outcome                                    |
       | tenant flag true (submitted task envelope) | submitted task envelope (awaiting approval) |
       | adapter flag true (submitted task envelope) | submitted task envelope (awaiting approval) |
-

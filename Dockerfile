@@ -35,9 +35,11 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies with caching and increased timeout
 # This layer will be cached as long as pyproject.toml and uv.lock don't change
 ENV UV_HTTP_TIMEOUT=300
+# Install runtime deps only — dev group (pytest, factory-boy, ruff, etc.) stays out
+# of the production image. See [dependency-groups].dev in pyproject.toml.
 RUN --mount=type=cache,target=/cache/uv \
     --mount=type=cache,target=/root/.cache/pip \
-    uv sync --frozen
+    uv sync --frozen --no-dev
 
 # Runtime stage
 FROM python:3.12-slim

@@ -958,4 +958,3 @@ Feature: BR-UC-021 Preview Creative
     # canonical example). This anchors the post-sync preview flow as distinct
     # from the existing single/batch/variant inline scenarios.
     # preview_display: post-sync preview returns a render in the format's native dimensions
-

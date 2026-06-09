@@ -1174,4 +1174,3 @@ Feature: BR-UC-015 Track Conversions
     Then the history contains exactly one entry with entry_type "request"
     And the history contains exactly one entry with entry_type "response"
     And every entry_type value is drawn from /schemas/enums/history-entry-type.json
-

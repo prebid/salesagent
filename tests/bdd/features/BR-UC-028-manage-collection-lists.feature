@@ -798,4 +798,3 @@ Feature: BR-UC-028 Manage Collection Lists
       | event="other_event"              | rejected (invalid event const)                |
       | resolved_at missing              | rejected: WEBHOOK_PAYLOAD_REQUIRED_FIELD_MISSING |
       | Top-level field 'extra_data' added | rejected (additionalProperties false)        |
-
