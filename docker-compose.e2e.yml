@@ -21,8 +21,11 @@ services:
       POSTGRES_PASSWORD: secure_password_change_me
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5435}:5432"
+    # NO host port here — publishing lives in docker-compose.e2e.ports.yml, which
+    # only the HOST paths overlay (conftest standalone branch, test-stack.sh). The
+    # in-network runner uses this base file alone and reaches Postgres by service
+    # name (postgres:5432), so it publishes ZERO host ports and many stacks can
+    # run concurrently without a port collision.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U adcp_user -d adcp"]
       interval: 10s
@@ -66,8 +69,9 @@ services:
       - ./config/nginx/nginx-development.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - adcp-server
-    ports:
-      - "127.0.0.1:${ADCP_SALES_PORT:-8092}:8000"
+    # NO host port here either — see the postgres note above. Publishing for the
+    # host paths is in docker-compose.e2e.ports.yml; the in-network runner reaches
+    # the proxy by service name (proxy:8000).
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

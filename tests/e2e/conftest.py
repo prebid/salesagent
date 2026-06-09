@@ -211,11 +211,14 @@ def docker_services_e2e(request):
         print("Building and starting Docker services with dynamic ports...")
         print("This may take 2-3 minutes for initial build...")
 
-        # Build first with output visible, then start detached
-        # Use docker-compose.e2e.yml which exposes individual ports for testing
+        # Build first with output visible, then start detached. This standalone
+        # branch runs pytest ON THE HOST and reaches the stack over localhost, so
+        # it overlays the ports file (the base compose publishes NO host ports —
+        # that is reserved for the in-network runner). Same files for build + up.
         print("Step 1/2: Building Docker images...")
+        compose_files = ["-f", "docker-compose.e2e.yml", "-f", "docker-compose.e2e.ports.yml"]
         build_result = subprocess.run(
-            ["docker-compose", "-f", "docker-compose.e2e.yml", "build", "--progress=plain"],
+            ["docker-compose", *compose_files, "build", "--progress=plain"],
             env=env,
             capture_output=False,  # Show build output
         )
@@ -224,7 +227,7 @@ def docker_services_e2e(request):
             raise subprocess.CalledProcessError(build_result.returncode, "docker-compose build")
 
         print("Step 2/2: Starting services...")
-        subprocess.run(["docker-compose", "-f", "docker-compose.e2e.yml", "up", "-d"], check=True, env=env)
+        subprocess.run(["docker-compose", *compose_files, "up", "-d"], check=True, env=env)
 
         # Wait for unified server to be healthy (MCP + A2A + Admin all on same port)
         max_wait = 120  # Increased from 60 to 120 seconds for CI

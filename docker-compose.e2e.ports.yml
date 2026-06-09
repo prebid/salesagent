@@ -1,0 +1,26 @@
+# Host-port publishing overlay for docker-compose.e2e.yml.
+#
+# WHY THIS IS SEPARATE: the base docker-compose.e2e.yml publishes NO host ports
+# so the in-network test runner (scripts/test-in-network.sh) is immune to
+# cross-stack host-port collisions — it reaches Postgres/the proxy by service
+# name and many stacks can run concurrently.
+#
+# The HOST test paths, however, run pytest ON THE HOST and must reach the stack
+# over localhost, so they DO need published ports. Those paths overlay this file:
+#   - tests/e2e/conftest.py  (standalone branch: builds + ups its own stack; this
+#                             is also the path GitHub CI uses for `pytest tests/e2e`)
+#   - scripts/test-stack.sh  (host stack for run_all_tests.sh / make test-stack-up)
+#
+# Usage (host paths only):
+#   docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml up -d
+#
+# Compose merges these `ports` onto the base service definitions. Do NOT add this
+# overlay to the in-network runner — that would reintroduce the collision surface.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5435}:5432"
+
+  proxy:
+    ports:
+      - "127.0.0.1:${ADCP_SALES_PORT:-8092}:8000"
