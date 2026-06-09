@@ -7,18 +7,29 @@ on:
         description: Brief reason for revert (logged in PR body)
         required: true
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   revert:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+      - name: Write PR body
+        env:
+          REVERT_REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Emergency revert triggered via workflow_dispatch."
+            echo "Reason: ${REVERT_REASON}"
+            echo "Post-revert: identify blocked egress, update allowlist, then flip back to block-mode."
+          } > /tmp/pr-body.md
       - name: Revert harden-runner to audit mode
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -34,4 +45,4 @@ jobs:
           git commit -m "ops: emergency revert harden-runner to audit mode"
           gh pr create \
             --title "ops: emergency revert harden-runner to audit" \
-            --body "Emergency revert triggered via workflow_dispatch. Reason: ${{ inputs.reason }}. Post-revert: identify blocked egress, update allowlist, then flip back to block-mode."
+            --body-file /tmp/pr-body.md

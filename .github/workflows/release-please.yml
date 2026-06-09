@@ -44,7 +44,6 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
@@ -161,7 +160,7 @@ jobs:
           subject-digest: ${{ needs.build-and-push.outputs.ghcr_digest }}
           push-to-registry: true
       - name: Scan image for OS-layer CVEs
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}@${{ needs.build-and-push.outputs.ghcr_digest }}
           severity: CRITICAL,HIGH

@@ -8,6 +8,10 @@ import pytest
 
 from tests.unit._architecture_helpers import repo_root
 
+# Jobs that need Docker or GitHub service containers cannot use disable-sudo-and-containers
+# (harden-runner removes the host Docker daemon). Audit-only harden-runner is sufficient.
+_DOCKER_AWARE_WORKFLOWS = frozenset({"ci.yml", "release-please.yml"})
+
 
 @pytest.mark.arch_guard
 def test_harden_runner_present_on_workflows() -> None:
@@ -18,10 +22,17 @@ def test_harden_runner_present_on_workflows() -> None:
         if wf.name == "harden-runner-emergency-revert.yml":
             continue
         text = wf.read_text()
-        if "step-security/harden-runner@" in text:
-            count += text.count("step-security/harden-runner@")
-            assert "egress-policy: audit" in text, f"{wf.name} missing audit egress-policy"
-            assert "disable-sudo-and-containers: true" in text, f"{wf.name} missing CVE-2025-32955 mitigation"
+        if "step-security/harden-runner@" not in text:
+            continue
+        hr_count = text.count("step-security/harden-runner@")
+        sudo_count = text.count("disable-sudo-and-containers: true")
+        count += hr_count
+        assert "egress-policy: audit" in text, f"{wf.name} missing audit egress-policy"
+        if wf.name in _DOCKER_AWARE_WORKFLOWS:
+            assert sudo_count >= 1, f"{wf.name} must disable sudo on non-docker jobs"
+            assert sudo_count < hr_count, f"{wf.name} must omit disable-sudo on docker/service jobs"
+        else:
+            assert sudo_count == hr_count, f"{wf.name} missing CVE-2025-32955 mitigation on a harden-runner step"
     assert count >= 5, f"expected >=5 harden-runner steps, found {count}"
 
 
