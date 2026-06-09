@@ -30,7 +30,7 @@ from src.core.database.models import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, SyncCreativesResponse
 from src.core.testing_hooks import AdCPTestContext
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
+from tests.factories.creative_asset import asset_spec, build_assets, image_spec
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -333,7 +333,7 @@ class TestCreativeLifecycleMCP:
                     "url": "https://example.com/old.jpg",
                     "width": 300,
                     "height": 250,
-                    "assets": dict(DEFAULT_IMAGE_ASSETS),
+                    "assets": build_assets(image_spec("banner")),
                 },
             )
             session.add(existing_creative)
@@ -505,7 +505,7 @@ class TestCreativeLifecycleMCP:
                         "url": f"https://example.com/creative_{i}.jpg",
                         "width": 300,
                         "height": 250,
-                        "assets": dict(DEFAULT_IMAGE_ASSETS),
+                        "assets": build_assets(image_spec("banner")),
                     },
                 )
                 for i in range(5)
@@ -544,7 +544,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_300x250_image",
                     status="approved",
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(3)
             ] + [
@@ -556,7 +556,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_728x90_image",
                     status="pending_review",
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ]
@@ -606,7 +606,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_300x250_image",
                     status="approved",
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ] + [
@@ -618,7 +618,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="video_instream_15s",
                     status="approved",
-                    data={"duration": 15.0, "assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"duration": 15.0, "assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(3)
             ]
@@ -681,7 +681,7 @@ class TestCreativeLifecycleMCP:
                     format="display_300x250_image",
                     status="approved",
                     created_at=now - timedelta(days=10 + i),  # 10+ days ago
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ] + [
@@ -694,7 +694,7 @@ class TestCreativeLifecycleMCP:
                     format="display_300x250_image",
                     status="approved",
                     created_at=now - timedelta(days=2 + i),  # 2-3 days ago
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ]
@@ -728,7 +728,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_300x250_image",
                     status="approved",
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 ),
                 DBCreative(
                     tenant_id=self.test_tenant_id,
@@ -738,7 +738,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="video_instream_15s",
                     status="approved",
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 ),
                 DBCreative(
                     tenant_id=self.test_tenant_id,
@@ -748,7 +748,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_728x90_image",
                     status="approved",
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 ),
             ]
             session.add_all(creatives)
@@ -787,7 +787,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_300x250_image",
                     status="approved",
-                    data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(25)  # Create 25 creatives
             ]
@@ -838,7 +838,7 @@ class TestCreativeLifecycleMCP:
                 agent_url="https://creative.adcontextprotocol.org",
                 format="display_300x250_image",
                 status="approved",
-                data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                data={"assets": build_assets(image_spec("banner"))},
             )
             creative_2 = DBCreative(
                 tenant_id=self.test_tenant_id,
@@ -848,7 +848,7 @@ class TestCreativeLifecycleMCP:
                 agent_url="https://creative.adcontextprotocol.org",
                 format="display_300x250_image",
                 status="approved",
-                data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                data={"assets": build_assets(image_spec("banner"))},
             )
             session.add_all([creative_1, creative_2])
 
@@ -951,22 +951,9 @@ class TestCreativeLifecycleMCP:
                 agent_url="https://creative.adcontextprotocol.org",
                 format="display_300x250_image",
                 status="approved",
-                data={
-                    "assets": {
-                        "banner_image": [
-                            {
-                                "asset_type": "image",
-                                "asset_id": "banner_image",
-                                "item_type": "individual",
-                                "required": True,
-                                # Missing URL - only has dimensions
-                                "width": 300,
-                                "height": 250,
-                            }
-                        ]
-                        # Removed click_url so fallback logic has no URL to find
-                    }
-                },
+                # Image asset with dimensions but NO url (and no click_url fallback),
+                # so the validator finds no media URL and must raise.
+                data={"assets": build_assets(asset_spec("banner_image", "image", width=300, height=250))},
             )
             session.add(creative_no_url)
             session.commit()

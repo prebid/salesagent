@@ -14,7 +14,15 @@ import pytest
 from adcp.types import CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
 
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS, make_creative_asset_minimal
+from tests.factories.creative_asset import (
+    AssetSpec,
+    asset_spec,
+    build_assets,
+    image_spec,
+    make_creative_asset_minimal,
+    text_spec,
+    video_spec,
+)
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -28,7 +36,7 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
         "creative_id": "c_test_1",
         "name": "Test Banner",
         "format_id": AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
-        "assets": dict(DEFAULT_IMAGE_ASSETS),
+        "assets": build_assets(image_spec("banner", multiple=True)),
     }
     defaults.update(overrides)
     return make_creative_asset_minimal(**defaults)
@@ -39,21 +47,24 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
 # ---------------------------------------------------------------------------
 
 
-def _asset_sample(asset_type: str, asset_id: str) -> dict:
-    """Build a valid SDK 5.7 discriminated-union asset entry for the given type."""
-    base = {"asset_type": asset_type, "asset_id": asset_id, "item_type": "individual", "required": True}
+def _asset_sample_spec(asset_type: str, role: str) -> AssetSpec:
+    """Build an AssetSpec for the given asset_type, used to both build and verify."""
     url_placeholder = "https://example.com/test_asset"
-    if asset_type in ("image", "video"):
-        return {**base, "url": url_placeholder, "width": 300, "height": 250}
+    if asset_type == "image":
+        return image_spec(role, url=url_placeholder, multiple=True)
+    if asset_type == "video":
+        return video_spec(role, url=url_placeholder, width=300, height=250, multiple=True)
     if asset_type == "audio":
-        return {**base, "url": url_placeholder}
-    if asset_type in ("text", "markdown", "html", "css", "javascript"):
-        return {**base, "content": f"test {asset_type} content"}
+        return asset_spec(role, "audio", multiple=True, url=url_placeholder)
+    if asset_type == "text":
+        return text_spec(role, content=f"test {asset_type} content", multiple=True)
+    if asset_type in ("markdown", "html", "css", "javascript"):
+        return asset_spec(role, asset_type, multiple=True, content=f"test {asset_type} content")
     if asset_type in ("vast", "daast"):
-        return {"asset_type": asset_type, "delivery_type": "url", "url": url_placeholder}
+        return asset_spec(role, asset_type, multiple=True, delivery_type="url", url=url_placeholder)
     if asset_type == "catalog":
-        return {"asset_type": "catalog", "type": "product", "url": url_placeholder}
-    return {**base, "content": f"test {asset_type} content"}
+        return asset_spec(role, "catalog", multiple=True, type="product", url=url_placeholder)
+    return asset_spec(role, asset_type, multiple=True, content=f"test {asset_type} content")
 
 
 class TestAllAssetTypesAcceptedThroughSync:
@@ -91,7 +102,7 @@ class TestAllAssetTypesAcceptedThroughSync:
                     _make_creative_asset(
                         creative_id=f"c_{asset_type}",
                         name=f"Test {asset_type}",
-                        assets={asset_type: [_asset_sample(asset_type, asset_type)]},
+                        assets=build_assets(_asset_sample_spec(asset_type, asset_type)),
                     )
                 )
 
@@ -120,7 +131,7 @@ class TestAllAssetTypesAcceptedThroughSync:
                 creative = _make_creative_asset(
                     creative_id=f"c_rt_{asset_type}",
                     name=f"Roundtrip {asset_type}",
-                    assets={asset_type: [_asset_sample(asset_type, asset_type)]},
+                    assets=build_assets(_asset_sample_spec(asset_type, asset_type)),
                 )
                 response = env.call_impl(creatives=[creative])
                 assert response.creatives[0].action == "created"

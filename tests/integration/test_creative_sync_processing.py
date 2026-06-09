@@ -17,13 +17,10 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from tests.factories.creative_asset import (
-    DEFAULT_IMAGE_ASSETS,
-)
-from tests.factories.creative_asset import (
-    make_image_assets as _image_assets,
-)
-from tests.factories.creative_asset import (
-    make_text_assets as _text_assets,
+    assert_assets,
+    build_assets,
+    image_spec,
+    text_spec,
 )
 from tests.harness import CreativeSyncEnv
 
@@ -45,7 +42,7 @@ def _creative(**overrides) -> dict:
         "creative_id": "c_proc_1",
         "name": "Processing Test",
         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-        "assets": dict(DEFAULT_IMAGE_ASSETS),
+        "assets": build_assets(image_spec("banner")),
     }
     defaults.update(overrides)
     return defaults
@@ -93,7 +90,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_msg",
                         format_id=fmt,
-                        assets=_text_assets("message", "Initial prompt"),
+                        assets=build_assets(text_spec("message", content="Initial prompt")),
                     )
                 ]
             )
@@ -107,7 +104,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_msg",
                         format_id=fmt,
-                        assets=_text_assets("message", "Updated holiday banner"),
+                        assets=build_assets(text_spec("message", content="Updated holiday banner")),
                     )
                 ]
             )
@@ -128,7 +125,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_brief",
                         format_id=fmt,
-                        assets=_text_assets("message", "Initial"),
+                        assets=build_assets(text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -139,7 +136,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_brief",
                         format_id=fmt,
-                        assets=_text_assets("brief", "Promote summer sale"),
+                        assets=build_assets(text_spec("brief", content="Promote summer sale")),
                     )
                 ]
             )
@@ -159,7 +156,7 @@ class TestGenerativeUpdatePromptExtraction:
                     _creative(
                         creative_id="c_gen_up_inputs",
                         format_id=fmt,
-                        assets=_text_assets("message", "Initial"),
+                        assets=build_assets(text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -202,7 +199,7 @@ class TestGenerativeUpdateNoPrompt:
                     _creative(
                         creative_id="c_gen_no_prompt",
                         format_id=fmt,
-                        assets=_text_assets("message", "Initial prompt"),
+                        assets=build_assets(text_spec("message", content="Initial prompt")),
                     )
                 ]
             )
@@ -254,11 +251,14 @@ class TestGenerativeUpdateUserAssets:
                     _creative(
                         creative_id="c_gen_user_assets",
                         format_id=fmt,
-                        assets=_text_assets("message", "Initial"),
+                        assets=build_assets(text_spec("message", content="Initial")),
                     )
                 ]
             )
             env.mock["registry"].return_value.build_creative.reset_mock()
+
+            # The same spec builds the update payload AND verifies the stored asset.
+            hero_image_spec = image_spec("hero_image", url="https://user-provided.com/img.png")
 
             # Update with user assets AND message
             result = env.call_impl(
@@ -266,10 +266,7 @@ class TestGenerativeUpdateUserAssets:
                     _creative(
                         creative_id="c_gen_user_assets",
                         format_id=fmt,
-                        assets={
-                            **_text_assets("message", "Refine it"),
-                            **_image_assets("hero_image", url="https://user-provided.com/img.png"),
-                        },
+                        assets=build_assets(text_spec("message", content="Refine it"), hero_image_spec),
                     )
                 ]
             )
@@ -285,18 +282,8 @@ class TestGenerativeUpdateUserAssets:
                 assert db.data.get("generative_build_result") is not None
 
                 # INV-6: the user-provided image survives the generative build (not overwritten).
-                # Production stores the SDK 5.7 list shape {role: [asset_obj]} and enriches the
-                # asset object with null defaults, so assert list-index [0] + field containment
-                # (this is the corrected shape the uc006 BDD Then-steps must also use).
                 stored_assets = db.data.get("assets") or {}
-                assert "hero_image" in stored_assets, f"user image missing: {list(stored_assets)}"
-                stored_image = stored_assets["hero_image"]
-                assert isinstance(stored_image, list), f"expected SDK 5.7 list shape, got {type(stored_image).__name__}"
-                user_image = _image_assets("hero_image", url="https://user-provided.com/img.png")["hero_image"][0]
-                for key, value in user_image.items():
-                    assert stored_image[0].get(key) == value, (
-                        f"user image['{key}'] not preserved: expected {value!r}, got {stored_image[0].get(key)!r}"
-                    )
+                assert_assets(stored_assets, hero_image_spec)
 
 
 class TestGenerativeUpdatePromotedOfferings:
@@ -316,7 +303,7 @@ class TestGenerativeUpdatePromotedOfferings:
                     _creative(
                         creative_id="c_gen_promo",
                         format_id=fmt,
-                        assets=_text_assets("message", "Initial"),
+                        assets=build_assets(text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -327,10 +314,10 @@ class TestGenerativeUpdatePromotedOfferings:
                     _creative(
                         creative_id="c_gen_promo",
                         format_id=fmt,
-                        assets={
-                            **_text_assets("message", "Build with offerings"),
-                            **_text_assets("promoted_offerings", "Widget Pro | $99"),
-                        },
+                        assets=build_assets(
+                            text_spec("message", content="Build with offerings"),
+                            text_spec("promoted_offerings", content="Widget Pro | $99"),
+                        ),
                     )
                 ]
             )
@@ -358,7 +345,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
                     _creative(
                         creative_id="c_no_gemini_up",
                         format_id=fmt,
-                        assets=_text_assets("message", "Initial"),
+                        assets=build_assets(text_spec("message", content="Initial")),
                     )
                 ]
             )
@@ -371,7 +358,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
                     _creative(
                         creative_id="c_no_gemini_up",
                         format_id=fmt,
-                        assets=_text_assets("message", "Try to update"),
+                        assets=build_assets(text_spec("message", content="Try to update")),
                     )
                 ]
             )

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import (
     CreativeFormatsEnv,
     CreativeListEnv,
@@ -51,7 +51,7 @@ class TestMissingFormatIdRejectedThroughImpl:
                         "creative_id": "c_no_format",
                         "name": "Missing Format Creative",
                         # format_id intentionally omitted
-                        "assets": dict(DEFAULT_IMAGE_ASSETS),
+                        "assets": build_assets(image_spec("banner")),
                     }
                 ],
             )
@@ -97,13 +97,13 @@ class TestCreativeIdsScopeFiltering:
                         "creative_id": "c_included",
                         "name": "Should Be Included",
                         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-                        "assets": dict(DEFAULT_IMAGE_ASSETS),
+                        "assets": build_assets(image_spec("banner")),
                     },
                     {
                         "creative_id": "c_excluded",
                         "name": "Should Be Excluded",
                         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-                        "assets": dict(DEFAULT_IMAGE_ASSETS),
+                        "assets": build_assets(image_spec("banner")),
                     },
                 ],
                 creative_ids=["c_included"],  # Only process c_included

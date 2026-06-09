@@ -24,7 +24,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
+from tests.factories.creative_asset import assert_assets, build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 
 
@@ -122,8 +122,6 @@ class TestSyncCreativeCreateTransport:
             assert db_creative is None, "Dry-run creative should NOT be in the database"
 
 
-from tests.factories.creative_asset import make_text_assets as _text_assets
-
 DEFAULT_AGENT_URL = "https://example.com/agent"
 DEFAULT_FORMAT_ID = {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL}
 
@@ -134,7 +132,7 @@ def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
         "creative_id": creative_id,
         "name": name,
         "format_id": DEFAULT_FORMAT_ID,
-        "assets": dict(DEFAULT_IMAGE_ASSETS),
+        "assets": build_assets(image_spec("banner")),
     }
     defaults.update(overrides)
     return defaults
@@ -363,7 +361,7 @@ class TestGenerativeBuildClassification:
                         "creative_id": "c_gen_01",
                         "name": "Generative Banner",
                         "format_id": fmt,
-                        "assets": _text_assets("message", "Build me a banner"),
+                        "assets": build_assets(text_spec("message", content="Build me a banner")),
                     }
                 ],
             )
@@ -408,7 +406,7 @@ class TestGenerativeBuildPromptMessage:
                         "creative_id": "c_gen_02",
                         "name": "Message Test",
                         "format_id": fmt,
-                        "assets": _text_assets("message", "Create a holiday banner"),
+                        "assets": build_assets(text_spec("message", content="Create a holiday banner")),
                     }
                 ],
             )
@@ -442,7 +440,7 @@ class TestGenerativeBuildPromptBrief:
                         "creative_id": "c_gen_03",
                         "name": "Brief Test",
                         "format_id": fmt,
-                        "assets": _text_assets("brief", "Promote summer sale"),
+                        "assets": build_assets(text_spec("brief", content="Promote summer sale")),
                     }
                 ],
             )
@@ -476,7 +474,7 @@ class TestGenerativeBuildPromptRole:
                         "creative_id": "c_gen_04",
                         "name": "Prompt Role Test",
                         "format_id": fmt,
-                        "assets": _text_assets("prompt", "Design a Q4 campaign banner"),
+                        "assets": build_assets(text_spec("prompt", content="Design a Q4 campaign banner")),
                     }
                 ],
             )
@@ -577,7 +575,7 @@ class TestGenerativeBuildUpdatePreserve:
                         "creative_id": "c_gen_07",
                         "name": "Preserve Test",
                         "format_id": fmt,
-                        "assets": _text_assets("message", "Initial prompt"),
+                        "assets": build_assets(text_spec("message", content="Initial prompt")),
                     }
                 ],
             )
@@ -640,6 +638,11 @@ class TestGenerativeBuildUserAssetPriority:
                 },
             )
 
+            # User-provided headline must survive (NOT be replaced by the
+            # generative "AI-generated headline" output). Build and verify with
+            # the SAME spec so the assertion checks the preserved content.
+            user_headline = text_spec("headline", content="User-provided headline")
+
             result = env.call_via(
                 transport,
                 creatives=[
@@ -647,10 +650,10 @@ class TestGenerativeBuildUserAssetPriority:
                         "creative_id": "c_gen_08",
                         "name": "Asset Priority Test",
                         "format_id": fmt,
-                        "assets": {
-                            **_text_assets("message", "Build me a banner"),
-                            **_text_assets("headline", "User-provided headline"),
-                        },
+                        "assets": build_assets(
+                            text_spec("message", content="Build me a banner"),
+                            user_headline,
+                        ),
                         "url": "https://user.example.com/image.png",
                     }
                 ],
@@ -671,9 +674,8 @@ class TestGenerativeBuildUserAssetPriority:
             assert db_creative is not None
             # User-provided URL should be preserved (not overwritten by generative output)
             assert db_creative.data.get("url") == "https://user.example.com/image.png"
-            # User-provided assets should be preserved
-            assets = db_creative.data.get("assets", {})
-            assert "headline" in assets
+            # User-provided headline preserved with its original content (not AI output)
+            assert_assets(db_creative.data.get("assets", {}), user_headline)
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +703,7 @@ class TestFormatValidationAdapter:
                         "creative_id": "c_adapter_fmt",
                         "name": "Adapter Format Creative",
                         "format_id": {"id": "billboard", "agent_url": "broadstreet://default"},
-                        "assets": dict(DEFAULT_IMAGE_ASSETS),
+                        "assets": build_assets(image_spec("banner")),
                     }
                 ],
             )
@@ -1016,7 +1018,7 @@ class TestMissingFormatFails:
                     {
                         "creative_id": "c_no_format",
                         "name": "No Format Creative",
-                        "assets": dict(DEFAULT_IMAGE_ASSETS),
+                        "assets": build_assets(image_spec("banner")),
                     }
                 ],
                 validation_mode="lenient",
@@ -1118,7 +1120,7 @@ class TestGeminiKeyMissing:
                         "creative_id": "c_no_gemini",
                         "name": "No Gemini Key",
                         "format_id": fmt,
-                        "assets": _text_assets("message", "Build a banner"),
+                        "assets": build_assets(text_spec("message", content="Build a banner")),
                     }
                 ],
                 validation_mode="lenient",

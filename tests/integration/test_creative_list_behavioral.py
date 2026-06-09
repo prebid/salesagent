@@ -26,7 +26,7 @@ from tests.factories import (
     PrincipalFactory,
     TenantFactory,
 )
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import CreativeListEnv, make_identity
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -602,7 +602,7 @@ class TestListResponseShape:
                 principal=principal,
                 creative_id="c_snippet",
                 data={
-                    "assets": dict(DEFAULT_IMAGE_ASSETS),
+                    "assets": build_assets(image_spec("banner")),
                     "snippet": "<script>/* ad tag */</script>",
                 },
             )
@@ -747,7 +747,7 @@ class TestListCreativeObjectConstruction:
                 principal=principal,
                 creative_id="c_snippet",
                 data={
-                    "assets": dict(DEFAULT_IMAGE_ASSETS),
+                    "assets": build_assets(image_spec("banner")),
                     "snippet": "<script>var ad = 1;</script>",
                     "url": "https://cdn.example.com/ad.html",
                 },
@@ -768,7 +768,7 @@ class TestListCreativeObjectConstruction:
                 principal=principal,
                 creative_id="c_snippet_no_url",
                 data={
-                    "assets": dict(DEFAULT_IMAGE_ASSETS),
+                    "assets": build_assets(image_spec("banner")),
                     "snippet": "<script>var ad = 1;</script>",
                 },
             )
@@ -787,7 +787,7 @@ class TestListCreativeObjectConstruction:
                 principal=principal,
                 creative_id="c_normal",
                 data={
-                    "assets": dict(DEFAULT_IMAGE_ASSETS),
+                    "assets": build_assets(image_spec("banner")),
                     "url": "https://cdn.example.com/creative.jpg",
                 },
             )
@@ -862,7 +862,7 @@ class TestListCreativeObjectConstruction:
                 principal=principal,
                 creative_id="c_with_tags",
                 data={
-                    "assets": dict(DEFAULT_IMAGE_ASSETS),
+                    "assets": build_assets(image_spec("banner")),
                     "tags": ["brand_safe", "premium"],
                 },
             )
@@ -880,7 +880,7 @@ class TestListCreativeObjectConstruction:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_no_tags",
-                data={"assets": dict(DEFAULT_IMAGE_ASSETS)},
+                data={"assets": build_assets(image_spec("banner"))},
             )
             response = env.call_impl()
 

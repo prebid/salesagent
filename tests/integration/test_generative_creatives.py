@@ -16,8 +16,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.schemas import SyncCreativesResponse
-from tests.factories.creative_asset import make_image_assets as _image_assets
-from tests.factories.creative_asset import make_text_assets as _text_assets
+from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
@@ -31,7 +30,9 @@ def _creative(**overrides) -> dict:
         "creative_id": "gen-creative-001",
         "name": "Test Generative Creative",
         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_generative"},
-        "assets": _text_assets("message", "Create a banner ad for eco-friendly products"),
+        "assets": build_assets(
+            text_spec("message", content="Create a banner ad for eco-friendly products", multiple=True)
+        ),
     }
     defaults.update(overrides)
     return defaults
@@ -122,7 +123,7 @@ class TestGenerativeCreatives:
                         creative_id="static-creative-001",
                         name="Test Static Creative",
                         format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        assets=_image_assets("image", url="https://example.com/banner.png"),
+                        assets=build_assets(image_spec("image", url="https://example.com/banner.png", multiple=True)),
                     )
                 ]
             )
@@ -149,7 +150,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-002",
                         format_id=fmt,
-                        assets=_text_assets("message", "Test message"),
+                        assets=build_assets(text_spec("message", content="Test message", multiple=True)),
                     )
                 ]
             )
@@ -172,7 +173,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-003",
                         format_id=fmt,
-                        assets=_text_assets("brief", "Message from brief"),
+                        assets=build_assets(text_spec("brief", content="Message from brief", multiple=True)),
                     )
                 ]
             )
@@ -223,7 +224,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-005",
                         format_id=fmt,
-                        assets=_text_assets("message", "Initial message"),
+                        assets=build_assets(text_spec("message", content="Initial message", multiple=True)),
                     )
                 ]
             )
@@ -245,7 +246,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-005",
                         format_id=fmt,
-                        assets=_text_assets("message", "Refined message"),
+                        assets=build_assets(text_spec("message", content="Refined message", multiple=True)),
                     )
                 ]
             )
@@ -270,7 +271,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-006",
                         format_id=fmt,
-                        assets=_text_assets("message", "Test message"),
+                        assets=build_assets(text_spec("message", content="Test message", multiple=True)),
                     )
                 ]
             )
