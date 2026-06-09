@@ -799,7 +799,22 @@ def create_service_account(tenant_id):
 
         except Exception as e:
             logger.error(f"Error creating service account for tenant {tenant_id}: {e}", exc_info=True)
-            return jsonify({"success": False, "error": f"Failed to create service account: {str(e)}"}), 500
+            error_str = str(e)
+            if "SERVICE_DISABLED" in error_str and "iam.googleapis.com" in error_str:
+                import re
+
+                match = re.search(r"activationUrl[^\"]*\"([^\"]+)\"", error_str)
+                activation_url = match.group(1) if match else "https://console.developers.google.com/apis/api/iam.googleapis.com/overview"
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": (
+                            "The IAM API is not enabled in the configured GCP project. "
+                            f"Enable it at: {activation_url} — then wait ~2 minutes and retry."
+                        ),
+                    }
+                ), 500
+            return jsonify({"success": False, "error": f"Failed to create service account: {error_str}"}), 500
 
     except Exception as e:
         logger.error(f"Error in create_service_account endpoint: {e}", exc_info=True)
