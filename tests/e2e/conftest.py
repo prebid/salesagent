@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -472,23 +473,30 @@ def live_server(docker_services_e2e):
     ports = docker_services_e2e
 
     host = e2e_host()
-    # DB host: in-network there is no published Postgres port, so honor the
-    # service-name DATABASE_URL (postgres:5432); else fall back to localhost:port.
-    pg_url = os.getenv("DATABASE_URL") or (
-        f"postgresql://adcp_user:secure_password_change_me@localhost:{ports['postgres_port']}/adcp"
+    # Resolve ONE effective DB URL and PARSE postgres_params from it, so the URL
+    # string (live_server["postgres"]) and the param dict can never diverge on
+    # host/port/dbname — the divergence that made direct-DB e2e helpers hit
+    # localhost:5435 in-network. Preference order:
+    #   E2E_DATABASE_URL  — in-network server DB by service name (postgres:5432/adcp)
+    #   DATABASE_URL      — host path: the e2e stack's localhost:<published>/adcp
+    #   localhost:<discovered port> — last-resort fallback
+    pg_url = (
+        os.getenv("E2E_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or f"postgresql://adcp_user:secure_password_change_me@localhost:{ports['postgres_port']}/adcp"
     )
-    pg_host = os.getenv("ADCP_TEST_DB_HOST", "localhost")
+    parsed = urlparse(pg_url)
     return {
         "mcp": f"http://{host}:{ports['mcp_port']}",
         "a2a": f"http://{host}:{ports['a2a_port']}",
         "admin": f"http://{host}:{ports['admin_port']}",
         "postgres": pg_url,
         "postgres_params": {
-            "host": pg_host,
-            "port": ports["postgres_port"],
-            "user": "adcp_user",
-            "password": "secure_password_change_me",
-            "dbname": "adcp",
+            "host": parsed.hostname or "localhost",
+            "port": parsed.port or 5432,
+            "user": parsed.username or "adcp_user",
+            "password": parsed.password or "secure_password_change_me",
+            "dbname": (parsed.path.lstrip("/") or "adcp"),
         },
     }
 
