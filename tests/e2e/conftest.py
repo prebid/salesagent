@@ -8,6 +8,7 @@ Implements testing hooks from https://github.com/adcontextprotocol/adcp/pull/34
 import os
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -311,15 +312,15 @@ def docker_services_e2e(request):
     init_env["ADCP_SALES_PORT"] = str(mcp_port)
     init_env["POSTGRES_PORT"] = str(postgres_port)
 
-    # Use docker-compose exec to run the script inside the container
-    # This works for both self-managed (else block) and existing services (if block)
-    # provided we are in the correct project context.
+    # Seed CI test data. On the host we shell into the server container via
+    # docker-compose exec (the host process can't reach the container DB
+    # directly). In-network there is no docker-compose binary, but the runner
+    # already has DATABASE_URL=postgres:5432 and the source, so it runs the seed
+    # script itself — the script only needs a DB connection, not Docker.
+    import shutil
 
-    # Note: run_all_tests.sh sets COMPOSE_PROJECT_NAME, so we inherit that environment.
-    # If running manually without script, it defaults to folder name.
-
-    init_result = subprocess.run(
-        [
+    if shutil.which("docker-compose"):
+        init_cmd = [
             "docker-compose",
             "-f",
             "docker-compose.e2e.yml",
@@ -328,7 +329,12 @@ def docker_services_e2e(request):
             "adcp-server",
             "python",
             "scripts/setup/init_database_ci.py",
-        ],
+        ]
+    else:
+        init_cmd = [sys.executable, "scripts/setup/init_database_ci.py"]
+
+    init_result = subprocess.run(
+        init_cmd,
         env=init_env,
         capture_output=True,
         text=True,
@@ -387,8 +393,8 @@ def docker_services_e2e(request):
         import psycopg2
 
         conn = psycopg2.connect(
-            host="localhost",
-            port=postgres_port,
+            host=os.getenv("ADCP_TEST_DB_HOST", "localhost"),
+            port=int(os.getenv("ADCP_TEST_DB_PORT", str(postgres_port))),
             database="adcp",
             user="adcp_user",
             password="secure_password_change_me",
