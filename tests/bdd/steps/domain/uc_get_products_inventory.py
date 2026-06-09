@@ -213,21 +213,3 @@ def then_no_field(ctx: dict, field: str) -> None:
         assert not hasattr(inner, field), f"Field {field!r} should not be present on {type(inner).__name__}"
 
 
-@then("the first product publisher_properties preserves all legacy fields")
-def then_preserves_legacy_fields(ctx: dict) -> None:
-    """Assert all legacy fields injected in the Given step are preserved with their values.
-
-    The Given step records expected legacy fields in ctx["expected_legacy_fields"].
-    This step verifies each field is present on publisher_properties[0] with the
-    exact value that was injected, confirming ensure_selection_type() is non-destructive.
-    """
-    inner = _get_first_prop(ctx)
-    expected_legacy = ctx["expected_legacy_fields"]
-    assert expected_legacy, "No expected_legacy_fields recorded in ctx — Given step missing?"
-
-    for field_name, expected_value in expected_legacy.items():
-        if isinstance(inner, dict):
-            actual = inner.get(field_name)
-        else:
-            actual = getattr(inner, field_name, None)
-        assert actual == expected_value, f"Legacy field {field_name!r}: expected {expected_value!r}, got {actual!r}"

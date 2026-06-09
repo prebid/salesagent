@@ -52,16 +52,16 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
                 "click_url": {"url": "https://example.com/landing"},
             },
         )
+    # SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role
+    # with LIST values of asset objects carrying an asset_type tag. Build via the
+    # single canonical helper (tests/factories/creative_asset.make_image_assets)
+    # so this shape lives in exactly one place — see GH #1391.
+    from tests.factories.creative_asset import make_image_assets
+
     return (
         "display_300x250",
         env.DEFAULT_AGENT_URL,
-        {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        make_image_assets("image"),
     )
 
 

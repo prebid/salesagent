@@ -145,7 +145,12 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
 
     # SDK 5.7 removed these from the parent — declare locally.
     # Typed as SyncResponseAccount for proper deserialization on transport roundtrip.
-    accounts: list[SyncResponseAccount] = []
+    # `accounts` is REQUIRED (no default): AdCP 3.1 sync-accounts-response is
+    # oneOf(SyncAccountsSuccess requires `accounts` | SyncAccountsError requires
+    # `errors`). This model is the success variant, so omitting `accounts`
+    # entirely is invalid (it would be neither a valid success nor error). May
+    # be an empty list for a zero-account sync, but the field must be present.
+    accounts: list[SyncResponseAccount]
     dry_run: bool | None = None
     context: LibraryContextObject | dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
