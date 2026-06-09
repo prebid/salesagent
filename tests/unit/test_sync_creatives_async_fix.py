@@ -238,7 +238,7 @@ class TestSyncCreativesAsyncScenario:
             "name": "Test Creative",
             "format_id": {"agent_url": "https://example.com", "id": "display_300x250"},
             "assets": build_assets(
-                image_spec("banner_image", url="https://example.com/image.png", width=300, height=250, multiple=True)
+                image_spec("banner_image", url="https://example.com/image.png", width=300, height=250)
             ),
         }
 

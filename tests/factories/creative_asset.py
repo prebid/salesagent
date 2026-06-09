@@ -72,7 +72,7 @@ class CreativeAssetFactory(factory.Factory):
     creative_id = factory.Sequence(lambda n: f"c_{n:04d}")
     name = factory.Sequence(lambda n: f"Test Creative {n}")
     format_id = factory.LazyFunction(lambda: FormatId(id="display_300x250_image", agent_url=AGENT_URL))
-    assets = factory.LazyFunction(lambda: build_assets(image_spec("banner", multiple=True)))
+    assets = factory.LazyFunction(lambda: build_assets(image_spec("banner")))
 
 
 # ---------------------------------------------------------------------------

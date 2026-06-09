@@ -5364,8 +5364,10 @@ def then_user_assets_preserved(ctx: dict) -> None:
     """Assert user-provided assets are preserved in the DB after generative build.
 
     INV-6: user assets take priority over generative output. Verify the stored
-    creative's assets match the user-provided values exactly (deep-equal), not just
-    that the key exists. This catches generated content overwriting user values.
+    creative's assets still carry each user-provided asset's fields (field
+    containment, via assert_assets — production enriches the stored object with
+    null-default fields, so this is containment, not byte-for-byte equality). This
+    catches generated content overwriting user values.
     """
     error = ctx.get("error")
     if error is not None:
@@ -5394,6 +5396,14 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
     stored_assets = _stored_assets_for_last_creative(ctx)
     # User-provided assets must survive the generative build (not overwritten by generated content).
     assert_assets(stored_assets, *ctx.get("user_provided_assets", []))
+    # PRIORITY (distinct from mere preservation): the generative output must NOT be merged in —
+    # no asset role beyond the ones the buyer submitted may appear in the stored creative.
+    submitted_roles = set(ctx["creatives"][-1].get("assets", {}))
+    leaked = set(stored_assets) - submitted_roles
+    assert not leaked, (
+        f"INV-6: generated assets {sorted(leaked)} leaked into stored creative; "
+        f"user-submitted roles were {sorted(submitted_roles)}. User assets must take priority."
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════

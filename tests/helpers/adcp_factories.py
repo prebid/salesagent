@@ -484,7 +484,7 @@ def create_test_creative_asset(
         creative = create_test_creative_asset(
             creative_id="creative_001",
             format_id="video_1920x1080",
-            assets=build_assets(image_spec("primary", url="https://cdn.example.com/banner.png", multiple=True))
+            assets=build_assets(image_spec("primary", url="https://cdn.example.com/banner.png"))
         )
     """
     if isinstance(format_id, str):
@@ -494,7 +494,7 @@ def create_test_creative_asset(
         # SDK 5.7: assets values must be lists of discriminated-union asset
         # models (asset_type tag), not bare dicts. Build the list shape via the
         # AssetSpec mechanism instead of hand-rolling the shape.
-        assets = build_assets(image_spec("primary", url="https://example.com/creative.jpg", multiple=True))
+        assets = build_assets(image_spec("primary", url="https://example.com/creative.jpg"))
 
     return CreativeAsset(creative_id=creative_id, name=name, format_id=format_id, assets=assets, **kwargs)
 

@@ -23,7 +23,7 @@ def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> di
         "creative_id": creative_id,
         "name": name,
         "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png", multiple=True)),
+        "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
         "variants": [],
     }
 
@@ -112,7 +112,7 @@ def make_test_creative(
         "variants": [],
         "name": name,
         "format": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-        "assets": build_assets(image_spec("banner", url="https://example.com/banner.jpg", multiple=True)),
+        "assets": build_assets(image_spec("banner", url="https://example.com/banner.jpg")),
         "principal_id": principal_id,
         "created_date": datetime.now(UTC),
         "updated_date": datetime.now(UTC),
@@ -133,7 +133,7 @@ def make_test_creative_list(count: int = 3) -> list:
             variants=[],
             name=f"Test Creative {i}",
             format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-            assets=build_assets(image_spec("banner", url=f"https://example.com/banner{i}.jpg", multiple=True)),
+            assets=build_assets(image_spec("banner", url=f"https://example.com/banner{i}.jpg")),
             principal_id=f"principal_{i}",
             created_date=datetime.now(UTC),
             updated_date=datetime.now(UTC),

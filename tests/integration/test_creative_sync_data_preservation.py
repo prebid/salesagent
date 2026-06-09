@@ -176,7 +176,7 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "preserve-url-001",
                         "name": "User Creative with URL",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
-                        "assets": build_assets(image_spec("banner_image", url=user_url, multiple=True)),
+                        "assets": build_assets(image_spec("banner_image", url=user_url)),
                     }
                 ],
             )
@@ -292,8 +292,7 @@ class TestCreativeSyncDataPreservation:
             banner_spec = image_spec(
                 "banner_image",
                 url="https://user-creative.example.com/banner.png",
-                multiple=True,
-            )
+                            )
 
             result = env.call_impl(
                 creatives=[
@@ -353,7 +352,7 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "preserve-gen-url-001",
                         "name": "User Video Creative",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "video_generative"},
-                        "assets": build_assets(video_spec("video", url=user_url, multiple=True, duration=30)),
+                        "assets": build_assets(video_spec("video", url=user_url, duration=30)),
                     }
                 ],
             )
@@ -407,7 +406,7 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "update-preserve-001",
                         "name": "Creative to Update",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
-                        "assets": build_assets(image_spec("banner_image", url=original_url, multiple=True)),
+                        "assets": build_assets(image_spec("banner_image", url=original_url)),
                     }
                 ],
             )
@@ -420,7 +419,7 @@ class TestCreativeSyncDataPreservation:
                         "creative_id": "update-preserve-001",
                         "name": "Creative to Update",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
-                        "assets": build_assets(image_spec("banner_image", url=new_user_url, multiple=True)),
+                        "assets": build_assets(image_spec("banner_image", url=new_user_url)),
                     }
                 ],
             )

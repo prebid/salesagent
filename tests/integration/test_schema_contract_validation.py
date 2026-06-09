@@ -377,7 +377,7 @@ class TestCreativeSchemaContract:
             "creative_id": "creative_contract_test",
             "name": "Creative Contract Test",
             "format_id": FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            "assets": build_assets(image_spec("banner_image", url="https://example.com/creative.jpg", multiple=True)),
+            "assets": build_assets(image_spec("banner_image", url="https://example.com/creative.jpg")),
             "status": "approved",
             "principal_id": "test_principal",
             "created_date": datetime.now(),
@@ -401,7 +401,7 @@ class TestCreativeSchemaContract:
             "name": "Video Creative Contract Test",
             "format_id": FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_640x480"),
             "assets": build_assets(
-                video_spec("video_file", url="https://example.com/video.mp4", width=1920, height=1080, multiple=True)
+                video_spec("video_file", url="https://example.com/video.mp4", width=1920, height=1080)
             ),
             "status": "approved",  # Use valid status per adcp 2.5.0 Creative enum
             "principal_id": "test_principal",

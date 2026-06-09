@@ -36,7 +36,7 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
         "creative_id": "c_test_1",
         "name": "Test Banner",
         "format_id": AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
-        "assets": build_assets(image_spec("banner", multiple=True)),
+        "assets": build_assets(image_spec("banner")),
     }
     defaults.update(overrides)
     return make_creative_asset_minimal(**defaults)

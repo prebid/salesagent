@@ -186,7 +186,7 @@ class TestMCPToolRoundtripMinimal:
                             "height": 250,
                         },
                         "assets": build_assets(
-                            image_spec("image", url="https://example.com/preview.jpg", multiple=True)
+                            image_spec("image", url="https://example.com/preview.jpg")
                         ),
                     }
                 ]

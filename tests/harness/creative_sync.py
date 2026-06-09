@@ -34,7 +34,7 @@ Generative creative usage::
             "name": "Gen Creative",
             "format_id": fmt,
             "assets": build_assets(
-                text_spec("message", content="Build me a banner", multiple=True)
+                text_spec("message", content="Build me a banner")
             ),
         }])
 

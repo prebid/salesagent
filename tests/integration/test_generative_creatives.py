@@ -31,7 +31,7 @@ def _creative(**overrides) -> dict:
         "name": "Test Generative Creative",
         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_generative"},
         "assets": build_assets(
-            text_spec("message", content="Create a banner ad for eco-friendly products", multiple=True)
+            text_spec("message", content="Create a banner ad for eco-friendly products")
         ),
     }
     defaults.update(overrides)
@@ -123,7 +123,7 @@ class TestGenerativeCreatives:
                         creative_id="static-creative-001",
                         name="Test Static Creative",
                         format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        assets=build_assets(image_spec("image", url="https://example.com/banner.png", multiple=True)),
+                        assets=build_assets(image_spec("image", url="https://example.com/banner.png")),
                     )
                 ]
             )
@@ -150,7 +150,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-002",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Test message", multiple=True)),
+                        assets=build_assets(text_spec("message", content="Test message")),
                     )
                 ]
             )
@@ -173,7 +173,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-003",
                         format_id=fmt,
-                        assets=build_assets(text_spec("brief", content="Message from brief", multiple=True)),
+                        assets=build_assets(text_spec("brief", content="Message from brief")),
                     )
                 ]
             )
@@ -224,7 +224,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-005",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Initial message", multiple=True)),
+                        assets=build_assets(text_spec("message", content="Initial message")),
                     )
                 ]
             )
@@ -246,7 +246,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-005",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Refined message", multiple=True)),
+                        assets=build_assets(text_spec("message", content="Refined message")),
                     )
                 ]
             )
@@ -271,7 +271,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-006",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Test message", multiple=True)),
+                        assets=build_assets(text_spec("message", content="Test message")),
                     )
                 ]
             )

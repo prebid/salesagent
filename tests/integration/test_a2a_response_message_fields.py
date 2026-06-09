@@ -129,7 +129,7 @@ class TestA2AMessageFieldValidation:
                         "format_id": "display_300x250",
                         "name": "Test Creative",
                         "assets": build_assets(
-                            image_spec("main_image", url="https://example.com/image.jpg", multiple=True)
+                            image_spec("main_image", url="https://example.com/image.jpg")
                         ),
                     }
                 ],

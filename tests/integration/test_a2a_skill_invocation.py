@@ -873,7 +873,7 @@ class TestA2ASkillInvocation:
                         "name": "Test Creative",
                         "format_id": "display_300x250",
                         "assets": build_assets(
-                            image_spec("asset_1", url="https://example.com/creative.jpg", multiple=True)
+                            image_spec("asset_1", url="https://example.com/creative.jpg")
                         ),
                     }
                 ]

@@ -46,7 +46,7 @@ def _creative(**overrides) -> dict:
         "creative_id": "c_async_1",
         "name": "Async Lifecycle Test",
         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("banner", multiple=True)),
+        "assets": build_assets(image_spec("banner")),
     }
     defaults.update(overrides)
     return defaults

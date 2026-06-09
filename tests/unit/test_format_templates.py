@@ -13,7 +13,7 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.schemas import Creative, Format
 from src.core.schemas import FormatId as SchemasFormatId
-from tests.factories.creative_asset import build_assets, image_spec, video_spec
+from tests.factories.creative_asset import asset_spec, build_assets
 
 
 class TestExtractFormatInfo:
@@ -307,7 +307,7 @@ class TestAdapterAssetConversion:
                 width=300,
                 height=250,
             ),
-            assets=build_assets(image_spec("banner_image", url="https://example.com/banner.jpg", multiple=True)),
+            assets=build_assets(asset_spec("banner_image", "image", url="https://example.com/banner.jpg")),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
@@ -330,7 +330,7 @@ class TestAdapterAssetConversion:
                 height=1080,
                 duration_ms=30000,
             ),
-            assets=build_assets(video_spec("video", url="https://example.com/video.mp4", multiple=True)),
+            assets=build_assets(asset_spec("video", "video", url="https://example.com/video.mp4")),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
@@ -351,7 +351,7 @@ class TestAdapterAssetConversion:
                 id="display_static",
                 # No width/height
             ),
-            assets=build_assets(image_spec("banner_image", url="https://example.com/banner.jpg", multiple=True)),
+            assets=build_assets(asset_spec("banner_image", "image", url="https://example.com/banner.jpg")),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])
@@ -371,7 +371,7 @@ class TestAdapterAssetConversion:
                 width=728,
                 height=90,
             ),
-            assets=build_assets(image_spec("banner_image", url="https://example.com/leaderboard.jpg", multiple=True)),
+            assets=build_assets(asset_spec("banner_image", "image", url="https://example.com/leaderboard.jpg")),
         )
 
         asset = _convert_creative_to_adapter_asset(creative, ["pkg_1"])

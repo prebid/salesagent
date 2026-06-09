@@ -1432,7 +1432,7 @@ class TestUC003UploadInlineCreatives:
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
                                 "assets": build_assets(
                                     image_spec(
-                                        "main", url="https://example.com/a1.png", width=300, height=250, multiple=True
+                                        "main", url="https://example.com/a1.png", width=300, height=250
                                     )
                                 ),
                             },
@@ -1442,7 +1442,7 @@ class TestUC003UploadInlineCreatives:
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
                                 "assets": build_assets(
                                     image_spec(
-                                        "main", url="https://example.com/a2.png", width=300, height=250, multiple=True
+                                        "main", url="https://example.com/a2.png", width=300, height=250
                                     )
                                 ),
                             },
@@ -1488,7 +1488,7 @@ class TestUC003UploadInlineCreatives:
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
                                 "assets": build_assets(
                                     image_spec(
-                                        "main", url="https://example.com/a3.png", width=300, height=250, multiple=True
+                                        "main", url="https://example.com/a3.png", width=300, height=250
                                     )
                                 ),
                             }
@@ -1537,7 +1537,7 @@ class TestUC003UploadInlineCreatives:
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
                                 "assets": build_assets(
                                     image_spec(
-                                        "main", url="https://example.com/fail.png", width=300, height=250, multiple=True
+                                        "main", url="https://example.com/fail.png", width=300, height=250
                                     )
                                 ),
                             }
@@ -2517,7 +2517,7 @@ class TestUC003ExtK:
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
                                 "assets": build_assets(
                                     image_spec(
-                                        "main", url="https://example.com/fail.png", width=300, height=250, multiple=True
+                                        "main", url="https://example.com/fail.png", width=300, height=250
                                     )
                                 ),
                             }
@@ -2560,7 +2560,7 @@ class TestUC003ExtK:
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
                                 "assets": build_assets(
                                     image_spec(
-                                        "main", url="https://example.com/fail.png", width=300, height=250, multiple=True
+                                        "main", url="https://example.com/fail.png", width=300, height=250
                                     )
                                 ),
                             }
