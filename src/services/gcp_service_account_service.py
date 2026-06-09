@@ -57,7 +57,7 @@ from google.cloud.iam_admin_v1 import types
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig
+from src.core.database.models import AdapterConfig, Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -141,12 +141,19 @@ class GCPServiceAccountService:
             Exception: If service account creation fails
         """
         with get_db_session() as session:
-            # Get adapter config
+            # Verify tenant exists before touching adapter config
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if not tenant:
+                raise ValueError(f"Tenant {tenant_id} not found")
+
+            # Get or create adapter config — service account creation is the first step
+            # of GAM setup, so the row may not exist yet.
             stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
             adapter_config = session.scalars(stmt).first()
 
             if not adapter_config:
-                raise ValueError(f"Tenant {tenant_id} not found or has no adapter config")
+                adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="google_ad_manager")
+                session.add(adapter_config)
 
             # Check if service account already exists
             if adapter_config.gam_service_account_email:
