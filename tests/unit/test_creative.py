@@ -4180,7 +4180,7 @@ class TestExtensionGaps:
                     {
                         "creative_id": "c_no_name",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        "assets": build_assets(image_spec("banner", url="https://example.com/b.png", multiple=True)),
+                        "assets": build_assets(image_spec("banner", url="https://example.com/b.png")),
                     }
                 ],
                 identity=identity,
