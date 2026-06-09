@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import ContextObject
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexResponse
 from src.core.tool_context import ToolContext
@@ -108,7 +108,7 @@ def _patch_happy_path(
     )
     stack.enter_context(
         patch(
-            "src.core.tools.performance.get_principal_object",
+            "src.core.auth.get_principal_object",
             return_value=mock_principal,
         )
     )
@@ -430,14 +430,16 @@ class TestErrorPaths:
     """Error path tests for _update_performance_index_impl."""
 
     # E1 ---------------------------------------------------------------
-    def test_identity_none_raises_value_error(self):
-        """E1: identity=None raises ValueError (not AdCPAuthenticationError).
+    def test_identity_none_raises_auth_error(self):
+        """E1: identity=None raises AdCPAuthRequiredError via require_identity.
 
-        The impl checks identity before tenant, so ValueError fires first.
+        Routed through the typed identity helper rather than a bare ValueError, so
+        the boundary emits the canonical AUTH envelope with a recovery hint instead
+        of a synthetic VALIDATION_ERROR.
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        with pytest.raises(ValueError, match="Identity is required"):
+        with pytest.raises(AdCPAuthRequiredError, match="Identity is required"):
             _update_performance_index_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
@@ -494,8 +496,12 @@ class TestErrorPaths:
             )
 
     # E4 ---------------------------------------------------------------
-    def test_principal_not_found_raises_not_found_error(self):
-        """E4: get_principal_object returns None raises AdCPNotFoundError."""
+    def test_principal_not_found_raises_auth_error(self):
+        """E4: a token resolving to a missing principal raises AdCPAuthenticationError.
+
+        Parity with create/update/delivery, which all route this lookup through
+        resolve_principal_or_raise (AUTH_TOKEN_INVALID), not a 404.
+        """
         from unittest.mock import Mock
 
         from src.core.tools.performance import _update_performance_index_impl
@@ -510,9 +516,9 @@ class TestErrorPaths:
         with (
             patch("src.core.tools.performance.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.performance._verify_principal", return_value=None),
-            patch("src.core.tools.performance.get_principal_object", return_value=None),
+            patch("src.core.auth.get_principal_object", return_value=None),
         ):
-            with pytest.raises(AdCPNotFoundError, match="not found"):
+            with pytest.raises(AdCPAuthenticationError, match="not found"):
                 _update_performance_index_impl(
                     media_buy_id="mb_1",
                     performance_data=[{"product_id": "p1", "performance_index": 1.0}],

@@ -17,21 +17,6 @@ from src.core.exceptions import AdCPError
 from src.core.tool_error_logging import _build_error_code_to_status
 
 
-def _walk_subclasses(root: type) -> list[type]:
-    """Return the transitive closure of ``root.__subclasses__()`` (BFS)."""
-    seen: set[type] = set()
-    stack = [root]
-    out: list[type] = []
-    while stack:
-        cls = stack.pop()
-        if cls in seen:
-            continue
-        seen.add(cls)
-        out.append(cls)
-        stack.extend(cls.__subclasses__())
-    return out
-
-
 class TestErrorCodeStatusTableDerivation:
     """The status table is derived from class attributes, not hand-edited."""
 
@@ -52,9 +37,7 @@ class TestErrorCodeStatusTableDerivation:
         """
         table = _build_error_code_to_status()
         missing: list[str] = []
-        for cls in _walk_subclasses(AdCPError):
-            if cls is AdCPError:
-                continue
+        for cls in AdCPError.iter_concrete_subclasses():
             code = getattr(cls, "_default_error_code", None)
             status = getattr(cls, "_default_status_code", None)
             if not code or not status:
@@ -78,9 +61,8 @@ class TestErrorCodeStatusTableDerivation:
         (authenticated but not authorized).
         """
         table = _build_error_code_to_status()
-        assert table["AUTH_REQUIRED"] == 403, (
-            f"AUTH_REQUIRED must resolve to 403 (AdCPAuthorizationError), got {table.get('AUTH_REQUIRED')}"
-        )
+        status = table.get("AUTH_REQUIRED")
+        assert status == 403, f"AUTH_REQUIRED must resolve to 403 (AdCPAuthorizationError), got {status}"
 
     def test_invalid_request_resolves_to_400(self):
         """Pin: ``INVALID_REQUEST`` resolves to 400.
@@ -92,9 +74,8 @@ class TestErrorCodeStatusTableDerivation:
         an inline ``_GENERIC_CATCHALLS`` set.
         """
         table = _build_error_code_to_status()
-        assert table["INVALID_REQUEST"] == 400, (
-            f"INVALID_REQUEST must resolve to 400 (generic 4xx catchall), got {table.get('INVALID_REQUEST')}"
-        )
+        status = table.get("INVALID_REQUEST")
+        assert status == 400, f"INVALID_REQUEST must resolve to 400 (generic 4xx catchall), got {status}"
 
     def test_auth_token_invalid_resolves_to_401(self):
         """Pin: ``AUTH_TOKEN_INVALID`` resolves to 401 from ``AdCPAuthenticationError``.
@@ -104,9 +85,8 @@ class TestErrorCodeStatusTableDerivation:
         — passthrough, not in ERROR_CODE_MAPPING.
         """
         table = _build_error_code_to_status()
-        assert table["AUTH_TOKEN_INVALID"] == 401, (
-            f"AUTH_TOKEN_INVALID must resolve to 401 (AdCPAuthenticationError), got {table.get('AUTH_TOKEN_INVALID')}"
-        )
+        status = table.get("AUTH_TOKEN_INVALID")
+        assert status == 401, f"AUTH_TOKEN_INVALID must resolve to 401 (AdCPAuthenticationError), got {status}"
 
     def test_service_unavailable_resolves_via_highest_status(self):
         """Pin: ``SERVICE_UNAVAILABLE`` takes the highest status when codes overlap.
@@ -117,9 +97,8 @@ class TestErrorCodeStatusTableDerivation:
         used for a plain-ToolError fallback that has no carried context.
         """
         table = _build_error_code_to_status()
-        assert table["SERVICE_UNAVAILABLE"] == 503, (
-            f"SERVICE_UNAVAILABLE must resolve to 503 (highest status wins), got {table.get('SERVICE_UNAVAILABLE')}"
-        )
+        status = table.get("SERVICE_UNAVAILABLE")
+        assert status == 503, f"SERVICE_UNAVAILABLE must resolve to 503 (highest status wins), got {status}"
 
     def test_table_is_built_from_function_not_module_const(self):
         """Pin: the function returns a fresh dict (no module-level mutation).

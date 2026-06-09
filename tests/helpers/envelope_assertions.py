@@ -23,7 +23,7 @@ def assert_envelope_shape(
     target: Any,
     code: str,
     *,
-    recovery: str | None = None,
+    recovery: str,
     message_substr: str | None = None,
     check_mcp_tool_error: bool = False,
 ) -> None:
@@ -37,8 +37,12 @@ def assert_envelope_shape(
         code: Expected wire error code; must match BOTH ``adcp_error.code``
                 and ``errors[0].code``. Two-layer invariant: both layers
                 always agree.
-        recovery: If provided, both ``adcp_error.recovery`` and
-                ``errors[0].recovery`` must equal this hint.
+        recovery: Required. Both ``adcp_error.recovery`` and
+                ``errors[0].recovery`` must equal this hint. Pinning recovery
+                is mandatory: it is the buyer-facing retry semantics
+                (``correctable`` / ``transient`` / ``terminal``) and a silent
+                drift between a typed exception's recovery and the wire is
+                exactly the regression this helper exists to catch.
         message_substr: If provided, must appear in ``errors[0].message``.
                 ``adcp_error.message`` is allowed to differ (it carries the
                 envelope-level summary).
@@ -64,13 +68,12 @@ def assert_envelope_shape(
     assert body["adcp_error"]["code"] == code, f"adcp_error.code={body['adcp_error']['code']!r}, expected {code!r}"
     assert body["errors"][0]["code"] == code, f"errors[0].code={body['errors'][0]['code']!r}, expected {code!r}"
 
-    if recovery is not None:
-        assert body["adcp_error"].get("recovery") == recovery, (
-            f"adcp_error.recovery={body['adcp_error'].get('recovery')!r}, expected {recovery!r}"
-        )
-        assert body["errors"][0].get("recovery") == recovery, (
-            f"errors[0].recovery={body['errors'][0].get('recovery')!r}, expected {recovery!r}"
-        )
+    assert body["adcp_error"].get("recovery") == recovery, (
+        f"adcp_error.recovery={body['adcp_error'].get('recovery')!r}, expected {recovery!r}"
+    )
+    assert body["errors"][0].get("recovery") == recovery, (
+        f"errors[0].recovery={body['errors'][0].get('recovery')!r}, expected {recovery!r}"
+    )
 
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")

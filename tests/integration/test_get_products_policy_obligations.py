@@ -252,7 +252,7 @@ class TestBriefPolicyBlocked:
             with pytest.raises(AdCPAuthorizationError) as exc_info:
                 await env.call_impl(brief="Online gambling ads")
 
-        assert exc_info.value.details.get("error_code") == "POLICY_VIOLATION"
+        assert exc_info.value.error_code == "POLICY_VIOLATION"
 
 
 class TestBriefPolicyRestrictedManualReview:
@@ -293,7 +293,7 @@ class TestBriefPolicyRestrictedManualReview:
             with pytest.raises(AdCPAuthorizationError) as exc_info:
                 await env.call_impl(brief="Craft beer festival promotion")
 
-        assert exc_info.value.details.get("error_code") == "POLICY_VIOLATION"
+        assert exc_info.value.error_code == "POLICY_VIOLATION"
 
 
 class TestBriefPolicyApproved:

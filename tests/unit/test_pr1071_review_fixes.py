@@ -73,7 +73,7 @@ class TestDeliveryLoopErrorHandling:
         mock_uow.media_buys = mock_repo
 
         with (
-            patch("src.core.tools.media_buy_delivery.get_principal_object", return_value=MagicMock()),
+            patch("src.core.auth.get_principal_object", return_value=MagicMock()),
             patch("src.core.tools.media_buy_delivery.get_adapter", return_value=MagicMock()),
             patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
@@ -82,9 +82,8 @@ class TestDeliveryLoopErrorHandling:
             response = _get_media_buy_delivery_impl(req, identity)
 
         # The good media buy should still be in the response
-        assert len(response.media_buy_deliveries) >= 1, (
-            "A single media buy error killed the entire response — the loop must catch exceptions and continue"
-        )
+        msg = "A single media buy error killed the entire response — the loop must catch exceptions and continue"
+        assert len(response.media_buy_deliveries) >= 1, msg
         assert response.media_buy_deliveries[0].media_buy_id == "mb_good"
 
 

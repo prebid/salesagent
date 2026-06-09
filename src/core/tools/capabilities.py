@@ -29,7 +29,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
@@ -96,14 +96,13 @@ def _get_adcp_capabilities_impl(
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
-    assert identity is not None
+    identity = require_identity(identity, context=req.context if req else None)
 
     tenant_id = tenant["tenant_id"]
     tenant_name = tenant.get("name", "Unknown")
 
     # Log activity
-    if identity:
-        log_tool_activity(identity, "get_adcp_capabilities")
+    log_tool_activity(identity, "get_adcp_capabilities")
 
     # Get adapter to determine channels and capabilities
     primary_channels: list[MediaChannel] = []

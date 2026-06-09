@@ -45,7 +45,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
     MODULE = "src.core.tools.media_buy_delivery"
     EXTERNAL_PATCHES = {
         "uow": f"{MODULE}.MediaBuyUoW",
-        "principal": f"{MODULE}.get_principal_object",
+        "principal": "src.core.auth.get_principal_object",
         "adapter": f"{MODULE}.get_adapter",
         "pricing": f"{MODULE}._get_pricing_options",
         "circuit_open": f"{MODULE}._is_circuit_breaker_open",
