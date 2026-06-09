@@ -213,10 +213,6 @@ class AdCPError(Exception):
     error_code: str
     status_code: int
     recovery: RecoveryHint
-    # Envelope transparency marker (spec ProtocolEnvelope.replayed): True when this
-    # error is a cached idempotency replay rather than a fresh execution. Default
-    # False; the rejection-replay path sets it before raising.
-    replayed: bool
 
     def __init__(
         self,
@@ -243,7 +239,6 @@ class AdCPError(Exception):
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
         self.recovery = recovery if recovery is not None else type(self)._default_recovery
-        self.replayed = False
 
     @property
     def wire_error_code(self) -> str:
@@ -728,23 +723,18 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
 
     Recovery=terminal: the buyer must mint a fresh idempotency_key (or reconcile
     state) rather than retry — replaying the same key with a different canonical
-    payload keeps conflicting. Per the AdCP replay_ttl_seconds capability contract.
+    payload keeps conflicting.
+
+    .. note::
+        **Documented spec divergence (recovery class).** AdCP 3.0.1 prose
+        classifies the conflict as ``correctable``; we emit ``terminal`` to match
+        the installed SDK's ``STANDARD_ERROR_CODES`` validator. The conformance
+        storyboard grades the conflict CODE only (no recovery check), so
+        ``terminal`` passes both. Mirrors ``AdCPAuthenticationError``'s
+        SDK-alignment note; revisit if the SDK validator accepts ``correctable``.
     """
 
     _default_error_code: ClassVar[str] = "IDEMPOTENCY_CONFLICT"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
-
-
-class AdCPIdempotencyExpiredError(AdCPError):
-    """idempotency_key replayed past the retention window (410, IDEMPOTENCY_EXPIRED).
-
-    Recovery=terminal: the cached response is gone, so the buyer must mint a
-    fresh idempotency_key rather than retry the expired one. Per the AdCP
-    replay_ttl_seconds capability contract.
-    """
-
-    _default_status_code: ClassVar[int] = 410
-    _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
@@ -919,10 +909,6 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     serialized_context = _serialize_context(exc.context)
     if serialized_context is not None:
         envelope["context"] = serialized_context
-    # Spec ProtocolEnvelope.replayed — present (true) only on a cached idempotency
-    # replay; omitted on fresh executions (the spec's "false or omitted").
-    if exc.replayed:
-        envelope["replayed"] = True
     return envelope
 
 

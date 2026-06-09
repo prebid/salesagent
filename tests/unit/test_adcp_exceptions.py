@@ -109,15 +109,6 @@ class TestExceptionHierarchy:
         assert exc.status_code == 409
         assert exc.error_code == "IDEMPOTENCY_CONFLICT"
 
-    def test_idempotency_expired_error(self):
-        """AdCPIdempotencyExpiredError must be a 410 with code IDEMPOTENCY_EXPIRED."""
-        from src.core.exceptions import AdCPError, AdCPIdempotencyExpiredError
-
-        exc = AdCPIdempotencyExpiredError("idempotency replay window expired")
-        assert isinstance(exc, AdCPError)
-        assert exc.status_code == 410
-        assert exc.error_code == "IDEMPOTENCY_EXPIRED"
-
     def test_idempotency_conflict_wire_envelope(self):
         """The two-layer envelope carries IDEMPOTENCY_CONFLICT + terminal in both layers."""
         from src.core.exceptions import AdCPIdempotencyConflictError, build_two_layer_error_envelope
@@ -126,28 +117,6 @@ class TestExceptionHierarchy:
         assert env["adcp_error"]["code"] == "IDEMPOTENCY_CONFLICT"
         assert env["adcp_error"]["recovery"] == "terminal"
         assert env["errors"][0]["code"] == "IDEMPOTENCY_CONFLICT"
-
-    def test_idempotency_expired_wire_envelope(self):
-        """The two-layer envelope carries IDEMPOTENCY_EXPIRED + terminal in both layers."""
-        from src.core.exceptions import AdCPIdempotencyExpiredError, build_two_layer_error_envelope
-
-        env = build_two_layer_error_envelope(AdCPIdempotencyExpiredError("window expired"))
-        assert env["adcp_error"]["code"] == "IDEMPOTENCY_EXPIRED"
-        assert env["adcp_error"]["recovery"] == "terminal"
-        assert env["errors"][0]["code"] == "IDEMPOTENCY_EXPIRED"
-
-    def test_replayed_flag_surfaces_in_envelope(self):
-        """exc.replayed=True adds envelope-level replayed:true; default omits it (spec ProtocolEnvelope.replayed)."""
-        from src.core.exceptions import AdCPValidationError, build_two_layer_error_envelope
-
-        fresh = AdCPValidationError("budget too low")
-        assert "replayed" not in build_two_layer_error_envelope(fresh)
-
-        replayed = AdCPValidationError("budget too low")
-        replayed.replayed = True
-        env = build_two_layer_error_envelope(replayed)
-        assert env["replayed"] is True
-        assert env["adcp_error"]["code"] == "VALIDATION_ERROR"
 
     def test_budget_exhausted_error(self):
         """AdCPBudgetExhaustedError must have status_code=422."""
@@ -288,13 +257,6 @@ class TestRecoveryClassification:
         from src.core.exceptions import AdCPIdempotencyConflictError
 
         exc = AdCPIdempotencyConflictError("dup key, different payload")
-        assert exc.recovery == "terminal"
-
-    def test_idempotency_expired_defaults_to_terminal(self):
-        """AdCPIdempotencyExpiredError defaults to recovery='terminal'."""
-        from src.core.exceptions import AdCPIdempotencyExpiredError
-
-        exc = AdCPIdempotencyExpiredError("replay window expired")
         assert exc.recovery == "terminal"
 
     def test_gone_error_defaults_to_correctable(self):

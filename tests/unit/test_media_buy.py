@@ -1216,32 +1216,31 @@ class TestCreateMediaBuyIdempotency:
 
     @pytest.mark.asyncio
     async def test_idempotency_replay_returns_existing(self):
-        """Retry with same idempotency_key returns the original media buy.
+        """Retry with the same key replays the cached success verbatim, marked replayed.
 
         Covers: UC-002-MAIN-IDEMPOTENCY
         """
+        from src.core.idempotency_canonical import canonical_request_hash
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         idem_key = "550e8400-e29b-41d4-a716-446655440000"
         req = _make_request(idempotency_key=idem_key)
         identity = _make_identity()
 
-        # Mock the existing media buy that was previously created
-        existing_buy = MagicMock()
-        existing_buy.media_buy_id = "mb_original_123"
-        existing_buy.status = "active"
+        # What the first call cached: {status: <protocol>, response: <domain dump>}.
+        original = _make_success(media_buy_id="mb_original_123")
+        cached_attempt = MagicMock()
+        cached_attempt.response_envelope = {"status": "completed", "response": original.model_dump(mode="json")}
+        # Matching hash → a true replay (a mismatch would be IDEMPOTENCY_CONFLICT).
+        cached_attempt.payload_hash = canonical_request_hash(req)
 
-        existing_pkg = MagicMock()
-        existing_pkg.package_id = "pkg_original_1"
-
-        mock_repo = MagicMock()
-        mock_repo.find_by_idempotency_key.return_value = existing_buy
-        mock_repo.get_packages.return_value = [existing_pkg]
+        mock_attempts = MagicMock()
+        mock_attempts.find_by_key.return_value = cached_attempt
 
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
-        mock_uow.media_buys = mock_repo
+        mock_uow.idempotency_attempts = mock_attempts
 
         with (
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
@@ -1258,14 +1257,14 @@ class TestCreateMediaBuyIdempotency:
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.media_buy_id == "mb_original_123"
-        assert len(result.response.packages) == 1
-        assert result.response.packages[0].package_id == "pkg_original_1"
         assert result.status == "completed"
-
-        # Verify the repo was called with correct args — called twice:
-        # once for the initial lookup, once inside _build_idempotency_hit_result
-        assert mock_repo.find_by_idempotency_key.call_count == 2
-        mock_repo.find_by_idempotency_key.assert_called_with(idem_key, "test_principal")
+        assert result.replayed is True  # spec replay marker, injected at replay time (never stored)
+        mock_attempts.find_by_key.assert_called_once_with(
+            principal_id="test_principal",
+            account_id=identity.account_id,
+            tool_name="create_media_buy",
+            idempotency_key=idem_key,
+        )
 
     @pytest.mark.asyncio
     async def test_idempotency_absent_proceeds_normally(self):
@@ -1333,7 +1332,7 @@ class TestCreateMediaBuyIdempotency:
         mock_idem_repo = MagicMock()
         mock_idem_repo.find_by_idempotency_key.return_value = None
 
-        # Mock idempotency_attempts repo also returns None (no cached rejection)
+        # β success cache returns None (no cached success) → probe misses, flow proceeds
         mock_idem_attempts_repo = MagicMock()
         mock_idem_attempts_repo.find_by_key.return_value = None
 
@@ -1383,8 +1382,13 @@ class TestCreateMediaBuyIdempotency:
             with pytest.raises(AdCPProductNotFoundError):
                 await _create_media_buy_impl(req, identity=identity)
 
-        # Idempotency check ran but found nothing — proceeded to normal flow
-        mock_idem_repo.find_by_idempotency_key.assert_called_once_with("new-key-never-seen", "test_principal")
+        # β idempotency probe ran (verbatim success cache), found nothing → proceeded
+        mock_idem_attempts_repo.find_by_key.assert_called_once_with(
+            principal_id="test_principal",
+            account_id=identity.account_id,
+            tool_name="create_media_buy",
+            idempotency_key="new-key-never-seen",
+        )
 
 
 class TestCreateMediaBuyAdapterInteraction:

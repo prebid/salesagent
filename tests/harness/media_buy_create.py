@@ -147,30 +147,45 @@ class MediaBuyCreateEnv(IntegrationEnv):
         mgr.add_message.return_value = None
         return mgr
 
-    def seed_rejection(self, idempotency_key: str, message: str) -> None:
-        """Persist a cached create_media_buy rejection for this env's principal.
+    def seed_success(
+        self,
+        idempotency_key: str,
+        *,
+        media_buy_id: str = "mb_seeded",
+        payload_hash: str | None = None,
+    ) -> None:
+        """Persist a cached create_media_buy SUCCESS for this env's principal.
 
-        Writes a real ``IdempotencyAttempt`` row via a real ``MediaBuyUoW`` so
-        the production replay lookup (``find_by_key``) serves it on the next
-        call carrying the same ``idempotency_key``. The cached envelope is the
-        ``model_dump`` of a ``CreateMediaBuyError`` — exactly what production
-        caches at the adapter-rejection path.
+        Writes a real ``IdempotencyAttempt`` row via a real ``MediaBuyUoW`` so the
+        production replay lookup (``find_by_key``) serves it VERBATIM on the next
+        call carrying the same ``idempotency_key``. ``payload_hash=None`` makes the
+        lookup always a replay (never an ``IDEMPOTENCY_CONFLICT``); pass a hash to
+        exercise the conflict path. The stored envelope is the structured
+        ``{status, response}`` shape production caches — errors are never cached.
         """
+        from adcp.server.helpers import valid_actions_for_status
+        from adcp.types import MediaBuyStatus
+
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import Error
+        from src.core.schemas._base import CreateMediaBuySuccess
 
         self._commit_factory_data()
-        rejection = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message=message, details=None)],
-            context=None,
+        success = CreateMediaBuySuccess(
+            media_buy_id=media_buy_id,
+            packages=[],
+            status=MediaBuyStatus.active,
+            valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
         )
         with MediaBuyUoW(self._tenant_id) as uow:
             assert uow.idempotency_attempts is not None
-            uow.idempotency_attempts.record_rejection(
+            uow.idempotency_attempts.record_success(
                 principal_id=self._principal_id,
+                account_id=None,
                 tool_name="create_media_buy",
                 idempotency_key=idempotency_key,
-                response_envelope=rejection.model_dump(mode="json"),
+                response_model=success,
+                protocol_status="completed",
+                payload_hash=payload_hash,
             )
 
     def _configure_mocks(self) -> None:

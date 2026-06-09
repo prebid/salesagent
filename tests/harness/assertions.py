@@ -17,7 +17,6 @@ import re
 from typing import Any
 
 from tests.harness.transport import Transport, TransportResult
-from tests.helpers.envelope_assertions import assert_envelope_shape
 
 
 def assert_envelope(result: TransportResult, transport: Transport) -> None:
@@ -101,36 +100,6 @@ def assert_rejected(
     if message_contains is not None:
         message = getattr(error, "message", error_str)
         assert message_contains in str(message), f"Expected '{message_contains}' in message. Got: {str(message)[:200]}"
-
-
-def assert_replayed_rejection(
-    result: TransportResult,
-    *,
-    code: str,
-    message_contains: str | None = None,
-    recovery: str | None = None,
-) -> None:
-    """Assert a *replayed* cached rejection raised through the boundary as a two-layer envelope.
-
-    With the raise-based idempotency model, a replayed rejection is re-raised as a
-    typed ``AdCPError`` (``replayed=True``), so it surfaces as an ERROR result
-    carrying the real two-layer wire envelope — byte-identical to the fresh reject,
-    plus the spec ``replayed: true`` marker (``ProtocolEnvelope.replayed``).
-
-    Args:
-        result: TransportResult from a wire transport (REST/A2A/MCP).
-        code: Expected wire error code; must match both envelope layers.
-        message_contains: Substring that must appear in ``errors[0].message``. Pass
-            the full cached message for a byte-identical round-trip check.
-        recovery: Expected recovery hint in both layers (optional).
-    """
-    assert result.is_error, f"Expected a (raised) replayed rejection but got success: {result.payload}"
-    envelope = result.wire_error_envelope or result.synthesized_error_envelope
-    assert envelope is not None, f"Replayed rejection must carry a wire error envelope. Error: {result.error}"
-    assert_envelope_shape(envelope, code, recovery=recovery, message_substr=message_contains)
-    assert envelope.get("replayed") is True, (
-        f"Replayed rejection envelope must carry replayed=true (spec ProtocolEnvelope.replayed). Got: {envelope}"
-    )
 
 
 def assert_rejected_with_suggestion(

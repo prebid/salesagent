@@ -46,7 +46,6 @@ from tests.harness.assertions import (
     assert_envelope,
     assert_error_result,
     assert_payload_field,
-    assert_replayed_rejection,
 )
 
 # Creative envs (multi-transport)
@@ -76,7 +75,6 @@ __all__ = [
     "assert_envelope",
     "assert_error_result",
     "assert_payload_field",
-    "assert_replayed_rejection",
     # Creative envs
     "CreativeFormatsEnv",
     "CreativeListEnv",
