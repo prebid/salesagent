@@ -1,7 +1,13 @@
 # syntax=docker/dockerfile:1.4
 # Multi-stage build for smaller image
 # Cache bust: 2026-02-27
-FROM python:3.12-slim AS builder
+ARG PYTHON_VERSION=3.12
+ARG PYTHON_BASE_DIGEST=sha256:866411c135b507754efdf2fda51484be4d3d7d5173ed53cd083106132e710904
+# Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
+ARG SOURCE_DATE_EPOCH=0
+ARG UV_VERSION=0.11.15
+
+FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST} AS builder
 
 # Disable man pages and docs to speed up apt operations
 RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
@@ -19,9 +25,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq-dev \
     git
 
-# Install uv (cacheable)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir uv
+ARG UV_VERSION=0.11.15
+COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /bin/
 
 # Set up caching for uv
 ENV UV_CACHE_DIR=/cache/uv
@@ -42,7 +47,7 @@ RUN --mount=type=cache,target=/cache/uv \
     uv sync --frozen --no-dev
 
 # Runtime stage
-FROM python:3.12-slim
+FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST}
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.title="AdCP Sales Agent"
@@ -96,9 +101,10 @@ COPY config/nginx/nginx-single-tenant.conf /etc/nginx/nginx-single-tenant.conf
 COPY config/nginx/nginx-multi-tenant.conf /etc/nginx/nginx-multi-tenant.conf
 COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 
-# Create nginx directories with proper permissions
-RUN mkdir -p /var/log/nginx /var/run && \
-    chown -R www-data:www-data /var/log/nginx /var/run
+# Non-root runtime user (D34 — issue #1234 PR 5)
+RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app && \
+    mkdir -p /var/log/nginx /var/run && \
+    chown -R app:app /app /var/log/nginx /var/run
 
 # Add .venv to PATH and set PYTHONPATH for module imports
 ENV PATH="/app/.venv/bin:$PATH"
@@ -116,6 +122,8 @@ EXPOSE 8000
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
+
+USER app:app
 
 # Use venv Python directly as entrypoint (prepares for hardened images that lack bash)
 ENTRYPOINT ["/app/.venv/bin/python", "scripts/deploy/run_all_services.py"]
