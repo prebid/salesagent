@@ -21,7 +21,7 @@ from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-from tests.factories.creative_asset import make_image_assets
+from tests.factories.creative_asset import make_image_assets, make_text_assets
 from tests.factories.principal import PrincipalFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4530,9 +4530,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
         "creative_id": "creative-generative-001",
         "name": "Generative Creative",
         "format_id": fmt,
-        "assets": {
-            "message": {"content": "Generate a banner ad for summer sale"},
-        },
+        "assets": make_text_assets("message", "Generate a banner ad for summer sale"),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4760,7 +4758,7 @@ def given_message_asset_with_prompt(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {})["message"] = {"content": "Generate a banner ad for summer sale"}
+    last_creative.setdefault("assets", {}).update(make_text_assets("message", "Generate a banner ad for summer sale"))
 
 
 @given("no prompt assets or inputs")
@@ -4790,7 +4788,7 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {})["message"] = {"content": "Generate a banner ad for summer sale"}
+    last_creative.setdefault("assets", {}).update(make_text_assets("message", "Generate a banner ad for summer sale"))
     # Remove GEMINI_API_KEY from config mock
     env = ctx["env"]
     env.mock["config"].return_value.gemini_api_key = None
@@ -4830,9 +4828,7 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
         "creative_id": "creative-gen-prompt-001",
         "name": "Generative With Prompt",
         "format_id": fmt,
-        "assets": {
-            "message": {"content": asset_prompt},
-        },
+        "assets": make_text_assets("message", asset_prompt),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4879,9 +4875,7 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
         "creative_id": "creative-gen-no-key-001",
         "name": "Generative No Key",
         "format_id": fmt,
-        "assets": {
-            "message": {"content": "Generate a banner ad"},
-        },
+        "assets": make_text_assets("message", "Generate a banner ad"),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -5143,7 +5137,8 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
         "name": "Generative With User Assets",
         "format_id": fmt,
         "assets": {
-            "message": {"content": "Generate a responsive ad"},
+            **make_text_assets("message", "Generate a responsive ad"),
+            # NOTE: image left as bare dict — migrated separately (INV-6 user assets, #1391).
             "image": {"url": "https://example.com/user-banner.png", "width": 300, "height": 250},
         },
     }
