@@ -414,7 +414,11 @@
 
 <!-- Section 3: Advertiser → buyer-agent assignments -->
 <section class="br-section" data-section="advertiser-assignments">
-    <h2>Advertisers</h2>
+    <div class="br-section-header">
+        <h2>Advertisers</h2>
+        <button class="br-btn-secondary" data-testid="sync-advertisers-btn" data-action="sync-advertisers">↺ Sync from GAM</button>
+    </div>
+    <div data-sync-advertisers-status style="display: none; font-size: var(--sa-text-sm); margin-bottom: var(--sa-space-2);"></div>
     <p class="br-section-help">
         Every GAM advertiser synced from your network. Assign a buyer agent
         to surface that advertiser's orders and line items in the agent's
@@ -967,6 +971,71 @@
             openRuleModal('add', prefill);
         });
     });
+
+    // ---------- Sync advertisers ----------
+    const syncAdvBtn = document.querySelector('[data-action="sync-advertisers"]');
+    const syncAdvStatus = document.querySelector('[data-sync-advertisers-status]');
+    const gamStatusBase = scriptRoot + '/tenant/' + encodeURIComponent(tenantId) + '/gam/sync-status/';
+
+    function pollAdvertiserSyncStatus(syncId) {
+        var intervalId = setInterval(function () {
+            fetch(gamStatusBase + encodeURIComponent(syncId), {
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' },
+            })
+                .then(function (r) { return r.json(); })
+                .then(function (body) {
+                    if (body.status === 'completed') {
+                        clearInterval(intervalId);
+                        var s = body.summary || {};
+                        var msg = 'Sync complete — ' + (s.upserted || 0) + ' upserted, ' + (s.soft_deleted || 0) + ' inactive.';
+                        showToast(msg);
+                        window.location.reload();
+                    } else if (body.status === 'failed') {
+                        clearInterval(intervalId);
+                        syncAdvStatus.textContent = 'Sync failed: ' + (body.error || 'unknown error');
+                        syncAdvStatus.style.color = 'var(--sa-danger)';
+                        syncAdvBtn.disabled = false;
+                        syncAdvBtn.textContent = '↺ Sync from GAM';
+                    }
+                })
+                .catch(function () { /* transient — keep polling */ });
+        }, 2000);
+    }
+
+    if (syncAdvBtn) {
+        syncAdvBtn.addEventListener('click', function () {
+            syncAdvBtn.disabled = true;
+            syncAdvBtn.textContent = '↺ Syncing…';
+            syncAdvStatus.style.display = 'block';
+            syncAdvStatus.style.color = 'var(--sa-text-muted)';
+            syncAdvStatus.textContent = 'Starting sync…';
+
+            fetch(baseUrl + '/api/sync-advertisers', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            })
+                .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+                .then(function (resp) {
+                    if (!resp.ok) {
+                        syncAdvStatus.textContent = resp.body.message || 'Failed to start sync.';
+                        syncAdvStatus.style.color = 'var(--sa-danger)';
+                        syncAdvBtn.disabled = false;
+                        syncAdvBtn.textContent = '↺ Sync from GAM';
+                        return;
+                    }
+                    syncAdvStatus.textContent = 'Sync in progress…';
+                    pollAdvertiserSyncStatus(resp.body.sync_id);
+                })
+                .catch(function () {
+                    syncAdvStatus.textContent = 'Network error — try again.';
+                    syncAdvStatus.style.color = 'var(--sa-danger)';
+                    syncAdvBtn.disabled = false;
+                    syncAdvBtn.textContent = '↺ Sync from GAM';
+                });
+        });
+    }
 
     // Advertiser → agent assignment selects
     document.querySelectorAll('[data-action="assign-agent"]').forEach(function (select) {

@@ -178,9 +178,8 @@ ENV SKIP_CRON=false
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=5 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
       CMD ["python", "scripts/healthcheck.py", "8000"]
-
 
 # Use venv Python directly as entrypoint (prepares for hardened images that lack bash)
 ENTRYPOINT ["/app/.venv/bin/python", "scripts/deploy/run_all_services.py"]

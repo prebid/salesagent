@@ -18,6 +18,7 @@ Add Rule modal.
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from datetime import UTC, datetime
 
@@ -43,10 +44,12 @@ from src.core.database.models import (
     AdvertiserRoutingRule,
     GamAdvertiser,
     Principal,
+    SyncJob,
     Tenant,
 )
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.services.gam_advertisers_sync import sync_advertisers
 from src.services.recent_buyers_service import compute_recent_buyers
 
 logger = logging.getLogger(__name__)
@@ -627,3 +630,47 @@ def list_principals(tenant_id: str):
         rows = tenant_repo.list_principals()
         principals = [{"principal_id": p.principal_id, "name": p.name} for p in rows]
     return jsonify({"principals": principals})
+
+
+@buyer_routing_bp.route(
+    "/<tenant_id>/buyer-routing/api/sync-advertisers",
+    methods=["POST"],
+    strict_slashes=False,
+)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
+def trigger_advertiser_sync(tenant_id: str):
+    """Trigger a background GAM advertisers sync from the buyer-routing page.
+
+    Creates a pending SyncJob, spawns a daemon thread, and returns the
+    sync_id so the client can poll
+    ``GET /tenant/<tenant_id>/gam/sync-status/<sync_id>`` for progress.
+    """
+    started_at = datetime.now(UTC)
+    sync_id = f"sync_{tenant_id}_advertisers_{int(started_at.timestamp() * 1_000_000)}"
+
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if tenant is None:
+            return _api_error_json("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        job = SyncJob(
+            sync_id=sync_id,
+            tenant_id=tenant_id,
+            adapter_type="google_ad_manager",
+            sync_type="advertisers",
+            status="pending",
+            started_at=started_at,
+            triggered_by="admin_ui",
+            triggered_by_id="sync_advertisers_button",
+        )
+        session.add(job)
+        session.commit()
+
+    def _run() -> None:
+        try:
+            sync_advertisers(tenant_id, sync_id=sync_id)
+        except Exception:
+            logger.exception("[%s] advertiser sync thread failed", sync_id)
+
+    threading.Thread(target=_run, daemon=True, name=f"adv-sync-{sync_id}").start()
+    return jsonify({"sync_id": sync_id})
