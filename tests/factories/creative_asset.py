@@ -274,6 +274,28 @@ def url_spec(role: str, *, url: str, url_type: str | None = None, multiple: bool
     return AssetSpec(role, "url", fields, multiple)
 
 
+def video_spec(
+    role: str = "video",
+    *,
+    url: str = "https://example.com/video.mp4",
+    width: int = 640,
+    height: int = 360,
+    multiple: bool = False,
+    **fields: object,
+) -> AssetSpec:
+    """AssetSpec for a video asset (extra typed fields, e.g. duration, via kwargs)."""
+    return AssetSpec(role, "video", {"url": url, "width": width, "height": height, **fields}, multiple)
+
+
+def asset_spec(role: str, asset_type: str, *, multiple: bool = False, **fields: object) -> AssetSpec:
+    """Generic AssetSpec for any asset_type (audio, vast, html, css, markdown, catalog, ...).
+
+    Use the typed constructors (image_spec/text_spec/url_spec/video_spec) for the common
+    types; use this for the long tail so no test hand-rolls an asset dict.
+    """
+    return AssetSpec(role, asset_type, dict(fields), multiple)
+
+
 def build_assets(*specs: AssetSpec) -> dict:
     """Merge specs into one ``assets`` slot map for a creative payload."""
     out: dict = {}
