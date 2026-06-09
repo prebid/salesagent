@@ -928,4 +928,3 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent calls get_creative_delivery
     Then the response should never carry an error with code "CREATIVE_REJECTED"
     # CREATIVE_REJECTED is a pre-serve verdict; delivery reports refer to already-approved creatives
-

@@ -740,4 +740,3 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Then the response includes validated_at as an ISO 8601 timestamp
     And the response may include list_resolved_at showing when the list was last resolved
     # POST-S6: validated_at required; list_resolved_at optional
-

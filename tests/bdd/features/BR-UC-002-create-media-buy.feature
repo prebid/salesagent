@@ -2734,4 +2734,3 @@ Feature: BR-UC-002 Create Media Buy
     # buy transitions to pending_start. The state transition is observable via
     # get_media_buys (covered in UC-019) but the anchor is the buy state on UC-002.
     # pending_creatives_to_start: creative sync unblocks pending_creatives -> pending_start
-

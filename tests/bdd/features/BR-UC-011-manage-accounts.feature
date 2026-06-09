@@ -703,4 +703,3 @@ Feature: BR-UC-011 Manage Accounts
     # @bva idempotency_key: same key reused with a different accounts payload
     # v3.1: ETag string form supported by current_version
     # POST-F3: recovery suggestion (use a fresh idempotency_key or re-read current state) accompanies the conflict
-

@@ -1101,4 +1101,3 @@ Feature: BR-UC-005 Discover Creative Formats
     # unique identifier within that agent). Sellers returning bare-string format IDs
     # break the v3.1 federation contract.
     # discover_formats: format_id object shape is the federation contract
-

@@ -1152,4 +1152,3 @@ Feature: BR-UC-008 Manage Audience Signals
     # The agent pushes the segment to the platform and returns a deployment record.
     # When live, the activation_key carries type "segment_id".
     # signals_baseline: platform-destination activation contract
-

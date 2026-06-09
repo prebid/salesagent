@@ -1083,4 +1083,3 @@ Feature: BR-UC-027 Manage Async Tasks
     # POST-F1: list query is read-only; no client-visible side effect
     # POST-F2: buyer knows response was rejected by internal consistency check
     # POST-F3: application context echoed on validation failure
-

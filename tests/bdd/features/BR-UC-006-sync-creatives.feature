@@ -1650,4 +1650,3 @@ Feature: BR-UC-006 Sync Creative Assets
     # from creative-platform (Innovid/Flashtalking) which carries a full lifecycle;
     # the sales-agent reception is the minimum viable creative-handling contract.
     # creative_reception: stateful sales agent minimum-viable creative reception contract
-
