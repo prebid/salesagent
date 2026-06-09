@@ -2,7 +2,7 @@
 # Multi-stage build for smaller image
 # Cache bust: 2026-02-27
 ARG PYTHON_VERSION=3.12
-ARG PYTHON_BASE_DIGEST=sha256:866411c135b507754efdf2fda51484be4d3d7d5173ed53cd083106132e710904
+ARG PYTHON_BASE_DIGEST=sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
 # Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
 ARG SOURCE_DATE_EPOCH=0
 ARG UV_VERSION=0.11.15
