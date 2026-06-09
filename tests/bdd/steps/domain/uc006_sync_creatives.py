@@ -5137,8 +5137,7 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
         "format_id": fmt,
         "assets": {
             **make_text_assets("message", "Generate a responsive ad"),
-            # NOTE: image left as bare dict — migrated separately (INV-6 user assets, #1391).
-            "image": {"url": "https://example.com/user-banner.png", "width": 300, "height": 250},
+            **make_image_assets("image", url="https://example.com/user-banner.png"),
         },
     }
     ctx.setdefault("creatives", []).append(creative_payload)
@@ -5339,6 +5338,19 @@ def then_existing_data_preserved(ctx: dict) -> None:
             )
 
 
+def _first_asset_object(asset_value: object) -> dict:
+    """Return the asset object dict from an asset slot value, for either valid shape.
+
+    AdCP 3.1 (creative-manifest) allows a slot value to be a single asset object
+    (individual slots) or a list of asset objects (multi-count slots, ``max > 1``);
+    the adcp 5.7 SDK accepts and stores both. Return the (first) asset object either way
+    so assertions don't hard-code one shape.
+    """
+    if isinstance(asset_value, list):
+        return asset_value[0] if asset_value else {}
+    return asset_value if isinstance(asset_value, dict) else {}
+
+
 @then("the user-provided assets should be preserved")
 def then_user_assets_preserved(ctx: dict) -> None:
     """Assert user-provided assets are preserved in the DB after generative build.
@@ -5375,10 +5387,15 @@ def then_user_assets_preserved(ctx: dict) -> None:
         assert asset_key in stored_assets, (
             f"User-provided '{asset_key}' asset missing from stored assets: {list(stored_assets.keys())}"
         )
-        assert stored_assets[asset_key] == user_value, (
-            f"User-provided '{asset_key}' asset was overwritten by generated content. "
-            f"Expected {user_value!r}, got {stored_assets[asset_key]!r}"
-        )
+        # Production stores the asset object and enriches it with null-default fields, so assert
+        # the user's fields are preserved (containment) rather than whole-value exact-equality.
+        user_obj = _first_asset_object(user_value)
+        stored_obj = _first_asset_object(stored_assets[asset_key])
+        for field, fval in user_obj.items():
+            assert stored_obj.get(field) == fval, (
+                f"User-provided '{asset_key}'['{field}'] was overwritten by generated content. "
+                f"Expected {fval!r}, got {stored_obj.get(field)!r}"
+            )
 
 
 @then("user assets should take priority over any generated content")
@@ -5420,10 +5437,11 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
             f"User-provided 'image' asset should be preserved in creative data, "
             f"got assets keys: {list(stored_assets.keys())}"
         )
-        stored_image = stored_assets["image"]
-        for key, value in user_assets["image"].items():
-            assert stored_image.get(key) == value, (
-                f"User-provided image['{key}'] should be preserved. Expected {value!r}, got {stored_image.get(key)!r}"
+        stored_obj = _first_asset_object(stored_assets["image"])
+        user_obj = _first_asset_object(user_assets["image"])
+        for key, value in user_obj.items():
+            assert stored_obj.get(key) == value, (
+                f"User-provided image['{key}'] should be preserved. Expected {value!r}, got {stored_obj.get(key)!r}"
             )
 
 

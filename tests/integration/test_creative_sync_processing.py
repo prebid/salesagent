@@ -284,6 +284,20 @@ class TestGenerativeUpdateUserAssets:
                 # data field should have generative build result but NOT overwritten user assets
                 assert db.data.get("generative_build_result") is not None
 
+                # INV-6: the user-provided image survives the generative build (not overwritten).
+                # Production stores the SDK 5.7 list shape {role: [asset_obj]} and enriches the
+                # asset object with null defaults, so assert list-index [0] + field containment
+                # (this is the corrected shape the uc006 BDD Then-steps must also use).
+                stored_assets = db.data.get("assets") or {}
+                assert "hero_image" in stored_assets, f"user image missing: {list(stored_assets)}"
+                stored_image = stored_assets["hero_image"]
+                assert isinstance(stored_image, list), f"expected SDK 5.7 list shape, got {type(stored_image).__name__}"
+                user_image = _image_assets("hero_image", url="https://user-provided.com/img.png")["hero_image"][0]
+                for key, value in user_image.items():
+                    assert stored_image[0].get(key) == value, (
+                        f"user image['{key}'] not preserved: expected {value!r}, got {stored_image[0].get(key)!r}"
+                    )
+
 
 class TestGenerativeUpdatePromotedOfferings:
     """Promoted offerings extracted and passed to build_creative.
