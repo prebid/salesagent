@@ -41,6 +41,11 @@ COMPOSE_FILE="docker-compose.e2e.yml"
 # concurrent runs never contend; the suffix just keeps container names distinct.
 # Compose rejects uppercase project names — lowercase whatever we're given.
 export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$$}" | tr '[:upper:]' '[:lower:]')"
+# The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
+# interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
+# e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
+# gets a report. Compose interpolates this into the adcp-server service env.
+export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
 SUITES="${1:-unit,integration,bdd,admin,e2e,ui}"
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
