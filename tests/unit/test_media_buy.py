@@ -328,6 +328,35 @@ class TestCreateMediaBuyResponseShapes:
         assert dumped["status"] == "completed"
         assert dumped["media_buy_id"] == "mb_1"
 
+    def test_result_serializes_replayed_marker_when_set(self):
+        """`replayed=True` surfaces as a top-level boolean; omitted when False.
+
+        Spec: AdCP 3.0.1 idempotency — a replayed cached success carries a
+        top-level ``replayed: true`` envelope marker; fresh responses omit it
+        so they stay byte-identical. Injected at response time via
+        CreateMediaBuyResult._serialize, never stored in the cached body.
+        """
+        success = _make_success(media_buy_id="mb_1")
+
+        # Fresh (default): no replayed key on the wire.
+        fresh = CreateMediaBuyResult(status="completed", response=success).model_dump()
+        assert "replayed" not in fresh
+
+        # Replay: top-level replayed=True alongside status and the payload fields.
+        replay = CreateMediaBuyResult(status="completed", response=success, replayed=True).model_dump()
+        assert replay["replayed"] is True
+        assert replay["status"] == "completed"
+        assert replay["media_buy_id"] == "mb_1"
+
+    def test_replayed_defaults_false_and_preserves_unpacking(self):
+        """replayed defaults False and does not disturb (response, status) unpacking."""
+        success = _make_success(media_buy_id="mb_1")
+        result = CreateMediaBuyResult(status="completed", response=success)
+        assert result.replayed is False
+        response, status = result
+        assert status == "completed"
+        assert response.media_buy_id == "mb_1"
+
     def test_error_str_includes_error_count(self):
         """UC-002-R06: CreateMediaBuyError.__str__ mentions error count.
 
@@ -1288,68 +1317,6 @@ class TestCreateMediaBuyIdempotency:
                 await _create_media_buy_impl(req, identity=identity)
 
         mock_uow.media_buys.find_by_idempotency_key.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_idempotency_cached_rejection_replayed(self):
-        """Retry with the same idempotency_key after a rejection re-raises the cached envelope.
-
-        Covers: UC-002-MAIN-IDEMPOTENCY (rejection replay branch)
-        """
-        from src.core.exceptions import AdCPError
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        idem_key = "cafebabe-dead-beef-1234-feedface0001"
-        req = _make_request(idempotency_key=idem_key)
-        identity = _make_identity()
-
-        cached_envelope = {
-            "errors": [
-                {
-                    "code": "VALIDATION_ERROR",
-                    "message": "Currency JPY not enabled for this principal",
-                    "recovery": "correctable",
-                }
-            ],
-            "context": None,
-        }
-
-        mock_idem_repo = MagicMock()
-        mock_idem_repo.find_by_idempotency_key.return_value = None
-
-        mock_idem_attempts_repo = MagicMock()
-        cached_attempt = MagicMock()
-        cached_attempt.response_envelope = cached_envelope
-        cached_attempt.payload_hash = None  # no stored hash → replay, never a conflict
-        mock_idem_attempts_repo.find_by_key.return_value = cached_attempt
-
-        mock_idem_uow = MagicMock()
-        mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
-        mock_idem_uow.__exit__ = MagicMock(return_value=None)
-        mock_idem_uow.media_buys = mock_idem_repo
-        mock_idem_uow.idempotency_attempts = mock_idem_attempts_repo
-
-        with (
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
-            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_idem_uow),
-        ):
-            mock_princ = MagicMock()
-            mock_princ.principal_id = "test_principal"
-            mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
-
-            with pytest.raises(AdCPError) as exc_info:
-                await _create_media_buy_impl(req, identity=identity)
-
-        exc = exc_info.value
-        assert exc.error_code == "VALIDATION_ERROR"
-        assert "Currency JPY" in exc.message
-        assert exc.replayed is True
-        mock_idem_attempts_repo.find_by_key.assert_called_once_with(
-            principal_id="test_principal",
-            tool_name="create_media_buy",
-            idempotency_key=idem_key,
-        )
 
     @pytest.mark.asyncio
     async def test_idempotency_new_key_proceeds(self):

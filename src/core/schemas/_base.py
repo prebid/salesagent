@@ -293,10 +293,19 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     status: str
     response: CreateMediaBuySuccess | CreateMediaBuyError
 
+    # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
+    # envelope / top of the structured result). Set True ONLY when this response
+    # is a verbatim replay of a previously cached success. Injected at response
+    # time, never stored in the cached body; omitted when False so fresh
+    # responses are byte-identical to before. Only valid on a successful result.
+    replayed: bool = False
+
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
         result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
+        if self.replayed:
+            result["replayed"] = True
         return result
 
     def __iter__(self):
