@@ -39,7 +39,8 @@ set -uo pipefail
 COMPOSE_FILE="docker-compose.e2e.yml"
 # PID-suffixed project name -> isolated network per run. No host ports means
 # concurrent runs never contend; the suffix just keeps container names distinct.
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-adcp-innet-$$}"
+# Compose rejects uppercase project names — lowercase whatever we're given.
+export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$$}" | tr '[:upper:]' '[:lower:]')"
 SUITES="${1:-unit,integration,bdd,admin,e2e,ui}"
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
