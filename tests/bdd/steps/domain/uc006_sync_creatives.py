@@ -3712,13 +3712,7 @@ def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> N
         "name": "Provenance Source Type Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
         "provenance": {"digital_source_type": source_type},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": make_image_assets("image", url="https://example.com/banner.png"),
     }
     ctx.setdefault("creatives", []).append(payload)
     ctx["creative_format_id"] = format_id
@@ -3727,11 +3721,16 @@ def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> N
 
 @given(parsers.parse('an asset within the creative declaring digital_source_type "{source_type}"'))
 def given_asset_with_provenance_source_type(ctx: dict, source_type: str) -> None:
-    """Add asset-level provenance to the last creative's first asset."""
+    """Add asset-level provenance to the last creative's first asset.
+
+    SDK 5.7: an asset slot is a list of asset objects, so asset-level provenance
+    attaches to the individual asset at index 0 (AdCP core/provenance.json — provenance
+    attaches to individual assets; most-specific replaces inherited).
+    """
     creative_payload = ctx["creatives"][-1]
     assets = creative_payload.get("assets", {})
     first_key = next(iter(assets))
-    assets[first_key]["provenance"] = {"digital_source_type": source_type}
+    assets[first_key][0]["provenance"] = {"digital_source_type": source_type}
     ctx["asset_provenance_source_type"] = source_type
 
 
