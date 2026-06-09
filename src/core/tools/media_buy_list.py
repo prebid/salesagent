@@ -58,10 +58,13 @@ from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthRequiredError, AdCPCapabilityNotSupportedError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPCapabilityNotSupportedError,
+    AdCPValidationError,
+)
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -94,10 +97,7 @@ def _get_media_buys_impl(
     Returns:
         GetMediaBuysResponse with matching media buys
     """
-    if identity is None:
-        raise AdCPAuthRequiredError(
-            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
-        )
+    identity = require_identity(identity, context=req.context)
 
     if req.account is not None or req.account_id is not None:
         raise AdCPCapabilityNotSupportedError(
@@ -110,17 +110,27 @@ def _get_media_buys_impl(
     if not principal_id:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
+            errors=[
+                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                    code="AUTH_REQUIRED", message="Principal ID not found in context"
+                )
+            ],
         )
 
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[Error(code="AUTH_REQUIRED", message=f"Principal {principal_id} not found")],
+            errors=[
+                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                    code="AUTH_REQUIRED", message=f"Principal {principal_id} not found"
+                )
+            ],
         )
 
-    tenant = identity.tenant
+    # require_tenant raises the canonical auth envelope instead of a raw TypeError
+    # if no tenant resolved (the principal advisories above take precedence).
+    tenant = require_tenant(identity, context=req.context)
     today = datetime.now(UTC).date()
     tenant_id: str = tenant["tenant_id"]
 
@@ -221,14 +231,15 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # Use the spec-standard ``INTERNAL_ERROR`` code (data-integrity
-                    # is a seller-side issue; buyer can't fix). The specific
-                    # ``TARGETING_REHYDRATION_FAILED`` shape lives in the message
-                    # so callers can grep/route on it without us adding a
-                    # non-standard wire code.
+                    # Seller-side data-integrity failure (the buyer can't fix it),
+                    # surfaced with the standard ``SERVICE_UNAVAILABLE`` wire code —
+                    # matching the sibling per-creative advisory in
+                    # creatives/_processing.py — with the specific
+                    # ``TARGETING_REHYDRATION_FAILED`` shape in the message so
+                    # callers can grep/route on it.
                     hydration_errors.append(
-                        Error(
-                            code="INTERNAL_ERROR",
+                        Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
+                            code="SERVICE_UNAVAILABLE",
                             message=(
                                 f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
                                 f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "

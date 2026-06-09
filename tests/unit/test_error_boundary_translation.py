@@ -458,8 +458,8 @@ class TestA2ADispatcherFailedSkillResult:
 
         assert result["success"] is False
         assert result["skill"] == "get_products"
-        assert result["error"] == "bad input"
         env = result["error_envelope"]
+        assert env["errors"][0]["message"] == "bad input"
         assert env["adcp_error"]["code"] == "VALIDATION_ERROR"
         assert env["errors"][0]["code"] == "VALIDATION_ERROR"
         assert env["errors"][0]["recovery"] == "correctable"
@@ -493,7 +493,6 @@ class TestA2ADispatcherFailedSkillResult:
 
         result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError())
 
-        assert result["error"] == "RuntimeError"
         env = result["error_envelope"]
         assert env["errors"][0]["message"] == "RuntimeError"
 
@@ -742,6 +741,7 @@ class TestRESTSymmetricValueErrorAndPermissionError:
             assert_envelope_shape(
                 response.json(),
                 "AUTH_REQUIRED",
+                recovery="terminal",
                 message_substr="tenant scope mismatch",
             )
 
@@ -766,6 +766,14 @@ class TestRESTSymmetricValueErrorAndPermissionError:
 # ---------------------------------------------------------------------------
 
 
+def _synthetic_tool_error(source):
+    """Wrap an AdCPError as the AdCPToolError a REST route catches defensively."""
+    from src.core.exceptions import build_two_layer_error_envelope
+    from src.core.tool_error_logging import AdCPToolError
+
+    return AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+
+
 class TestHandleToolErrorPreservesStatusCode:
     """``handle_tool_error`` must use the source AdCPError's status_code.
 
@@ -776,60 +784,27 @@ class TestHandleToolErrorPreservesStatusCode:
     which caused 4xx errors to be mislabeled as 5xx on this defensive path.
     """
 
-    def test_validation_tool_error_returns_400(self):
-        """AdCPToolError carrying a VALIDATION_ERROR envelope → 400."""
-        from src.core.exceptions import AdCPValidationError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
+    @pytest.mark.parametrize(
+        ("source_cls_name", "message", "expected_status"),
+        [
+            ("AdCPValidationError", "invalid request", 400),
+            ("AdCPAuthenticationError", "token expired", 401),
+            ("AdCPMediaBuyNotFoundError", "buy_x missing", 404),
+            ("AdCPBudgetTooLowError", "below minimum", 422),
+            ("AdCPAdapterError", "GAM unavailable", 502),
+        ],
+    )
+    def test_preserves_source_status_code(self, source_cls_name, message, expected_status):
+        """handle_tool_error uses the source AdCPError's status_code, not a hardcoded 500.
 
-        source = AdCPValidationError("invalid request")
-        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+        A new typed subclass is one parametrize row, not one method.
+        """
+        import src.core.exceptions as exceptions_mod
+        from src.core.tool_error_logging import handle_tool_error
 
-        response = handle_tool_error(tool_error)
-        assert response.status_code == 400
-
-    def test_auth_tool_error_returns_401(self):
-        """AdCPToolError carrying an AUTH_REQUIRED envelope → 401."""
-        from src.core.exceptions import AdCPAuthenticationError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
-
-        source = AdCPAuthenticationError("token expired")
-        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
-
-        response = handle_tool_error(tool_error)
-        assert response.status_code == 401
-
-    def test_not_found_tool_error_returns_404(self):
-        """AdCPToolError carrying a NOT_FOUND envelope → 404."""
-        from src.core.exceptions import AdCPMediaBuyNotFoundError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
-
-        source = AdCPMediaBuyNotFoundError("buy_x missing")
-        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
-
-        response = handle_tool_error(tool_error)
-        assert response.status_code == 404
-
-    def test_budget_too_low_tool_error_returns_422(self):
-        """AdCPToolError carrying a BUDGET_TOO_LOW envelope → 422."""
-        from src.core.exceptions import AdCPBudgetTooLowError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
-
-        source = AdCPBudgetTooLowError("below minimum")
-        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
-
-        response = handle_tool_error(tool_error)
-        assert response.status_code == 422
-
-    def test_adapter_tool_error_returns_502(self):
-        """AdCPToolError carrying a SERVICE_UNAVAILABLE/adapter envelope → 502."""
-        from src.core.exceptions import AdCPAdapterError, build_two_layer_error_envelope
-        from src.core.tool_error_logging import AdCPToolError, handle_tool_error
-
-        source = AdCPAdapterError("GAM unavailable")
-        tool_error = AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
-
-        response = handle_tool_error(tool_error)
-        assert response.status_code == 502
+        source = getattr(exceptions_mod, source_cls_name)(message)
+        response = handle_tool_error(_synthetic_tool_error(source))
+        assert response.status_code == expected_status
 
     def test_plain_tool_error_falls_back_to_500(self):
         """Plain ToolError with no recognized wire code defaults to 500."""
@@ -932,9 +907,8 @@ class TestToDictRecoveryField:
         for exc, expected_recovery in cases:
             d = exc.to_dict()
             assert "recovery" in d, f"{type(exc).__name__}.to_dict() missing 'recovery' key"
-            assert d["recovery"] == expected_recovery, (
-                f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
-            )
+            msg = f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
+            assert d["recovery"] == expected_recovery, msg
 
     def test_to_dict_custom_recovery_override(self):
         """Custom recovery= kwarg overrides class default in to_dict() output."""
@@ -1209,7 +1183,6 @@ class TestRecoveryRoundtrip:
             ):
                 client = TestClient(app, raise_server_exceptions=False)
                 response = client.get("/api/v1/capabilities")
-                assert response.status_code == expected_status, (
-                    f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
-                )
+                status_msg = f"{exc_class.__name__}: status {response.status_code}, expected {expected_status}"
+                assert response.status_code == expected_status, status_msg
                 assert_envelope_shape(response.json(), expected_code, recovery=expected_recovery)

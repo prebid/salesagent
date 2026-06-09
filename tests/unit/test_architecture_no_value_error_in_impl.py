@@ -37,7 +37,6 @@ from pathlib import Path
 VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/__init__.py": 2,
     "src/adapters/base.py": 1,
-    "src/adapters/broadstreet/adapter.py": 3,
     "src/adapters/broadstreet/config_schema.py": 4,
     "src/adapters/gam/auth.py": 5,
     "src/adapters/gam/client.py": 1,
@@ -46,16 +45,8 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/gam/managers/targeting.py": 22,
     "src/adapters/gam/pricing_compatibility.py": 2,
     "src/adapters/gam_implementation_config_schema.py": 4,
-    "src/adapters/google_ad_manager.py": 8,
-    "src/adapters/kevel.py": 2,
-    "src/adapters/mock_ad_server.py": 7,
-    "src/adapters/triton_digital.py": 2,
     "src/adapters/xandr.py": 5,
-    "src/core/tools/creatives/_processing.py": 2,
-    "src/core/tools/creatives/_validation.py": 5,
-    "src/core/tools/media_buy_create.py": 2,  # 286: null-session guard, 821: agent_url HTTP(S) validation
-    "src/core/tools/performance.py": 1,
-    "src/core/tools/products.py": 1,
+    "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)
 }
 
 from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse

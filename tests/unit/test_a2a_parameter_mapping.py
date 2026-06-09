@@ -69,9 +69,8 @@ class TestA2AParameterMapping:
 
             # Verify packages data is passed through (may have additional fields from Pydantic serialization)
             assert len(call_kwargs["packages"]) == len(parameters["packages"]), "Package count should match"
-            assert call_kwargs["packages"][0]["package_id"] == parameters["packages"][0]["package_id"], (
-                "Package ID should match"
-            )
+            msg = "Package ID should match"
+            assert call_kwargs["packages"][0]["package_id"] == parameters["packages"][0]["package_id"], msg
 
             # Should NOT use legacy 'updates' parameter
             assert "updates" not in call_kwargs, "Should not pass legacy 'updates' parameter to core function"
@@ -135,19 +134,19 @@ class TestA2AParameterMapping:
 
             import asyncio
 
-            from a2a.utils.errors import A2AError
+            # Skill handlers raise typed AdCPValidationError on missing params so the
+            # dispatcher routes through the two-layer envelope (not a JSON-RPC error).
+            from src.core.exceptions import AdCPValidationError
 
-            # Should raise A2AError for missing required parameter
-            with pytest.raises(A2AError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 asyncio.run(
                     handler._handle_update_media_buy_skill(parameters=invalid_parameters, identity=_MOCK_IDENTITY)
                 )
 
             # Error message should mention required parameter
             error_message = str(exc_info.value).lower()
-            assert "media_buy_id" in error_message or "buyer_ref" in error_message, (
-                "Error message should mention required parameter"
-            )
+            msg = "Error message should mention required parameter"
+            assert "media_buy_id" in error_message or "buyer_ref" in error_message, msg
 
     def test_get_media_buy_delivery_uses_plural_media_buy_ids(self):
         """

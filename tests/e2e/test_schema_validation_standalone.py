@@ -31,7 +31,7 @@ async def test_schema_validator_initialization():
 # Did not exercise any sales agent behavior — purely fixture vs. upstream spec drift.
 # Real schema conformance is covered by tests/unit/test_adcp_contract.py against the
 # pinned adcp library version. Removed rather than skipped to satisfy the smoke-test
-# TestNoSkippedTests guard. See PR #1186 notes.
+# TestNoSkippedTests guard.
 
 
 @pytest.mark.asyncio

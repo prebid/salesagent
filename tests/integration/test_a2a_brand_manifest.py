@@ -163,4 +163,4 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     # Two-layer envelope: adcp_error mirror + errors[] payload
     from tests.helpers import assert_envelope_shape
 
-    assert_envelope_shape(envelope, "VALIDATION_ERROR")
+    assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")

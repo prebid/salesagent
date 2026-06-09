@@ -111,20 +111,16 @@ class TestTenantErrorPath:
         """H1: No tenant from identity and no current tenant raises AdCPAuthenticationError."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        with (
-            patch("src.core.tools.properties.log_tool_activity"),
-        ):
-            with pytest.raises(AdCPAuthenticationError, match="Could not resolve tenant"):
+        with patch("src.core.tools.properties.log_tool_activity"):
+            with pytest.raises(AdCPAuthenticationError, match="No tenant context"):
                 _list_authorized_properties_impl(req=None, identity=None)
 
     def test_tenant_error_message_is_descriptive(self):
-        """H1: Error message mentions subdomain, virtual host, or header."""
+        """H1: Error message guides the buyer to the auth token / host headers."""
         from src.core.tools.properties import _list_authorized_properties_impl
 
-        with (
-            patch("src.core.tools.properties.log_tool_activity"),
-        ):
-            with pytest.raises(AdCPAuthenticationError, match="subdomain|virtual host|x-adcp-tenant"):
+        with patch("src.core.tools.properties.log_tool_activity"):
+            with pytest.raises(AdCPAuthenticationError, match="x-adcp-auth token|host headers"):
                 _list_authorized_properties_impl(req=None, identity=None)
 
 

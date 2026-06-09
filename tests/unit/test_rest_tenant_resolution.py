@@ -100,11 +100,11 @@ class TestVerifyPrincipalSimplified:
         from src.core.tools.media_buy_update import _verify_principal
 
         sig = inspect.signature(_verify_principal)
-        context_param = sig.parameters.get("context")
-        assert context_param is not None
-        ann = str(context_param.annotation)
+        identity_param = sig.parameters.get("identity")
+        assert identity_param is not None
+        ann = str(identity_param.annotation)
         assert "ResolvedIdentity" in ann, (
-            f"_verify_principal context param annotation is '{ann}', should include ResolvedIdentity"
+            f"_verify_principal identity param annotation is '{ann}', should include ResolvedIdentity"
         )
 
     def test_verify_principal_no_get_principal_id_from_context_import(self):
@@ -118,7 +118,7 @@ class TestVerifyPrincipalSimplified:
         sig = inspect.signature(media_buy_update._verify_principal)
         # The function should accept ResolvedIdentity without isinstance fallback chains
         # We verify by checking it doesn't have more than 2 type options (was 3: Context|ToolContext|ResolvedIdentity)
-        ann = str(sig.parameters["context"].annotation)
+        ann = str(sig.parameters["identity"].annotation)
         assert "Context |" not in ann or ann.count("|") <= 1, (
             f"_verify_principal still has 3-way isinstance dispatch: {ann}. Simplify to accept ResolvedIdentity only."
         )
