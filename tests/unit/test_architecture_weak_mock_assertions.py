@@ -22,7 +22,7 @@ Two anti-patterns are guarded:
 
 Scanning approach: AST — detect (FunctionDef, AsyncFunctionDef) nodes.
 
-beads: beads-bou.5 (split assertion guard), beads-6kh (bare assertion guard)
+beads: #1370 (split assertion guard), #1370 (bare assertion guard)
 """
 
 import ast
@@ -34,7 +34,7 @@ SCAN_DIRS = (ROOT / "tests",)
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was introduced. Allowlist shrinks as tests
 # are upgraded to assert_called_once_with().
-# FIXME(beads-bou.5): each entry below should be upgraded to assert_called_once_with()
+# FIXME(#1370): each entry below should be upgraded to assert_called_once_with()
 WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_a2a_brand_manifest_parameter.py", "test_handle_get_products_skill_brand_manifest_not_converted"),
     ("tests/unit/test_a2a_brand_manifest_parameter.py", "test_handle_get_products_skill_extracts_all_parameters"),
@@ -80,7 +80,7 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
-    # FIXME(beads-bou.5): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
+    # FIXME(#1370): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/bdd/steps/generic/then_media_buy.py", "then_slack_notification_sent"),
     ("tests/integration/test_auth_header_propagation.py", "test_creative_agent_custom_auth_header_propagation"),
     ("tests/integration/test_auth_header_propagation.py", "test_signals_agent_custom_auth_header_propagation"),
@@ -213,7 +213,7 @@ class TestNoWeakMockAssertions:
 # Pre-existing violations: bare assert_called_once() with no call_args check at all.
 # These tests verify call count but not arguments — should be upgraded to
 # assert_called_once_with() or explicitly kept if only call count matters.
-# FIXME(beads-6kh): each entry below should be reviewed and upgraded
+# FIXME(#1370): each entry below should be reviewed and upgraded
 BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/adapters/broadstreet/test_client.py", "test_get_network"),
     ("tests/unit/test_a2a_auth_optional.py", "test_get_products_with_auth"),
@@ -242,7 +242,7 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_transport_tenant_resolution.py", "test_db_queried_only_once"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_positive_budget_persists_to_db"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_valid_date_range_persists_to_db"),
-    # FIXME(beads-6kh): pre-existing bare assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
+    # FIXME(#1370): pre-existing bare assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_review_workflow_with_slack"),
     ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_background_ai_review_submitted"),
     ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_slack_notification_sent"),

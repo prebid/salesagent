@@ -9,6 +9,17 @@ from typing import Any
 from urllib.parse import urlparse
 
 
+def int_env(name: str, default: str) -> int:
+    """Parse an integer environment variable with a friendly error on invalid values."""
+    raw = os.environ.get(name, default)
+    if raw == "":
+        raw = default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer value for {name}: {raw!r}") from exc
+
+
 class DatabaseConfig:
     """PostgreSQL database configuration."""
 
@@ -25,7 +36,7 @@ class DatabaseConfig:
         return {
             "type": "postgresql",
             "host": os.environ.get("DB_HOST", "localhost"),
-            "port": int(os.environ.get("DB_PORT", "5432")),
+            "port": int_env("DB_PORT", "5432"),
             "database": os.environ.get("DB_NAME", "adcp"),
             "user": os.environ.get("DB_USER", "adcp"),
             "password": os.environ.get("DB_PASSWORD", ""),

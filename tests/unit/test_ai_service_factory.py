@@ -12,6 +12,7 @@ from src.services.ai import (
     build_model_string,
     get_platform_defaults,
 )
+from src.services.ai.config import GOOGLE_PROVIDER_ALIASES, uses_legacy_gemini_api_key
 
 
 class TestTenantAIConfig:
@@ -69,6 +70,18 @@ class TestModelSettings:
             ModelSettings(timeout=0)
         with pytest.raises(ValueError):
             ModelSettings(timeout=-1)
+
+
+class TestUsesLegacyGeminiApiKey:
+    """Admin legacy gemini_api_key migration applies to all Google provider aliases."""
+
+    @pytest.mark.parametrize("provider", sorted(GOOGLE_PROVIDER_ALIASES))
+    def test_applies_for_google_aliases(self, provider):
+        assert uses_legacy_gemini_api_key(provider) is True
+
+    @pytest.mark.parametrize("provider", ["anthropic", "openai", "groq"])
+    def test_does_not_apply_for_non_google_providers(self, provider):
+        assert uses_legacy_gemini_api_key(provider) is False
 
 
 class TestBuildModelString:

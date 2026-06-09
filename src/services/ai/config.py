@@ -24,6 +24,11 @@ def canonicalize_google_provider(provider: str) -> str:
     return provider
 
 
+def uses_legacy_gemini_api_key(provider: str) -> bool:
+    """True when admin AI settings should read tenant.gemini_api_key for this provider."""
+    return canonicalize_google_provider(provider) == CANONICAL_GOOGLE_PROVIDER
+
+
 class TenantAIConfig(BaseModel):
     """Per-tenant AI configuration stored in database.
 
