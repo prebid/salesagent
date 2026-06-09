@@ -16,6 +16,7 @@ from adcp.types import FormatId
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import make_mock_uow
 
 
@@ -236,19 +237,9 @@ class TestSyncCreativesAsyncScenario:
             "creative_id": "test_creative_789",
             "name": "Test Creative",
             "format_id": {"agent_url": "https://example.com", "id": "display_300x250"},
-            "assets": {
-                "banner_image": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "banner_image",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/image.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            },
+            "assets": build_assets(
+                image_spec("banner_image", url="https://example.com/image.png", width=300, height=250, multiple=True)
+            ),
         }
 
         with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:

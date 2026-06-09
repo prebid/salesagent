@@ -13,6 +13,8 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.factories.creative_asset import build_assets, image_spec
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -183,19 +185,9 @@ class TestMCPToolRoundtripMinimal:
                             "width": 300,
                             "height": 250,
                         },
-                        "assets": {
-                            "image": [
-                                {
-                                    "asset_type": "image",
-                                    "asset_id": "image",
-                                    "item_type": "individual",
-                                    "required": True,
-                                    "url": "https://example.com/preview.jpg",
-                                    "width": 300,
-                                    "height": 250,
-                                }
-                            ],
-                        },
+                        "assets": build_assets(
+                            image_spec("image", url="https://example.com/preview.jpg", multiple=True)
+                        ),
                     }
                 ]
             },

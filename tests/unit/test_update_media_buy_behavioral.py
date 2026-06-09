@@ -31,6 +31,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.creative_asset import build_assets, image_spec
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -1429,37 +1430,21 @@ class TestUC003UploadInlineCreatives:
                                 "creative_id": "c1",
                                 "name": "Creative 1",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {
-                                    "main": [
-                                        {
-                                            "asset_type": "image",
-                                            "asset_id": "main",
-                                            "item_type": "individual",
-                                            "required": True,
-                                            "url": "https://example.com/a1.png",
-                                            "width": 300,
-                                            "height": 250,
-                                        }
-                                    ]
-                                },
+                                "assets": build_assets(
+                                    image_spec(
+                                        "main", url="https://example.com/a1.png", width=300, height=250, multiple=True
+                                    )
+                                ),
                             },
                             {
                                 "creative_id": "c2",
                                 "name": "Creative 2",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {
-                                    "main": [
-                                        {
-                                            "asset_type": "image",
-                                            "asset_id": "main",
-                                            "item_type": "individual",
-                                            "required": True,
-                                            "url": "https://example.com/a2.png",
-                                            "width": 300,
-                                            "height": 250,
-                                        }
-                                    ]
-                                },
+                                "assets": build_assets(
+                                    image_spec(
+                                        "main", url="https://example.com/a2.png", width=300, height=250, multiple=True
+                                    )
+                                ),
                             },
                         ],
                     }
@@ -1501,19 +1486,11 @@ class TestUC003UploadInlineCreatives:
                                 "creative_id": "c3",
                                 "name": "Creative 3",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {
-                                    "main": [
-                                        {
-                                            "asset_type": "image",
-                                            "asset_id": "main",
-                                            "item_type": "individual",
-                                            "required": True,
-                                            "url": "https://example.com/a3.png",
-                                            "width": 300,
-                                            "height": 250,
-                                        }
-                                    ]
-                                },
+                                "assets": build_assets(
+                                    image_spec(
+                                        "main", url="https://example.com/a3.png", width=300, height=250, multiple=True
+                                    )
+                                ),
                             }
                         ],
                     }
@@ -1558,19 +1535,11 @@ class TestUC003UploadInlineCreatives:
                                 "creative_id": "c_fail",
                                 "name": "Bad Creative",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {
-                                    "main": [
-                                        {
-                                            "asset_type": "image",
-                                            "asset_id": "main",
-                                            "item_type": "individual",
-                                            "required": True,
-                                            "url": "https://example.com/fail.png",
-                                            "width": 300,
-                                            "height": 250,
-                                        }
-                                    ]
-                                },
+                                "assets": build_assets(
+                                    image_spec(
+                                        "main", url="https://example.com/fail.png", width=300, height=250, multiple=True
+                                    )
+                                ),
                             }
                         ],
                     }
@@ -2546,19 +2515,11 @@ class TestUC003ExtK:
                                 "creative_id": "c_fail",
                                 "name": "Fail",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {
-                                    "main": [
-                                        {
-                                            "asset_type": "image",
-                                            "asset_id": "main",
-                                            "item_type": "individual",
-                                            "required": True,
-                                            "url": "https://example.com/fail.png",
-                                            "width": 300,
-                                            "height": 250,
-                                        }
-                                    ]
-                                },
+                                "assets": build_assets(
+                                    image_spec(
+                                        "main", url="https://example.com/fail.png", width=300, height=250, multiple=True
+                                    )
+                                ),
                             }
                         ],
                     }
@@ -2597,19 +2558,11 @@ class TestUC003ExtK:
                                 "creative_id": "c_fail",
                                 "name": "Fail",
                                 "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                "assets": {
-                                    "main": [
-                                        {
-                                            "asset_type": "image",
-                                            "asset_id": "main",
-                                            "item_type": "individual",
-                                            "required": True,
-                                            "url": "https://example.com/fail.png",
-                                            "width": 300,
-                                            "height": 250,
-                                        }
-                                    ]
-                                },
+                                "assets": build_assets(
+                                    image_spec(
+                                        "main", url="https://example.com/fail.png", width=300, height=250, multiple=True
+                                    )
+                                ),
                             }
                         ],
                     }

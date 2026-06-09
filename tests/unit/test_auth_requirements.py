@@ -25,6 +25,7 @@ from fastmcp.exceptions import ToolError
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.creative_asset import build_assets, image_spec
 
 
 class TestAuthenticationRequirements:
@@ -43,14 +44,9 @@ class TestAuthenticationRequirements:
                 "creative_id": "test_creative",
                 "name": "Test Creative",
                 "format_id": "display_728x90_image",
-                "assets": {
-                    "banner_image": {
-                        "asset_type": "image",
-                        "url": "https://example.com/banner.png",
-                        "width": 728,
-                        "height": 90,
-                    }
-                },
+                "assets": build_assets(
+                    image_spec("banner_image", url="https://example.com/banner.png", width=728, height=90)
+                ),
             }
         ]
 

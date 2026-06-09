@@ -20,6 +20,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
     UpdatePerformanceIndexResponse,
 )
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
     create_test_publisher_properties_by_tag,
@@ -161,14 +162,9 @@ class TestResponseStrMethods:
             variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets={
-                "banner_image": {
-                    "url": "https://example.com/creative.jpg",
-                    "width": 300,
-                    "height": 250,
-                    "asset_type": "image",
-                }
-            },
+            assets=build_assets(
+                image_spec("banner_image", url="https://example.com/creative.jpg", width=300, height=250)
+            ),
             principal_id="prin_123",
             created_date=datetime.now(UTC),
             updated_date=datetime.now(UTC),

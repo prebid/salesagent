@@ -40,6 +40,7 @@ from src.core.schemas import (
     SignalDeployment,
     Targeting,
 )
+from tests.factories.creative_asset import build_assets, image_spec, video_spec
 
 
 class AdCPSchemaContractValidator:
@@ -376,19 +377,7 @@ class TestCreativeSchemaContract:
             "creative_id": "creative_contract_test",
             "name": "Creative Contract Test",
             "format_id": FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            "assets": {
-                "banner_image": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "banner_image",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/creative.jpg",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            },
+            "assets": build_assets(image_spec("banner_image", url="https://example.com/creative.jpg", multiple=True)),
             "status": "approved",
             "principal_id": "test_principal",
             "created_date": datetime.now(),
@@ -411,19 +400,9 @@ class TestCreativeSchemaContract:
             "creative_id": "video_contract_test",
             "name": "Video Creative Contract Test",
             "format_id": FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_640x480"),
-            "assets": {
-                "video_file": [
-                    {
-                        "asset_type": "video",
-                        "asset_id": "video_file",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://example.com/video.mp4",
-                        "width": 1920,
-                        "height": 1080,
-                    }
-                ]
-            },
+            "assets": build_assets(
+                video_spec("video_file", url="https://example.com/video.mp4", width=1920, height=1080, multiple=True)
+            ),
             "status": "approved",  # Use valid status per adcp 2.5.0 Creative enum
             "principal_id": "test_principal",
             "created_date": datetime.now(),

@@ -13,6 +13,7 @@ import pytest
 from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatus
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, create_a2a_text_message
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -871,19 +872,9 @@ class TestA2ASkillInvocation:
                         "creative_id": "creative_test_1",
                         "name": "Test Creative",
                         "format_id": "display_300x250",
-                        "assets": {
-                            "asset_1": [
-                                {
-                                    "asset_type": "image",
-                                    "asset_id": "asset_1",
-                                    "item_type": "individual",
-                                    "required": True,
-                                    "url": "https://example.com/creative.jpg",
-                                    "width": 300,
-                                    "height": 250,
-                                }
-                            ]
-                        },
+                        "assets": build_assets(
+                            image_spec("asset_1", url="https://example.com/creative.jpg", multiple=True)
+                        ),
                     }
                 ]
             }
