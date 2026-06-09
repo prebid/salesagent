@@ -75,6 +75,7 @@ class TestRecordSuccess:
                 idempotency_key="key-a",
                 response_model=_model(media_buy_id="mb_1", packages=[]),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
                 now=now,
             )
 
@@ -101,6 +102,7 @@ class TestRecordSuccess:
                 idempotency_key="key-pending",
                 response_model=_model(media_buy_id="mb_p", status="pending_start"),
                 protocol_status="submitted",
+                payload_hash="hash-fixed",
             )
 
         assert attempt.response_envelope["status"] == "submitted"
@@ -120,6 +122,7 @@ class TestRecordSuccess:
                 idempotency_key="key-b",
                 response_model=_model(media_buy_id="mb_b"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
                 ttl=timedelta(minutes=30),
                 now=now,
             )
@@ -139,6 +142,7 @@ class TestRecordSuccess:
                 idempotency_key="key-dup",
                 response_model=_model(media_buy_id="mb_d"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
             )
 
             with pytest.raises(IntegrityError):
@@ -148,6 +152,7 @@ class TestRecordSuccess:
                     idempotency_key="key-dup",
                     response_model=_model(media_buy_id="mb_d"),
                     protocol_status="completed",
+                    payload_hash="hash-fixed",
                 )
 
     def test_null_account_still_unique(self, integration_db):
@@ -163,6 +168,7 @@ class TestRecordSuccess:
                 idempotency_key="key-null-acct",
                 response_model=_model(media_buy_id="mb_n"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
                 account_id=None,
             )
 
@@ -173,6 +179,7 @@ class TestRecordSuccess:
                     idempotency_key="key-null-acct",
                     response_model=_model(media_buy_id="mb_n"),
                     protocol_status="completed",
+                    payload_hash="hash-fixed",
                     account_id=None,
                 )
 
@@ -192,6 +199,7 @@ class TestFindByKey:
                 idempotency_key="key-c",
                 response_model=_model(media_buy_id="mb_c", packages=[]),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
             )
 
             found = repo.find_by_key(
@@ -231,6 +239,7 @@ class TestFindByKey:
                 idempotency_key="key-expired",
                 response_model=_model(media_buy_id="mb_e"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
                 ttl=timedelta(minutes=1),
                 now=past,
             )
@@ -260,6 +269,7 @@ class TestFindByKey:
                 idempotency_key="shared-key",
                 response_model=_model(tenant="t1"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
             )
 
             repo_t2 = IdempotencyAttemptRepository(session, "idem_iso_t2")
@@ -288,6 +298,7 @@ class TestFindByKey:
                 idempotency_key="shared-key",
                 response_model=_model(principal="a"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
             )
 
             found = repo.find_by_key(
@@ -311,6 +322,7 @@ class TestFindByKey:
                 idempotency_key="shared-key",
                 response_model=_model(account="acct_a"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
                 account_id="acct_a",
             )
 
@@ -344,6 +356,7 @@ class TestFindByKey:
                 idempotency_key="shared-key",
                 response_model=_model(tool="create"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
             )
 
             found = repo.find_by_key(
@@ -373,6 +386,7 @@ class TestExpireOld:
                 idempotency_key="key-old-1",
                 response_model=_model(media_buy_id="mb_o1"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
                 ttl=timedelta(minutes=1),
                 now=past,
             )
@@ -382,6 +396,7 @@ class TestExpireOld:
                 idempotency_key="key-old-2",
                 response_model=_model(media_buy_id="mb_o2"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
                 ttl=timedelta(minutes=1),
                 now=past,
             )
@@ -391,6 +406,7 @@ class TestExpireOld:
                 idempotency_key="key-fresh",
                 response_model=_model(media_buy_id="mb_f"),
                 protocol_status="completed",
+                payload_hash="hash-fixed",
                 now=future,
             )
 
@@ -418,6 +434,7 @@ class TestExpireOld:
                     idempotency_key="key-old",
                     response_model=_model(tenant=tenant),
                     protocol_status="completed",
+                    payload_hash="hash-fixed",
                     ttl=timedelta(minutes=1),
                     now=past,
                 )

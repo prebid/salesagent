@@ -991,10 +991,12 @@ class IdempotencyAttempt(Base):
     under a concurrent same-key race; this table holds the verbatim response to
     replay once the winner has committed.
 
-    `expires_at` enforces an explicit TTL — buyers retrying long after the
-    original request get a fresh evaluation, not a stale replay. The default
-    TTL is announced via `get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds`
-    (86400 = 24h).
+    `expires_at` enforces an explicit TTL — expired rows are treated as absent at
+    the read path, so a retry after expiry re-executes. When the original buy
+    still exists, that re-execution hits the `MediaBuy.idempotency_key` backstop
+    and resolves to a re-derived (non-verbatim, unmarked) response rather than a
+    duplicate booking. The default TTL is announced via
+    `get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds` (86400 = 24h).
     """
 
     __tablename__ = "idempotency_attempts"

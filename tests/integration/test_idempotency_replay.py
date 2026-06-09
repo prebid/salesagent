@@ -20,17 +20,18 @@ from tests.harness.media_buy_create import MediaBuyCreateEnv
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-def _seed_success(tenant_id, principal_id, idempotency_key, *, media_buy_id="mb_seeded", payload_hash=None):
-    """Write a cached success row directly via the repository (the verbatim cache).
+def _seed_success(tenant_id, principal_id, idempotency_key, *, payload_hash, media_buy_id="mb_seeded"):
+    """Seed a cached active-buy success (the verbatim cache).
 
-    ``payload_hash=None`` makes the lookup always a replay; pass a non-matching
-    hash to exercise the IDEMPOTENCY_CONFLICT path.
+    ``payload_hash`` must be the canonical hash of the request the test will
+    retry (a hash match replays); pass a non-matching hash to exercise the
+    IDEMPOTENCY_CONFLICT path.
     """
     from adcp.server.helpers import valid_actions_for_status
     from adcp.types import MediaBuyStatus
 
-    from src.core.database.repositories import MediaBuyUoW
     from src.core.schemas._base import CreateMediaBuySuccess
+    from tests.helpers import seed_cached_success
 
     success = CreateMediaBuySuccess(
         media_buy_id=media_buy_id,
@@ -38,17 +39,7 @@ def _seed_success(tenant_id, principal_id, idempotency_key, *, media_buy_id="mb_
         status=MediaBuyStatus.active,
         valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
     )
-    with MediaBuyUoW(tenant_id) as uow:
-        assert uow.idempotency_attempts is not None
-        uow.idempotency_attempts.record_success(
-            principal_id=principal_id,
-            account_id=None,
-            tool_name="create_media_buy",
-            idempotency_key=idempotency_key,
-            response_model=success,
-            protocol_status="completed",
-            payload_hash=payload_hash,
-        )
+    seed_cached_success(tenant_id, principal_id, idempotency_key, response_model=success, payload_hash=payload_hash)
 
 
 def _seed_principal(tenant_id, principal_id):
@@ -93,6 +84,7 @@ class TestImplReplaysCachedSuccess:
     """_create_media_buy_impl replays the cached success verbatim on key match."""
 
     async def test_cached_success_replayed_verbatim(self, integration_db):
+        from src.core.idempotency_canonical import canonical_request_hash
         from src.core.schemas._base import CreateMediaBuyResult, CreateMediaBuySuccess
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -101,8 +93,14 @@ class TestImplReplaysCachedSuccess:
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
 
         _seed_principal(tenant_id, principal_id)
-        # No stored hash → always a replay (never a conflict).
-        _seed_success(tenant_id, principal_id, idem_key, media_buy_id="mb_original_123")
+        # Stored hash matches the retry's canonical hash → a true replay.
+        _seed_success(
+            tenant_id,
+            principal_id,
+            idem_key,
+            payload_hash=canonical_request_hash(_make_request(idem_key)),
+            media_buy_id="mb_original_123",
+        )
 
         result = await _create_media_buy_impl(req=_make_request(idem_key), identity=_identity(tenant_id, principal_id))
 
@@ -132,30 +130,87 @@ class TestImplReplaysCachedSuccess:
         # Read-oracle defense: the conflict must not leak the cached payload/id.
         assert "mb_first" not in exc.message
 
-    async def test_unrelated_key_does_not_replay(self, integration_db):
-        """A different idempotency_key on the same principal never serves the seeded success."""
-        from src.core.exceptions import AdCPError
-        from src.core.tools.media_buy_create import _create_media_buy_impl
+    async def test_invalid_cached_envelope_treated_as_miss(self, integration_db):
+        """A cache row that no longer validates is a MISS — the retry re-executes.
 
-        seeded_key = f"seeded-{uuid.uuid4().hex[:8]}"
-        other_key = f"other-{uuid.uuid4().hex[:8]}"
-        tenant_id = f"miss_t_{uuid.uuid4().hex[:6]}"
+        Pins the schema-drift guard: a stored envelope from an older deploy that no
+        longer validates must never surface as an internal error on a retry of a
+        previously-successful call. The probe treats it as absent and re-executes
+        (here the bare request then fails downstream as a typed AdCPError — what
+        matters is it is neither a replay, a conflict, nor a raw ValidationError).
+        """
+        from pydantic import BaseModel
+        from pydantic import ValidationError as PydanticValidationError
+
+        from src.core.exceptions import AdCPError
+        from src.core.idempotency_canonical import canonical_request_hash
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from tests.helpers import seed_cached_success
+
+        idem_key = f"drift-{uuid.uuid4().hex[:8]}"
+        tenant_id = f"drift_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
 
         _seed_principal(tenant_id, principal_id)
-        _seed_success(tenant_id, principal_id, seeded_key, media_buy_id="mb_seeded_other")
 
-        # other_key has no cached success — the seeded buy must never be served. The
-        # empty-packages request may still fail downstream, but never as a replay.
-        try:
-            result = await _create_media_buy_impl(
-                req=_make_request(other_key), identity=_identity(tenant_id, principal_id)
+        class _LegacyShape(BaseModel):
+            """A stored shape CreateMediaBuySuccess no longer validates (schema drift)."""
+
+            legacy_field: str = "older-deploy"
+
+        seed_cached_success(
+            tenant_id,
+            principal_id,
+            idem_key,
+            response_model=_LegacyShape(),
+            payload_hash=canonical_request_hash(_make_request(idem_key)),
+        )
+
+        with pytest.raises(AdCPError) as exc_info:
+            await _create_media_buy_impl(req=_make_request(idem_key), identity=_identity(tenant_id, principal_id))
+
+        assert not isinstance(exc_info.value, PydanticValidationError)
+        assert exc_info.value.error_code != "IDEMPOTENCY_CONFLICT"
+
+    def test_unrelated_key_does_not_replay(self, integration_db):
+        """A different idempotency_key on the same principal executes fresh — and caches itself."""
+        from datetime import timedelta
+
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.schemas._base import CreateMediaBuySuccess
+
+        seeded_key = f"seeded-{uuid.uuid4().hex[:8]}"
+        other_key = f"other-{uuid.uuid4().hex[:8]}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            env.seed_success(seeded_key, payload_hash="unrelated-hash", media_buy_id="mb_seeded_other")
+            now = datetime.now(UTC)
+            result = env.call_impl(
+                brand={"domain": "miss-test.example.com"},
+                packages=[{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+                start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                po_number="MISS-1",
+                idempotency_key=other_key,
             )
-        except AdCPError:
-            return  # failed downstream — definitively not a replay of the seeded success
-        assert getattr(result, "replayed", False) is False
-        if hasattr(result.response, "media_buy_id"):
-            assert result.response.media_buy_id != "mb_seeded_other"
+            tenant_id = env._tenant_id
+            principal_id = env._principal_id
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.replayed is False, "A fresh key must execute fresh — never replay"
+        assert result.response.media_buy_id != "mb_seeded_other"
+
+        # The fresh success cached its own row under other_key (pins the store path).
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            cached = uow.idempotency_attempts.find_by_key(
+                principal_id=principal_id,
+                tool_name="create_media_buy",
+                idempotency_key=other_key,
+            )
+            assert cached is not None, "A fresh successful create must cache its response"
+            assert cached.payload_hash is not None
 
 
 class TestErrorsAreNeverCached:

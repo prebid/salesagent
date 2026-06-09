@@ -89,8 +89,8 @@ class IdempotencyAttemptRepository:
         idempotency_key: str,
         response_model: BaseModel,
         protocol_status: str,
+        payload_hash: str,
         account_id: str | None = None,
-        payload_hash: str | None = None,
         ttl: timedelta = DEFAULT_REPLAY_TTL,
         now: datetime | None = None,
     ) -> IdempotencyAttempt:
@@ -112,9 +112,10 @@ class IdempotencyAttemptRepository:
         responsibility (it resolves to a replay).
 
         ``payload_hash`` is the RFC 8785 canonical hash of the request payload
-        (see ``src.core.idempotency_canonical``). It lets the replay lookup tell
-        a true replay (same hash) from an ``IDEMPOTENCY_CONFLICT`` (same key,
-        different hash); ``None`` when the caller does not compute it.
+        (see ``src.core.idempotency_canonical``). It is required: it is what lets
+        the replay lookup tell a true replay (same hash) from an
+        ``IDEMPOTENCY_CONFLICT`` (same key, different hash) — a cached success
+        without it could not be conflict-checked, which the spec mandates.
         """
         current = now or datetime.now(UTC)
         attempt = IdempotencyAttempt(

@@ -2,12 +2,10 @@
 
 Verifies that when two concurrent requests with the same idempotency_key
 both pass the initial lookup and attempt to commit, the loser catches
-IntegrityError and returns the winner's result.
-
-Tests:
-1. DB-level: two create_from_request with same key — IntegrityError on second
-2. _build_idempotency_hit_result recovers the winner after a race
-3. Full _create_media_buy_impl concurrent scenario with asyncio.gather
+IntegrityError and resolves to the winner — replaying the winner's verbatim
+cached success when visible, enforcing the payload-hash conflict rule even
+after the race, and degrading to MediaBuy re-derivation only when the cache
+row is missing or unusable.
 """
 
 import uuid
@@ -216,3 +214,139 @@ class TestIdempotencyRaceRecovery:
             existing = verify_uow.media_buys.find_by_idempotency_key(idem_key, principal_id)
             assert existing is not None
             assert existing.media_buy_id == winner_id
+
+
+class TestDegradedFallbackStatus:
+    """The degraded re-derivation reports an awaiting-approval buy as still in flight."""
+
+    def test_pending_approval_buy_reports_submitted(self, integration_db):
+        """A degraded re-derivation of an awaiting-approval buy must not claim completed."""
+        from adcp.types import MediaBuyStatus
+
+        from src.core.schemas import CreateMediaBuyResult, CreateMediaBuySuccess
+        from src.core.tools.media_buy_create import _build_idempotency_hit_result
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+
+        idem_key = f"pend-{uuid.uuid4().hex[:8]}"
+        tenant_id = f"pend_t_{uuid.uuid4().hex[:6]}"
+
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id=tenant_id)
+            principal = PrincipalFactory(tenant=tenant)
+            principal_id = principal.principal_id
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                idempotency_key=idem_key,
+                status="pending_approval",
+            )
+            env.get_session()
+
+        result = _build_idempotency_hit_result(
+            tenant_id=tenant_id,
+            idempotency_key=idem_key,
+            principal_id=principal_id,
+            context=None,
+        )
+
+        assert isinstance(result, CreateMediaBuyResult)
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        # The protocol task is still in flight — the original response said "submitted".
+        assert result.status == "submitted"
+        # The internal awaiting-approval state maps to the nearest spec status.
+        assert result.response.status == MediaBuyStatus.pending_start
+
+
+class TestRaceLoserPayloadRules:
+    """_replay_after_race enforces the same payload rules as the probe."""
+
+    def test_different_payload_after_race_conflicts(self, integration_db):
+        """A race loser whose payload differs gets IDEMPOTENCY_CONFLICT, never the winner's response."""
+        from adcp.server.helpers import valid_actions_for_status
+        from adcp.types import MediaBuyStatus
+
+        from src.core.exceptions import AdCPError
+        from src.core.schemas import CreateMediaBuySuccess
+        from src.core.tools.media_buy_create import _replay_after_race
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.helpers import seed_cached_success
+
+        idem_key = f"rconf-{uuid.uuid4().hex[:8]}"
+        tenant_id = f"rconf_t_{uuid.uuid4().hex[:6]}"
+
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id=tenant_id)
+            principal = PrincipalFactory(tenant=tenant)
+            principal_id = principal.principal_id
+            env.get_session()
+
+        winner_success = CreateMediaBuySuccess(
+            media_buy_id="mb_race_winner",
+            packages=[],
+            status=MediaBuyStatus.active,
+            valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
+        )
+        seed_cached_success(
+            tenant_id, principal_id, idem_key, response_model=winner_success, payload_hash="winner-hash"
+        )
+
+        with pytest.raises(AdCPError) as exc_info:
+            _replay_after_race(
+                tenant_id,
+                idempotency_key=idem_key,
+                principal_id=principal_id,
+                account_id=None,
+                context=None,
+                request_hash="loser-different-hash",
+            )
+
+        assert exc_info.value.error_code == "IDEMPOTENCY_CONFLICT"
+        # Read-oracle defense: the conflict must not leak the winner's response.
+        assert "mb_race_winner" not in exc_info.value.message
+
+    def test_invalid_cached_envelope_falls_back_to_rederivation(self, integration_db):
+        """An unusable cache row degrades to MediaBuy re-derivation — never an internal error."""
+        from pydantic import BaseModel
+
+        from src.core.schemas import CreateMediaBuyResult, CreateMediaBuySuccess
+        from src.core.tools.media_buy_create import _replay_after_race
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+        from tests.helpers import seed_cached_success
+
+        idem_key = f"rinv-{uuid.uuid4().hex[:8]}"
+        tenant_id = f"rinv_t_{uuid.uuid4().hex[:6]}"
+
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id=tenant_id)
+            principal = PrincipalFactory(tenant=tenant)
+            principal_id = principal.principal_id
+            winner = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                idempotency_key=idem_key,
+                status="active",
+            )
+            winner_id = winner.media_buy_id
+            MediaPackageFactory(media_buy=winner, package_id="pkg_rinv_1")
+            env.get_session()
+
+        class _LegacyShape(BaseModel):
+            """A stored shape CreateMediaBuySuccess no longer validates (schema drift)."""
+
+            legacy_field: str = "older-deploy"
+
+        seed_cached_success(tenant_id, principal_id, idem_key, response_model=_LegacyShape(), payload_hash="same-hash")
+
+        result = _replay_after_race(
+            tenant_id,
+            idempotency_key=idem_key,
+            principal_id=principal_id,
+            account_id=None,
+            context=None,
+            request_hash="same-hash",
+        )
+
+        assert isinstance(result, CreateMediaBuyResult)
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id == winner_id
+        assert result.replayed is False, "A re-derived fallback is not a verbatim replay"

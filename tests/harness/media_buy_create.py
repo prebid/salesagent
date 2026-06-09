@@ -151,23 +151,25 @@ class MediaBuyCreateEnv(IntegrationEnv):
         self,
         idempotency_key: str,
         *,
+        payload_hash: str,
         media_buy_id: str = "mb_seeded",
-        payload_hash: str | None = None,
     ) -> None:
         """Persist a cached create_media_buy SUCCESS for this env's principal.
 
         Writes a real ``IdempotencyAttempt`` row via a real ``MediaBuyUoW`` so the
         production replay lookup (``find_by_key``) serves it VERBATIM on the next
-        call carrying the same ``idempotency_key``. ``payload_hash=None`` makes the
-        lookup always a replay (never an ``IDEMPOTENCY_CONFLICT``); pass a hash to
-        exercise the conflict path. The stored envelope is the structured
-        ``{status, response}`` shape production caches — errors are never cached.
+        call carrying the same ``idempotency_key``. ``payload_hash`` must be the
+        canonical hash of the request the test will retry (compute it with
+        ``canonical_request_hash``) for a replay; pass a non-matching hash to
+        exercise the ``IDEMPOTENCY_CONFLICT`` path. The stored envelope is the
+        structured ``{status, response}`` shape production caches — errors are
+        never cached.
         """
         from adcp.server.helpers import valid_actions_for_status
         from adcp.types import MediaBuyStatus
 
-        from src.core.database.repositories import MediaBuyUoW
         from src.core.schemas._base import CreateMediaBuySuccess
+        from tests.helpers import seed_cached_success
 
         self._commit_factory_data()
         success = CreateMediaBuySuccess(
@@ -176,17 +178,13 @@ class MediaBuyCreateEnv(IntegrationEnv):
             status=MediaBuyStatus.active,
             valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
         )
-        with MediaBuyUoW(self._tenant_id) as uow:
-            assert uow.idempotency_attempts is not None
-            uow.idempotency_attempts.record_success(
-                principal_id=self._principal_id,
-                account_id=None,
-                tool_name="create_media_buy",
-                idempotency_key=idempotency_key,
-                response_model=success,
-                protocol_status="completed",
-                payload_hash=payload_hash,
-            )
+        seed_cached_success(
+            self._tenant_id,
+            self._principal_id,
+            idempotency_key,
+            response_model=success,
+            payload_hash=payload_hash,
+        )
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
@@ -347,8 +345,8 @@ class MediaBuyCreateEnv(IntegrationEnv):
         top-level protocol ``status``. The CreateMediaBuySuccess|CreateMediaBuyError
         union discriminates on ``media_buy_id`` (present only on success) — not
         on ``errors``, since a *successful* buy may also carry non-fatal advisory
-        ``errors``. A replayed rejection has ``errors`` and no ``media_buy_id``,
-        so it reconstructs as a CreateMediaBuyError.
+        ``errors``. An error body has ``errors`` and no ``media_buy_id``, so it
+        reconstructs as a CreateMediaBuyError.
         """
         status = data.pop("status", "completed")
         if data.get("media_buy_id") is not None:
