@@ -13,23 +13,26 @@
 # `postgres`/`proxy` here can never collide with another stack's — many of these
 # can run concurrently with zero port coordination.
 #
-# STATUS (what is verified to run in-network):
-#   unit, integration, bdd, admin  -> server-less (in-process TestClient / Flask
-#       test client, or integration spawns its server subprocess in-container);
-#       need only Postgres. VERIFIED: unit/admin/bdd pass; integration 1974 pass
-#       (minus the 18 creative_agent_live tests, which need CREATIVE_AGENT_URL +
-#       a creative-agent on the network, and one pre-existing template url_for
-#       failure unrelated to networking).
+# STATUS — all six suites run in-network, addressing every dependency by SERVICE
+# NAME (postgres:5432, proxy:8000, creative-agent:8080, runner alias `tests`):
+#   unit              -> no DB (DATABASE_URL unset by the unit tox env)
+#   integration       -> suite DB (/adcp_test) + creative-agent for the 18
+#                        test_creative_agent_live tests (CREATIVE_AGENT_URL)
+#   bdd               -> suite DB (/adcp_test), xdist
+#   admin             -> suite DB (/adcp_test)
+#   e2e               -> SERVER DB (/adcp via E2E_DATABASE_URL, per-suite tox
+#                        override); server reached at proxy:8000; webhooks call
+#                        back to the runner via ADCP_WEBHOOK_HOST=tests
+#   ui                -> SERVER DB (/adcp) + playwright chromium baked into
+#                        Dockerfile.test; browser drives proxy:8000
 #
-# NOT YET WIRED (TODO — these still address the server as localhost:<host-port>):
-#   e2e  -> ~10 conftest/test fixtures build http://localhost:{port}; need a
-#           server-host indirection (proxy) and DB host (postgres) split.
-#   ui   -> same localhost issue + needs a playwright browser in Dockerfile.test.
-#   creative-agent -> add the service to the network + set CREATIVE_AGENT_URL so
-#           test_creative_agent_live.py can run.
+# Per-suite DB split: integration/bdd/admin use the runner's DATABASE_URL
+# (/adcp_test); e2e/ui override it to E2E_DATABASE_URL (/adcp) in their tox envs.
+# Both DBs live on the same `postgres` service — different database names, no
+# collision, and NO published host ports anywhere.
 #
 # Usage:
-#   scripts/test-in-network.sh                          # unit,integration,bdd,admin
+#   scripts/test-in-network.sh                          # all six suites
 #   scripts/test-in-network.sh unit,integration         # explicit suite list
 set -uo pipefail
 
@@ -37,7 +40,7 @@ COMPOSE_FILE="docker-compose.e2e.yml"
 # PID-suffixed project name -> isolated network per run. No host ports means
 # concurrent runs never contend; the suffix just keeps container names distinct.
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-adcp-innet-$$}"
-SUITES="${1:-unit,integration,bdd,admin}"
+SUITES="${1:-unit,integration,bdd,admin,e2e,ui}"
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
@@ -46,12 +49,18 @@ dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile ru
 cleanup() { dc down -v >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
+# The pinned reference creative-agent image (adcp@<pin>) is built once by the
+# single-source script; compose reuses it as the `creative-agent` service (no
+# :9999). Host run_all_tests.sh uses the same script (same pin) — no divergence.
+echo "Building pinned creative-agent image (single-sourced)..."
+scripts/creative-agent-stack.sh build
+
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
 dc build postgres adcp-server proxy tests
 
-# Bring up Postgres + the app server + proxy. None of these need to publish host
-# ports for the in-network runner — it reaches them by service name.
-dc up -d postgres adcp-server proxy
+# Bring up Postgres + the app server + proxy + the pinned creative-agent (and its
+# own registry Postgres). None publish host ports — all reached by service name.
+dc up -d postgres adcp-server proxy creative-pg creative-agent
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))
@@ -69,8 +78,10 @@ dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test"
 
 # Run the suites in-network. DATABASE_URL=postgres:5432 (service name) is baked
 # into the `tests` service environment — no host port, no scan, no race.
+# --use-aliases gives this run container the `tests` network alias so the server
+# can call webhooks back to it (ADCP_WEBHOOK_HOST=tests) by name.
 echo "Running suites in-network: $SUITES"
-dc run --rm tests tox -e "$SUITES" -p
+dc run --rm --use-aliases tests tox -e "$SUITES" -p
 RC=$?
 
 # tox writes per-suite JSON into /app/.tox (bind-mounted to the host tree).

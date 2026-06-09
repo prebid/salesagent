@@ -35,10 +35,16 @@ def admin_e2e_env(docker_services_e2e):
     old_port = os.environ.get("ADCP_SALES_PORT")
     os.environ["ADCP_SALES_PORT"] = str(admin_port)
 
-    # Also set DATABASE_URL to point at the e2e Postgres
+    # Also set DATABASE_URL to point at the e2e Postgres (the SERVER's /adcp DB).
+    # In-network the runner exports E2E_DATABASE_URL (postgres:5432/adcp, no host
+    # port); on the host path build localhost:<published-port>.
     old_db = os.environ.get("DATABASE_URL")
     pg_port = ports["postgres_port"]
-    os.environ["DATABASE_URL"] = f"postgresql://adcp_user:secure_password_change_me@localhost:{pg_port}/adcp"
+    db_host = os.environ.get("ADCP_TEST_DB_HOST", "localhost")
+    db_port = os.environ.get("ADCP_TEST_DB_PORT", str(pg_port))
+    os.environ["DATABASE_URL"] = os.environ.get("E2E_DATABASE_URL") or (
+        f"postgresql://adcp_user:secure_password_change_me@{db_host}:{db_port}/adcp"
+    )
 
     from tests.harness.admin_accounts import AdminAccountEnv
 

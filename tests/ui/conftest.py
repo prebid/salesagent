@@ -16,23 +16,32 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def base_url():
-    """Base URL for the running app."""
+    """Base URL for the running app.
+
+    Host path: localhost:<published-port>. In-network the server is reached by
+    service name (ADCP_TEST_HOST=proxy) with no published host port.
+    """
+    host = os.environ.get("ADCP_TEST_HOST", "localhost")
     port = os.environ.get("ADCP_SALES_PORT", "8000")
-    return f"http://localhost:{port}"
+    return f"http://{host}:{port}"
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_test_auth_enabled():
     """Enable auth_setup_mode on the default tenant so /test/auth works.
 
-    The app's internal DB URL uses Docker-internal hostnames (postgres:5432),
-    so we construct a localhost URL using the exposed POSTGRES_PORT.
+    Seeds the SERVER's database (/adcp). In-network there is no published
+    Postgres port, so honor the service-name URL the runner exports
+    (E2E_DATABASE_URL=postgres:5432/adcp); on the host path fall back to
+    localhost:<published POSTGRES_PORT>.
     """
-    pg_port = os.environ.get("POSTGRES_PORT")
-    if not pg_port:
-        pytest.skip("POSTGRES_PORT not set — cannot configure test auth")
-
-    db_url = f"postgresql://adcp_user:secure_password_change_me@localhost:{pg_port}/adcp"
+    db_url = os.environ.get("E2E_DATABASE_URL")
+    if not db_url:
+        pg_port = os.environ.get("POSTGRES_PORT")
+        if not pg_port:
+            pytest.skip("neither E2E_DATABASE_URL nor POSTGRES_PORT set — cannot configure test auth")
+        db_host = os.environ.get("ADCP_TEST_DB_HOST", "localhost")
+        db_url = f"postgresql://adcp_user:secure_password_change_me@{db_host}:{pg_port}/adcp"
 
     from sqlalchemy import create_engine, text
 

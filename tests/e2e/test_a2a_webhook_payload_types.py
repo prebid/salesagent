@@ -10,6 +10,7 @@ This test validates that our A2A server sends the correct payload type based on 
 """
 
 import json
+import os
 import socket
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -194,9 +195,11 @@ def webhook_capture_server():
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    # Use localhost in URL - the MCP server's protocol_webhook_service
-    # rewrites it to host.docker.internal
-    webhook_url = f"http://localhost:{port}/webhook"
+    # Host path: 'localhost' is rewritten to host.docker.internal by the server.
+    # In-network the receiver lives in the runner container; the server reaches it
+    # by the runner's network alias (ADCP_WEBHOOK_HOST=tests), left un-rewritten.
+    webhook_host = os.getenv("ADCP_WEBHOOK_HOST", "localhost")
+    webhook_url = f"http://{webhook_host}:{port}/webhook"
 
     yield {
         "url": webhook_url,

@@ -90,11 +90,30 @@ services:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      # Fixed in-network DB address — never a host port, never collides.
+      # Fixed in-network DB address — never a host port, never collides. This is
+      # the SUITE database used by unit(skip)/integration/bdd/admin.
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp_test?sslmode=disable
+      # E2E and UI must hit the SERVER's database (/adcp), not the suite DB. The
+      # tox e2e/ui envs override DATABASE_URL from this var (host path leaves it
+      # unset and keeps its own DATABASE_URL).
+      E2E_DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       # Suites that hit the running server reach it in-network (no host port).
       ADCP_SERVER_URL: http://proxy:8000
       ADCP_SALES_PORT: "8000"
+      # e2e/ui address the server by service name (proxy) and the server DB by
+      # service name (postgres:5432) — resolved by conftest via these vars.
+      ADCP_TEST_HOST: proxy
+      ADCP_TEST_DB_HOST: postgres
+      ADCP_TEST_DB_PORT: "5432"
+      # Webhook reverse-addressing: the server calls back to this runner by its
+      # network alias (requires `docker compose run --use-aliases`). 'tests' is
+      # not 'localhost', so the server does NOT rewrite it to host.docker.internal.
+      ADCP_WEBHOOK_HOST: tests
+      # Pinned reference creative agent, reachable in-network by service name
+      # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
+      CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
+      # Playwright chromium is pre-installed in Dockerfile.test at this path.
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       ADCP_TESTING: "true"
       ADCP_AUTH_TEST_MODE: "true"
       CREATE_SAMPLE_DATA: "true"
@@ -110,6 +129,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      creative-agent:
+        condition: service_healthy
     volumes:
       - .:/app
       - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
@@ -119,6 +140,55 @@ services:
     # Overridden by `docker compose run --rm tests <cmd>`; idle by default.
     command: ["sleep", "infinity"]
 
+  # ─── Pinned reference creative agent (in-network) ──────────────────────────
+  # Mirror of scripts/creative-agent-stack.sh, but ON the compose network with
+  # NO published host port. The host path runs that script standalone (creative-net,
+  # :9999); in-network we reuse the SAME pre-built image (`adcp-creative-agent`,
+  # adcp@ca70dd1e2a6c) so CI/host/in-network cannot diverge on the pin. The
+  # image is built by `scripts/creative-agent-stack.sh build` (called from
+  # scripts/test-in-network.sh) before `up`. Gated behind the runner profile so a
+  # normal e2e `up` never pulls it.
+  creative-pg:
+    profiles: ["runner"]
+    image: postgres:16
+    environment:
+      POSTGRES_DB: adcp_registry
+      POSTGRES_USER: adcp
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - creative_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adcp -d adcp_registry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  creative-agent:
+    profiles: ["runner"]
+    image: adcp-creative-agent  # built by scripts/creative-agent-stack.sh build
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      DATABASE_URL: postgresql://adcp:localdev@creative-pg:5432/adcp_registry
+      RUN_MIGRATIONS: "true"
+      ALLOW_INSECURE_COOKIES: "true"
+      DEV_USER_EMAIL: ci@test.com
+      DEV_USER_ID: ci-user
+      AGENT_TOKEN_ENCRYPTION_SECRET: local-ci-encryption-key-32chars!!
+      WORKOS_API_KEY: sk_test_dummy
+      WORKOS_CLIENT_ID: client_dummy
+    depends_on:
+      creative-pg:
+        condition: service_healthy
+    # Node is guaranteed in this image; curl/wget may not be. Use node http.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/api/creative-agent/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
 volumes:
   postgres_data:
   tox_data:
+  creative_pg_data:
