@@ -184,7 +184,9 @@ class TestErrorsAreNeverCached:
             try:
                 result = env.call_impl(
                     brand={"domain": "err-test.example.com"},
-                    packages=[{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+                    packages=[
+                        {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
+                    ],
                     start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     po_number="ERR-1",

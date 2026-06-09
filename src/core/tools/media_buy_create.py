@@ -1708,9 +1708,7 @@ async def _create_media_buy_impl(
                 # Conflict only when a stored hash is present AND differs — a row
                 # without a hash carries no conflict signal, so it always replays.
                 if cached.payload_hash is not None and cached.payload_hash != request_hash:
-                    raise AdCPIdempotencyConflictError(
-                        "idempotency_key was reused with a different request payload"
-                    )
+                    raise AdCPIdempotencyConflictError("idempotency_key was reused with a different request payload")
                 logger.info("Idempotency replay: returning cached success for key %s", req.idempotency_key)
                 return _replay_cached_success(cached.response_envelope)
 
