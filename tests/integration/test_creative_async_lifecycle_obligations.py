@@ -32,8 +32,8 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
-from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import CreativeSyncEnv
+from tests.helpers.creative_test_helpers import creative_payload
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -42,14 +42,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 def _creative(**overrides) -> dict:
     """Minimal creative dict for testing."""
-    defaults = {
-        "creative_id": "c_async_1",
-        "name": "Async Lifecycle Test",
-        "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("banner")),
-    }
-    defaults.update(overrides)
-    return defaults
+    return creative_payload(
+        **{
+            "creative_id": "c_async_1",
+            "name": "Async Lifecycle Test",
+            "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+            **overrides,
+        }
+    )
 
 
 class TestAsyncSubmittedLifecycle:

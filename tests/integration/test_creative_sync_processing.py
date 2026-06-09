@@ -17,12 +17,12 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from tests.factories.creative_asset import (
-    assert_assets,
     build_assets,
     image_spec,
     text_spec,
 )
 from tests.harness import CreativeSyncEnv
+from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -38,14 +38,14 @@ def _error_messages(errors: list | None) -> list[str]:
 
 def _creative(**overrides) -> dict:
     """Minimal creative dict for testing."""
-    defaults = {
-        "creative_id": "c_proc_1",
-        "name": "Processing Test",
-        "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("banner")),
-    }
-    defaults.update(overrides)
-    return defaults
+    return creative_payload(
+        **{
+            "creative_id": "c_proc_1",
+            "name": "Processing Test",
+            "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+            **overrides,
+        }
+    )
 
 
 def _create_then_update(
@@ -281,9 +281,8 @@ class TestGenerativeUpdateUserAssets:
                 # data field should have generative build result but NOT overwritten user assets
                 assert db.data.get("generative_build_result") is not None
 
-                # INV-6: the user-provided image survives the generative build (not overwritten).
-                stored_assets = db.data.get("assets") or {}
-                assert_assets(stored_assets, hero_image_spec)
+            # INV-6: the user-provided image survives the generative build (not overwritten).
+            assert_stored_creative_assets("c_gen_user_assets", hero_image_spec)
 
 
 class TestGenerativeUpdatePromotedOfferings:

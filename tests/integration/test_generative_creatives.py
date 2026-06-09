@@ -18,6 +18,7 @@ from src.core.database.models import Creative as DBCreative
 from src.core.schemas import SyncCreativesResponse
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv
+from tests.helpers.creative_test_helpers import creative_payload
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -26,16 +27,15 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 def _creative(**overrides) -> dict:
     """Minimal creative dict for testing."""
-    defaults = {
-        "creative_id": "gen-creative-001",
-        "name": "Test Generative Creative",
-        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_generative"},
-        "assets": build_assets(
-            text_spec("message", content="Create a banner ad for eco-friendly products")
-        ),
-    }
-    defaults.update(overrides)
-    return defaults
+    return creative_payload(
+        **{
+            "creative_id": "gen-creative-001",
+            "name": "Test Generative Creative",
+            "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_generative"},
+            "assets": build_assets(text_spec("message", content="Create a banner ad for eco-friendly products")),
+            **overrides,
+        }
+    )
 
 
 class TestGenerativeCreatives:

@@ -46,8 +46,9 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from tests.factories import PrincipalFactory, TenantFactory
-from tests.factories.creative_asset import assert_assets, build_assets, image_spec, video_spec
+from tests.factories.creative_asset import build_assets, image_spec, video_spec
 from tests.harness._base import IntegrationEnv
+from tests.helpers.creative_test_helpers import assert_stored_creative_assets
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -292,7 +293,7 @@ class TestCreativeSyncDataPreservation:
             banner_spec = image_spec(
                 "banner_image",
                 url="https://user-creative.example.com/banner.png",
-                            )
+            )
 
             result = env.call_impl(
                 creatives=[
@@ -308,12 +309,12 @@ class TestCreativeSyncDataPreservation:
         assert len(result.creatives) == 1
         assert result.creatives[0].action == "created"
 
+        # User's banner asset must survive — NOT replaced by generative output.
+        assert_stored_creative_assets("preserve-assets-001", banner_spec)
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(creative_id="preserve-assets-001")
             creative = session.scalars(stmt).first()
             assert creative is not None
-            # User's banner asset must survive — NOT replaced by generative output.
-            assert_assets(creative.data.get("assets") or {}, banner_spec)
             assert "generated_headline" not in (creative.data.get("assets") or {})
             assert "generated_image" not in (creative.data.get("assets") or {})
 

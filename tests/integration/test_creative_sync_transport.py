@@ -24,8 +24,9 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
-from tests.factories.creative_asset import assert_assets, build_assets, image_spec, text_spec
+from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
+from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
 
 
 def _error_messages(errors: list | None) -> list[str]:
@@ -128,14 +129,14 @@ DEFAULT_FORMAT_ID = {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL}
 
 def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
     """Build a minimal creative dict for transport tests."""
-    defaults = {
-        "creative_id": creative_id,
-        "name": name,
-        "format_id": DEFAULT_FORMAT_ID,
-        "assets": build_assets(image_spec("banner")),
-    }
-    defaults.update(overrides)
-    return defaults
+    return creative_payload(
+        **{
+            "creative_id": creative_id,
+            "name": name,
+            "format_id": DEFAULT_FORMAT_ID,
+            **overrides,
+        }
+    )
 
 
 @pytest.mark.requires_db
@@ -674,8 +675,8 @@ class TestGenerativeBuildUserAssetPriority:
             assert db_creative is not None
             # User-provided URL should be preserved (not overwritten by generative output)
             assert db_creative.data.get("url") == "https://user.example.com/image.png"
-            # User-provided headline preserved with its original content (not AI output)
-            assert_assets(db_creative.data.get("assets", {}), user_headline)
+        # User-provided headline preserved with its original content (not AI output)
+        assert_stored_creative_assets("c_gen_08", user_headline, tenant_id="test_tenant")
 
 
 # ---------------------------------------------------------------------------

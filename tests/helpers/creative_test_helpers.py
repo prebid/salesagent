@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, Mock, patch
 
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
 from tests.harness import make_mock_uow
 
 
@@ -26,6 +26,46 @@ def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> di
         "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
         "variants": [],
     }
+
+
+_DEFAULT_AGENT_URL = "https://creative.test.example.com"
+
+
+def creative_payload(**overrides: object) -> dict:
+    """Build a minimal creative request dict (``creative_id``/``name``/``format_id``/``assets``).
+
+    Shared skeleton for the per-file ``_creative`` helpers. The four base fields fall
+    back to sensible defaults via ``setdefault``; any field a caller supplies (the
+    file-specific defaults a ``_creative`` passes, or a per-test override) wins. Extra
+    keys (e.g. ``data``, ``variants``) pass straight through.
+    """
+    payload: dict = dict(overrides)
+    payload.setdefault("creative_id", "c1")
+    payload.setdefault("name", "Test")
+    payload.setdefault("format_id", {"id": "display_300x250", "agent_url": _DEFAULT_AGENT_URL})
+    payload.setdefault("assets", build_assets(image_spec("banner")))
+    return payload
+
+
+def assert_stored_creative_assets(creative_id: str, *specs: AssetSpec, tenant_id: str | None = None) -> None:
+    """Fetch the stored creative by id and assert its data["assets"] contains each spec.
+
+    Opens a DB session, selects the Creative by ``creative_id`` (scoped to
+    ``tenant_id`` when given), and runs ``assert_assets`` against its stored
+    ``data["assets"]`` so build-and-verify flow through the same AssetSpec.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Creative as DBCreative
+
+    filters: dict = {"creative_id": creative_id}
+    if tenant_id is not None:
+        filters["tenant_id"] = tenant_id
+    with get_db_session() as session:
+        db = session.scalars(select(DBCreative).filter_by(**filters)).first()
+        assert db is not None, f"Creative {creative_id} not found in DB"
+        assert_assets((db.data or {}).get("assets", {}), *specs)
 
 
 def make_creative_uow(*, include_assignments: bool = False):
