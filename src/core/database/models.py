@@ -976,23 +976,23 @@ class MediaBuy(Base):
 
 
 class IdempotencyAttempt(Base):
-    """Cached rejection envelope keyed by (tenant, principal, tool, idempotency_key).
+    """Cached verbatim SUCCESS response keyed by (tenant, principal, account, tool, idempotency_key).
 
-    AdCP spec mandates that retrying a tool call with the same idempotency_key
-    must return the original result without re-processing. Successful media
-    buys are already idempotent via MediaBuy.idempotency_key (the partial
-    unique index on `media_buys`). This table fills the gap for *rejected*
-    requests — without it, a buyer who retries after a validation failure
-    would re-run the validation and could legitimately get a different answer
-    (e.g. if a product was added in the interim).
+    AdCP 3.0.1 idempotency: retrying a mutating tool call with the same
+    idempotency_key must return the ORIGINAL success response byte-for-byte
+    (marked `replayed: true`), and errors are NEVER cached — a retry after an
+    error re-executes. This table is the verbatim success cache: it stores the
+    original response envelope plus the RFC 8785 canonical hash of the request
+    payload, so a replay returns the stored envelope unchanged and a same-key /
+    different-payload retry is rejected with `IDEMPOTENCY_CONFLICT`.
 
-    The cached envelope (`response_envelope`) is the single-layer `{errors, context}`
-    projection of the rejection's wire envelope. On replay it is reconstructed into a
-    typed AdCPError and re-raised, so the boundary re-emits the same two-layer wire
-    shape as the fresh reject (marked `replayed=true`).
+    `MediaBuy.idempotency_key` (the partial unique index on `media_buys`) remains
+    the dup-booking backstop — it guarantees a single ad-server booking even
+    under a concurrent same-key race; this table holds the verbatim response to
+    replay once the winner has committed.
 
-    `expires_at` enforces an explicit TTL — buyers retrying long after a
-    rejection should get a fresh evaluation, not a stale answer. The default
+    `expires_at` enforces an explicit TTL — buyers retrying long after the
+    original request get a fresh evaluation, not a stale replay. The default
     TTL is announced via `get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds`
     (86400 = 24h).
     """
@@ -1004,10 +1004,15 @@ class IdempotencyAttempt(Base):
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
     principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    account_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Resolved account scope (AdCP idempotency scope is agent+account+key); NULL when the buy targets no sub-account",
+    )
     tool_name: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        comment="Tool that produced the rejection, e.g. 'create_media_buy'",
+        comment="Tool that produced the cached success, e.g. 'create_media_buy'",
     )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     payload_hash: Mapped[str | None] = mapped_column(
@@ -1018,7 +1023,7 @@ class IdempotencyAttempt(Base):
     response_envelope: Mapped[dict] = mapped_column(
         JSONType,
         nullable=False,
-        comment="Cached rejection envelope ({errors, context}); reconstructed + re-raised on replay",
+        comment="Verbatim original success response envelope; returned unchanged on replay (marked replayed=true)",
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -1036,9 +1041,11 @@ class IdempotencyAttempt(Base):
             "idx_idempotency_attempts_lookup",
             "tenant_id",
             "principal_id",
+            "account_id",
             "tool_name",
             "idempotency_key",
             unique=True,
+            postgresql_nulls_not_distinct=True,
         ),
         Index("idx_idempotency_attempts_expires_at", "expires_at"),
     )

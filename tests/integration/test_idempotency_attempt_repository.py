@@ -1,9 +1,14 @@
 """Integration tests for IdempotencyAttemptRepository.
 
-Backs AdCP contract item 7 (issue #1303): retrying a tool call with the same
-idempotency_key after a rejection must return the cached envelope, not a
-fresh evaluation. The repository encapsulates the per-tenant, per-principal,
-per-tool, per-key uniqueness contract and TTL-driven expiry.
+Backs the AdCP 3.0.1 idempotency contract: retrying a mutating tool call with
+the same idempotency_key must replay the original SUCCESS verbatim (errors are
+never cached). The repository encapsulates the per-tenant, per-principal,
+per-account, per-tool, per-key uniqueness contract and TTL-driven expiry.
+
+The stored envelope is structured ``{"status": <protocol task status>,
+"response": <serialized domain model>}`` — the protocol status rides alongside
+the domain payload (a pending buy's ``submitted`` status is not a valid domain
+status, so it cannot live inside the response).
 """
 
 from __future__ import annotations
@@ -11,11 +16,27 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
 from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+class _Resp(BaseModel):
+    """Minimal stand-in success model — the repo serializes whatever model it's given."""
+
+    model_config = {"extra": "allow"}
+
+
+def _model(**fields) -> _Resp:
+    return _Resp(**fields)
+
+
+def _envelope(status: str, **response_fields) -> dict:
+    """The structured shape record_success stores: protocol status + domain response."""
+    return {"status": status, "response": response_fields}
 
 
 class _RepoEnv(IntegrationEnv):
@@ -37,8 +58,8 @@ def _setup(env: _RepoEnv, tenant_id: str = "idem_t1", principal_id: str = "idem_
     return env.get_session()
 
 
-class TestRecordRejection:
-    """record_rejection writes the envelope and stamps expiry from TTL."""
+class TestRecordSuccess:
+    """record_success serializes the model, writes the row, and stamps expiry from TTL."""
 
     def test_writes_row_with_default_ttl(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -46,24 +67,44 @@ class TestRecordRejection:
         with _RepoEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
-            envelope = {"errors": [{"code": "VALIDATION_ERROR", "message": "bad budget"}], "context": None}
 
             now = datetime(2026, 5, 17, 12, 0, 0, tzinfo=UTC)
-            attempt = repo.record_rejection(
+            attempt = repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="key-a",
-                response_envelope=envelope,
+                response_model=_model(media_buy_id="mb_1", packages=[]),
+                protocol_status="completed",
                 now=now,
             )
 
             assert attempt.tenant_id == "idem_t1"
             assert attempt.principal_id == "idem_p1"
+            assert attempt.account_id is None
             assert attempt.tool_name == "create_media_buy"
             assert attempt.idempotency_key == "key-a"
-            assert attempt.response_envelope == envelope
+            # The repo stored protocol status + the serialized model, structured.
+            assert attempt.response_envelope == _envelope("completed", media_buy_id="mb_1", packages=[])
             # Default TTL = 24h
             assert attempt.expires_at == now + timedelta(seconds=86400)
+
+    def test_submitted_protocol_status_preserved(self, integration_db):
+        """A pending buy's ``submitted`` status survives even though it is not a domain status."""
+        from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
+
+        with _RepoEnv() as env:
+            session = _setup(env)
+            repo = IdempotencyAttemptRepository(session, "idem_t1")
+            attempt = repo.record_success(
+                principal_id="idem_p1",
+                tool_name="create_media_buy",
+                idempotency_key="key-pending",
+                response_model=_model(media_buy_id="mb_p", status="pending_start"),
+                protocol_status="submitted",
+            )
+
+        assert attempt.response_envelope["status"] == "submitted"
+        assert attempt.response_envelope["response"]["status"] == "pending_start"
 
     def test_custom_ttl_honored(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -73,11 +114,12 @@ class TestRecordRejection:
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             now = datetime(2026, 5, 17, 12, 0, 0, tzinfo=UTC)
 
-            attempt = repo.record_rejection(
+            attempt = repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="key-b",
-                response_envelope={"errors": []},
+                response_model=_model(media_buy_id="mb_b"),
+                protocol_status="completed",
                 ttl=timedelta(minutes=30),
                 now=now,
             )
@@ -85,25 +127,53 @@ class TestRecordRejection:
             assert attempt.expires_at == now + timedelta(minutes=30)
 
     def test_duplicate_raises_integrity_error(self, integration_db):
-        """Unique index on (tenant, principal, tool, key) prevents double-cache."""
+        """Unique index on (tenant, principal, account, tool, key) prevents double-cache."""
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
         with _RepoEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
-            repo.record_rejection(
+            repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="key-dup",
-                response_envelope={"errors": []},
+                response_model=_model(media_buy_id="mb_d"),
+                protocol_status="completed",
             )
 
             with pytest.raises(IntegrityError):
-                repo.record_rejection(
+                repo.record_success(
                     principal_id="idem_p1",
                     tool_name="create_media_buy",
                     idempotency_key="key-dup",
-                    response_envelope={"errors": []},
+                    response_model=_model(media_buy_id="mb_d"),
+                    protocol_status="completed",
+                )
+
+    def test_null_account_still_unique(self, integration_db):
+        """NULLS NOT DISTINCT: two NULL-account rows for the same key still collide."""
+        from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
+
+        with _RepoEnv() as env:
+            session = _setup(env)
+            repo = IdempotencyAttemptRepository(session, "idem_t1")
+            repo.record_success(
+                principal_id="idem_p1",
+                tool_name="create_media_buy",
+                idempotency_key="key-null-acct",
+                response_model=_model(media_buy_id="mb_n"),
+                protocol_status="completed",
+                account_id=None,
+            )
+
+            with pytest.raises(IntegrityError):
+                repo.record_success(
+                    principal_id="idem_p1",
+                    tool_name="create_media_buy",
+                    idempotency_key="key-null-acct",
+                    response_model=_model(media_buy_id="mb_n"),
+                    protocol_status="completed",
+                    account_id=None,
                 )
 
 
@@ -116,12 +186,12 @@ class TestFindByKey:
         with _RepoEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
-            envelope = {"errors": [{"code": "BUDGET_TOO_LOW"}], "context": {"request_id": "r1"}}
-            repo.record_rejection(
+            repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="key-c",
-                response_envelope=envelope,
+                response_model=_model(media_buy_id="mb_c", packages=[]),
+                protocol_status="completed",
             )
 
             found = repo.find_by_key(
@@ -131,7 +201,7 @@ class TestFindByKey:
             )
 
         assert found is not None
-        assert found.response_envelope == envelope
+        assert found.response_envelope == _envelope("completed", media_buy_id="mb_c", packages=[])
 
     def test_returns_none_when_missing(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -155,11 +225,12 @@ class TestFindByKey:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             past = datetime(2020, 1, 1, tzinfo=UTC)
-            repo.record_rejection(
+            repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="key-expired",
-                response_envelope={"errors": []},
+                response_model=_model(media_buy_id="mb_e"),
+                protocol_status="completed",
                 ttl=timedelta(minutes=1),
                 now=past,
             )
@@ -183,11 +254,12 @@ class TestFindByKey:
             session = env.get_session()
 
             repo_t1 = IdempotencyAttemptRepository(session, "idem_iso_t1")
-            repo_t1.record_rejection(
+            repo_t1.record_success(
                 principal_id="idem_iso_p",
                 tool_name="create_media_buy",
                 idempotency_key="shared-key",
-                response_envelope={"tenant": "t1"},
+                response_model=_model(tenant="t1"),
+                protocol_status="completed",
             )
 
             repo_t2 = IdempotencyAttemptRepository(session, "idem_iso_t2")
@@ -197,7 +269,7 @@ class TestFindByKey:
                 idempotency_key="shared-key",
             )
 
-        assert found is None, "Tenant t2 must not see tenant t1's cached rejection"
+        assert found is None, "Tenant t2 must not see tenant t1's cached success"
 
     def test_principal_isolation(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -210,11 +282,12 @@ class TestFindByKey:
             session = env.get_session()
 
             repo = IdempotencyAttemptRepository(session, "idem_pi_t1")
-            repo.record_rejection(
+            repo.record_success(
                 principal_id="idem_pi_a",
                 tool_name="create_media_buy",
                 idempotency_key="shared-key",
-                response_envelope={"principal": "a"},
+                response_model=_model(principal="a"),
+                protocol_status="completed",
             )
 
             found = repo.find_by_key(
@@ -223,7 +296,40 @@ class TestFindByKey:
                 idempotency_key="shared-key",
             )
 
-        assert found is None, "Principal b must not see principal a's cached rejection"
+        assert found is None, "Principal b must not see principal a's cached success"
+
+    def test_account_isolation(self, integration_db):
+        """Two accounts under one principal reusing a key are independent (AdCP scope)."""
+        from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
+
+        with _RepoEnv() as env:
+            session = _setup(env)
+            repo = IdempotencyAttemptRepository(session, "idem_t1")
+            repo.record_success(
+                principal_id="idem_p1",
+                tool_name="create_media_buy",
+                idempotency_key="shared-key",
+                response_model=_model(account="acct_a"),
+                protocol_status="completed",
+                account_id="acct_a",
+            )
+
+            # Same (tenant, principal, tool, key) but a different account → independent.
+            other = repo.find_by_key(
+                principal_id="idem_p1",
+                tool_name="create_media_buy",
+                idempotency_key="shared-key",
+                account_id="acct_b",
+            )
+            same = repo.find_by_key(
+                principal_id="idem_p1",
+                tool_name="create_media_buy",
+                idempotency_key="shared-key",
+                account_id="acct_a",
+            )
+
+        assert other is None, "account acct_b must not see acct_a's cached success"
+        assert same is not None, "account acct_a must replay its own cached success"
 
     def test_tool_name_isolation(self, integration_db):
         """Different tools using the same idempotency_key are independent."""
@@ -232,11 +338,12 @@ class TestFindByKey:
         with _RepoEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
-            repo.record_rejection(
+            repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="shared-key",
-                response_envelope={"tool": "create"},
+                response_model=_model(tool="create"),
+                protocol_status="completed",
             )
 
             found = repo.find_by_key(
@@ -245,7 +352,7 @@ class TestFindByKey:
                 idempotency_key="shared-key",
             )
 
-        assert found is None, "update_media_buy must not see create_media_buy's cached rejection"
+        assert found is None, "update_media_buy must not see create_media_buy's cached success"
 
 
 class TestExpireOld:
@@ -260,27 +367,30 @@ class TestExpireOld:
             past = datetime(2020, 1, 1, tzinfo=UTC)
             future = datetime(2099, 1, 1, tzinfo=UTC)
 
-            repo.record_rejection(
+            repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="key-old-1",
-                response_envelope={"e": 1},
+                response_model=_model(media_buy_id="mb_o1"),
+                protocol_status="completed",
                 ttl=timedelta(minutes=1),
                 now=past,
             )
-            repo.record_rejection(
+            repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="key-old-2",
-                response_envelope={"e": 2},
+                response_model=_model(media_buy_id="mb_o2"),
+                protocol_status="completed",
                 ttl=timedelta(minutes=1),
                 now=past,
             )
-            repo.record_rejection(
+            repo.record_success(
                 principal_id="idem_p1",
                 tool_name="create_media_buy",
                 idempotency_key="key-fresh",
-                response_envelope={"e": 3},
+                response_model=_model(media_buy_id="mb_f"),
+                protocol_status="completed",
                 now=future,
             )
 
@@ -302,11 +412,12 @@ class TestExpireOld:
 
             past = datetime(2020, 1, 1, tzinfo=UTC)
             for tenant in ("idem_exp_t1", "idem_exp_t2"):
-                IdempotencyAttemptRepository(session, tenant).record_rejection(
+                IdempotencyAttemptRepository(session, tenant).record_success(
                     principal_id="idem_exp_p",
                     tool_name="create_media_buy",
                     idempotency_key="key-old",
-                    response_envelope={"tenant": tenant},
+                    response_model=_model(tenant=tenant),
+                    protocol_status="completed",
                     ttl=timedelta(minutes=1),
                     now=past,
                 )

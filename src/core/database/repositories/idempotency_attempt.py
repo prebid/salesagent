@@ -1,10 +1,12 @@
-"""IdempotencyAttempt repository — tenant-scoped access to cached rejection envelopes.
+"""IdempotencyAttempt repository — tenant-scoped access to the verbatim success cache.
 
-AdCP replay-after-rejection contract: retrying a tool call with the same
-idempotency_key must return the original answer. Successful media buys handle
-this via media_buys.idempotency_key. This repository handles the rejection
-path — when the original request was rejected, the buyer retrying with the
-same key must get the same rejection envelope, not a fresh evaluation.
+AdCP 3.0.1 idempotency contract: retrying a mutating tool call with the same
+idempotency_key must return the ORIGINAL success response byte-for-byte (marked
+``replayed: true``), and errors are NEVER cached — a retry after an error
+re-executes. This repository stores and replays those cached successes, keyed by
+``(tenant_id, principal_id, account_id, tool_name, idempotency_key)`` (the AdCP
+scope is agent + account + key). ``MediaBuy.idempotency_key`` remains the
+dup-booking backstop; this table holds the verbatim response to replay.
 
 The default TTL is 24h (matches the value announced via
 get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds = 86400).
@@ -13,8 +15,8 @@ get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds = 86400).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
+from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -25,11 +27,13 @@ DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
 
 
 class IdempotencyAttemptRepository:
-    """Tenant-scoped CRUD for cached rejection envelopes.
+    """Tenant-scoped CRUD for the verbatim success cache.
 
-    Queries are scoped by (tenant_id, principal_id, tool_name, idempotency_key)
-    — the same composite key the unique index enforces — so two principals can
-    use the same idempotency_key without collision.
+    Queries are scoped by ``(tenant_id, principal_id, account_id, tool_name,
+    idempotency_key)`` — the same composite key the unique index enforces (with
+    NULLS NOT DISTINCT, so a NULL account still enforces uniqueness) — so two
+    principals, or two accounts under one principal, can use the same
+    idempotency_key without collision.
 
     Args:
         session: SQLAlchemy session (caller manages lifecycle).
@@ -50,13 +54,16 @@ class IdempotencyAttemptRepository:
         principal_id: str,
         tool_name: str,
         idempotency_key: str,
+        account_id: str | None = None,
         now: datetime | None = None,
     ) -> IdempotencyAttempt | None:
-        """Return the cached rejection for this key, or None if absent or expired.
+        """Return the cached success for this key, or None if absent or expired.
 
         Expired entries are treated as absent — callers should fall through to
-        re-evaluation rather than returning a stale answer. Cleanup of expired
-        rows is the responsibility of `expire_old`.
+        re-execution rather than returning a stale answer. Cleanup of expired
+        rows is the responsibility of ``expire_old``. ``account_id is None``
+        matches rows stored with no account (``IS NULL``), mirroring the
+        NULLS NOT DISTINCT unique index.
         """
         current = now or datetime.now(UTC)
         stmt = (
@@ -64,6 +71,8 @@ class IdempotencyAttemptRepository:
             .where(
                 IdempotencyAttempt.tenant_id == self._tenant_id,
                 IdempotencyAttempt.principal_id == principal_id,
+                # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
+                IdempotencyAttempt.account_id == account_id,
                 IdempotencyAttempt.tool_name == tool_name,
                 IdempotencyAttempt.idempotency_key == idempotency_key,
                 IdempotencyAttempt.expires_at > current,
@@ -72,23 +81,35 @@ class IdempotencyAttemptRepository:
         )
         return self._session.scalars(stmt).first()
 
-    def record_rejection(
+    def record_success(
         self,
         *,
         principal_id: str,
         tool_name: str,
         idempotency_key: str,
-        response_envelope: dict[str, Any],
+        response_model: BaseModel,
+        protocol_status: str,
+        account_id: str | None = None,
         payload_hash: str | None = None,
         ttl: timedelta = DEFAULT_REPLAY_TTL,
         now: datetime | None = None,
     ) -> IdempotencyAttempt:
-        """Cache a rejection envelope so future retries with the same key replay it.
+        """Cache a successful response so future retries with the same key replay it verbatim.
 
-        The (tenant, principal, tool, key) tuple has a UNIQUE index — callers
-        must guarantee they haven't already cached for this key (the
+        The stored envelope is ``{"status": <protocol task status>, "response":
+        <model dump>}`` — the protocol status is held alongside the domain
+        response so a replay reconstructs the exact original wrapper (a pending
+        buy's ``submitted`` status is not a valid domain status, so it cannot
+        ride inside the response payload). The wire ``replayed`` marker is
+        injected at replay time, never stored. The model is serialized HERE, not
+        by the caller, so ``_impl`` functions never call ``.model_dump()``
+        (enforced by the no-model-dump-in-impl structural guard).
+
+        The ``(tenant, principal, account, tool, key)`` tuple has a UNIQUE index
+        — callers guarantee they haven't already cached for this key (the
         ``find_by_key`` lookup is the natural gate). Catching the
-        ``IntegrityError`` on race is the caller's responsibility.
+        ``IntegrityError`` on a concurrent same-key race is the caller's
+        responsibility (it resolves to a replay).
 
         ``payload_hash`` is the RFC 8785 canonical hash of the request payload
         (see ``src.core.idempotency_canonical``). It lets the replay lookup tell
@@ -99,9 +120,10 @@ class IdempotencyAttemptRepository:
         attempt = IdempotencyAttempt(
             tenant_id=self._tenant_id,
             principal_id=principal_id,
+            account_id=account_id,
             tool_name=tool_name,
             idempotency_key=idempotency_key,
-            response_envelope=response_envelope,
+            response_envelope={"status": protocol_status, "response": response_model.model_dump(mode="json")},
             payload_hash=payload_hash,
             expires_at=current + ttl,
         )
@@ -115,11 +137,9 @@ class IdempotencyAttemptRepository:
         Designed to be called by a periodic cleanup job. Scoped to ``tenant_id``
         so cross-tenant cleanup is impossible from a single repository.
 
-        NOTE: No production caller is wired yet — the ``idempotency_attempts``
-        table will grow unbounded until a periodic cleanup task is added
-        (tracked as a follow-up). TTL on stored rows still applies at the
-        read path (``find_by_key`` filters on ``expires_at``), so replay
-        correctness is unaffected; only storage growth is the concern.
+        TTL on stored rows still applies at the read path (``find_by_key``
+        filters on ``expires_at``), so replay correctness holds regardless of
+        when this runs; only storage growth is the concern it addresses.
         """
         current = now or datetime.now(UTC)
         stmt = delete(IdempotencyAttempt).where(
