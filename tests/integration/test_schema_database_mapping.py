@@ -420,7 +420,7 @@ class TestSchemaFieldMapping:
                 assert validated_product.product_id == "validation_test_001"
                 # adcp 2.14.0+ uses RootModel wrapper - access via .root
                 pricing = validated_product.pricing_options[0]
-                pricing_inner = pricing.root if hasattr(pricing, "root") else pricing
+                pricing_inner = pricing.root
                 assert pricing_inner.rate == 7.25
                 assert pricing_inner.pricing_model == "cpm"
             except Exception as e:
