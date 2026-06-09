@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.4
+# In-network test runner image.
+#
+# Same Python/uv base as the app Dockerfile, but installs the `dev` dependency
+# group (pytest, tox, pytest-xdist, etc.) which the production image deliberately
+# omits (Dockerfile runs `uv sync --frozen` without --group dev).
+#
+# The runner joins the compose network and reaches Postgres/the server by
+# SERVICE NAME (postgres:5432, proxy:8000) — so it needs no published host ports,
+# which is what eliminates the cross-stack host-port collisions (see
+# docker-compose.e2e.yml `tests` service + scripts/test-in-network.sh).
+FROM python:3.12-slim
+
+RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        gcc libpq-dev git curl postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+# Put the venv OUTSIDE /app so the runtime `.:/app` bind mount never shadows it
+# (the /app/.venv anonymous-volume hack is fragile — anon volumes aren't
+# refreshed when the image is rebuilt).
+ENV UV_HTTP_TIMEOUT=300 \
+    UV_PYTHON_PREFERENCE=only-system \
+    UV_CACHE_DIR=/cache/uv \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+# Dependency layer: cached unless pyproject.toml / uv.lock change. Installs the
+# dev group so pytest/xdist/pytest-bdd etc. are present (unlike the production
+# image), plus tox + tox-uv (a dev TOOL, not in the dependency group) so the
+# in-network runner uses the SAME tox envs as the host path — no arg drift.
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/cache/uv \
+    uv sync --frozen --group dev \
+    && uv pip install --python /opt/venv tox tox-uv
+
+# Source is bind-mounted at runtime (see compose `tests` service volumes); the
+# venv at /opt/venv is self-contained in the image and never bind-shadowed.

@@ -74,5 +74,51 @@ services:
       timeout: 5s
       retries: 5
 
+  # In-network test runner (Option 1). Reaches Postgres/the server by SERVICE
+  # NAME on the compose network — postgres:5432, proxy:8000 — so it needs NO
+  # published host ports. Each `docker compose -p <project>` gets its own
+  # isolated network, so `postgres` here can never collide with another stack's
+  # `postgres`. This removes the host-port TOCTOU race that scripts/test-stack.sh
+  # hits when guessing free ports in 50000-60000 under a crowded Docker host.
+  #
+  # Gated behind a profile so a normal `up` does not start it; the runner is
+  # launched explicitly via `docker compose run --rm tests ...`
+  # (see scripts/test-in-network.sh).
+  tests:
+    profiles: ["runner"]
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      # Fixed in-network DB address — never a host port, never collides.
+      DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp_test?sslmode=disable
+      # Suites that hit the running server reach it in-network (no host port).
+      ADCP_SERVER_URL: http://proxy:8000
+      ADCP_SALES_PORT: "8000"
+      ADCP_TESTING: "true"
+      ADCP_AUTH_TEST_MODE: "true"
+      CREATE_SAMPLE_DATA: "true"
+      DELIVERY_WEBHOOK_INTERVAL: "5"
+      # The source is bind-mounted, so the host's in-tree __pycache__ comes with
+      # it — and those .pyc embed host absolute paths in co_filename, which makes
+      # pytest-bdd's scenarios() resolve feature files to /Users/... instead of
+      # /app/... (FileNotFoundError). Redirect bytecode to a container-local dir
+      # so Python recompiles from /app and paths resolve correctly.
+      PYTHONPYCACHEPREFIX: /tmp/pycache
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-test_key}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
+    working_dir: /app
+    # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
+    # the /app bind mount, so it is never shadowed — no .venv anonymous volume.
+    # Overridden by `docker compose run --rm tests <cmd>`; idle by default.
+    command: ["sleep", "infinity"]
+
 volumes:
   postgres_data:
+  tox_data:
