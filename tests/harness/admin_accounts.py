@@ -144,7 +144,10 @@ class AdminAccountEnv:
         """Set up requests.Session for e2e transport against Docker stack."""
         import requests
 
-        self._base_url = f"http://localhost:{self._e2e_port}"
+        # Host path: localhost:<published-port>. In-network the server is reached
+        # by service name (ADCP_TEST_HOST=proxy) with no published host port.
+        host = os.environ.get("ADCP_TEST_HOST", "localhost")
+        self._base_url = f"http://{host}:{self._e2e_port}"
         self._session = requests.Session()
         logger.info("Admin e2e transport: %s", self._base_url)
 
