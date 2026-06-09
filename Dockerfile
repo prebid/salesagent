@@ -7,6 +7,7 @@ ARG PYTHON_BASE_DIGEST=sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893d
 ARG SOURCE_DATE_EPOCH=0
 ARG UV_VERSION=0.11.15
 
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST} AS builder
 
 # Disable man pages and docs to speed up apt operations
@@ -25,8 +26,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq-dev \
     git
 
-ARG UV_VERSION=0.11.15
-COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 # Set up caching for uv
 ENV UV_CACHE_DIR=/cache/uv
