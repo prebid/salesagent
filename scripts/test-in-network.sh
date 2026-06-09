@@ -81,12 +81,29 @@ dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test"
 # into the `tests` service environment — no host port, no scan, no race.
 # --use-aliases gives this run container the `tests` network alias so the server
 # can call webhooks back to it (ADCP_WEBHOOK_HOST=tests) by name.
-echo "Running suites in-network: $SUITES"
-dc run --rm --use-aliases tests tox -e "$SUITES" -p
+#
+# SERIAL (no `-p`): run_all_tests.sh runs `tox -p` on the HOST, where each env is
+# its own process tree with the full host RAM. Packing all six suites into ONE
+# container and running them concurrently OOM-kills them (exit -9) — and bdd's
+# `-n auto` alone spawns one worker per host CPU (~17), each loading the app.
+# Serial execution keeps peak memory to a single suite; PYTEST_XDIST_AUTO_NUM_WORKERS
+# (set on the tests service) caps bdd's worker count so it can't blow memory or
+# trip the xdist loadscope rescheduler. Same suites, same outcomes — just not
+# wall-clock parallel inside the one container.
+echo "Running suites in-network (serial): $SUITES"
+dc run --rm --use-aliases tests tox -e "$SUITES"
 RC=$?
 
-# tox writes per-suite JSON into /app/.tox (bind-mounted to the host tree).
-cp .tox/*.json "$RESULTS_DIR/" 2>/dev/null || true
+# tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
+# (kept off the bind mount so venvs don't live on the slow host tree). The host
+# .tox is therefore empty — extract the reports from the volume with a throwaway
+# container before the cleanup trap runs `down -v` and removes it.
+echo "Extracting JSON reports from the tox_data volume..."
+docker run --rm \
+    -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
+    -v "$(pwd)/${RESULTS_DIR}:/out" \
+    alpine sh -c 'cp /t/*.json /out/ 2>/dev/null || true'
 echo "Reports: $RESULTS_DIR/"
+ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
 exit $RC

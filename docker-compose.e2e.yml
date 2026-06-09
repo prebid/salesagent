@@ -118,6 +118,10 @@ services:
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
       # Playwright chromium is pre-installed in Dockerfile.test at this path.
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # bdd uses `pytest -n auto`, which sizes to the host CPU count (~17 here) —
+      # far too many app-loading workers for one container (OOM + xdist loadscope
+      # KeyError). Cap `auto` to a memory-safe worker count in-network.
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "4"
       ADCP_TESTING: "true"
       ADCP_AUTH_TEST_MODE: "true"
       CREATE_SAMPLE_DATA: "true"
