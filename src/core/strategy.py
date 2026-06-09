@@ -8,7 +8,7 @@ Provides unified strategy system that works for both:
 """
 
 from datetime import UTC, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -30,7 +30,7 @@ class SimulationError(StrategyError):
     pass
 
 
-class JumpEvent(str, Enum):
+class JumpEvent(StrEnum):
     """Predefined events for simulation time jumping."""
 
     # Campaign lifecycle

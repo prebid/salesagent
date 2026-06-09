@@ -16,7 +16,7 @@ This module handles all testing headers and provides isolated test execution:
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from fastmcp.server.context import Context
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from src.core.tool_context import ToolContext
 
 
-class CampaignEvent(str, Enum):
+class CampaignEvent(StrEnum):
     """Campaign lifecycle and error events that can be jumped to."""
 
     # Lifecycle Events

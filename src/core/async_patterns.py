@@ -5,7 +5,7 @@ in the MCP server, following the A2A protocol's Task-based approach.
 """
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 T = TypeVar("T", bound=BaseModel)
 
 
-class TaskState(str, Enum):
+class TaskState(StrEnum):
     """Task lifecycle states following A2A specification."""
 
     SUBMITTED = "submitted"

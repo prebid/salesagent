@@ -36,8 +36,10 @@ def then_response_status(ctx: dict, status: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
 
-    # If response has an explicit status field, check it directly.
-    if hasattr(resp, "status"):
+    # Determine if response type declares a ``status`` field via Pydantic metadata.
+    # Uses getattr on the class (not instance) to handle non-Pydantic test doubles.
+    resp_fields = getattr(type(resp), "model_fields", {})
+    if "status" in resp_fields:
         actual = resp.status
         assert actual == status, f"Expected status '{status}', got '{actual}'"
         return
@@ -53,13 +55,12 @@ def then_response_status(ctx: dict, status: str) -> None:
     error = ctx.get("error")
     assert error is None, f"Status 'completed' claimed but the operation recorded an error: {error!r}"
 
-    present = [a for a in _STATUSLESS_SUCCESS_ATTRS if hasattr(resp, a)]
-    assert present, (
-        f"Status-less response {type(resp).__name__} exposes none of the "
-        f"expected success collections {_STATUSLESS_SUCCESS_ATTRS} — cannot "
-        f"prove the operation completed successfully"
-    )
-    for attr in present:
+    # Verify at least one schema-required success collection is present and populated.
+    found_count = 0
+    for attr in _STATUSLESS_SUCCESS_ATTRS:
+        if attr not in resp_fields:
+            continue
+        found_count += 1
         value = getattr(resp, attr)
         assert value is not None, (
             f"Status 'completed' claimed but response.{attr} is None — the schema-required success payload is missing"
@@ -68,6 +69,11 @@ def then_response_status(ctx: dict, status: str) -> None:
             assert isinstance(value, list), (
                 f"Status 'completed' claimed but response.{attr} is {type(value).__name__}, expected a list"
             )
+    assert found_count >= 1, (
+        f"Status-less response {type(resp).__name__} exposes none of the "
+        f"expected success collections {_STATUSLESS_SUCCESS_ATTRS} — cannot "
+        f"prove the operation completed successfully"
+    )
 
 
 # ── Response contains field ──────────────────────────────────────────
@@ -117,18 +123,55 @@ def then_no_sandbox_field(ctx: dict) -> None:
 def then_no_real_api_calls(ctx: dict) -> None:
     """Assert no real ad platform API calls were made.
 
-    Verifies the mock registry was used instead of real HTTP calls.
-    The harness patches ``get_creative_agent_registry`` — if production
-    code called it, it got the mock and no real API calls occurred.
+    Operation-agnostic: works across all use cases (UC-001 products,
+    UC-004 delivery, UC-005 creative formats, UC-018 list creatives,
+    UC-019 query media buys) by inspecting the harness environment's
+    external patches rather than checking a single mock by name.
+
+    Three-part verification:
+    1. Production produced a response (the operation actually ran).
+    2. The harness has active external service patches — every external
+       integration point is replaced by a mock, so real HTTP/SOAP/gRPC
+       calls cannot escape the patch boundary.
+    3. The response carries ``sandbox=True``, corroborating that
+       production took the simulated/sandbox code path.
     """
     env = ctx["env"]
     assert env is not None, "Expected harness env in ctx — without the harness, real API calls could occur"
-    registry_mock = env.mock.get("registry")
-    assert registry_mock is not None, "Registry mock not configured in harness"
-    # If a response exists, production ran the impl — verify it used the mock
-    if "response" in ctx:
-        mock_registry = registry_mock.return_value
-        formats_called = mock_registry.list_all_formats.called or mock_registry.list_all_formats_with_errors.called
-        assert formats_called, (
-            "Production code returned a response but did not call the mock registry — real API calls may have been made"
-        )
+
+    # 1. Production must have produced a response. A missing response means
+    #    the operation didn't run — that's a test failure, not a vacuous pass.
+    resp = ctx.get("response")
+    assert resp is not None, (
+        "Expected a response from production code but none found — "
+        "cannot verify 'no real API calls' without a completed operation"
+    )
+
+    # 2. The harness must have external service patches active. Each harness
+    #    env declares EXTERNAL_PATCHES that replace real ad-platform clients
+    #    (adapter, registry, etc.) with mocks. If external patches exist,
+    #    real calls are structurally impossible — the import target is replaced.
+    external_patches = getattr(env, "EXTERNAL_PATCHES", {})
+    assert len(external_patches) > 0 or len(env.mock) > 0, (
+        f"Harness {type(env).__name__} has no external patches and no active mocks — "
+        "cannot guarantee real ad-platform calls were suppressed"
+    )
+
+    # Verify at least one external mock was exercised by production code.
+    # This proves production actually ran through the patched seam (not that
+    # it silently skipped the external call entirely and returned a stub).
+    any_external_mock_called = any(mock.called for mock in env.mock.values())
+    assert any_external_mock_called, (
+        f"None of the harness mocks ({list(env.mock.keys())}) were called — "
+        "production code may have bypassed all patched external services. "
+        f"Harness: {type(env).__name__}"
+    )
+
+    # 3. Corroborate via the sandbox flag on the response. The sandbox=True
+    #    flag proves the sandbox/simulated code path served the result.
+    sandbox = getattr(resp, "sandbox", None)
+    assert sandbox is True, (
+        f"Expected sandbox=True on response confirming simulated mode, "
+        f"got sandbox={sandbox!r}. Without sandbox=True, the response may "
+        f"have been served by real ad-platform integration."
+    )

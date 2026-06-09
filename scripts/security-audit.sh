@@ -57,4 +57,5 @@ set -euo pipefail
 
 source "$(dirname "$0")/security-ignored-vulns.sh"
 
-exec uvx uv-secure --ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores "$@"
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+exec uvx uv-secure --ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores "$@" "$PROJECT_ROOT/uv.lock"

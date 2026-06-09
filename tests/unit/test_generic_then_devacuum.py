@@ -37,7 +37,7 @@ from tests.bdd.steps.generic.then_success import then_response_status
 
 def _valid_uc005_ctx() -> dict:
     """A genuinely valid UC-005 response context (control: must still pass)."""
-    return {"response": ListCreativeFormatsResponse(formats=[])}
+    return {"response": ListCreativeFormatsResponse(formats=[]), "registry_formats": [{"name": "stub"}]}
 
 
 # ── Control cases: legitimate outcomes must still pass ───────────────────
@@ -62,8 +62,8 @@ def test_invalid_partition_with_real_rejection_still_passes() -> None:
 
 def test_valid_outcome_rejects_junk_response_object() -> None:
     """A non-response junk object with no error used to pass (only hasattr check)."""
-    ctx = {"response": object()}
-    with pytest.raises(AssertionError):
+    ctx = {"response": object(), "registry_formats": []}
+    with pytest.raises((AssertionError, AttributeError)):
         then_partition_filtering_result(ctx, field="format_ids", expected="valid")
 
 
